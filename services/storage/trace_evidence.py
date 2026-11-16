@@ -207,7 +207,7 @@ class TraceEvidence:
             if name in attrs:
                 if type(attrs[name]) is not bool:raise EvidenceUnavailable('Invalid source subagent flag')
                 fields['isSubagent']=attrs[name];break
-        for dest,names in {'query':('legacy.session_query','legacy.query','query'),'label':('legacy.session_label','legacy.label','label'),'finalResult':('legacy.final_result','final_result'),'skill':('legacy.skill','skill'),'skillVersion':('legacy.skill_version','skill_version','skillVersion'),'executionSkills':('legacy.execution_skills','execution_skills','executionSkills'),'agentId':('agent.id','legacy.agent_id','agentId'),'clientId':('agent.insight.client_id','client.id','legacy.client_id','client_id','clientId'),'skillOrigins':('legacy.skill_origins','skill_origins','skillOrigins','skill.origins')}.items():
+        for dest,names in {'query':('legacy.session_query','legacy.query','query'),'label':('legacy.session_label','legacy.label','label'),'finalResult':('legacy.final_result','final_result'),'skill':('legacy.skill','skill'),'skills':('legacy.skills','skills'),'skillVersion':('legacy.skill_version','skill_version','skillVersion'),'executionSkills':('legacy.execution_skills','execution_skills','executionSkills'),'agentId':('agent.id','legacy.agent_id','agentId'),'clientId':('agent.insight.client_id','client.id','legacy.client_id','client_id','clientId'),'skillOrigins':('legacy.skill_origins','skill_origins','skillOrigins','skill.origins')}.items():
             for name in names:
                 if name in attrs:fields[dest]=attrs[name];break
         if 'query' not in fields:

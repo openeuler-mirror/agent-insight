@@ -16,7 +16,8 @@
 
 import { createHash } from 'node:crypto';
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
-import { ingestCoreRas } from '@/lib/storage-core/analytics';
+import { ingestCoreRas, analyticsFailure } from '@/lib/storage-core/analytics';
+import { handleCoreRasGet } from '@/lib/storage-core/ras';
 import { compatibilityFailure } from '@/lib/storage-core/compat';
 
 
@@ -82,6 +83,7 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
+    if (isStorageCoreEnabled()) return await handleCoreRasGet(req);
     const { username: user } = await resolveUser(req)
     const url = new URL(req.url)
     const taskId = url.searchParams.get("taskId")
@@ -133,6 +135,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ status: "ok", events, executionId })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
+    if (isStorageCoreEnabled()) return analyticsFailure(err);
     console.error("[RAS ingest] GET error:", message)
     return NextResponse.json({ status: "error", message }, { status: 500 })
   }

@@ -404,3 +404,26 @@ Benchmark原创建/启动/实际device命令/提交/真实评测HTTP/规范化/�
 证据仍在`exclude/20261115-ob765mlu/`：`consumer-v1-final-full.log`、`consumer-v1-python-final-v2-{manifest,report}.json`及日志、`consumer-relational-*`、`acceptance-skill-consumers/original-consumer-http-final-report.json`、`consumer-v1-main-preservation.json`、`consumer-v1-main-readback.json`和`consumer-v1-{agents,skills,versions}.jpg`。原验收环境仍在`http://localhost:58488/config/skills`及`/agents`，沿用原admin。
 
 本片未接管Skill runs/logs、Agent删除、独立rejudge/cancel、Batch/Trigger、其他采集/Infra/RAS/配置域与完整历史导入；它们继续按phase7推进，不据此宣称全部功能迁移完成。万级Span/水位/容量机制继续留第二版，未执行生产切换。
+
+## 2026-11-16 第一版运行记录、可靠性与独立答案评测接入
+
+本批接通 Skill runs/logs、RAS 专题 GET、Trace 可靠性详情、FI Run 的 Trace 纯读，以及独立重评、Final Result 编辑、取消和 Query 编辑。保留原筛选、版本、分页、状态、评测算法、DTO 与前端界面。静态 Skill/版本/Config/RegisteredAgent、FI 控制记录仍是原控制域权威，不将这些域宣称为整体迁移完成。没有新增表、迁移或 parser 版本，仍为 015、65 张事务表和 15 张 ClickHouse 表。
+
+答案评测复用内部 Outcome Experiment、现有 RunPlan、工作回执及 lease/fence；Trace、Skill 记录和统计读取同一专用当前结果，普通实验分数不覆盖答案。保留真实 0、未知 null、原失败分析和历史已知主版本，实际调用版本单列。Query 编辑事务封存原算法重算的路由快照并清分，不启动模型；无 Session 的合法执行可编辑 Final Result，无 Config 时仍保存并产生原未知分含义。真实 owner/write 检查先于 Evidence、Config 和模型读取。组内可见不成为代写权限。
+
+取消期间，迟到录制仍被原 fence 拒绝；仅明确录制拒绝分类或非 uncertain 的 attempt 拒绝，并经当前 Outcome、原 slot 与再次当前状态授权复核证实已取消或替换，才返回原取消 DTO。录制失败、未知投递（包括 409/410）与权限查询失败继续报错，未放宽录制或来源验证。真实 HTTP 发现的结果 publication 内部状态误冲突、写预检和取消响应问题均有 RED→GREEN 与独立 spec/quality 复核。
+
+| 验证 | 最终结果与边界 |
+|---|---|
+| 应用全量 | 最终冻结 v7 共 5915 项，5893 通过、22 跳过、0 失败/取消，522.27 秒；Node24、独立 HOME/SQLite，原 collector 类型预检与完整 test glob 均执行。Node 并行参数置于 glob 前，经独立探针确认限制为 4；项目 scripts/依赖未改。此前原 npm test 的 v5 为 5910 项零失败，未包含最终取消增量，不替代 v7 结果 |
+| 存储整套 | 1068 项，889 通过、179 项可选引擎未配置跳过、0 失败/错误，290.15 秒；ResourceWarning 作为错误。153 个后端源/schema/test 文件运行前后及最终当前源码 SHA 相同；跳过不算实机通过 |
+| PG / 原生 openGauss | 各 56/56 通过、无跳过，425.91/437.24 秒；每库 56 个自建 schema 回查残留 0。PG 在 host psycopg2，openGauss 在原生 Linux aarch64 驱动环境；事实 sink 为 MemoryFacts，不混称三库与 CH 的完整组合矩阵。当前后端与实测快照一致 |
+| 真实原 HTTP / CH / IAM | 全新 SQLite 与独立 CH database，原 handler、真实静态 Prisma 与实际 apiFetch 共 51 次请求通过；7 次本地 Mock 模型 HTTP 调用及真实 Judge Trace 录制，非外部模型效果验收。覆盖精确重试不重复模型、服务重启、真实 0 分的 Trace/Skill/统计一致、Query 重算、无 Session/无 Config 编辑、运行中取消及迟到录制拒绝；旧动态表读写毒化访问计数 0 |
+| 原 Next / 浏览器 | 实际 Next 的原重评、取消及编辑入口能加载并按真实权限拒绝不可用来源；非成功写入证明。浏览器刷新后保留 2 个 Skill、3 条真实运行记录及原未知状态，v0 空结果提示正常；原激活版本未改，控制台 0 错误/警告，TSX/CSS 零 diff |
+| 类型 / 审查 | 全项目 tsc 通过；相关 ESLint 0 error，flow 文件既有 unused catch warning 1 条单列保留。各片 spec/quality 与最后取消增量均通过；最终 3070 个已列源码文件 SHA 未变，当前实现与冻结 overlay 相同，diff-check 通过 |
+| 现有数据保留 | 原验收环境先备份 core/legacy 两库，schema15 不变。65 张 core 表、96 张旧表的业务内容、全部 15 张 CH 逻辑内容、原凭据和注册行保留；本次刷新 0 新注册、0 归属规范化，仅两条既有负面 Outbox 正常更新重试元数据。早一轮曾由未改动的原 normalizer 规范化 4 个已知系统 Agent 的 ownership，独立前后证据保留，未将其宣称为逐字节不变。数据库 integrity_check 为 ok，默认业务库和生产未操作 |
+| 历史读回 | 4 组既有身份有效；普通实验 100 分、Workbench 0 分、诊断 done/report 再次通过实际 Next HTTP 读回，原登录 Key 保留 |
+
+证据位于 `exclude/storage-core-next-consumers/20261115-dz8_dnl_/`：`consumers-final-v7-node-full.log`、`consumers-final-v5-python-sequential-{report,manifest}.json`、`final-v4-relational-*`、`acceptance-current-consumers-v9/{outcome,current-consumer}-http-report.json`、`final-v7-code-verification.json`、`final-v7-consumers-main-{preservation,readback}.json`、`final-v7-next-runtime.json` 与三张 `final-v7-*.png`。失败、超时和被后续审查替代的快照均保留；v4 三项应用失败中两项为 OTel 测试时序假设（已本地提交受控时钟回归），另一项超大输入去重在低竞争隔离单文件复验 38 秒通过；v4 存储整套触及脚本 900 秒上限，不算通过，最终顺序运行结果如上。没有扩大业务超时或放宽原断言以换取通过。
+
+原验收入口仍为 `http://localhost:58488/config/skills`，沿用原 admin。下一步按 phase7 接 Batch Trace evaluate/retry/abort 与当前进度，再接 Dataset start/retry、Trigger、可信采集和旧积压确认；Agent/RAS 删除、Infra、FI/客户端控制、静态资产/配置/会话、Goal Plus/协作/Usage 及 96 模型完整语义 apply 仍未完成。生产停写/切换/回退未执行，万级 Span/水位/千级混合容量继续留第二版，不把本批接线当作全产品切换完成。

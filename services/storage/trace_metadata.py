@@ -75,7 +75,7 @@ class TraceMetadata:
             row=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone()
             return self._properties(row,ws,trace_id)
 
-    def patch(self,token,ws,trace_id,changes,expected_revision=None):
+    def _patch(self,con,token,ws,trace_id,changes,expected_revision=None,*,extra_changes=None):
         if not isinstance(changes,dict) or not changes or set(changes)-{'label','query','final_result','user_feedback'}:raise ValueError('invalid annotation changes')
         encoded=json.dumps(changes,ensure_ascii=False,allow_nan=False,separators=(',',':'))
         if len(encoded.encode())>4*1024*1024:raise ValueError('annotation changes exceed4MiB')
@@ -86,22 +86,27 @@ class TraceMetadata:
             else:
                 if value is not None and not isinstance(value,str):raise ValueError('annotation text must be string or null')
                 values[{'query':'query_override','final_result':'final_result_override'}.get(key,key)]=value
+        self._trace(con,token,ws,trace_id,'write')
+        old=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone()
+        current=self._properties(old,ws,trace_id)
+        if expected_revision is not None and expected_revision!=current['revision']:raise Conflict('annotation revision changed')
+        extra=json.loads(current['extra_json'])
+        if old and set(changes)<=set(current['override_fields']) and all(old[key]==value for key,value in values.items()) and (not extra_changes or all(extra.get(key)==value for key,value in extra_changes.items())):return current
+        if extra_changes:extra.update(extra_changes)
+        updated=dict(current);updated.update(values);now=self.control.clock()
+        extra['override_fields']=sorted(set(current['override_fields'])|set(changes))
+        extra_json=json.dumps(extra,ensure_ascii=False,sort_keys=True,allow_nan=False,separators=(',',':'))
+        version=revision(current['revision']+1)
+        if old:
+            con.execute('UPDATE trace_annotations SET label=?,query_override=?,final_result_override=?,feedback_json=?,extra_json=?,revision=?,updated_at_ms=? WHERE workspace_id=? AND trace_id=? AND revision=?',
+                (updated['label'],updated['query_override'],updated['final_result_override'],updated['feedback_json'],extra_json,version,max(now,old['updated_at_ms']),ws,trace_id,current['revision']))
+        else:
+            con.execute('INSERT INTO trace_annotations VALUES(?,?,?,?,?,?,?,1,?,?)',(ws,trace_id,updated['label'],updated['query_override'],updated['final_result_override'],updated['feedback_json'],extra_json,now,now))
+        return self._properties(con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone(),ws,trace_id)
+
+    def patch(self,token,ws,trace_id,changes,expected_revision=None):
         with self.control.transaction() as con:
-            self._trace(con,token,ws,trace_id,'write')
-            old=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone()
-            current=self._properties(old,ws,trace_id)
-            if expected_revision is not None and expected_revision!=current['revision']:raise Conflict('annotation revision changed')
-            if old and set(changes)<=set(current['override_fields']) and all(old[key]==value for key,value in values.items()):return current
-            updated=dict(current);updated.update(values);now=self.control.clock()
-            extra=json.loads(current['extra_json']);extra['override_fields']=sorted(set(current['override_fields'])|set(changes))
-            extra_json=json.dumps(extra,ensure_ascii=False,sort_keys=True,allow_nan=False,separators=(',',':'))
-            version=revision(current['revision']+1)
-            if old:
-                con.execute('UPDATE trace_annotations SET label=?,query_override=?,final_result_override=?,feedback_json=?,extra_json=?,revision=?,updated_at_ms=? WHERE workspace_id=? AND trace_id=? AND revision=?',
-                    (updated['label'],updated['query_override'],updated['final_result_override'],updated['feedback_json'],extra_json,version,max(now,old['updated_at_ms']),ws,trace_id,current['revision']))
-            else:
-                con.execute('INSERT INTO trace_annotations VALUES(?,?,?,?,?,?,?,1,?,?)',(ws,trace_id,updated['label'],updated['query_override'],updated['final_result_override'],updated['feedback_json'],extra_json,now,now))
-            return self._properties(con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone(),ws,trace_id)
+            return self._patch(con,token,ws,trace_id,changes,expected_revision)
 
     def delete(self,token,ws,trace_id):
         with self.control.transaction() as con:

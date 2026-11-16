@@ -199,7 +199,7 @@ class ExperimentStore:
             if len(seen)>MAX_ITEMS:raise ExperimentTooLarge('Experiment execution history exceeds budget')
             _,plan=self._plan(con,ws,exp,run[0])
             for case_id,ev in plan.get('frozen_trace_evidence',{}).items():
-                execution=ev.get('execution',{});session=ev.get('session',{})
+                execution=ev.get('execution') or {};session=ev.get('session') or {}
                 case=current_cases.get(case_id)
                 if case and case_id not in readiness and case.get('executionId')==execution.get('id') and case.get('taskId')==session.get('taskId') and execution.get('id') and session.get('taskId'):
                     messages=session.get('interactions')
@@ -216,7 +216,7 @@ class ExperimentStore:
                         parts=message.get('parts') if isinstance(message.get('parts'),list) else content
                         return isinstance(parts,list) and any(isinstance(part,dict) and (isinstance(part.get('text'),str) and part['text'].strip() or str(part.get('type')) in {'tool','tool-call','tool_call'} and (part.get('callID') or part.get('id'))) for part in parts)
                     readiness[case_id]={'executionId':execution['id'],'taskId':session['taskId'],'hasInteractions':bool(messages),'hasBusinessResponse':any(business_response(message) for message in messages),'hasEndTime':bool(session.get('endTime')),'executionAgent':execution.get('agentName')}
-                if session.get('taskId') not in session_ids:
+                if session.get('taskId') and session.get('taskId') not in session_ids:
                     session_ids.add(session.get('taskId'));sessions.append(session)
                 if execution.get('id') not in seen:
                     seen.add(execution.get('id'));source=copy.deepcopy(execution)
@@ -272,9 +272,10 @@ class ExperimentStore:
             con.execute("INSERT INTO experiment_cases(workspace_id,experiment_id,case_id,ordinal,state,payload_hash,payload_ref,trace_id,created_at_ms,updated_at_ms,binding_hash) VALUES(?,?,?,?,'active',?,?,?,?,?,?)",(ws,exp,identity,ordinal,digest,ref,trace,now,now,binding))
         return identity
 
-    def _create(self,con,token,ws,body,scope):
+    def _create(self,con,token,ws,body,scope,private=False):
         source=copy.deepcopy(body.get('experiment'))
         if not isinstance(source,dict):raise ValueError('Experiment must be an object')
+        if source.get('scope')=='trace-outcome' and not private:raise Forbidden('Outcome head requires the private atomic handoff')
         identity=identifier(source.get('id') or _id());name=identifier(source.get('name',''))
         if con.execute('SELECT 1 FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,identity)).fetchone():raise Conflict('Experiment ID already exists')
         cases=source.pop('cases',[])
@@ -443,6 +444,9 @@ class ExperimentStore:
         snapshot,traces=prepared
         if str(head['revision'])!=snapshot['revision']:raise Conflict('Experiment changed while preparing RunPlan')
         flow_parent=False
+        if head['scope']=='trace-outcome':
+            from .trace_outcome import validate_start
+            validate_start(self,con,token,ws,body,scope,head,snapshot,traces)
         if head['scope']=='trace-flow-analysis':
             if not callable(self.frozen_assets_verifier) or self.frozen_assets_verifier(token,ws,copy.deepcopy(body)) is not True:raise Forbidden('Private frozen flow attestation required')
             try:manifest=json.loads(snapshot['experiment'].get('configSnapshotJson') or '{}')['coreFlowAnalysis']
@@ -599,7 +603,7 @@ class ExperimentStore:
         if body.get('case_id'):sql+=' AND w.case_key=?';params.append(body['case_id'])
         sql+=' ORDER BY w.priority DESC,w.created_at_ms,w.work_item_id LIMIT 1';row=con.execute(sql,tuple(params)).fetchone()
         if row is None:return None
-        if phase=='evaluate' and head['scope']=='trace-flow-analysis':
+        if phase=='evaluate' and head['scope'] in {'trace-flow-analysis','trace-outcome'}:
             prior=con.execute('SELECT c.payload_hash,c.payload_ref FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id WHERE c.workspace_id=? AND c.work_item_id=? AND c.run_id=? ORDER BY a.attempt_no DESC LIMIT 1',(ws,row['work_item_id'],row['run_id'])).fetchone()
             if prior:
                 checkpoint=self._load(prior['payload_hash'],prior['payload_ref']).get('checkpoint',{})
@@ -622,7 +626,7 @@ class ExperimentStore:
             if checkpoint.get('command_id'):checkpoint['_command_target']=checkpoint.get('_command_target') or self._external_target(checkpoint['command_id'],checkpoint,previous_request,previous['attempt_id'])
             if checkpoint.get('command_id') and not checkpoint.get('cleanup_confirmed'):
                 checkpoint['cleanup_required']=True
-        if row['phase']=='evaluate' and head['scope']=='trace-flow-analysis':
+        if row['phase']=='evaluate' and head['scope'] in {'trace-flow-analysis','trace-outcome'}:
             prior=con.execute('SELECT c.payload_hash,c.payload_ref FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id WHERE c.workspace_id=? AND c.work_item_id=? AND c.run_id=? ORDER BY a.attempt_no DESC LIMIT 1',(ws,item,row['run_id'])).fetchone()
             if prior:
                 observed=self._load(prior['payload_hash'],prior['payload_ref']).get('checkpoint',{})
@@ -699,6 +703,9 @@ class ExperimentStore:
             if isinstance(error,dict) and error.get('code')=='EVALUATION_CLEANUP_UNCONFIRMED':failure_code=error['code'];result.update(cleanupUnconfirmed=True,score=None)
         else:result['status']='done'
         if slot['evaluator_id']==EXECUTION_SLOT:raise Conflict('Execution attempts cannot submit machine evaluation results')
+        if head['scope']=='trace-outcome' and not failed:
+            from .trace_outcome import validate_result
+            validate_result(self,con,token,ws,body,cp,result)
         score=result.get('score')
         if score is not None and (type(score) not in (float,int) or not math.isfinite(score) or not 0<=score<=100):raise ValueError('Machine score must be finite 0..100 or null')
         for k in ('humanScore','humanReason','humanBy','humanAt','id','caseId','experimentId','evaluatorId','user'):result.pop(k,None)
@@ -837,7 +844,10 @@ class ExperimentStore:
         if not isinstance(body,dict):raise ValueError('Experiment RPC body must be an object')
         if len(_json(body).encode())>MAX_BYTES:raise ExperimentTooLarge('Experiment request exceeds budget')
         reads={'list','read','get','runplan','load_work','check_work','comments'};ephemeral={'claim','renew','reconcile'}
-        allowed=reads|ephemeral|{'create','ensure','update','case_upsert','case_upsert_many','case_remove','bind_trace','start','checkpoint','complete','fail','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','retry','cancel','remove','review','comment','comment_remove'}
+        allowed=reads|ephemeral|{'create','ensure','update','case_upsert','case_upsert_many','case_remove','bind_trace','start','checkpoint','complete','fail','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','retry','cancel','remove','review','comment','comment_remove','outcome_begin','outcome_cancel','outcome_query'}
+        if action in {'outcome_begin','outcome_lookup','outcome_cancel','outcome_query'}:
+            from .trace_outcome import dispatch_outcome
+            return dispatch_outcome(self,action,token,ws,body)
         if action=='derived_issue_resolve':return self._resolve_derived_issues(token,ws,body)
         if action=='derived_resolution_scope':
             with self.control.read_transaction() as con:
@@ -896,7 +906,7 @@ class ExperimentStore:
                     limit=body.get('limit',100)
                     if type(limit) is not int or not 1<=limit<=MAX_ITEMS:raise ValueError('Invalid list limit')
                     grant=self.iam._workspace(scope,ws,'read');where="e.workspace_id=? AND e.state='active' AND e.experiment_id>?";params=[ws,body.get('after_id','')]
-                    if body.get('_hide_internal') is True:where+=" AND e.scope<>'trace-flow-analysis'"
+                    if body.get('_hide_internal') is True:where+=" AND e.scope NOT IN ('trace-flow-analysis','trace-outcome')"
                     for key,col in [('scope','scope'),('skill_name','skill_name')]:
                         if key in body:where+=' AND e.'+col+'=?';params.append(body[key])
                     if grant.role not in {'owner','admin','personal'}:where+=" AND (a.owner_principal_id=? OR a.visibility='group' OR EXISTS(SELECT 1 FROM iam_resource_grants g WHERE g.workspace_id=a.workspace_id AND g.resource_kind=a.resource_kind AND g.resource_id=a.resource_id AND g.grantee_principal_id=?))";params.extend([scope.principal_id,scope.principal_id])
@@ -939,6 +949,7 @@ class ExperimentStore:
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,capability);self.iam._workspace(scope,ws,'read')
             if action not in {'create','ensure'}:self._head(con,token,ws,body['experiment_id'],capability,deleted=action in {'remove','case_remove','cancellation_update'})
+            if action in {'update','case_upsert','case_upsert_many','case_remove','bind_trace','start','execute_start','retry','remove','review','comment','comment_remove'} and self._head(con,token,ws,body['experiment_id'],capability)['scope']=='trace-outcome':raise Forbidden('Outcome mutations require the atomic Trace handoff')
             if action not in ephemeral:
                 _,_,receipt=self._receipt(con,scope,ws,action,body)
                 if receipt:
@@ -1271,7 +1282,7 @@ class ExperimentStore:
                 for result in case['results']:result.update(score=None,humanScore=None,errorMessage=None)
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);grant=self.iam._workspace(scope,ws,'read')
-            where="e.workspace_id=? AND e.state='active' AND e.scope<>'trace-flow-analysis'";params=[ws]
+            where="e.workspace_id=? AND e.state='active' AND e.scope NOT IN ('trace-flow-analysis','trace-outcome')";params=[ws]
             if body.get('experiment_id'):where+=' AND e.experiment_id=?';params.append(identifier(body['experiment_id']))
             if body.get('task_id'):
                 task=identifier(body['task_id']);alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(ws,task)).fetchone()

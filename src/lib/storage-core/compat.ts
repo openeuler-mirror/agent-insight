@@ -112,7 +112,19 @@ export async function compatibleRequest(request:Request,target:string,fields:str
   return result;
  } catch(error) {return failure(error);}
 }
-export function handleCompatibleObserveData(request:Request,options:CompatibilityOptions={}) {
+export async function handleCompatibleObserveData(request:Request,options:CompatibilityOptions={}) {
+ if(request.method==='PATCH'){
+  try{
+   const raw=await readCoreBytes(request.clone().body,4*1024*1024);
+   let value:Record<string,unknown>;
+   try{value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw)) as Record<string,unknown>;}catch{throw new CompatibilityError(400,'Invalid JSON');}
+   if(value&&typeof value==='object'&&!Array.isArray(value)){
+    const key=Object.hasOwn(value,'user_feedback')?'user_feedback':Object.hasOwn(value,'label')?'label':typeof value.query==='string'?'query':typeof value.final_result==='string'?'final_result':null;
+    if(key==='final_result'){const {handleCoreFinalResultEdit}=await import('./trace-outcome');return handleCoreFinalResultEdit(request,options);}
+    if(key==='query'){const {handleCoreQueryEdit}=await import('./trace-outcome');return handleCoreQueryEdit(request,options);}
+   }
+  }catch(error){return failure(error instanceof SyntaxError?new CompatibilityError(400,'Invalid JSON'):error);}
+ }
  return compatibleRequest(request,'/v1/compat/observe/data',DATA_FIELDS,options);
 }
 export function handleCompatibleSession(request:Request,options:CompatibilityOptions={}) {

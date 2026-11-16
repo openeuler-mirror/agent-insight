@@ -1,4 +1,4 @@
-import {freezeModelSelection,matchesFrozenModelSelection} from './frozen-model';
+import {matchesFrozenModelSelection} from './frozen-model';
 import {runWithCoreDatasetActor} from './datasets';
 import {runWithCoreEvaluatorActor} from './evaluators';
 import type {PrismaClient} from '@prisma/client';
@@ -19,7 +19,7 @@ const globalContexts=globalThis as unknown as Record<symbol,AsyncLocalStorage<Co
 const contexts=globalContexts[contextKey] ||= new AsyncLocalStorage<CoreExperimentContext>();
 const LIMIT=64*1024*1024;
 const collectionRoutes=new Set(['agents','traces','eval-runs','eval-results','eval-traces','cancellations','environment-preparations']);
-const mutations=new Set(['create','update','case_upsert','case_upsert_many','case_remove','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','derived_issue_resolve','start','checkpoint','complete','fail','retry','cancel','review','comment','comment_remove','remove']);
+const mutations=new Set(['create','update','case_upsert','case_upsert_many','case_remove','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','derived_issue_resolve','start','checkpoint','complete','fail','retry','cancel','review','comment','comment_remove','remove','outcome_begin','outcome_cancel','outcome_query']);
 export const getCoreExperimentContext=()=>contexts.getStore();
 export function requireCoreExperimentContext():CoreExperimentContext {
  const context=contexts.getStore();if(!context)throw Object.assign(new Error('Trusted Experiment repository scope required'),{status:503});return context;
@@ -46,9 +46,11 @@ export async function withCoreExperiments<T>(request:Request,action:()=>Promise<
   if(Buffer.byteLength(data,'utf8')>LIMIT)throw Object.assign(new Error('Experiment request too large'),{status:413});
   let controller:Record<string,string>={};
   const config=payload.config;
-  if(['start','execute_start'].includes(actionName)&&config&&typeof config==='object'&&('core_flow_analysis' in config||Array.isArray((config as Record<string,unknown>).derived_skill_ids)&&((config as Record<string,unknown>).derived_skill_ids as unknown[]).length)){
+  if(['start','execute_start','outcome_begin'].includes(actionName)&&config&&typeof config==='object'&&('core_flow_analysis' in config||'core_outcome' in config||Array.isArray((config as Record<string,unknown>).derived_skill_ids)&&((config as Record<string,unknown>).derived_skill_ids as unknown[]).length)){
    const {validateControllerSkillScope,controllerHeaders}=await import('./controller');if(Array.isArray((config as Record<string,unknown>).derived_skill_ids)&&((config as Record<string,unknown>).derived_skill_ids as unknown[]).length)await validateControllerSkillScope(actor.username,config as Record<string,unknown>);controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');
   }
+  if(actionName==='outcome_query'){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
+  if(actionName==='complete'&&(payload.result as {evidence?:{json?:{coreOutcome?:unknown}}}|undefined)?.evidence?.json?.coreOutcome){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
   if(['execute_start','execute_complete','execute_fail'].includes(actionName)||actionName==='checkpoint'&&(payload.checkpoint as Record<string,unknown>|undefined)?.cleanup_confirmed===true){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-execution/v1');}
   if(actionName==='cancellation_update'){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-cancellation/v1');}
   if(actionName==='derived_issue_resolve'){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}

@@ -255,3 +255,13 @@ FI 收集回调只确认收集事实。实验的 Trace 就绪与 Case 关联由�
 第一版后续消费者：Skill列表和版本页的调用量、成功率、P95及趋势，以及Agent管理页的调用统计与自动发现，已改用授权新存储。静态Skill/版本/静态评估/RegisteredAgent仍由原控制域保存。版本页仅为显示的执行记录读取完整输出；原有无Session执行仍可展示，不伪造轨迹。
 
 内部取证端口`/v1/compat/observe/evidence?view=execution`返回`agent-insight.trace-execution`，包含原Execution、来源清单及独立内容摘要，不含Session；默认完整Evidence仍要求真实Session。Agent元数据通过现`analytics`端口只读`agent_metadata`动作读取（每批最多200个Trace/boundary），只发送真实身份及注册必需小字段；根身份不从后代Span猜测。旧登录映射的静态Owner与IAM规范用户名分别保留：只对本人来源补注册，不把共享Trace变成本人的Agent。没有新增表或迁移，现015/parser1保持。
+
+### 运行记录、可靠性与答案评测
+
+Skill runs/logs沿用原筛选、版本、分页、状态与评测快照算法，从授权摘要选定真实执行，再读取完整Execution；无需Session的执行记录仍可展示。已知历史主版本不因重评或最新Skill定义变化而覆盖，实际调用版本单独保留；未知版本不做读时回填。
+
+RAS专题读取通过现analytics端口的`ras_read`/`validate_ras_read`读取真实事件，包含先于Trace到达的事件；按真实Owner、task及当前授权匹配，组内管理权限不能读取他人的私有Judge轨迹。专题保留原倒序，Trace可靠性详情保留最早200条的升序窗口和中英文DTO。读取核验receipt、CH正文hash及当前来源，返回前复核执行Evidence和事件选择；原完整字段超预算明确413。事件页最多10000条，类型筛选最多扫描100000条回执、共享60秒预算，签名读取token最多3MiB；这些是护栏，不是容量验收指标。FI Trace页面的动态Session/RAS也使用新存储，FI控制记录和原模型/marker优先级继续保留，FI marker不会变成真实RAS事实。
+
+独立rejudge、Final Result编辑与取消复用内部`trace-outcome` Experiment/RunPlan。编辑和持久任务同事务交接，取消/替换通过现lease/fence阻止迟到结果；首个无任务取消也保存精确操作回执。模型选择与实际来源封存，observed响应恢复复用，未知投递保持pending。仅专属Outcome结果可覆盖答案字段，普通实验分数不会当成答案分；真实0分与未知null分开。Trace列表、Skill记录和统计读取同一当前选择，并复核其签名边界；统计读取不加载完整RunPlan或Session。
+
+Query编辑不启动模型：同事务保存新query、按原算法重算的路由标量/快照、清分标记及取消事实；新一代成功结果才覆盖该标记。无真实Skill调用时，原路由标量可为null而快照触发率为0，保留两者含义。上述操作以真实凭据授权，仅Trace本人可重评、编辑答案或取消；查询/正文中的user不扩权。没有新增表、迁移或前端布局，其他控制域及完整历史导入仍按剩余清单推进。

@@ -469,6 +469,10 @@ async function evaluateOnce(
 }
 
 export async function evaluateFrozenExperimentWork(work: FrozenExperimentWork, options: {user: string; signal: AbortSignal}): Promise<EvaluatorOutput> {
+  if (work.handle.evaluator_id === '__trace_outcome__') {
+    const {computeFrozenCoreOutcomeWork} = await import('@/lib/storage-core/trace-outcome');
+    return computeFrozenCoreOutcomeWork(work,options) as Promise<EvaluatorOutput>;
+  }
   if (['__trace_flow_match__','__trace_flow_attribution__'].includes(work.handle.evaluator_id)) {
     const {computeFrozenCoreFlowWork} = await import('@/lib/storage-core/flow-analysis');
     return computeFrozenCoreFlowWork(work,options) as Promise<EvaluatorOutput>;

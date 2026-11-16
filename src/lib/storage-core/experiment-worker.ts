@@ -9,7 +9,7 @@ export interface ExperimentWorkHandle extends Record<string,unknown> {
 }
 export interface FrozenExperimentWork {
  handle:ExperimentWorkHandle;raw_case:Record<string,unknown>;experiment_config:Record<string,unknown>;
- frozen_trace_evidence:{execution:Record<string,unknown>|null;session?:{interactions:unknown};execution_skills?:unknown[];[key:string]:unknown}|null;
+ frozen_trace_evidence:{execution:Record<string,unknown>|null;session?:{interactions:unknown}|null;execution_skills?:unknown[];[key:string]:unknown}|null;
  frozen_evaluator:{card:unknown;[key:string]:unknown};runplan:Record<string,unknown>;frozen_ras_events?:unknown[];
 }
 interface Activation {concurrency:number;context:CoreExperimentContext;generation:number;completion:Promise<void>}

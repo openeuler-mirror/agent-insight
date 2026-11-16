@@ -8,7 +8,7 @@ const key=Symbol.for('agent-insight.storage-core.flow-model-delivery');
 const globals=globalThis as unknown as Record<symbol,AsyncLocalStorage<Delivery>>;
 const deliveries=globals[key] ||= new AsyncLocalStorage<Delivery>();
 const object=(value:unknown):value is Row=>!!value&&typeof value==='object'&&!Array.isArray(value);
-function pending():Error{return Object.assign(new Error('Flow model delivery is not confirmed'),{status:503,code:'CORE_FLOW_MODEL_DELIVERY_PENDING',coreDeliveryUncertain:true});}
+function pending(recordingStatus?:number):Error{return Object.assign(new Error('Flow model delivery is not confirmed'),{status:503,code:'CORE_FLOW_MODEL_DELIVERY_PENDING',coreDeliveryUncertain:true,...(recordingStatus===409||recordingStatus===410?{coreTraceRecordingStatus:recordingStatus}:{})});}
 export const getCoreFlowModelDeliveryContext=()=>deliveries.getStore();
 export async function withCoreFlowModelDelivery<T>(context:CoreExperimentContext,work:FrozenExperimentWork,action:()=>Promise<T>):Promise<T>{
  const checkpoint=(work as FrozenExperimentWork&{checkpoint?:Row}).checkpoint;const raw=checkpoint?._flow_model_calls;
@@ -46,7 +46,8 @@ async function execute<T>(scope:Delivery,body:unknown,perform:()=>Promise<T>):Pr
  let response:T;
  try{response=await perform();}
  catch(error){
-  if((error as {code?:string})?.code==='CORE_TRACE_RECORDING_FAILED'||(error as {coreDeliveryUncertain?:boolean})?.coreDeliveryUncertain)throw pending();
+  const failure=error as {code?:string;coreDeliveryUncertain?:boolean;coreTraceRecordingStatus?:number};
+  if(failure?.code==='CORE_TRACE_RECORDING_FAILED'||failure?.coreDeliveryUncertain)throw pending(failure.coreTraceRecordingStatus);
   scope.calls[String(index)]={request_hash:hash,state:'failed'};await save(scope,index,'failed');throw error;
  }
  if(!object(response))throw pending();

@@ -17,6 +17,9 @@
 import { readRecords, type OutcomeSkillBreakdown, type RoutingSkillBreakdown } from '@/lib/storage/data-service';
 import { resolveUser } from '@/lib/auth/auth';
 import { NextResponse } from 'next/server';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+import { readCoreSkillRecords } from '@/lib/storage-core/skill-records';
 
 export async function GET(request: Request) {
   try {
@@ -26,7 +29,8 @@ export async function GET(request: Request) {
     const limitStr = searchParams.get('limit');
     let limit = 10;
 
-    const { username } = await resolveUser(request as any);
+    const core = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+    const { username } = core ?? await resolveUser(request as any);
 
     // 如果提供了API key但找不到用户，返回空数组
     if (username === null && (request.headers.get('x-witty-api-key') || searchParams.get('apiKey'))) {
@@ -53,7 +57,7 @@ export async function GET(request: Request) {
         }
     }
 
-    const records = await readRecords(username || undefined);
+    const records = core ? (await readCoreSkillRecords(request, core)).records : await readRecords(username || undefined);
     
     // Filter records
     const filtered = records.filter(r => {
@@ -113,9 +117,11 @@ export async function GET(request: Request) {
         };
     });
 
+    if (core) await core.validate();
     return NextResponse.json(result);
 
   } catch (error) {
+        if (isStorageCoreEnabled()) return analyticsFailure(error);
     console.error('Skill logs fetch error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

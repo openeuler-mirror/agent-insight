@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {handleCoreOutcomeCancel} from '@/lib/storage-core/trace-outcome';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -19,6 +21,7 @@ import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
+  if (isStorageCoreEnabled()) return handleCoreOutcomeCancel(request);
   try {
     const data = await request.json();
     console.log(`[Cancel-API] Received request: ${JSON.stringify(data)}`);

@@ -16,7 +16,11 @@
 
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
-import { prisma } from '@/lib/storage/prisma'
+import { prisma, prismaRaw } from '@/lib/storage/prisma'
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
+import { compatibilityContext } from '@/lib/storage-core/compat'
+import { readTraceEvidence } from '@/lib/storage-core/evidence'
+import { readCoreRasEvents, analyticsFailure } from '@/lib/storage-core/analytics'
 import {
   buildFiPipelineMarkers,
   buildFiTraceMarkers,
@@ -115,14 +119,29 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ runId: string }> },
 ) {
-  const { username } = await resolveUser(req)
+  try {
+  const core = isStorageCoreEnabled()
+  const actor = core ? await compatibilityContext(req) : null
+  const username = actor ? actor.username : (await resolveUser(req)).username
+  if (core && !username) throw Object.assign(new Error('Verified FI owner required'), {status: 403})
   const { runId } = await ctx.params
-  const run = await prisma.faultInjectionRun.findUnique({ where: { runId } })
+  const run = core ? await prismaRaw.faultInjectionRun.findFirst({where: {runId, user: username}}) : await prisma.faultInjectionRun.findUnique({ where: { runId } })
   if (!run) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   let interactions: unknown[] = []
   let sessionModel: string | null = null
+  let sourceSnapshot: string | null = null
   if (run.sessionTaskId) {
+    if (core) {
+      try {
+        const {evidence} = await readTraceEvidence(req, {taskId: run.sessionTaskId})
+        interactions = evidence.session.interactions
+        sessionModel = asNonEmptyString(evidence.session.model)
+        sourceSnapshot = evidence.snapshot_hash
+      } catch (error) {
+        if ((error as {status?: number})?.status !== 404) throw error
+      }
+    } else {
     const session = await prisma.session.findUnique({ where: { taskId: run.sessionTaskId } })
     if (session?.interactions) {
       try {
@@ -132,13 +151,14 @@ export async function GET(
       }
     }
     sessionModel = asNonEmptyString(session?.model)
+    }
   }
 
   let model: string | null = null
   let taskKey: string | null = null
   let taskName: string | null = null
   if (run.fiTaskId) {
-    const task = await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
+    const task = core ? await prismaRaw.faultInjectionTask.findFirst({where: {id: run.fiTaskId, user: username}}) : await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
     model = asNonEmptyString(task?.model)
     taskKey = task?.taskKey || null
     taskName = task?.name || null
@@ -160,8 +180,10 @@ export async function GET(
 
   // Real RAS detections for this session (if any) — keep separate from FI markers.
   let rasMarkers: ReturnType<typeof buildRasTraceMarkers> = []
+  let rasSelection: Awaited<ReturnType<typeof readCoreRasEvents>> | null = null
   if (run.sessionTaskId) {
-    const rasRows = await listRasEventsByTaskIds({
+    rasSelection = core ? await readCoreRasEvents(req, [run.sessionTaskId], {limit: 200}) : null
+    const rasRows = core ? rasSelection!.events : await listRasEventsByTaskIds({
       taskIds: [run.sessionTaskId],
       user: run.user || undefined,
       limit: 200,
@@ -186,6 +208,12 @@ export async function GET(
     }))
   }
 
+  if (sourceSnapshot && run.sessionTaskId) {
+    const {evidence} = await readTraceEvidence(req, {taskId: run.sessionTaskId})
+    if (evidence.snapshot_hash !== sourceSnapshot) throw Object.assign(new Error('FI Trace source changed'), {status: 409})
+  }
+  if (rasSelection) await rasSelection.validate()
+
   return NextResponse.json({
     taskId: run.sessionTaskId,
     taskKey,
@@ -209,4 +237,8 @@ export async function GET(
     // Never promote FI markers into RAS timeline rows.
     reliabilityEvents: [],
   })
+  } catch (error) {
+    if (isStorageCoreEnabled()) return analyticsFailure(error)
+    throw error
+  }
 }

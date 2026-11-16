@@ -4,6 +4,7 @@ import { controllerHeaders } from './controller';
 import { buildAnalyticsProjection, type AnalyticsProjection, type AnalyticsExecution } from './analytics-projection';
 import type { ReliabilityEventRow } from '../fleet/reliability';
 import {bucketStarts,normalizeWindow,planOf} from '../fleet/agg';
+import type {CoreOutcomeLookup} from './trace-outcome-projection';
 
 type Actor = Awaited<ReturnType<typeof compatibilityContext>>;
 type Execution = Omit<AnalyticsExecution,'timestamp'> & {timestamp:Date};
@@ -46,8 +47,9 @@ function matches(row:Execution,where:Record<string,unknown>):boolean {
     return comparable(value)===comparable(condition);
   });
 }
-export function createAnalyticsSource(username:string,items:AnalyticsItem[],events:ReliabilityEventRow[]=[]) {
+export function createAnalyticsSource(username:string,items:AnalyticsItem[],events:ReliabilityEventRow[]=[],outcomes:Record<string,CoreOutcomeLookup>={}) {
   const rows:Execution[]=[];
+  const currentOutcomes=new Map<string,CoreOutcomeLookup>();
   const identities=new Set<string>();
   const originals=new Set(items.map(item=>item.projection?.executions?.[0]?.id));
   for(const item of items) {
@@ -57,11 +59,32 @@ export function createAnalyticsSource(username:string,items:AnalyticsItem[],even
       if(identities.has(raw.id))fail('Ambiguous analytics execution identity',409);
       identities.add(raw.id);
       const timestamp=new Date(raw.timestamp);if(!Number.isFinite(timestamp.getTime()))fail('Invalid analytics timestamp');
-      rows.push({...raw,timestamp});
+      const row={...raw,timestamp};
+      const current=index===0?outcomes[item.trace_id]:undefined;
+      if(current){
+        currentOutcomes.set(raw.id,current);
+        const value=current.outcome?.value;
+        if(value){
+          row.isAnswerCorrect=value.is_answer_correct;row.failures=JSON.stringify(value.failures);row.skillIssues=value.skill_issues===null?null:JSON.stringify(value.skill_issues);
+          const metadata=value.record_projection;
+          if(metadata){
+            if(Object.hasOwn(metadata,'skill'))row.skill=metadata.skill??null;
+            if(Object.hasOwn(metadata,'skill_version'))row.skillVersion=metadata.skill_version;
+            if(Array.isArray(metadata.invokedSkills)){row.invokedSkills=JSON.stringify(metadata.invokedSkills);row.executionSkills=metadata.invokedSkills.map(skill=>({skillName:skill.name,version:skill.version??null}));}
+            row.skillTriggerRate=metadata.skill_trigger_rate;
+          }
+        }
+        if(current.answer_reset){
+          row.isAnswerCorrect=false;
+          if(current.answer_reset.query_projection)row.skillTriggerRate=current.answer_reset.query_projection.skill_trigger_rate;
+        }
+      }
+      rows.push(row);
     }
   }
   return {
     username,items,events,rows,
+    currentOutcome(id:string){return currentOutcomes.get(id)??null;},
     staticUsers:[username],
     findMany(query:Query={}) {
       let result=rows.filter(row=>matches(row,query.where||{}));
@@ -166,14 +189,14 @@ function selectionFor(request:Request):Record<string,unknown> {
   for(const key of ['from_ms','to_ms'])if(selection[key]!==undefined&&!Number.isFinite(selection[key]))fail('Invalid analytics time range',400);
   return selection;
 }
-async function readActor(actor:Actor,options:CompatibilityOptions,background=false,selection:Record<string,unknown>={}):Promise<AnalyticsSource> {
+async function readActor(actor:Actor,options:CompatibilityOptions,background=false,selection:Record<string,unknown>={},includeRas=true):Promise<AnalyticsSource> {
   if(!actor.username)fail('Verified analytics identity required',403);
   let cursor:string|undefined;let scope:string|undefined;
-  const items:AnalyticsItem[]=[];const pending:{trace_id:string;boundary:string}[]=[];const checked:{trace_id:string;boundary:string}[]=[];const enrichmentTokens:string[]=[];const rasTokens:string[]=[];const events=new Map<string,ReliabilityEventRow>();
+  const items:AnalyticsItem[]=[];const pending:{trace_id:string;boundary:string}[]=[];const checked:{trace_id:string;boundary:string}[]=[];const enrichmentTokens:string[]=[];const rasTokens:string[]=[];const outcomeTokens:string[]=[];const outcomes:Record<string,CoreOutcomeLookup>={};const events=new Map<string,ReliabilityEventRow>();
   let pageLimit=200;
   for(;;) {
     let page:Record<string,unknown>;
-    try {page=await rpc(actor,'read',{limit:pageLimit,parser_version:1,selection,...(cursor?{cursor}:{})},options);}
+    try {page=await rpc(actor,'read',{limit:pageLimit,parser_version:1,selection,...(includeRas?{}:{include_ras:false}),...(cursor?{cursor}:{})},options);}
     catch(error) {
       if(error&&typeof error==='object'&&'status'in error&&error.status===413&&pageLimit>1){pageLimit=Math.max(1,Math.floor(pageLimit/2));continue;}
       throw error;
@@ -181,6 +204,13 @@ async function readActor(actor:Actor,options:CompatibilityOptions,background=fal
     if(!Array.isArray(page.items)||!Array.isArray(page.pending)||typeof page.scope_fingerprint!=='string')fail('Analytics coverage unavailable');
     if(scope!==undefined&&scope!==page.scope_fingerprint)fail('Authorization changed during analytics read',403);
     scope=page.scope_fingerprint;
+    if(page.items.length&&(!page.outcomes||typeof page.outcomes!=='object'||Array.isArray(page.outcomes)||typeof page.outcome_read_token!=='string'))fail('Current Outcome read coverage unavailable');
+    for(const item of page.items as AnalyticsItem[]){
+      const current=(page.outcomes as Record<string,CoreOutcomeLookup>)[item.trace_id];
+      if(!current||typeof current.is_evaluating!=='boolean'||typeof current.selection_hash!=='string'||!/^[0-9a-f]{64}$/.test(current.selection_hash)||current.outcome!==null&&(!current.outcome?.source||current.outcome.source.trace_id!==item.trace_id||current.outcome.source.execution_id!==item.projection.executions[0].id))fail('Current Outcome source differs',409);
+      outcomes[item.trace_id]=current;
+    }
+    if(typeof page.outcome_read_token==='string')outcomeTokens.push(page.outcome_read_token);
     items.push(...page.items as AnalyticsItem[]);pending.push(...page.pending as typeof pending);
     checked.push(...(Array.isArray(page.checked_sources)?page.checked_sources as typeof checked:(page.items as AnalyticsItem[]).map(({trace_id,boundary})=>({trace_id,boundary}))));
     if(items.length+pending.length>100000||checked.length>100000)fail('Analytics scan budget exceeded',413);
@@ -212,6 +242,10 @@ async function readActor(actor:Actor,options:CompatibilityOptions,background=fal
       const check=await rpc(actor,'validate_ras',{read_tokens:rasTokens.slice(offset,offset+200)},options);
       if(check.scope_fingerprint!==scope)fail('Authorization changed during RAS statistics',403);
     }
+    for(let offset=0;offset<outcomeTokens.length;offset+=200){
+      const check=await rpc(actor,'validate_outcomes',{read_tokens:outcomeTokens.slice(offset,offset+200)},options);
+      if(check.scope_fingerprint!==scope)fail('Authorization changed during Outcome read',403);
+    }
   };
   await validate();
   const enrich=async(traceIds:string[])=>{
@@ -230,12 +264,12 @@ async function readActor(actor:Actor,options:CompatibilityOptions,background=fal
     enrichmentTokens.push(value.read_token);
     return value;
   };
-  return {...createAnalyticsSource(actor.username,items,[...events.values()]),actor,validate,enrich};
+  return {...createAnalyticsSource(actor.username,items,[...events.values()],outcomes),actor,validate,enrich};
 }
 export async function readCoreAnalytics(request:Request,options:CompatibilityOptions={}):Promise<AnalyticsSource> {
   const actor=await compatibilityContext(request,options);const selection=selectionFor(request);
   for(let attempt=0;;attempt++) {
-    try{return await readActor(actor,options,false,selection);}
+    try{return await readActor(actor,options,false,selection,new URL(request.url).pathname!=='/api/ingest/ras-events');}
     catch(error){if(attempt>=2||!error||typeof error!=='object'||!('status'in error)||error.status!==409)throw error;}
   }
 }
@@ -253,4 +287,30 @@ export async function ingestCoreRas(request:Request,events:Record<string,unknown
   const actor=await compatibilityContext(request,options);
   if(!actor.token.startsWith('api_'))fail('Collector API credential required',403);
   return rpc(actor,'ras_ingest',{events},options,true);
+}
+
+export type CoreRasEvent=ReliabilityEventRow & {user:string;rasSessionKey:string|null;executionId:string|null};
+export async function readCoreRasEvents(request:Request,taskIds:string[]=[],selection:{limit?:number;types?:string[];order?:'asc'|'desc'}={},options:CompatibilityOptions={}) {
+  const actor=await compatibilityContext(request,options);
+  const value=await rpc(actor,'ras_read',{task_ids:taskIds,selection},options);
+  if(!Array.isArray(value.events)||typeof value.read_token!=='string'||typeof value.scope_fingerprint!=='string'||!value.execution_ids||typeof value.execution_ids!=='object')fail('RAS read coverage unavailable');
+  const events=value.events.map(raw=>{
+    const row=raw as CoreRasEvent;const ts=new Date(row.ts);
+    if(typeof row.id!=='string'||typeof row.taskId!=='string'||typeof row.user!=='string'||!Number.isFinite(ts.getTime()))fail('Invalid RAS event source');
+    return {...row,ts};
+  });
+  const validate=async()=>{const check=await rpc(actor,'validate_ras_read',{read_token:value.read_token},options);if(check.scope_fingerprint!==value.scope_fingerprint)fail('RAS authorization changed',403);};
+  return {actor,events,executionIds:value.execution_ids as Record<string,string|null>,hasMore:value.has_more===true,validate};
+}
+
+export async function readCoreRasMetadata(request:Request,limit:number,options:CompatibilityOptions={}) {
+  const actor=await compatibilityContext(request,options);const value=await rpc(actor,'ras_read',{task_ids:[],selection:{limit,view:'metadata'}},options);
+  if(!Array.isArray(value.events)||typeof value.read_token!=='string'||typeof value.scope_fingerprint!=='string')fail('RAS metadata coverage unavailable');
+  const rows=value.events.map(raw=>{
+    const row=raw as {taskId:string;user:string;platform:string|null;framework:string|null;ts:string};const ts=new Date(row.ts);
+    if(typeof row.taskId!=='string'||typeof row.user!=='string'||!Number.isFinite(ts.getTime()))fail('Invalid RAS metadata source');
+    return {...row,ts};
+  });
+  const validate=async()=>{const check=await rpc(actor,'validate_ras_read',{read_token:value.read_token},options);if(check.scope_fingerprint!==value.scope_fingerprint)fail('RAS authorization changed',403);};
+  return {actor,rows,validate};
 }

@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {handleCoreOutcomeRejudge} from '@/lib/storage-core/trace-outcome';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,6 +24,7 @@ import { db } from '@/lib/storage/prisma';
 import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '@/lib/evaluation-task-manager';
 
 export async function POST(request: Request) {
+  if (isStorageCoreEnabled()) return handleCoreOutcomeRejudge(request);
   try {
     const data = await request.json();
     console.log(`[Rejudge] Received request for task: ${data.task_id || data.upload_id}`);

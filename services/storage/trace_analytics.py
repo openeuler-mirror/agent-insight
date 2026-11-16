@@ -14,6 +14,8 @@ from .trace_evidence import TraceEvidence
 MAX_PROJECTION_BYTES=2*1024*1024
 MAX_PAGE_BYTES=8*1024*1024
 MAX_RAS_EVENTS=10000
+MAX_RAS_SCAN=100000
+MAX_RAS_READ_TOKEN_BYTES=3*1024*1024
 PARSER_VERSION=1
 
 
@@ -186,12 +188,13 @@ class TraceAnalytics:
         if not times or any(value is None for value in times):return True
         return not (selection.get('from_ms') is not None and max(times)<selection['from_ms'] or selection.get('to_ms') is not None and min(times)>selection['to_ms'])
 
-    def read(self,token,workspace,*,limit=200,cursor=None,selection=None):
+    def read(self,token,workspace,*,limit=200,cursor=None,selection=None,include_ras=True):
         identifier(workspace)
+        if type(include_ras) is not bool:raise ValueError('Invalid analytics RAS inclusion')
         selection_filter=_selection(selection)
         if type(limit) is not int or not 1<=limit<=200:raise ValueError('Analytics page size must be 1..200')
         scope,_=self.queries._candidates(token,workspace,None,1)
-        query=content_hash({'workspace_id':workspace,'domain':'trace-analytics','parser_version':PARSER_VERSION,'selection':selection_filter})
+        query=content_hash({'workspace_id':workspace,'domain':'trace-analytics','parser_version':PARSER_VERSION,'selection':selection_filter,**({'include_ras':False} if not include_ras else {})})
         after=self.queries._decode(cursor,scope.fingerprint,query) if cursor else None
         current,candidates=self.queries._candidates(token,workspace,after,limit+1)
         if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed during analytics pagination')
@@ -223,13 +226,37 @@ class TraceAnalytics:
             if size>MAX_PAGE_BYTES:raise AnalyticsTooLarge('Analytics page exceeds 8MiB; request fewer traces')
             if _projection_matches(projection,selection_filter):items.append({'trace_id':selection['trace_id'],'boundary':selection['boundary'],'projection':projection})
         selected_ids={row['trace_id'] for row in items+pending}
-        events,ras_snapshot=self._ras_read(workspace,{trace:source for trace,source in sources.items() if trace in selected_ids})
+        with self.control.read_transaction() as con:outcome_snapshot=self._outcome_snapshot(con,token,workspace,sorted(row['trace_id'] for row in items))
+        events,ras_snapshot=self._ras_read(workspace,{trace:source for trace,source in sources.items() if trace in selected_ids}) if include_ras else ([],None)
         self._recheck(token,workspace,scope,boundaries)
         position=candidates[-1] if candidates else None
         next_cursor=self.queries._encode({'version':1,'scope':scope.fingerprint,'query':query,'created_at_ms':position['created_at_ms'],'trace_id':position['trace_id']}) if more else None
-        ras_token=self.queries._encode({'purpose':'analytics-ras/v1','workspace_id':workspace,'scope':scope.fingerprint,'trace_ids':sorted(selected_ids),'snapshot_hash':_hash(ras_snapshot)})
+        ras_token=self.queries._encode({'purpose':'analytics-ras/v1','workspace_id':workspace,'scope':scope.fingerprint,'trace_ids':sorted(selected_ids),'snapshot_hash':_hash(ras_snapshot)}) if include_ras else None
+        outcome_token=self.queries._encode({'purpose':'analytics-outcome/v1','workspace_id':workspace,'scope':scope.fingerprint,'trace_ids':sorted(outcome_snapshot['outcomes']),'snapshot_hash':_hash(outcome_snapshot)})
         return {'items':items,'pending':pending,'next_cursor':next_cursor,'scope_fingerprint':scope.fingerprint,'project_id':scope.project_id,'ras_events':events,'ras_read_token':ras_token,
+            'outcomes':outcome_snapshot['outcomes'],'outcome_read_token':outcome_token,
             'checked_sources':[{'trace_id':trace,'boundary':boundary} for trace,boundary in boundaries.items()]}
+
+    def _outcome_snapshot(self,con,token,workspace,traces):
+        from .experiments import ExperimentStore
+        from .trace_outcome import _lookup_tx
+        scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read');store=ExperimentStore(self.control)
+        outcomes={};size=0
+        for trace in traces:
+            self._boundary(con,token,workspace,trace,scope)
+            selected=_lookup_tx(store,con,token,workspace,{'trace_ref':trace});size+=len(_json(selected).encode('utf-8'))
+            if size>MAX_PAGE_BYTES:raise AnalyticsTooLarge('Current Outcome page exceeds8MiB; request fewer traces')
+            outcomes[trace]=selected
+        return {'scope':scope.fingerprint,'outcomes':outcomes}
+
+    def validate_outcomes(self,token,workspace,read_tokens):
+        if not isinstance(read_tokens,list) or not 1<=len(read_tokens)<=200:raise ValueError('Outcome validation requires 1..200 read tokens')
+        with self.control.read_transaction() as con:
+            scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read')
+            for read_token in read_tokens:
+                value=self._read_snapshot_token(read_token,workspace,scope,'analytics-outcome/v1')
+                if _hash(self._outcome_snapshot(con,token,workspace,value['trace_ids']))!=value['snapshot_hash']:raise Conflict('Current Outcome selection changed across analytics pages')
+        return {'scope_fingerprint':scope.fingerprint}
 
     @staticmethod
     def _ras_snapshot(con,workspace,sources):
@@ -263,6 +290,157 @@ class TraceAnalytics:
         with self.control.read_transaction() as con:
             if self._ras_snapshot(con,workspace,sources)!=snapshot:raise Conflict('RAS event changed during analytics query')
         return events,snapshot
+
+    @staticmethod
+    def _ras_budget(deadline):
+        import time
+        if time.monotonic()>deadline:raise AnalyticsTooLarge('RAS selection exceeds read time budget; narrow taskIds')
+
+    def _ras_trace_link(self,con,scope,workspace,task,owner=None,*,deadline):
+        self._ras_budget(deadline)
+        access,params=self.queries._selection(con,scope,workspace)
+        sql="""SELECT t.trace_id,t.route_epoch,t.incarnation,a.owner_principal_id,
+            COALESCE((SELECT e.alias_id FROM trace_legacy_ids e WHERE e.workspace_id=t.workspace_id AND e.trace_id=t.trace_id AND e.alias_kind='execution' ORDER BY e.created_at_ms,e.alias_id LIMIT 1),t.trace_id) AS execution_id
+            FROM trace_locators t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_kind='trace' AND a.resource_id=t.trace_id
+            WHERE t.workspace_id=? AND t.state='active'"""+access+" AND (EXISTS(SELECT 1 FROM trace_legacy_ids l WHERE l.workspace_id=t.workspace_id AND l.trace_id=t.trace_id AND l.alias_kind='task' AND l.alias_id=?) OR (t.trace_id=? AND NOT EXISTS(SELECT 1 FROM trace_legacy_ids l WHERE l.workspace_id=t.workspace_id AND l.trace_id=t.trace_id AND l.alias_kind='task')))"
+        params.extend([task,task])
+        if owner is not None:sql+=' AND a.owner_principal_id=?';params.append(owner)
+        rows=con.execute(sql+' LIMIT 2',tuple(params)).fetchall()
+        if len(rows)>1:raise Conflict('RAS task has ambiguous Trace identity')
+        if not rows:return None
+        result=dict(rows[0])
+        annotation=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(workspace,result['trace_id'])).fetchone()
+        result['annotation_hash']=_hash(dict(annotation)) if annotation else None
+        head=con.execute("SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='trace' AND entity_id=?",(workspace,result['trace_id'],result['trace_id'])).fetchone()
+        if head is None:result['execution_id']=None
+        else:
+            from .dataset_generation_sources import GenerationSources
+            reader=GenerationSources(self.queries,self.authorized);reader.deadline=deadline
+            state=reader._artifact(dict(head));flag=state.get('legacy_projection',{}).get('is_subagent')
+            if flag is None:
+                candidates=[];capsule=None
+                for span in con.execute("SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='span' ORDER BY entity_id",(workspace,result['trace_id'])):
+                    source=reader._artifact(dict(span));sections=source['sections']
+                    if 'legacy_trace' in sections:
+                        if capsule is not None:raise AnalyticsUnavailable('RAS original execution metadata is ambiguous')
+                        capsule=json.loads(sections['legacy_trace']);flag=capsule.get('execution',{}).get('isSubagent',False)
+                    else:
+                        value=reader._fields(source).get('isSubagent')
+                        if value is not None:candidates.append((1 if source['row'].get('parent_span_id') else 2,value))
+                if capsule is None:
+                    priority=max((item[0] for item in candidates),default=0);flags={item[1] for item in candidates if item[0]==priority}
+                    if len(flags)>1:raise AnalyticsUnavailable('RAS root execution metadata is ambiguous')
+                    flag=next(iter(flags),False)
+            if type(flag) is not bool:raise AnalyticsUnavailable('RAS root execution metadata is invalid')
+            if flag:result['execution_id']=None
+            result['head_revision']=head['revision'];result['head_hash']=head['content_hash']
+        self._ras_budget(deadline)
+        return result
+
+    @staticmethod
+    def _ras_selection(tasks=None,selection=None):
+        tasks=[] if tasks is None else tasks
+        if not isinstance(tasks,list) or len(tasks)>10000 or not all(isinstance(task,str) for task in tasks) or len(set(tasks))!=len(tasks):raise ValueError('RAS read requires at most10000 distinct tasks')
+        for task in tasks:identifier(task)
+        if selection is None:selection={}
+        if not isinstance(selection,dict) or set(selection)-{'limit','types','view','order'}:raise ValueError('Invalid RAS read selection')
+        limit=selection.get('limit',MAX_RAS_EVENTS);types=selection.get('types',[]);view=selection.get('view','events')
+        order=selection.get('order','desc')
+        if order not in ('asc','desc'):raise ValueError('Invalid RAS read order')
+        if view not in ('events','metadata'):raise ValueError('Invalid RAS read view')
+        if type(limit) is not int or not 0<=limit<=MAX_RAS_EVENTS:raise ValueError('RAS read page exceeds bounded selection')
+        if not isinstance(types,list) or len(types)>10 or not all(isinstance(kind,str) for kind in types):raise ValueError('Invalid RAS event type selection')
+        for kind in types:identifier(kind)
+        return {'task_ids':sorted(tasks),'limit':limit,'types':sorted(set(types)),'view':view,'order':order}
+
+    def _ras_read_snapshot(self,con,token,workspace,selection,deadline):
+        self._ras_budget(deadline)
+        scope=self.iam._scope(con,token);grant=self.iam._workspace(scope,workspace,'read');tasks=selection['task_ids']
+        roots={task:self._ras_trace_link(con,scope,workspace,task,deadline=deadline) for task in tasks}
+        access,params=self.queries._selection(con,scope,workspace)
+        match="(EXISTS(SELECT 1 FROM trace_legacy_ids l WHERE l.workspace_id=t.workspace_id AND l.trace_id=t.trace_id AND l.alias_kind='task' AND l.alias_id=r.task_id) OR (t.trace_id=r.task_id AND NOT EXISTS(SELECT 1 FROM trace_legacy_ids l WHERE l.workspace_id=t.workspace_id AND l.trace_id=t.trace_id AND l.alias_kind='task')))"
+        joins="FROM trace_locators t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_kind='trace' AND a.resource_id=t.trace_id WHERE t.workspace_id=? AND a.owner_principal_id=r.owner_principal_id AND "+match
+        visible="EXISTS(SELECT 1 "+joins+" AND t.state='active'"+access+")"
+        predicate="r.owner_principal_id=? OR "+visible;args=[workspace,scope.principal_id,*params]
+        if grant.role in {'owner','admin','personal'}:
+            predicate+=" OR NOT EXISTS(SELECT 1 "+joins+")";args.append(workspace)
+        sql="SELECT r.*,p.normalized_login_name AS owner_username FROM ras_event_receipts r JOIN iam_principals p ON p.principal_id=r.owner_principal_id WHERE r.workspace_id=? AND ("+predicate+")"
+        if tasks:
+            clauses=[];owners={}
+            for task in tasks:
+                owners.setdefault(roots[task]['owner_principal_id'] if roots[task] else None,[]).append(task)
+            for owner,group in owners.items():
+                clause='r.task_id IN ('+','.join('?' for _ in group)+')';args.extend(group)
+                if owner is not None:clause+=' AND r.owner_principal_id=?';args.append(owner)
+                clauses.append('('+clause+')')
+            sql+=' AND ('+' OR '.join(clauses)+')'
+        direction=selection['order'].upper()
+        sql+=' ORDER BY r.occurred_at_ms '+direction+',r.event_id '+direction+',r.owner_principal_id'
+        rows=con.execute(sql+' LIMIT ?',(*args,selection['scan_limit'])).fetchall() if selection['limit'] else []
+        receipts=[dict(row) for row in rows]
+        links={}
+        for row in receipts:
+            key=(row['owner_principal_id'],row['task_id'])
+            if key not in links:links[key]=self._ras_trace_link(con,scope,workspace,row['task_id'],row['owner_principal_id'],deadline=deadline)
+            row['execution_id']=links[key]['execution_id'] if links[key] else None
+        self._ras_budget(deadline)
+        return {'scope':scope.fingerprint,'receipts':receipts,'roots':roots}
+
+    def ras_read(self,token,workspace,tasks=None,selection=None):
+        import time
+        identifier(workspace);selection=self._ras_selection(tasks,selection)
+        selection['scan_limit']=min(200,MAX_RAS_SCAN) if selection['types'] and selection['limit'] else selection['limit']+1 if selection['limit'] else 0
+        events=[];size=0;seen=0;processed=0;before=None;deadline=time.monotonic()+60
+        def read_facts(rows):
+            self._ras_budget(deadline)
+            try:
+                value=self.facts.read_ras_events(workspace,rows) if rows else []
+                self._ras_budget(deadline);return value
+            except Exception as error:
+                if getattr(error,'status',None)!=413 or len(rows)<=1:raise
+                middle=len(rows)//2
+                return read_facts(rows[:middle])+read_facts(rows[middle:])
+        while True:
+            self._ras_budget(deadline)
+            with self.control.read_transaction() as con:current=self._ras_read_snapshot(con,token,workspace,selection,deadline)
+            if before and (current['scope']!=before['scope'] or current['roots']!=before['roots'] or current['receipts'][:processed]!=before['receipts']):raise Conflict('RAS sources changed during bounded scan')
+            before=current;pending=before['receipts'][processed:]
+            for offset in range(0,len(pending),200):
+                rows=pending[offset:offset+200];facts=read_facts(rows)
+                index={tuple(row.get(key) for key in ('owner_principal_id','task_id','event_key','content_hash')):row for row in facts if row.get('workspace_id')==workspace}
+                for receipt in rows:
+                    row=index.get(tuple(receipt[key] for key in ('owner_principal_id','task_id','event_key','content_hash')));text=row.get('event_json') if row else None
+                    if not isinstance(text,str) or len(text.encode('utf-8'))>262144 or hashlib.sha256(text.encode('utf-8')).hexdigest()!=receipt['content_hash']:raise AnalyticsUnavailable('Accepted RAS event is unavailable or corrupted')
+                    event=json.loads(text)
+                    if event.get('id')!=receipt['event_id'] or event.get('taskId')!=receipt['task_id']:raise AnalyticsUnavailable('RAS event identity differs')
+                    if selection['types'] and event.get('type') not in selection['types']:continue
+                    seen+=1
+                    if len(events)>=selection['limit']:continue
+                    if selection['view']=='metadata':event={**{key:event.get(key) for key in ('taskId','platform','framework','ts')},'user':receipt['owner_username']}
+                    else:event['user']=receipt['owner_username'];event['executionId']=receipt['execution_id'];event.setdefault('rasSessionKey',None)
+                    size+=len(_json(event).encode('utf-8'))
+                    if size>MAX_PAGE_BYTES:raise AnalyticsTooLarge('RAS events exceed8MiB; narrow taskIds or limit')
+                    events.append(event)
+            processed=len(before['receipts'])
+            if not selection['types'] or seen>=selection['limit'] or processed<selection['scan_limit']:break
+            if selection['scan_limit']>=MAX_RAS_SCAN:raise AnalyticsTooLarge('RAS type scan exceeds receipt budget; narrow taskIds')
+            selection['scan_limit']=min(MAX_RAS_SCAN,selection['scan_limit']+200)
+        with self.control.read_transaction() as con:
+            if self._ras_read_snapshot(con,token,workspace,selection,deadline)!=before:raise Conflict('RAS read source or authorization changed')
+        read_token=self.queries._encode({'purpose':'analytics-ras-read/v1','workspace_id':workspace,'scope':before['scope'],'selection':selection,'snapshot_hash':_hash(before)})
+        self._ras_budget(deadline)
+        if len(read_token)>MAX_RAS_READ_TOKEN_BYTES:raise AnalyticsTooLarge('RAS selection exceeds read token budget; narrow taskIds')
+        return {'events':events,'has_more':seen>selection['limit'] or bool(selection['types'] and seen>=selection['limit'] and processed==selection['scan_limit']),'execution_ids':{task:row['execution_id'] if row else None for task,row in before['roots'].items()},'scope_fingerprint':before['scope'],'read_token':read_token}
+
+    def validate_ras_read(self,token,workspace,read_token):
+        import time
+        deadline=time.monotonic()+60
+        with self.control.read_transaction() as con:
+            scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read')
+            value=self._read_snapshot_token(read_token,workspace,scope,'analytics-ras-read/v1',selection_key='selection')
+            if _hash(self._ras_read_snapshot(con,token,workspace,value['selection'],deadline))!=value['snapshot_hash']:raise Conflict('RAS read sources changed')
+        self._ras_budget(deadline)
+        return {'scope_fingerprint':scope.fingerprint}
 
     def ras_ingest(self,token,workspace,events):
         identifier(workspace)
@@ -531,16 +709,22 @@ class TraceAnalytics:
         if len(_json(result).encode('utf-8'))>MAX_PAGE_BYTES:raise AnalyticsTooLarge('Quality enrichment exceeds 8MiB; request fewer traces')
         return result
 
-    def _read_snapshot_token(self,read_token,workspace,scope,purpose):
+    def _read_snapshot_token(self,read_token,workspace,scope,purpose,*,selection_key='trace_ids'):
         try:
-            if not isinstance(read_token,str) or not 1<=len(read_token)<=256*1024:raise ValueError()
+            budget=MAX_RAS_READ_TOKEN_BYTES if purpose=='analytics-ras-read/v1' and selection_key=='selection' else 256*1024
+            if not isinstance(read_token,str) or not 1<=len(read_token)<=budget:raise ValueError()
             raw=base64.b64decode(read_token+'='*(-len(read_token)%4),altchars=b'-_',validate=True)
             if base64.urlsafe_b64encode(raw).decode().rstrip('=')!=read_token:raise ValueError()
             body,signature=raw[:-32],raw[-32:]
             if len(signature)!=32 or not hmac.compare_digest(signature,hmac.new(self.queries.secret,body,hashlib.sha256).digest()):raise ValueError()
             value=json.loads(body)
-            if not isinstance(value,dict) or set(value)!={'purpose','workspace_id','scope','trace_ids','snapshot_hash'} or value['purpose']!=purpose or value['workspace_id']!=workspace or value['scope']!=scope.fingerprint:raise ValueError()
-            traces=value['trace_ids'];_digest(value['snapshot_hash'])
+            if not isinstance(value,dict) or set(value)!={'purpose','workspace_id','scope',selection_key,'snapshot_hash'} or value['purpose']!=purpose or value['workspace_id']!=workspace or value['scope']!=scope.fingerprint:raise ValueError()
+            _digest(value['snapshot_hash'])
+            if selection_key=='selection':
+                selected=value[selection_key]
+                if not isinstance(selected,dict) or set(selected)!={'task_ids','limit','types','view','order','scan_limit'} or type(selected['scan_limit']) is not int or not 0<=selected['scan_limit']<=MAX_RAS_SCAN or self._ras_selection(selected['task_ids'],{key:selected[key] for key in ('limit','types','view','order')})!={key:selected[key] for key in ('task_ids','limit','types','view','order')}:raise ValueError()
+                return value
+            traces=value[selection_key]
             if not isinstance(traces,list) or len(traces)>200 or len(set(traces))!=len(traces):raise ValueError()
             for trace in traces:identifier(trace)
             return value
@@ -566,9 +750,11 @@ class TraceAnalytics:
         return {'scope_fingerprint':scope.fingerprint}
 
     def dispatch(self,action,token,workspace,value):
-        if action=='read':return self.read(token,workspace,limit=value.get('limit',200),cursor=value.get('cursor'),selection=value.get('selection'))
+        if action=='read':return self.read(token,workspace,limit=value.get('limit',200),cursor=value.get('cursor'),selection=value.get('selection'),include_ras=value.get('include_ras',True))
         if action=='prepare':return self.prepare(token,workspace,value.get('trace_id'))
         if action=='publish':return self.publish(token,workspace,value.get('trace_id'),value.get('boundary'),value.get('projection'))
+        if action=='ras_read':return self.ras_read(token,workspace,value.get('task_ids'),value.get('selection'))
+        if action=='validate_ras_read':return self.validate_ras_read(token,workspace,value.get('read_token'))
         if action=='ras_ingest':return self.ras_ingest(token,workspace,value.get('events'))
         if action=='validate':return self.validate(token,workspace,value.get('items'))
         if action=='agent_metadata':return self.agent_metadata(token,workspace,value.get('items'))
@@ -576,4 +762,5 @@ class TraceAnalytics:
         if action=='prepare_sources':return self.prepare_sources(token,workspace,value.get('experiment_id'),value.get('run_id'))
         if action=='validate_enrichment':return self.validate_enrichment(token,workspace,value.get('read_tokens'))
         if action=='validate_ras':return self.validate_ras(token,workspace,value.get('read_tokens'))
+        if action=='validate_outcomes':return self.validate_outcomes(token,workspace,value.get('read_tokens'))
         raise ValueError('Unsupported analytics action')

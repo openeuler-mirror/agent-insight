@@ -19,6 +19,9 @@ import { prisma } from '@/lib/storage/prisma'
 import { deriveAnomalyStatus } from '@/lib/reliability/anomaly-status'
 import { buildRasTraceMarkers } from '@/lib/ingest/ras/trace-markers'
 import type { RasEventRow } from '@/lib/ingest/ras/normalize'
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
+import { readTraceExecution } from '@/lib/storage-core/evidence'
+import { readCoreRasEvents, analyticsFailure } from '@/lib/storage-core/analytics'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,13 +40,25 @@ export async function GET(
     const url = new URL(req.url)
     const locale = url.searchParams.get('locale') === 'en' ? 'en' : 'zh'
 
-    const execution = await prisma.execution.findUnique({
+    const core = isStorageCoreEnabled()
+    let executionSnapshot: string | null = null
+    let execution: {id: string; taskId: string | null; finalResult: string | null} | null = null
+    if (core) {
+      try {
+        const {evidence} = await readTraceExecution(req, {executionId: id})
+        executionSnapshot = evidence.snapshot_hash
+        execution = {id: evidence.execution.id, taskId: evidence.execution.taskId, finalResult: evidence.execution.finalResult ?? null}
+      } catch (error) {
+        if ((error as {status?: number})?.status !== 404) throw error
+      }
+    } else execution = await prisma.execution.findUnique({
       where: { id },
       select: { id: true, taskId: true, finalResult: true },
     })
 
     const taskId = execution?.taskId || ''
-    const events = await prisma.rasAnomalyEvent.findMany({
+    const coreEvents = core && taskId ? await readCoreRasEvents(req, [taskId], {limit: 200, order: 'asc'}) : null
+    const events = core ? coreEvents?.events || [] : await prisma.rasAnomalyEvent.findMany({
       where: {
         OR: [
           { executionId: id },
@@ -124,6 +139,11 @@ export async function GET(
       }
     })
 
+    if (executionSnapshot) {
+      const {evidence} = await readTraceExecution(req, {executionId: id})
+      if (evidence.snapshot_hash !== executionSnapshot) throw Object.assign(new Error('Reliability execution source changed'), {status: 409})
+    }
+    if (coreEvents) await coreEvents.validate()
     return NextResponse.json({
       executionId: id,
       lifecycleStatus: execution?.finalResult ? 'success' : 'unknown',
@@ -142,6 +162,7 @@ export async function GET(
       evaluation: null,
     })
   } catch (error) {
+    if (isStorageCoreEnabled()) return analyticsFailure(error)
     console.error('[observe reliability GET]', error)
     return NextResponse.json({ error: 'failed to load reliability detail' }, { status: 500 })
   }

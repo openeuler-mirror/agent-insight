@@ -83,6 +83,22 @@ class TraceEvidenceTests(unittest.TestCase):
                 for read in (self.evidence().read,self.evidence().read_execution):
                     self.assertEqual(read(self.token,'w',trace_ref=trace)['execution'].get('agentId'),'root-agent-'+str(index))
 
+    def test_native_raw_skills_without_primary_or_invocation_are_preserved(self):
+        from services.storage.tests.test_observations import packet
+        cases=[('legacy.skills',{'arrayValue':{'values':[{'stringValue':'raw-only'}]}},['raw-only']),
+               ('skills',{'stringValue':'["raw-only"]'},'["raw-only"]')]
+        for index,(alias,attribute,expected) in enumerate(cases,start=4):
+            with self.subTest(attribute=alias):
+                source=packet(trace=str(index)*32)
+                source['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({'key':alias,'value':attribute})
+                trace=self.ingest.accept(self.token,'w',source)['trace_ids'][0];self.drain()
+                metadata=json.loads(self.queries.summary(self.token,'w',trace)['trace']['attributes_json'])
+                self.assertEqual(metadata.get('skills'),['raw-only'])
+                for read in (self.evidence().read,self.evidence().read_execution):
+                    execution=read(self.token,'w',trace_ref=trace)['execution']
+                    self.assertEqual(execution.get('skills'),expected)
+                    self.assertIsNone(execution.get('skill'));self.assertIsNone(execution.get('invokedSkills'))
+
     def test_descendant_agent_id_cannot_be_presented_as_root_execution_identity(self):
         from services.storage.tests.test_observations import packet
         source=packet();spans=source['resourceSpans'][0]['scopeSpans'][0]['spans']

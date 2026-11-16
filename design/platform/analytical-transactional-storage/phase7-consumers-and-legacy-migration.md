@@ -141,3 +141,29 @@ cut描述包括源Trace revision、语义生命周期哈希、捕获时间、证
 
 
 Agent管理GET复用现`analytics`端口增加只读`agent_metadata`动作，每批至多200个已授权Trace/boundary，读取前后复核，返回真实Execution ID/Agent ID和可选注册输入。复用已有经验证的源元数据读取，不改015或parser。静态RegisteredAgent仍原权威；今日调用/最后调用仍按真实agentId计数，不凭名称猜关联。仅本人最近300个实际Execution请求role/agent/subagent_name，按原interaction顺序及原extractObservedAgentRegistrations补注册；Langfuse用原secondary interactions，空/缺Session不造注册。native沿用原Session的resource agent/service覆盖和raw优先语义。源artifact在本地可能包含正文，但不组装完整Session、不从CH拉tool正文，Node只收到上述小字段。Agent DELETE暂不在此片迁移。
+
+
+第一版后续清单继续执行：Skill runs/logs仅替换原readRecords动态来源，复用原routing/outcome计算，所有合法历史字段和unknown版本保留，不进行读时版本回填。RAS专项GET补齐真实事件、摘要及Trace关联；现analytics端口增加ras_read/validate_ras_read只读动作，覆盖先于Trace到达的事件，普通成员本人/显式共享、组管理员本组，私有Judge Trace的他人事件仍隔离。OLTP receipt校验CH精确hash与当前revision，读取前后授权/版本复核，不使用payload.user授权；沿用原去重/摘要/生命周期投影，DELETE另按删除屏障接入。没有新表、parser或前端界面变更。
+
+Trace内可靠性详情复用同一真实Execution及RAS读取，保留原`ts ASC take200`窗口、marker/恢复状态算法及中英文DTO；RAS有界selection显式加入order并绑定读取token，缺省DESC保持专题页旧行为。不存在的执行仍返回原200 unknown，拒绝/错误不读取旧动态表。上报事件仅按真实来源归属匹配，不通过查询user扩大权限。
+
+FI run Trace纯读沿用原FI控制域及模型/marker优先级，使用真实兼容账号限定Run/Task与worker inventory；动态Session与真实RAS改读授权Evidence/事件，返回前复核源及RAS选择。尚无轨迹/Session保持原空轨迹，拒绝/损坏不回旧动态表。FI控制事务未在此片迁移，原FI markers不冒充真实RAS事件；仅精确GET补Key传输，无界面变化。
+
+
+### 第一版独立重评、取消与答案编辑：沿用原算法的事务接线
+
+沿用原judgeAnswer/analyzeFailures及返回DTO，在现ExperimentStore复用一个由workspace/owner/Trace/incarnation确定的内部Outcome head、固定Case与专用evaluator slot。每次请求对应现有experiment_runs.generation，不新建通用任务/水位系统。新增私有outcome_begin/outcome_lookup动作：事务外捕获真实Evidence与冻结的静态Config/Skill/模型选择/当前Flow步骤，事务内核对本人owner、head/annotation/alias及Flow来源，再更新可选final_result、修正冻结证据hash、取消旧工作、建立新RunPlan/work/操作回执；任一步失败回滚正文。旧成功结果、RunPlan及失败/取消事实保留，后到结果受现fence阻断。
+
+原final_result编辑trim后立即返回原成功消息，但成功前任务必须持久化；无匹配Config仍可保存并按原save规则产生未知分/缺配置原因。独立rejudge无Config仍400并同步等待原结果DTO。PATCH字段仍按feedback→label→query→final_result的原优先级，只处理首个命中。取消按真实owner及当前run/fence处理，不只改Node内存。只读凭据、组管理员及共享读取不能代替owner重评/编辑。
+
+计算hook使用现worker及冻结runtime；judge的core模型调用复用既有checkpoint/真实Agent Trace记录/取消包装，取消、Trace记录失败或不确定投递不能被旧catch吞成0分或空失败。结果只接受专用coreOutcome marker及其来源hash，不能拿其他实验generic score覆盖answer字段。lookup使用当前slot selection；pending/cancel保留旧score时按同head历史generation取最近已完成结果。Skill/Trace/统计读同一Outcome；内部head从普通实验列表隐藏，不引入新可见界面。先验证原子回滚、请求幂等、替换/取消late receipt拒绝、冻结配置重启、0/null、无Config编辑及混合授权，再进行隔离HTTP/三库与全量门禁。
+
+后续继续依赖顺序：Batch/Trigger任务和评分闭环→可信采集及旧积压确认后推进→Infra/RAS/FI与客户端事务→静态资产/配置/会话→Goal Plus/协作/Usage→完整旧库语义导入和隔离迁移演练。所有原有功能需逐项完成、逐项验证；生产切换另行授权，万级Span/容量仍第二版。
+
+### 第一版 Batch 后续执行顺序
+
+先接原Trace模式的evaluate/retry-evaluate/abort与进度读取，再接Dataset的start/retry-execute。BatchEvalTask、Skill/版本暂保留原控制权威，必须限定真实兼容账号；不能将控制外壳仍在旧域说成Batch整体已迁。原路由、原状态名、响应JSON和页面保持。动态来源用真实TraceEvidence，评测复用ensure/add/startEvalExperimentCases及现RunPlan、worker、lease/fence和冻结评估器，原通过/失败、均分和耗时解释不变。
+
+Trace批次先校验所有来源/Skill版本/已关联评测任务属于实际actor，持久记录准确的backing Experiment及Case绑定，再对选中Case一次封存并建立工作；返回原成功响应前必须有durable任务。任务状态和分数由当前typed work/result选择投影，JSON中自报的分数/状态不能冒充机器事实。取消持久化，单条重试只替代该Case当前代，其余已完成结果保留。响应丢失和静态控制更新失败时重用同请求操作回执/稳定绑定，不能盲启新模型请求；重启只恢复现worker已冻结的可执行工作，unknown投递仍pending。Dataset/外部Agent执行另用现可信录制与执行receipt闭环，不以改入库入口代替采集完成确认。
+
+独立重评取消的返回规则补充：模型晚返回后的录制仍受原attempt fence约束。只有录制边界明确的409/410拒绝（或明确取消类型）穿过Judge及模型投递包装，并且授权复核证明同一Outcome的本次run已取消或已被新run替换，等待中的原重评请求才返回原`{success:false,cancelled:true,message:'Evaluation cancelled'}`。未取消、来源漂移、真实录制失败、未知投递、授权或状态复核失败继续报错，不能通过泛化catch把它们当取消；不向已失效attempt补写checkpoint或迟到结果。

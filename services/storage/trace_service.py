@@ -377,7 +377,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                     config=value.get('config',{})
                     if action=='cancellation_update':purpose='experiment-cancellation/v1'
                     elif action in {'execute_start','execute_complete','execute_fail'} or action=='checkpoint' and isinstance(value.get('checkpoint'),dict) and value['checkpoint'].get('cleanup_confirmed') is True:purpose='experiment-execution/v1'
-                    elif action=='derived_issue_resolve' or action=='start' and isinstance(config,dict) and (config.get('derived_skill_ids') or 'core_flow_analysis' in config):purpose='experiment-frozen-assets/v1'
+                    elif action in {'outcome_begin','outcome_query'} or action=='complete' and isinstance(value.get('result'),dict) and isinstance(value['result'].get('evidence'),dict) and isinstance(value['result']['evidence'].get('json'),dict) and 'coreOutcome' in value['result']['evidence']['json'] or action=='derived_issue_resolve' or action=='start' and isinstance(config,dict) and (config.get('derived_skill_ids') or 'core_flow_analysis' in config):purpose='experiment-frozen-assets/v1'
                     if purpose:
                         from .controller_protocol import verify_controller_proof
                         principal=runtime.iam.scope(token).principal_id
@@ -483,8 +483,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             if path==['observe','evidence'] and self.command=='GET':
                 from .trace_evidence import TraceEvidence, MAX_EVIDENCE_BYTES
                 view=params.get('view')
-                if view not in (None,'execution'):raise ValueError('Unsupported evidence view')
-                evidence=TraceEvidence(runtime.queries,runtime.authorized)
+                if view not in (None,'execution','outcome-edit'):raise ValueError('Unsupported evidence view')
+                evidence=TraceEvidence(runtime.queries,runtime.authorized,allow_missing_session=view=='outcome-edit')
                 read=evidence.read_execution if view=='execution' else evidence.read
                 respond(read(token,workspace,task_id=params.get('taskId'),execution_id=params.get('executionId'),trace_ref=params.get('traceRef')),limit=MAX_EVIDENCE_BYTES+1024);return
             if path==['observe','agent-traces'] and self.command=='POST':
@@ -559,11 +559,13 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                     respond({'success':True,'count':int(deleted)});return
                 if self.command=='PATCH':
                     route=metadata.resolve(token,workspace,ref,kind)
-                    changes={key:value[key] for key in ('query','label','final_result','user_feedback') if key in value}
-                    if 'query' in changes and (not isinstance(changes['query'],str) or not changes['query'].strip()):raise ValueError('query must be nonempty')
+                    key='user_feedback' if 'user_feedback' in value else 'label' if 'label' in value else 'query' if isinstance(value.get('query'),str) else 'final_result' if isinstance(value.get('final_result'),str) else None
+                    changes={key:value[key]} if key else {}
                     # Result editing also schedules evaluation in the existing workflow; that handoff must precede publishing an edit.
                     if 'final_result' in changes:raise Conflict('result editing requires the evaluation handoff to be configured')
-                    metadata.patch(token,workspace,route['trace_id'],changes)
+                    if key=='query':
+                        raise Forbidden('Query editing requires the private frozen routing handoff')
+                    else:metadata.patch(token,workspace,route['trace_id'],changes)
                     records=listing.read(token,workspace,{'executionId':route['execution_id']})
                     record=records[0] if records else dict(task_id=route['task_id'],upload_id=route['execution_id'],**changes)
                     respond({'success':True,'record':record,'message':'用户反馈已更新' if 'user_feedback' in changes else 'Label 已更新' if 'label' in changes else 'Query 已更新'});return

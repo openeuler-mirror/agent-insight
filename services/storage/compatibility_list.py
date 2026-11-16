@@ -38,6 +38,10 @@ class LegacyTraceList:
         self.queries=queries;self.control=queries.control;self.iam=queries.iam;self.metadata=metadata
 
     def _records(self,token,workspace):
+        from .experiments import ExperimentStore
+        from .trace_outcome import _lookup_tx
+        from .trace_outcome_projection import overlay_record
+        outcome_store=ExperimentStore(self.control)
         cursor=None;result=[];scope=self.iam.scope(token)
         while True:
             page=self.queries.list_traces(token,workspace,limit=200,cursor=cursor)
@@ -84,14 +88,18 @@ class LegacyTraceList:
                     record['has_failures']=metrics.get('has_failures')
                     record['trace_started_at']=metrics.get('session_start') if metrics.get('session_captured') else record['timestamp']
                     if metrics.get('session_captured'):record['trace_completed_at']=metrics.get('session_end')
+                    current=_lookup_tx(outcome_store,con,token,workspace,{'trace_ref':row['trace_id']})
+                    record=overlay_record(record,current);record['_outcome_selection']=current['selection_hash']
                     result.append(record)
             if len(result)>100000:raise CompatibilityListLimit('narrow the legacy query scope')
             cursor=page.get('next_cursor')
             if not cursor:break
-        self._recheck(token,workspace,scope,[row['_trace_id'] for row in result])
+        self._recheck(token,workspace,scope,[row['_trace_id'] for row in result],{row['_trace_id']:row['_outcome_selection'] for row in result})
         return result,scope
 
-    def _recheck(self,token,workspace,scope,trace_ids=()):
+    def _recheck(self,token,workspace,scope,trace_ids=(),outcomes=None):
+        from .experiments import ExperimentStore
+        from .trace_outcome import _lookup_tx
         with self.control.read_transaction() as con:
             current=self.iam._scope(con,token);self.iam._workspace(current,workspace,'read')
             if current.fingerprint!=scope.fingerprint:raise Forbidden('authorization changed during compatibility read')
@@ -100,6 +108,11 @@ class LegacyTraceList:
                 marks=','.join('?' for _ in roots)
                 count=con.execute("SELECT COUNT(*) FROM trace_locators WHERE workspace_id=? AND state='active' AND trace_id IN ("+marks+")",tuple([workspace,*roots])).fetchone()[0]
                 if count!=len(roots):raise Forbidden('Trace deletion changed during compatibility read')
+            store=ExperimentStore(self.control)
+            for trace,selection in (outcomes or {}).items():
+                if _lookup_tx(store,con,token,workspace,{'trace_ref':trace})['selection_hash']!=selection:
+                    from .control import Conflict
+                    raise Conflict('Outcome selection changed during Trace list read')
 
     @staticmethod
     def _value(row,column):
@@ -212,9 +225,10 @@ class LegacyTraceList:
         latencies=[r['latency'] for r in selected if r['latency'] is not None]
         calls=sum(int(r.get('tool_call_count') or 0) for r in selected);errors=sum(int(r.get('tool_call_error_count') or 0) for r in selected)
         stats={'total':len(selected),'failedCount':sum(r['trace_status']=='failed' for r in selected),'avgLatencyMs':sum(latencies)/len(selected) if selected else 0,'toolErrorRate':math.floor(errors/calls*1000+0.5)/10 if calls else 0}
-        self._recheck(token,workspace,scope,[row['_trace_id'] for row in selected])
+        self._recheck(token,workspace,scope,[row['_trace_id'] for row in selected],{row['_trace_id']:row['_outcome_selection'] for row in selected})
         for row in selected:
             trace_id=row.pop('_trace_id',None)
+            row.pop('_outcome_selection',None)
             if _flag(params.get('includeCoreIdentity')):row['core_trace_id']=trace_id
         if not _flag(params.get('paginated')):return selected
         page=int(params.get('page',1));size=int(params.get('pageSize',20))

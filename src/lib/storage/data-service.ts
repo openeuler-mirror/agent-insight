@@ -822,7 +822,7 @@ export function findBestOutcomeConfig(
     });
 }
 
-function getEvaluationContextLabel(
+export function getEvaluationContextLabel(
     record: Pick<ExecutionRecord, 'query' | 'skill' | 'skill_version'>,
     outcomeConfig?: Pick<ConfigItem, 'query' | 'skill' | 'skillVersion'>
 ): string {
@@ -969,7 +969,7 @@ function getKeyActionFlowTargets(config: ConfigItem): { skill: string; version: 
     return Array.from(targets.values());
 }
 
-async function fillConfigKeyActionsFromParsedFlows(
+export async function fillConfigKeyActionsFromParsedFlows(
     config: ConfigItem,
     user?: string | null
 ): Promise<void> {
@@ -1239,7 +1239,7 @@ function buildOutcomeEvaluationSnapshot(
     };
 }
 
-async function attachEvaluationSnapshots(
+export async function buildRecordEvaluationSnapshots(
     record: ExecutionRecord,
     configs: ConfigItem[],
     evaluationUser?: string | null
@@ -1247,6 +1247,19 @@ async function attachEvaluationSnapshots(
     const routingConfig = record.query ? await findBestRoutingConfig(configs, record.query, evaluationUser ?? record.user ?? null) : undefined;
     const outcomeConfig = findBestOutcomeConfig(configs, record);
     const routingEvaluation = await buildRoutingEvaluationSnapshot(record, routingConfig, evaluationUser ?? record.user ?? null);
+    return {
+        ...record,
+        routing_evaluation: routingEvaluation,
+        outcome_evaluation: buildOutcomeEvaluationSnapshot(record, outcomeConfig, routingConfig, routingEvaluation),
+    };
+}
+
+async function attachEvaluationSnapshots(
+    record: ExecutionRecord,
+    configs: ConfigItem[],
+    evaluationUser?: string | null
+): Promise<ExecutionRecord> {
+    const snapshot = await buildRecordEvaluationSnapshots(record, configs, evaluationUser);
     const executionId = record.task_id || record.upload_id || '';
     let executionMatch: {
         matchJson?: string | null;
@@ -1270,9 +1283,7 @@ async function attachEvaluationSnapshots(
     }
 
     return {
-        ...record,
-        routing_evaluation: routingEvaluation,
-        outcome_evaluation: buildOutcomeEvaluationSnapshot(record, outcomeConfig, routingConfig, routingEvaluation),
+        ...snapshot,
         execution_match: executionMatch,
     };
 }

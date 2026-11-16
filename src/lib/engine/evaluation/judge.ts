@@ -15,6 +15,10 @@
  */
 
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
+import {randomUUID} from 'node:crypto';
+import {getTrustedCoreAgentContext} from '@/lib/engine/general-agent/trusted-context';
+import {buildDirectEvaluatorExecutionRecord} from '@/lib/engine/evaluation/evaluator-execution-recorder';
+import {executeCoreFlowModelCall} from '@/lib/storage-core/flow-model-delivery';
 
 import fs from 'fs';
 import { OpenAI } from "openai";
@@ -67,7 +71,40 @@ function appendLog(stage: string, input: any, output: any) {
   } catch(e) { console.error('Log error', e); }
 }
 
-async function getLlmClient(user?: string | null) {
+type JudgeLlmClient = {
+    apiKey: string | null;
+    chat: {completions: {create: (body: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, options?: {signal?: AbortSignal; timeout?: number}) => Promise<OpenAI.Chat.Completions.ChatCompletion>}};
+};
+function rethrowCoreJudgmentFailure(error: unknown) {
+    const trusted=getTrustedCoreAgentContext();
+    if (!trusted) return;
+    trusted.cancelSignal?.throwIfAborted();
+    const failure=error as {code?: string; coreDeliveryUncertain?: boolean};
+    if (failure?.code==='CORE_TRACE_RECORDING_FAILED'||failure?.coreDeliveryUncertain) throw error;
+}
+async function getLlmClient(user?: string | null):Promise<{client:JudgeLlmClient;model:string}|{client:null;model:null}> {
+    const trusted=getTrustedCoreAgentContext();
+    if (trusted) {
+        const client=new OpenAI({apiKey:trusted.trustedModel.apiKey||'no-api-key-required',baseURL:trusted.trustedModel.baseURL,defaultHeaders:trusted.trustedModel.headers,fetch:getModelFetch(),maxRetries:0});
+        const recorded:JudgeLlmClient={apiKey:client.apiKey,chat:{completions:{create:async(body,options)=>executeCoreFlowModelCall(body,async()=>{
+            trusted.cancelSignal?.throwIfAborted();
+            const startedAt=new Date().toISOString();let response:OpenAI.Chat.Completions.ChatCompletion|undefined;let failure:unknown;let failed=false;
+            const signals=[options?.signal,trusted.cancelSignal].filter((signal):signal is AbortSignal=>!!signal);
+            try {response=await client.chat.completions.create(body,{...options,...(signals.length?{signal:AbortSignal.any(signals)}:{})});}
+            catch (cause) {failed=true;failure=cause;}
+            const record=buildDirectEvaluatorExecutionRecord({taskId:'outcome-judge-'+randomUUID(),agentName:'outcome-judge',user,query:'Trace Outcome judgment',userMessage:JSON.stringify(body.messages),assistantOutput:response?.choices?.[0]?.message?.content||'',modelID:trusted.trustedModel.modelID,usage:response?.usage?{input:response.usage.prompt_tokens,output:response.usage.completion_tokens,total:response.usage.total_tokens}:null,startedAtISO:startedAt,completedAtISO:new Date().toISOString(),...(failed?{failure:{code:'outcome_model_failed',message:'Outcome model request failed'}}:{})});
+            if (!record) throw Object.assign(new Error('Core Outcome model Trace unavailable'),{code:'CORE_TRACE_RECORDING_FAILED'});
+            try {await trusted.recordCoreTrace({record,rawMessages:[{request:body,...(response?{response}:{failure:{code:'outcome_model_failed'}})}]});}
+            catch (cause) {
+                const status=(cause as {status?:unknown})?.status;
+                throw Object.assign(new Error('Core Outcome model Trace persistence failed'),{code:'CORE_TRACE_RECORDING_FAILED',...(status===409||status===410?{coreTraceRecordingStatus:status}:{})});
+            }
+            if (failed) throw failure;
+            trusted.cancelSignal?.throwIfAborted();return response!;
+        })}}};
+        return {client:recorded,model:trusted.trustedModel.modelID};
+    }
+
     const config = await getActiveConfig(user);
     if (!config) {
         return { client: null, model: null };
@@ -360,7 +397,7 @@ export async function judgeAnswer(
     };
 
   } catch (error) {
-
+    rethrowCoreJudgmentFailure(error);
     console.error("LLM Judgment Error:", error);
     const msg = String((error as any)?.message || '');
     if (msg.includes('timeout')) return { is_correct: false, score: 0, reason: "Judgment API failed: timeout" };
@@ -549,6 +586,7 @@ export async function analyzeEvaluationItems(
             }
             
         } catch (e: any) {
+            rethrowCoreJudgmentFailure(e);
             console.error(`[SkillAnalysis] Error analyzing ${item.id}:`, e);
             appendLog('skill_issue_analysis_error', { item_id: item.id }, { error: e });
         }
@@ -688,6 +726,7 @@ export async function analyzeFailures(
         };
 
     } catch (error) {
+        rethrowCoreJudgmentFailure(error);
         console.error("Failure Analysis Error:", error);
         return { failures: [] };
     }
