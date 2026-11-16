@@ -102,7 +102,7 @@ export async function scenario004(ctx) {
       const response = await fetch(baseUrl + '/api/skills/upload', { method: 'POST', headers: { 'x-witty-api-key': ctx.account.apiKey }, body: form });const data = await response.json();assert.ok(response.ok, data.error);skill = data.skill;version = data.version.version;
       assert.equal(skill.name, name);assert.equal(skill.user, username);assert.equal(skill.visibility, 'private');
       const clientRoot = path.join(root,'ordinary');env = runtimeEnv(clientRoot, path.join(clientRoot, 'bin'));env.OPENCODE_DISABLE_MODELS_FETCH = 'true';env.AGENT_INSIGHT_HOST = baseUrl;env.AGENT_INSIGHT_API_KEY = ctx.account.apiKey;
-      workspace = path.join(clientRoot, 'workspace');skillDir = path.join(workspace, '.opencode/skills', name);logFile = path.join(workspace, 'fixtures/messages');fs.mkdirSync(path.dirname(logFile),{recursive:true});fs.copyFileSync(path.join(project,'public/example/messages'),logFile);
+      workspace = path.join(clientRoot, 'workspace');skillDir = path.join(workspace, '.opencode/skills', name);logFile = path.join(workspace, 'fixtures/messages');fs.mkdirSync(path.dirname(logFile),{recursive:true});fs.copyFileSync(path.join(project,'test/e2e/fixtures/messages'),logFile);
       const hashes = assertSnapshot(files,files);datasetSnapshot = datasets();assert.ok(!datasetSnapshot.some(d => d.targetSkill === name));
       writePrivate(path.join(root,'private/baseline-files.json'),files);
       prompt = `${marker}：使用 ${name} 分析 ${logFile}。请先通过原生 skill 工具加载 ${name}，遵守其步骤。请统计 root 账户认证失败的次数，找出次数最多的来源及其次数，并给出日志证据。只分析提供的离线日志，不连接远程主机，不读取当前机器的 /var/log，不修改文件。`;

@@ -81,7 +81,7 @@ if(lane){report.lane=lane.lane;report.account=lane.username;fs.mkdirSync(lane.ap
 const ctx = { executionConfig:config,testUsername:config.account.username,...(lane?{testUsername:lane.username,persistentAppHome:lane.appHome}:{}), modelBaseUrl:process.env.E2E_MODEL_BASE_URL, project, root, runId, key: matches[0], secrets, stage, baseUrl: report.baseUrl,
   prepareClients, prepareFixtures, selectedCase: values.case, mode:values.mode };
 if(values.mode==='mock'){
-  const data=fs.readFileSync(path.join(project,'public/example/messages'),'utf8');
+  const data=fs.readFileSync(path.join(project,'test/e2e/fixtures/messages'),'utf8');
   ctx.modelMock=values.case!=='002'?await startCoreModelMock(ctx):await startModelMock({file:path.join(root,'ordinary/workspace/fixtures/messages'),firstLine:data.split('\n')[0],lineCount:data.trimEnd().split('\n').length});
   ctx.modelBaseUrl=ctx.modelMock.baseUrl;
 }

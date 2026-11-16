@@ -13,7 +13,7 @@ export async function scenario002(ctx) {
   let account, env, workspace, native, record, session, evidence, browser, context, page;
   const marker = `E2E-${runId}-002`;
   const username = ctx.testUsername || `test_e2e_${runId}_002@example.com`;
-  const data = fs.readFileSync(path.join(project, 'public/example/messages'));
+  const data = fs.readFileSync(path.join(project, 'test/e2e/fixtures/messages'));
   const lines = data.toString().trimEnd().split('\n');
   const expected = { username, marker, file: 'fixtures/messages', firstLine: lines[0], lineCount: lines.length, modelName: contextConfig(ctx).model.modelName };
   let prompt;
