@@ -59,3 +59,11 @@ test('internal current work metadata stays out of ordinary and nested public rea
  const plain=await view.experimentEvalResult.findUnique({where:{id:'result'}});assert.equal(JSON.stringify(plain).includes('coreWork'),false);
  const caseRow=await view.experimentCase.findUnique({where:{id:'case'}});assert.equal(JSON.stringify(caseRow).includes('coreWork'),false);
 });
+
+test('current execution metadata remains private in the default Case DTO',async()=>{
+ const {createExperimentReadView}=await import('@/lib/storage-core/experiment-view');
+ const coreExecution={runId:'sealed-run',workItemId:'current-work',runtimeStartedAtMs:1};
+ const view=createExperimentReadView([{coverage:'complete',experiment:{id:'exp',cases:[{id:'case',experimentId:'exp',coreExecution,results:[]}],groups:[],comments:[]}}]);
+ const row=await view.experimentCase.findUnique({where:{id:'case'}});assert.equal(JSON.stringify(row).includes('coreExecution'),false);
+ const selected=await (view.experimentCase as unknown as {findUnique:(input:unknown)=>Promise<{coreExecution:unknown}>}).findUnique({where:{id:'case'},select:{coreExecution:true}});assert.deepEqual(selected.coreExecution,coreExecution);
+});

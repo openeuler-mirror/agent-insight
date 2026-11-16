@@ -1,3 +1,4 @@
+import {projectCoreBatchDatasetTask} from './batch-dataset';
 import {prisma} from '@/lib/storage/prisma';
 import {requireCoreExperimentContext,lookupCoreExperimentOperation} from './experiments';
 import {activateExperimentWork} from './experiment-worker';
@@ -34,7 +35,7 @@ export async function assertCoreBatchScope(operation:string,experimentId?:string
 function requireOwner(user:string){if(user!==requireCoreExperimentContext().actor.username)throw failure('Batch actor differs',403);}
 export async function projectCoreBatchTask<T extends {user:string;configJson:object;caseStatesJson:object;traceEvalStatesJson?:object}>(task:T):Promise<T|null>{
  requireOwner(task.user);await assertCoreBatchScope('read');const config=task.configJson as Config;
- if(config.sourceMode!=='trace')return task;
+ if(config.sourceMode!=='trace')return projectCoreBatchDatasetTask(task);
  if(config.evalExperimentId&&(await assertCoreBatchScope('read',config.evalExperimentId)).lifecycle==='deleted')return null;
  const experiment=config.evalExperimentId?await ownedExperiment(config.evalExperimentId):undefined;
  if(experiment?.deletedAt)return null;
@@ -146,12 +147,14 @@ export async function abortCoreBatchTrace(task:Batch){
  return {ok:true,abortedAt:Date.now(),hadActiveRun:active>0,reset:active};
 }
 export function preserveCoreBatchBindings(previous:Record<string,unknown>,incoming:Record<string,unknown>){
- const next={...incoming};delete next.coreTraceBindings;delete next.coreTraceOperation;delete next.evalExperimentId;
+ const datasetIntent=previous.coreDatasetOperation as {phase?:string;cancelRequested?:boolean}|undefined;if(datasetIntent?.phase==='prepared'&&!datasetIntent.cancelRequested)throw failure('Batch preparation is already running',409);
+ const next={...incoming};for(const key of ['coreTraceBindings','coreTraceOperation','coreDatasetBindings','coreDatasetOperation','coreDatasetContext','evalExperimentId'])delete next[key];
  if(previous.evalExperimentId){
-  for(const key of ['sourceMode','skillId','versionId','evalExperimentId'])if(incoming[key]!==undefined&&incoming[key]!==previous[key])throw failure('Bound Batch context cannot be replaced',409);
-  for(const key of ['sourceMode','skillId','versionId','evalExperimentId'])if(previous[key]!==undefined)next[key]=previous[key];
+  for(const key of previous.sourceMode==='trace'?['sourceMode','skillId','versionId','evalExperimentId']:['evalExperimentId'])if(incoming[key]!==undefined&&incoming[key]!==previous[key])throw failure('Bound Batch context cannot be replaced',409);
+  for(const key of previous.sourceMode==='trace'?['sourceMode','skillId','versionId','evalExperimentId']:['evalExperimentId'])if(previous[key]!==undefined)next[key]=previous[key];
  }
  if(previous.coreTraceBindings)next.coreTraceBindings=previous.coreTraceBindings;
  if(previous.coreTraceOperation)next.coreTraceOperation=previous.coreTraceOperation;
+ for(const key of ['coreDatasetBindings','coreDatasetOperation','coreDatasetContext'])if(previous[key])next[key]=previous[key];
  return next;
 }

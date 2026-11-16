@@ -105,6 +105,7 @@ function setup() {
         '@/lib/storage/prisma': { prisma },
         './experiments': { requireCoreExperimentContext: () => context, lookupCoreExperimentOperation:async()=>replay.found?{experiment:exp}:null },
         './experiment-assets':load('src/lib/storage-core/experiment-assets.ts',{'node:crypto':{createHash}}),
+        './batch-dataset':{projectCoreBatchDatasetTask:async(task:unknown)=>task},
         './experiment-worker':{activateExperimentWork:async()=>{calls.push('activate');}},
         './evidence': { readTraceEvidence: async (_req: Request, { taskId }: {
                 taskId: string;
@@ -227,12 +228,12 @@ test('shared pure start identity preserves the existing operation key bytes and 
  assert.equal(operation.key,'intent:start:'+suffix);
  assert.equal(JSON.stringify(operation.request),JSON.stringify({experiment_id:'exp',case_ids:['c1','c2'],evaluator_ids:null}));
 });
-test('Dataset PATCH retains its original configuration replacement boundary',async()=>{
- const {task,config}=setup();config.sourceMode='dataset';task.configJson=JSON.stringify(config);
+test('Dataset PATCH retains its next-generation configuration replacement boundary and trusted bindings',async()=>{
+ const {api:helper,task,config}=setup();config.sourceMode='dataset';task.configJson=JSON.stringify(config);
  const deps:Record<string,unknown>={
   'next/server':{NextResponse:Response},'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},
   '@/lib/storage-core/experiments':{getCoreExperimentContext:()=>({compatibilityRoute:true}),coreExperimentFailure:()=>Response.json({error:'unexpected failure'},{status:502})},
-  '@/lib/storage-core/batch-trace':{assertCoreBatchScope:async()=>{},preserveCoreBatchBindings:()=>{throw Error('Trace-only protection reached Dataset');},projectCoreBatchTask:async(value:object)=>value},
+  '@/lib/storage-core/batch-trace':{assertCoreBatchScope:async()=>{},preserveCoreBatchBindings:helper.preserveCoreBatchBindings,projectCoreBatchTask:async(value:object)=>value},
   '@/lib/storage/prisma':{prisma:{batchEvalTask:{findFirst:async()=>task,findFirstOrThrow:async()=>task,updateMany:async({data}:{data:Partial<FixtureTask>})=>{Object.assign(task,data);return {count:1};}}}},
  };
  const api=load<{PATCH:(request:object,options:object)=>Promise<Response>}>('src/app/api/debug/batch-tasks/[taskId]/route.ts',deps);

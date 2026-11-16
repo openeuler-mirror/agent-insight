@@ -164,6 +164,28 @@ class BenchmarkCoreTests(unittest.TestCase):
         self.assertEqual(json.loads(run['evaluations'][0]['normalizedResultJson']),normalized)
         text=json.dumps(view);self.assertNotIn('PRIVATE GOLD',text);self.assertNotIn('bcap_',text);self.assertNotIn('private_release_id',text)
 
+    def test_benchmark_publish_execution_slot_keeps_native_projection_empty_and_owner_scope(self):
+        from services.storage.experiments import ExperimentStore
+        from services.storage.control import StorageError
+        started=self.start();view=self.invoke('read_view',experiment_id='bexp');snapshot=view['snapshots'][0]
+        case=snapshot['experiment']['cases'][0]
+        self.assertEqual(snapshot['experiment']['user'],'alice');self.assertEqual(case['input'],'public input')
+        self.assertIsNone(case['coreExecution']);self.assertEqual(snapshot['benchmark_runs'][0]['id'],started['runId'])
+        self.assertNotIn('PRIVATE GOLD',json.dumps(view));self.assertNotIn('bcap_',json.dumps(view))
+        with self.assertRaises(Forbidden):self.service().dispatch('read_view',self.bob,'w',{'experiment_id':'bexp'})
+        ordinary=ExperimentStore(self.control).dispatch('read',self.token,'w',{'experiment_id':'bexp'})
+        self.assertIsNone(ordinary['experiment']['cases'][0]['coreExecution'])
+        with self.control.transaction() as con:con.execute("UPDATE work_items SET phase='execute' WHERE evaluator_slot='__execution__'")
+        with self.assertRaises(StorageError):self.invoke('read_view',experiment_id='bexp')
+
+    def test_cancelled_benchmark_publish_slot_keeps_its_original_history_readable(self):
+        started=self.start();self.invoke('cancel_request',experiment_id='bexp',mode='cancel',operation_key='cancel-unstarted')
+        snapshot=self.invoke('read_view',experiment_id='bexp')['snapshots'][0]
+        self.assertIsNone(snapshot['experiment']['cases'][0]['coreExecution'])
+        self.assertEqual(snapshot['benchmark_runs'][0]['id'],started['runId'])
+        self.assertEqual(snapshot['benchmark_runs'][0]['status'],'cancelled')
+        self.assertNotIn('PRIVATE GOLD',json.dumps(snapshot))
+
     def test_old_callback_cannot_write_when_its_result_slot_has_been_rebound(self):
         claim,_=self.seal();token=self.invoke('load_dispatch',**claim)['request']['callbackHeaders']['x-agent-insight-callback-token']
         with self.control.transaction() as con:con.execute("UPDATE experiment_result_slots SET run_id=NULL,work_item_id=NULL,revision=revision+1 WHERE evaluator_id='__execution__'")

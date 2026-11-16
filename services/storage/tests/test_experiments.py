@@ -423,6 +423,7 @@ class ExperimentTests(unittest.TestCase):
         evidence=TraceEvidence(TraceQueries(self.control,facts,cursor_secret=b'experiment-test-cursor-private'),AuthorizedStorage(self.iam,facts))
         service=ExperimentStore(self.control,evidence=evidence)
         self.create();parent=self.execution_start();one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
+        self.call('case_upsert',experiment_id='exp',case={'id':'case','input':'later question','referenceOutput':'later gold'},operation_key='later-case-edit')
         accepted=ingest.accept(self.token,'w',packet());trace=accepted['trace_ids'][0]
         from services.storage.trace_evidence import EvidenceUnavailable
         with self.assertRaises(EvidenceUnavailable):service.dispatch('execute_complete',self.token,'w',self.handle(one)|{'trace_id':trace,'operation_key':'complete'})
@@ -431,9 +432,34 @@ class ExperimentTests(unittest.TestCase):
         self.assertNotEqual(parent['run_id'],result['current_run_id'])
         score=self.claim();work=service.dispatch('load_work',self.token,'w',self.handle(score))
         self.assertEqual(work['raw_case']['referenceOutput'],'答案');self.assertEqual(work['raw_case']['actualOutput'],'world')
+        self.assertEqual(result['experiment']['cases'][0]['referenceOutput'],'later gold')
+        self.assertEqual(result['experiment']['cases'][0]['coreExecution']['input'],'问题')
         self.assertEqual(work['frozen_evaluator']['card']['prompt'],'frozen rule')
+        self.assertEqual(work['runplan']['parent_execution_run_id'],parent['run_id'])
         self.assertEqual(work['frozen_trace_evidence']['manifest']['trace_id'],trace)
         self.assertEqual(result,service.dispatch('execute_complete',self.token,'w',self.handle(one)|{'trace_id':trace,'operation_key':'complete'}))
+
+
+    def test_execution_child_preserves_zero_empty_and_null_gold_from_the_frozen_parent(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts
+        from services.storage.tests.test_observations import packet
+        from services.storage.observations import ObservationIngest
+        from services.storage.trace_evidence import TraceEvidence
+        from services.storage.trace_service import TraceQueries
+        from services.storage.authorized import AuthorizedStorage
+        from services.storage.experiments import ExperimentStore
+        for value in (0,'',None):
+            with self.subTest(gold=value):
+                self.setUp();facts=MemoryFacts();ingest=ObservationIngest(self.control,facts)
+                service=ExperimentStore(self.control,evidence=TraceEvidence(TraceQueries(self.control,facts,cursor_secret=b'frozen-gold-private-cursor'),AuthorizedStorage(self.iam,facts)))
+                self.create();self.call('case_upsert',experiment_id='exp',case={'id':'case','referenceOutput':value},operation_key='initial-gold')
+                parent=self.execution_start();one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
+                self.call('case_upsert',experiment_id='exp',case={'id':'case','referenceOutput':'later edit'},operation_key='later-gold')
+                accepted=ingest.accept(self.token,'w',packet());self.assertTrue(ingest.work_once('ingest'))
+                service.dispatch('execute_complete',self.token,'w',self.handle(one)|{'trace_id':accepted['trace_ids'][0],'operation_key':'finished'})
+                judge=self.claim();work=service.dispatch('load_work',self.token,'w',self.handle(judge))
+                self.assertEqual(work['raw_case']['referenceOutput'],value);self.assertEqual(work['runplan']['parent_execution_run_id'],parent['run_id'])
+                self.assertEqual(self.call('read',experiment_id='exp')['experiment']['cases'][0]['referenceOutput'],'later edit')
 
     def test_execution_progress_has_real_attempt_and_waiting_trace_phase(self):
         self.create();self.execution_start();one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
@@ -442,6 +468,113 @@ class ExperimentTests(unittest.TestCase):
         progress=self.call('read',experiment_id='exp')['experiment']['cases'][0]['executionSnapshot']['progress']
         self.assertEqual(progress['stage'],2);self.assertEqual(progress['label'],'等待 Trace 入库')
         with self.assertRaises(Conflict):self.call('complete',**self.handle(one),result={'score':100},operation_key='not-score')
+
+    def test_local_execution_without_auto_evaluation_keeps_trace_and_creates_no_scoring_work(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts
+        from services.storage.tests.test_observations import packet
+        from services.storage.observations import ObservationIngest
+        from services.storage.trace_evidence import TraceEvidence
+        from services.storage.trace_service import TraceQueries
+        from services.storage.authorized import AuthorizedStorage
+        from services.storage.experiments import ExperimentStore
+        facts=MemoryFacts();ingest=ObservationIngest(self.control,facts)
+        evidence=TraceEvidence(TraceQueries(self.control,facts,cursor_secret=b'batch-execution-private-cursor'),AuthorizedStorage(self.iam,facts))
+        service=ExperimentStore(self.control,evidence=evidence)
+        self.create()
+        started=self.call('execute_start',experiment_id='exp',execution_request={'kind':'local','evaluate_after_execution':False},frozen_evaluators={'judge':{'id':'judge'}},operation_key='batch-start')
+        one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
+        self.call('checkpoint',**self.handle(one),expected_revision='1',checkpoint={'command_id':'local:'+one['attempt_id'],'runtime_started_at_ms':self.now},operation_key='running')
+        self.now+=1200
+        current=self.call('renew',**self.handle(one),lease_ms=30000)
+        self.call('checkpoint',**self.handle(current),expected_revision=current['checkpoint_revision'],checkpoint={'runtime_finished_at_ms':self.now},operation_key='finished')
+        accepted=ingest.accept(self.token,'w',packet());self.assertTrue(ingest.work_once('ingest-worker'))
+        result=service.dispatch('execute_complete',self.token,'w',self.handle(one)|{'trace_id':accepted['trace_ids'][0],'operation_key':'complete-batch'})
+        self.assertEqual(result['current_run_id'],started['run_id']);self.assertIsNone(self.claim())
+        row=result['experiment']['cases'][0]
+        self.assertEqual(row['coreExecution']['status'],'done');self.assertEqual(row['coreExecution']['runtimeFinishedAtMs']-row['coreExecution']['runtimeStartedAtMs'],1200)
+        self.assertEqual(row['coreExecution']['runId'],started['run_id']);self.assertEqual(row['coreExecution']['attemptId'],one['attempt_id'])
+        with self.control.read_transaction() as con:self.assertEqual(con.execute("SELECT COUNT(*) FROM work_items WHERE phase='evaluate'").fetchone()[0],0)
+        self.assertEqual(row['actualOutput'],'world')
+        self.assertEqual(row['results'][0]['status'],'skipped')
+        self.assertEqual(self.call('reconcile',experiment_id='exp')['experiment']['status'],'done')
+        self.call('execute_start',experiment_id='exp',case_ids=['case'],source_execution_run_id=started['run_id'],retry_from_attempt_id=one['attempt_id'],force_new_trace=True,operation_key='new-local-generation')
+        successor=self.call('claim',experiment_id='exp',phase='execute',worker_id='successor')
+        work=self.call('load_work',**self.handle(successor))
+        self.assertFalse(work['cleanup_required']);self.assertNotIn('command_id',work['checkpoint']);self.assertNotIn('runtime_started_at_ms',work['checkpoint'])
+
+    def test_two_no_auto_evaluation_completions_use_monotonic_placeholder_timestamps(self):
+        from services.storage.tests.test_trace_transfer import MemoryFacts
+        from services.storage.tests.test_observations import packet
+        from services.storage.observations import ObservationIngest
+        from services.storage.trace_evidence import TraceEvidence
+        from services.storage.trace_service import TraceQueries
+        from services.storage.authorized import AuthorizedStorage
+        from services.storage.experiments import ExperimentStore
+        def tick():
+            self.now+=1
+            return self.now
+        self.control.clock=tick
+        facts=MemoryFacts();ingest=ObservationIngest(self.control,facts)
+        service=ExperimentStore(self.control,evidence=TraceEvidence(TraceQueries(self.control,facts,cursor_secret=b'incrementing-clock-private-cursor'),AuthorizedStorage(self.iam,facts)))
+        value=experiment();value['cases'].append(value['cases'][0]|{'id':'second'})
+        self.call('create',experiment=value,operation_key='two-cases')
+        started=self.call('execute_start',experiment_id='exp',execution_request={'kind':'local','evaluate_after_execution':False},frozen_evaluators={'judge':{'id':'judge'}},operation_key='two-start')
+        for index in range(2):
+            item=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker-'+str(index))
+            accepted=ingest.accept(self.token,'w',packet(trace=str(index+1)*32));self.assertTrue(ingest.work_once('ingest-'+str(index)))
+            result=service.dispatch('execute_complete',self.token,'w',self.handle(item)|{'trace_id':accepted['trace_ids'][0],'operation_key':'two-complete-'+str(index)})
+            row=next(row for row in result['experiment']['cases'] if row['id']==item['case_id'])
+            self.assertEqual(row['coreExecution']['status'],'done');self.assertEqual(row['results'][0]['status'],'skipped')
+            self.assertEqual(row['coreExecution']['runId'],started['run_id'])
+        self.assertEqual(result['experiment']['status'],'done')
+        with self.control.read_transaction() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM work_items WHERE phase='evaluate'").fetchone()[0],0)
+
+    def test_native_execution_projection_rejects_non_execution_work_instead_of_hiding_corruption(self):
+        from services.storage.control import StorageError
+        self.create();self.execution_start()
+        self.assertEqual(self.call('read',experiment_id='exp')['experiment']['cases'][0]['coreExecution']['status'],'queued')
+        with self.control.transaction() as con:con.execute("UPDATE work_items SET phase='publish' WHERE evaluator_slot='__execution__'")
+        with self.assertRaises(StorageError):self.call('read',experiment_id='exp')
+
+    def test_execution_auto_evaluation_flag_requires_a_real_boolean(self):
+        self.create()
+        for value in ('false',0,None,[]):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                self.call('execute_start',experiment_id='exp',execution_request={'kind':'local','evaluate_after_execution':value},frozen_evaluators={'judge':{'id':'judge'}},operation_key='invalid-'+str(value))
+
+    def test_current_execution_projection_uses_slot_identity_and_rejects_user_supplied_metadata(self):
+        self.create();first=self.execution_start();one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
+        self.call('execute_fail',**self.handle(one),error='first',cleanup_confirmed=True,operation_key='failed-one')
+        self.now+=1000
+        second=self.call('execute_start',experiment_id='exp',execution_request={'kind':'local'},force_new_trace=True,retry_from_attempt_id=one['attempt_id'],frozen_evaluators={'judge':{'id':'judge'}},operation_key='second')
+        row=second['experiment']['cases'][0]
+        self.assertEqual(row['coreExecution']['runId'],second['run_id']);self.assertNotEqual(row['coreExecution']['runId'],first['run_id'])
+        self.assertIsNone(row['coreExecution']['attemptId']);self.assertEqual(row['coreExecution']['status'],'queued')
+        self.call('case_upsert',experiment_id='exp',case={'id':'case','coreExecution':{'status':'done','runtimeStartedAtMs':0}},operation_key='fake')
+        row=self.call('read',experiment_id='exp')['experiment']['cases'][0]
+        self.assertEqual(row['coreExecution']['status'],'queued');self.assertIsNone(row['coreExecution']['runtimeStartedAtMs'])
+
+    def test_bound_execution_retry_reuses_its_own_plan_after_another_start_changes_current_config(self):
+        self.create();first=self.call('execute_start',experiment_id='exp',execution_request={'kind':'local','evaluate_after_execution':False},config={'model_selection':{'id':'original-model'}},frozen_evaluators={'judge':{'prompt':'original rule'}},operation_key='first')
+        one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
+        self.call('execute_fail',**self.handle(one),error='stopped',cleanup_confirmed=True,operation_key='stopped')
+        self.call('update',experiment_id='exp',changes={'skillName':'new-skill','skillVersion':9,'evaluatorIdsJson':'["new-judge"]'},operation_key='new-config')
+        prior=self.call('read',experiment_id='exp')['experiment']['cases'][0]
+        self.assertEqual(prior['coreExecution']['evaluatorIds'],['judge'])
+        self.call('case_upsert',experiment_id='exp',case={'id':'other','input':'new input','referenceOutput':'new gold'},operation_key='other')
+        self.call('execute_start',experiment_id='exp',case_ids=['other'],execution_request={'kind':'local'},config={'model_selection':{'id':'new-model'}},frozen_evaluators={'new-judge':{'prompt':'new rule'}},operation_key='other-start')
+        retried=self.call('execute_start',experiment_id='exp',case_ids=['case'],source_execution_run_id=first['run_id'],retry_from_attempt_id=one['attempt_id'],force_new_trace=True,config={'model_selection':{'id':'new-model'}},frozen_evaluators={'judge':{'prompt':'new rule'},'new-judge':{'prompt':'new rule'}},operation_key='bound-retry')
+        plan=self.call('runplan',experiment_id='exp',run_id=retried['run_id'])['runplan']
+        self.assertEqual(plan['config']['model_selection']['id'],'original-model');self.assertEqual(plan['frozen_evaluators'],{'judge':{'prompt':'original rule'}})
+        self.assertEqual(plan['cases'][0]['referenceOutput'],'答案');self.assertNotEqual(plan['experiment_config'].get('skillVersion'),9)
+        self.assertEqual(self.call('read',experiment_id='exp')['experiment']['skillVersion'],9)
+
+    def test_bound_execution_retry_cannot_borrow_an_unselected_or_stale_case_plan(self):
+        self.create();first=self.execution_start();one=self.call('claim',experiment_id='exp',phase='execute',worker_id='worker')
+        self.call('execute_fail',**self.handle(one),error='stopped',cleanup_confirmed=True,operation_key='stopped')
+        self.call('case_upsert',experiment_id='exp',case={'id':'other','input':'other'},operation_key='other')
+        with self.assertRaises(Conflict):self.call('execute_start',experiment_id='exp',case_ids=['other'],source_execution_run_id=first['run_id'],frozen_evaluators={'judge':{'id':'judge'}},operation_key='borrow')
 
     def test_cancel_updates_are_folded_by_revision_not_random_uuid(self):
         self.create();cancelled=self.call('cancel',experiment_id='exp',operation_key='cancel');identity=cancelled['cancellation_id']

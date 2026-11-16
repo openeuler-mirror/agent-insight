@@ -196,3 +196,9 @@ Batch 静态 shell 继续服从实时 IAM capability：现私有 Experiment RPC 
 4. 在既有 frozen execution_request 支持 `evaluate_after_execution=false`（默认 true），同现完成事务跳过子评测；关闭自动评测时原状态为 executed，后续 retry-evaluate 保留 Trace 与执行耗时，只启动评测。零分、部分成功均分及全失败语义沿原算法。
 5. 同操作优先核对准确回执，再恢复 prepared/submitted，不因响应或静态 CAS 丢失重新运行 Agent。单行重执行只替代该 Case；取消先持久 fence，再核实本地进程退出。queued 未启动工作可恢复，running/清理未确认/未知投递不得当作安全重跑；硬崩溃后的旧进程清理证明仍是明确边界。
 6. 先 RED/GREEN 覆盖上述状态、两数据集版本固定、权限、丢响应、取消与迟到回执；再独立审查，隔离真实 HTTP/本地 Mock/原界面与后端全量、三库专项。保留已有数据，不改 schema/前端，不切生产，不把本片称为静态控制域或全部旧库迁移完成。
+
+Dataset Batch实现补充：同Task新start按当前选择建立新cut，并以Task CAS先预留prepared意图；旧Case/RunPlan不删除。retry-execute/retry-evaluate通过现私有source_execution_run_id验证当前Case→execute slot→run后派生原封存输入/配置，记录parent_execution_run_id；不以最新全局配置代替Case历史。新增coreExecution仅为派生私有字段，默认公开read view隐藏，按run局部缓存计划。controller既有purpose覆盖源引用及runtime时刻；autoEval=false不创建evaluate work且未启动占位槽skipped。自动评分使用父execute封存gold，保留Case用户编辑。只读GET无激活动作，queued恢复需要授权的原操作POST；同实例已观测完成可重送回执，硬重启无退出证明仍pending/503。客户端abort严格成功后仅淘汰同账号/Task的待确认意图。后续最终验收结果由implementation-status登记，不将实现或专项测试当作全产品/生产切换完成。
+
+Dataset Batch 审查补充：固定 Skill/数据切片及全部选中 Case 的只读校验先于预留和 typed 写；Case 使用现事务批量 upsert。明确失败仅释放未提交 Case 批次的准确本次空预留，未知投递或已提交绑定保留。已观测本机结果恢复时先重放原 waiting_trace checkpoint 与时间戳，再提交完成回执。
+
+Dataset Batch 真实运行补充：Agent 标准记录明确携带的 skill_version 在可信 Trace carrier 中映射到 canonical skillVersion，保留版本 0；缺失/null 不查询最新版本，已录制历史不改写。

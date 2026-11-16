@@ -472,7 +472,7 @@ class ExperimentExecutionControllerHTTPTests(unittest.TestCase):
             def __init__(self,*args,**kwargs):pass
             def dispatch(self,*args):return {'accepted':True}
         with patch.dict(sys.modules,{'services.storage.experiments':types.SimpleNamespace(ExperimentStore=Store)}):
-            for value in ({'action':'execute_start'},{'action':'execute_complete','trigger_decision':{'triggered':True}},{'action':'execute_fail','cleanup_confirmed':True},{'action':'checkpoint','checkpoint':{'cleanup_confirmed':True}}):
+            for value in ({'action':'execute_start'},{'action':'start','source_execution_run_id':'bound-execute-run'},{'action':'execute_complete','trigger_decision':{'triggered':True}},{'action':'execute_fail','cleanup_confirmed':True},{'action':'checkpoint','checkpoint':{'cleanup_confirmed':True}},{'action':'checkpoint','checkpoint':{'runtime_started_at_ms':1}},{'action':'checkpoint','checkpoint':{'runtime_finished_at_ms':2}}):
                 digest=hashlib.sha256(json.dumps(value).encode()).hexdigest();proof=hmac.new(bytes.fromhex('a'*64),'\0'.join(('experiment-execution/v1','alice','w',digest)).encode(),hashlib.sha256).hexdigest();path='/v1/compat/experiments?workspace_id=w'
                 self.assertEqual(self.request(path,self.token,body=value)[0],403)
                 self.assertEqual(self.request(path,self.token,body=value,headers={'x-storage-controller-proof':proof})[0],200)

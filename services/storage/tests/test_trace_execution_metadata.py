@@ -131,6 +131,29 @@ class TraceExecutionMetadataTests(unittest.TestCase):
         row=api.read(self.token,'w',{})[0];self.assertIsNone(row['answer_score']);self.assertFalse(row['is_answer_correct']);self.assertEqual(row['judgment_reason'],'结果评估中...')
         self.assertEqual(row['root_skill'],{'name':'root','version':None})
 
+    def test_trusted_agent_recording_preserves_explicit_source_skill_version_in_trace_and_list(self):
+        from services.storage.agent_traces import AgentTraceRecorder
+        from services.storage.experiments import ExperimentStore
+        from services.storage.tests.test_agent_traces import snapshot
+        from services.storage.tests.test_experiments import experiment
+        for version in (0,3,None,'missing'):
+            with self.subTest(version=version):
+                self.setUp();store=ExperimentStore(self.control)
+                store.dispatch('create',self.token,'w',{'experiment':experiment(),'operation_key':'create'})
+                store.dispatch('execute_start',self.token,'w',{'experiment_id':'exp','execution_request':{'kind':'local'},'frozen_evaluators':{'judge':{'id':'judge'}},'operation_key':'start'})
+                item=store.dispatch('claim',self.token,'w',{'experiment_id':'exp','phase':'execute','worker_id':'worker'})
+                body=snapshot();body['record']['skill']='fixed-skill'
+                if version!='missing':body['record']['skill_version']=version
+                body['context']={'experiment_recording_kind':'execution','experiment_id':'exp','experiment_attempt_id':item['attempt_id'],'experiment_fence':item['fence'],'experiment_lease_owner':item['lease_owner']}
+                receipt=AgentTraceRecorder(self.control,self.ingest).record(self.token,'w',body);self.drain()
+                evidence=TraceEvidence(self.queries,self.authorized).read(self.token,'w',trace_ref=receipt['trace_id'])
+                expected=None if version=='missing' else version
+                self.assertEqual(evidence['execution'].get('skillVersion'),expected)
+                raw=self.read(receipt['trace_id'])['items'][0]['execution']
+                self.assertEqual(raw.get('skillVersion'),expected)
+                row=self.listing().read(self.token,'w',{})[0]
+                self.assertEqual(row['skill_version'],expected);self.assertEqual(row['root_skill'],{'name':'fixed-skill','version':expected})
+
     def test_native_root_metadata_is_explicit_and_child_skill_is_not_a_root(self):
         from services.storage.tests.test_observations import packet
         body=packet();span=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]

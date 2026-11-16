@@ -1002,11 +1002,12 @@ export async function ensureEvalExperiment(params: {
   scope?: string;
   skillName?: string | null;
   skillVersion?: number | null;
+  datasetIds?: string[];
 }): Promise<string> {
   if (isStorageCoreEnabled()) {
     const context = requireCoreExperimentContext();
     if (params.user !== context.actor.username) throw Object.assign(new Error('Experiment actor mismatch'), {status: 403});
-    const request = {existing_id: params.existingId ?? null, name: params.name, agentName: params.agentName ?? '', evaluatorIds: params.evaluatorIds, scope: params.scope ?? '', skillName: params.skillName ?? '', skillVersion: params.skillVersion ?? null};
+    const request = {existing_id: params.existingId ?? null, name: params.name, agentName: params.agentName ?? '', evaluatorIds: params.evaluatorIds, scope: params.scope ?? '', skillName: params.skillName ?? '', skillVersion: params.skillVersion ?? null,...(params.datasetIds?{datasetIds:params.datasetIds}:{})};
     if (params.existingId) {
       try {
         const found = await context.rpc('read', {experiment_id: params.existingId}) as {gold_redacted?: boolean; experiment?: {id: string; user: string; status: string}};
@@ -1021,7 +1022,7 @@ export async function ensureEvalExperiment(params: {
       if (prior.experiment.status === 'cancelled') throw Object.assign(new Error('实验已取消'), {status: 409, code: 'EXPERIMENT_CANCELLED'});
       return prior.experiment.id;
     }
-    const experiment = await freezeExperimentAssets(context, {user: context.actor.username, name: params.name, type: 'single', agentName: request.agentName, evaluatorIdsJson: JSON.stringify(params.evaluatorIds), status: 'draft', scope: request.scope, skillName: request.skillName, skillVersion: request.skillVersion, cases: []});
+    const experiment = await freezeExperimentAssets(context, {user: context.actor.username, name: params.name, type: 'single', agentName: request.agentName, evaluatorIdsJson: JSON.stringify(params.evaluatorIds), status: 'draft', scope: request.scope, skillName: request.skillName, skillVersion: request.skillVersion,...(params.datasetIds?{configSnapshotJson:JSON.stringify({datasetIds:params.datasetIds})}:{}), cases: []});
     const result = await context.rpc('ensure', {experiment, existing_id: request.existing_id, operation_key: `${context.operationKey}:eval-ensure:${createHash('sha256').update(JSON.stringify(request)).digest('hex')}`, operation_request: request}) as {experiment?: {id: string}};
     if (!result?.experiment?.id) throw Object.assign(new Error('Experiment identity unavailable'), {status: 503});
     return result.experiment.id;

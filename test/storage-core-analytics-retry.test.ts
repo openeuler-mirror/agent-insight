@@ -77,7 +77,7 @@ for(const scenario of ['body-loss','storage-failure','explicit-key','account-swi
  if(scenario==='explicit-key')options.headers={'idempotency-key':'given'};
  if(scenario==='bounded'){
   for(let index=0;index<40;index++)await assert.rejects(()=>api('/api/debug/batch-tasks/batch',{...options,body:JSON.stringify({action:'evaluate',caseIds:[String(index)]})}),/response lost/);
-  const stored=JSON.parse([...memory.values()][0]) as Array<Record<string,unknown>>;assert.ok(stored.length<=32);assert.ok(stored.every(value=>Object.keys(value).sort().join(',')==='createdAt,key,signature'));assert.ok(![...memory.values()].join('').includes('actor-a'));return;
+  const stored=JSON.parse([...memory.values()][0]) as Array<Record<string,unknown>>;assert.ok(stored.length<=32);assert.ok(stored.every(value=>Object.keys(value).sort().join(',')==='createdAt,key,scope,signature'&&typeof value.scope==='string'&&/^[a-f0-9]{64}$/.test(value.scope)));assert.ok(![...memory.values()].join('').includes('actor-a'));return;
  }
  const first=()=>api('/api/debug/batch-tasks/batch',options);
  if(['body-loss','account-switch','selection-change','task-change'].includes(scenario))await assert.rejects(first,/lost/);else await first();
@@ -89,7 +89,7 @@ for(const scenario of ['body-loss','storage-failure','explicit-key','account-swi
  else assert.notEqual(seen[0],seen[1]);
 });
 
-for(const action of ['evaluate','retry-evaluate'])for(const firstBody of ['{"ok":','{"ok":false}','{"success":true}'])test('Batch keeps an unconfirmed operation key for '+action+' response '+firstBody,async()=>{
+for(const action of ['evaluate','retry-evaluate','start','retry-execute'])for(const firstBody of ['{"ok":','{"ok":false}','{"success":true}'])test('Batch keeps an unconfirmed operation key for '+action+' response '+firstBody,async()=>{
  const memory=new Map<string,string>();const seen:string[]=[];let sequence=0;let responses=0;
  const sandboxModule={exports:{}};
  const source=ts.transpileModule(fs.readFileSync(new URL('../src/lib/client/api.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -115,4 +115,21 @@ for(const scenario of ['ordinary-json','ordinary-text','explicit-key'])test('Bat
  const response=await api(explicit?'/api/debug/batch-tasks/batch':'/api/quality/report',{method:'POST',body:JSON.stringify({action:'evaluate',caseIds:['one']}),...(explicit?{headers:{'idempotency-key':'caller-supplied'}}:{})});
  assert.equal(response.status,200);assert.equal(seen[0],explicit?'caller-supplied':null);
  if(scenario==='ordinary-text')assert.equal(await response.text(),'plain text');else await assert.rejects(()=>response.json(),SyntaxError);
+});
+
+for(const acknowledgement of ['{"ok":true}','{"ok":false}','{"ok":'])test('Batch abort only retires matching authenticated Task intents after '+acknowledgement,async()=>{
+ const memory=new Map<string,string>(),seen:Array<{url:string;actor:string;key:string;action:string}>=[];let actor='alice',release=false,sequence=0;
+ const sandboxModule={exports:{}};const source=ts.transpileModule(fs.readFileSync(new URL('../src/lib/client/api.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ vm.runInNewContext(source,{module:sandboxModule,exports:sandboxModule.exports,Headers,Date,TextEncoder,Uint8Array,process:{env:{}},window:{},localStorage:{getItem:()=>actor},crypto:{subtle:webcrypto.subtle,randomUUID:()=> 'operation-'+(++sequence)},sessionStorage:{getItem:(key:string)=>memory.get(key)||null,setItem:(key:string,value:string)=>memory.set(key,value),removeItem:(key:string)=>memory.delete(key)},fetch:async(url:string,options:RequestInit)=>{
+  const action=JSON.parse(String(options.body)).action;const key=new Headers(options.headers).get('idempotency-key')||'';seen.push({url,actor,key,action});
+  if(action==='abort')return new Response(acknowledgement,{status:200});if(!release)throw Error('response lost');return Response.json({ok:true});
+ }});
+ const api=(sandboxModule.exports as {apiFetch:(url:string,options:RequestInit)=>Promise<Response>}).apiFetch;
+ const start={method:'POST',body:JSON.stringify({action:'start',caseIds:['one']})};
+ await assert.rejects(()=>api('/api/debug/batch-tasks/a',start),/response lost/);await assert.rejects(()=>api('/api/debug/batch-tasks/b',start),/response lost/);actor='bob';await assert.rejects(()=>api('/api/debug/batch-tasks/a',start),/response lost/);actor='alice';
+ await api('/api/debug/batch-tasks/a',{method:'POST',body:'{"action":"abort"}'});release=true;
+ await api('/api/debug/batch-tasks/a',start);await api('/api/debug/batch-tasks/b',start);actor='bob';await api('/api/debug/batch-tasks/a',start);
+ assert.ok(seen[0].key);if(acknowledgement==='{"ok":true}')assert.notEqual(seen[4].key,seen[0].key);else assert.equal(seen[4].key,seen[0].key);
+ assert.equal(seen[5].key,seen[1].key);assert.equal(seen[6].key,seen[2].key);
+ const stored=JSON.stringify([...memory.values()]);assert.equal(stored.includes('alice'),false);assert.equal(stored.includes('caseIds'),false);
 });

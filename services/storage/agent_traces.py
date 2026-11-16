@@ -192,6 +192,7 @@ class AgentTraceRecorder:
                     put(tool_key,copy.deepcopy(call),'tool',name=name,parent=sid,carrier=True,created=timing.get('started_at'),completed=timing.get('completed_at'))
         import datetime
         execution={key:copy.deepcopy(value) for key,value in record.items() if key!='interactions'}
+        if 'skill_version' in record:execution['skillVersion']=record['skill_version']
         public=body['context'].get('experiment_recording_kind')=='execution'
         subagent=record.get('isSubagent',record.get('is_subagent',False))
         if subagent is not None and type(subagent) is not bool:raise ValueError('Agent subagent flag must be a boolean')

@@ -16,11 +16,11 @@
 
 const URL_PREFIX = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const BATCH_OPERATION_STORAGE='agent-insight.batch-trace.operations.v1';
-interface BatchOperation {signature:string;key:string;createdAt:number}
+interface BatchOperation {signature:string;key:string;createdAt:number;scope?:string}
 function batchOperations():BatchOperation[]{
   try{
     const parsed:unknown=JSON.parse(sessionStorage.getItem(BATCH_OPERATION_STORAGE)||'[]');
-    return Array.isArray(parsed)?parsed.filter((value):value is BatchOperation=>!!value&&typeof value==='object'&&typeof value.signature==='string'&&/^[a-f0-9]{64}$/.test(value.signature)&&typeof value.key==='string'&&/^[\x21-\x7e]{1,512}$/.test(value.key)&&typeof value.createdAt==='number'&&Number.isFinite(value.createdAt)).slice(-32):[];
+    return Array.isArray(parsed)?parsed.filter((value):value is BatchOperation=>!!value&&typeof value==='object'&&typeof value.signature==='string'&&/^[a-f0-9]{64}$/.test(value.signature)&&typeof value.key==='string'&&/^[\x21-\x7e]{1,512}$/.test(value.key)&&typeof value.createdAt==='number'&&Number.isFinite(value.createdAt)&&(value.scope===undefined||typeof value.scope==='string'&&/^[a-f0-9]{64}$/.test(value.scope))).slice(-32):[];
   }catch{return [];}
 }
 function saveBatchOperations(operations:BatchOperation[]){
@@ -40,16 +40,19 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
     const key = localStorage.getItem('api_key');
     if (key) {headers.set('x-witty-api-key', key);transportedKey=key;}
   }
-  let batchOperation:BatchOperation|undefined;
+  let batchOperation:BatchOperation|undefined;let batchAction:unknown;let batchScope:string|undefined;
+  if(batchAuth&&method==='POST'&&/^\/api\/debug\/batch-tasks\/[^/]+$/.test(pathname)&&typeof options?.body==='string'){
+    try{batchAction=JSON.parse(options.body).action;const bytes=new TextEncoder().encode(JSON.stringify([fullUrl.split(/[?#]/,1)[0],headers.get('x-witty-api-key'),headers.get('authorization'),localStorage.getItem('user_id')]));batchScope=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');}catch{}
+  }
   if(batchAuth&&method==='POST'&&/^\/api\/debug\/batch-tasks\/[^/]+$/.test(pathname)&&typeof options?.body==='string'&&!headers.has('idempotency-key')){
     let action:unknown;
     try{action=JSON.parse(options.body).action;}catch{}
-    if((action==='evaluate'||action==='retry-evaluate')&&typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'){
+    if(['evaluate','retry-evaluate','start','retry-execute'].includes(String(action))&&typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'){
       const key=crypto.randomUUID();headers.set('idempotency-key',key);
       try{
-        const bytes=new TextEncoder().encode(JSON.stringify([fullUrl,options.body,headers.get('x-witty-api-key'),headers.get('authorization')]));
+        const bytes=new TextEncoder().encode(JSON.stringify([fullUrl,options.body,headers.get('x-witty-api-key'),headers.get('authorization'),localStorage.getItem('user_id')]));
         const signature=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
-        const pending=batchOperations();batchOperation=pending.find(value=>value.signature===signature)||{signature,key,createdAt:Date.now()};
+        const pending=batchOperations();batchOperation={...(pending.find(value=>value.signature===signature)||{signature,key,createdAt:Date.now()}),...(batchScope?{scope:batchScope}:{})};
         headers.set('idempotency-key',batchOperation.key);
         saveBatchOperations([...pending.filter(value=>value.signature!==signature),batchOperation]);
       }catch{}
@@ -70,6 +73,9 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
     if(acknowledgement&&typeof acknowledgement==='object'&&!Array.isArray(acknowledgement)&&'ok' in acknowledgement&&acknowledgement.ok===true){
       saveBatchOperations(batchOperations().filter(value=>value.signature!==batchOperation!.signature||value.key!==batchOperation!.key));
     }
+  }
+  if(batchAction==='abort'&&batchScope&&response.ok){
+    try{const acknowledgement:unknown=await response.clone().json();if(acknowledgement&&typeof acknowledgement==='object'&&!Array.isArray(acknowledgement)&&'ok'in acknowledgement&&acknowledgement.ok===true)saveBatchOperations(batchOperations().filter(value=>value.scope!==batchScope));}catch{}
   }
   return response;
 }

@@ -273,7 +273,7 @@ Query编辑不启动模型：同事务保存新query、按原算法重算的路�
 
 Trace 启动/重试使用 `idempotency-key` 标识一次操作；客户端仅保存最多 32 个请求哈希、操作键及时间。网络或响应体丢失会保留该键，收到可解析且 `ok: true` 的完整 JSON 确认后清除，下一次明确操作使用新键。服务器以持久操作键恢复原 start 回执及工作，不重复封存或发模型。原 `startedAt` 来自当前工作创建时间，完成时间来自当前工作/attempt metadata；内部 `coreWork` 不进入公开 Experiment DTO。
 
-BatchEvalTask、Skill/版本仍使用原静态控制存储。Dataset start/retry-execute 尚沿用原执行链路，此片不代表 Batch 全部迁移完成。
+BatchEvalTask、Skill/版本仍使用原静态控制存储。Dataset 执行与评测链路见下文 Dataset Batch 一节；完整旧库语义导入仍未完成。
 
 Batch 请求还会通过现有私有 Experiment RPC 的 `batch_scope` 固定动作核验凭据的实时权限：读取需 read，创建/配置更新/取消需 read+write，执行/评测及重试需 read+write+execute。身份相同或 workspace 角色相同不能替代凭据权限。读取绑定时仅在实时 owner 校验证实 backing 已删除后隐藏该项；不存在、未迁移或属于他人的绑定继续明确失败。
 
@@ -288,3 +288,17 @@ Skill筛选区分明确的关系空数组与未捕获关系：前者不匹配任
 
 
 性能验证边界：本片隔离环境32条可见Trace的原列表在本任务全量门禁结束后读取约4.1–4.9秒；多套全量测试同时运行时曾触及原15秒请求上限并返回502，原页面错误处理显示空列表。未扩大请求超时或放宽来源一致性，也未完成混合并发容量验收；这一成本与后续优化需求须与功能接通分别看待。
+
+### 第一版 Dataset Batch 执行与评测
+
+Dataset 模式的原 start、retry-execute、retry-evaluate、abort 与平面进度已走现 Experiment/RunPlan、本地执行和可信 Trace recorder；原页面、状态名与响应形状保留。Batch shell、Skill/版本仍在原静态控制域，动态执行/评分不回写旧 Execution/Session。可信 Agent 录制把明确的 skill_version 映射为 Trace 的 skillVersion，保留版本 0；缺失/null 不补最新版本，也不改写已录制历史。
+
+- 新逻辑 start 可在同 Task 选择新增用例或当前 Dataset 版本；多个 Dataset 在一次 typed 读取中固定各自 release、输入与 gold，再封存本次 RunPlan。未选中 Case 与旧 RunPlan 保留。单行重试使用该 Case 当前 execution slot 绑定的原 execute RunPlan，不能转到全局最新 Dataset/模型/评估器。
+- 返回成功前，shell prepared 意图和全部选中 execute work 已持久存在；只读校验固定版本及全部选中 Case 后，先 CAS 预留 Task，再更新定义并事务性批量 upsert Case，其他请求不能覆盖准备中的状态。明确失败仅在未提交 Case 批次时释放本次准确空预留；不清理其他意图，未知投递仍保留预留。相同操作先查准确回执；丢响应或最终 shell ACK 失败仍恢复原 run，不再启动 Agent。只读 GET 仅投影进度，不领任务或启动模型。
+- autoEval=false 的执行完成停在 executed；未建立评分 work 的占位槽为 skipped，不冒充正在评测。之后 retry-evaluate 仅评原 Trace，保留执行耗时；0 分是有效完成，null 不补为 0。各 Case 使用自己冻结的评估器列表，后续全局配置变化不抹掉未选中 Case 的旧结果。
+- 现私有 start/execute_start 的 source_execution_run_id 仅接受选中 Case 当前绑定的 execute run，服务端重新校验 owner、来源、权限与版本，再从原计划取配置和输入；派生计划记录 parent_execution_run_id。已有 purpose 的 controller proof 绑定该引用及 runtime 起止 checkpoint；普通 API 调用不能伪造可信运行时长。
+- 自动评测子计划使用父 execute plan 的固定 input/gold/context，加上实际 ready Trace/输出；当前 Case 的用户编辑继续保留。coreExecution 是私有投影，按当前 slot/work/attempt 派生，默认公开 Experiment DTO 不包含它；同次快照按 run 缓存已校验计划，保留 0、空串、null。
+- 取消先写持久 fence，再核实物理退出；完成兄弟结果保留。已完成本机进程的丢失 checkpoint/完成回执可在同实例复用已观测 Trace，先按原键和原时间戳重放 waiting_trace checkpoint，再提交完成，不重跑 Agent。有界本机恢复表仅淘汰已结清项，未确认回执保留，满时在领任务/模型执行前返回 503。硬重启后缺失旧进程退出证明时仍 pending/503，不能以租约过期代替清理证明；queued 未启动工作可由原操作 POST 恢复。
+- 客户端为 start/retry-execute 复用现有摘要/UUID 意图；只有严格 ok=true 的 abort ACK 才清理同账号、同 Task 的待确认意图，随后相同用例可显式启动新任务。存储仅保存有界 hash/key/时间与 scope 摘要，不保存正文或凭据；失败、坏 JSON 和其他账号/Task 不清理。
+
+本片的最终真实 HTTP、本机运行器、原界面与全量/三库验收由实现状态页记录。没有新表、迁移、parser 或前端布局变化；静态控制域与全部旧库语义迁移尚未完成。

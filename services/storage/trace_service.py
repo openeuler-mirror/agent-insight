@@ -377,7 +377,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                     action=value.get('action');purpose=None
                     config=value.get('config',{})
                     if action=='cancellation_update':purpose='experiment-cancellation/v1'
-                    elif action in {'execute_start','execute_complete','execute_fail'} or action=='checkpoint' and isinstance(value.get('checkpoint'),dict) and value['checkpoint'].get('cleanup_confirmed') is True:purpose='experiment-execution/v1'
+                    elif action in {'execute_start','execute_complete','execute_fail'} or action=='start' and value.get('source_execution_run_id') is not None or action=='checkpoint' and isinstance(value.get('checkpoint'),dict) and (value['checkpoint'].get('cleanup_confirmed') is True or any(name in value['checkpoint'] for name in ('runtime_started_at_ms','runtime_finished_at_ms'))):purpose='experiment-execution/v1'
                     elif action in {'outcome_begin','outcome_query'} or action=='complete' and isinstance(value.get('result'),dict) and isinstance(value['result'].get('evidence'),dict) and isinstance(value['result']['evidence'].get('json'),dict) and 'coreOutcome' in value['result']['evidence']['json'] or action=='derived_issue_resolve' or action=='start' and isinstance(config,dict) and (config.get('derived_skill_ids') or 'core_flow_analysis' in config):purpose='experiment-frozen-assets/v1'
                     if purpose:
                         from .controller_protocol import verify_controller_proof

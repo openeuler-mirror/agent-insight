@@ -26,6 +26,19 @@ export async function freezeExperimentAssets(context:CoreExperimentContext,data:
   const record=await findAgentDataset(context.actor.username,datasetId);if(!record)throw Object.assign(new Error('Experiment Dataset unavailable'),{status:404});
   const dataset=requireCoreDatasetContext().snapshots.get(datasetId);if(!dataset)throw Object.assign(new Error('Sealed Dataset version unavailable'),{status:409});releases.dataset=dataset.release_id;
  },context.options);
+ if(snapshot.datasetIds!==undefined){
+  if(!Array.isArray(snapshot.datasetIds)||!snapshot.datasetIds.length||snapshot.datasetIds.length>1000||snapshot.datasetIds.some(id=>typeof id!=='string'||!id))throw Object.assign(new Error('Batch Dataset selection required'),{status:400});
+  const selected=[...new Set(snapshot.datasetIds as string[])];
+  snapshot.coreBatchDatasets=await runWithCoreDatasetActor(context.actor,context.request,async()=>{
+   const datasets=[];
+   for(const id of selected){
+    const record=await findAgentDataset(context.actor.username,id);if(!record)continue;
+    const bound=requireCoreDatasetContext().snapshots.get(id);if(!bound)throw Object.assign(new Error('Sealed Batch Dataset version unavailable'),{status:409});
+    releases['dataset:'+id]=bound.release_id;datasets.push(record);
+   }
+   if(!datasets.length)throw Object.assign(new Error('Batch Dataset unavailable'),{status:404});return {datasets};
+  },context.options);
+ }
  snapshot.customEvaluatorSnapshots={schemaVersion:1,cards:frozen.cards};
  snapshot.coreAssets={schemaVersion:1,evaluators,releases};
  return {...data,configSnapshotJson:JSON.stringify(snapshot)};

@@ -31,6 +31,7 @@ import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
 import {getCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
 import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import {projectCoreBatchTask,startCoreBatchTrace,abortCoreBatchTrace,preserveCoreBatchBindings,assertCoreBatchScope} from '@/lib/storage-core/batch-trace';
+import {startCoreBatchDataset,abortCoreBatchDataset} from '@/lib/storage-core/batch-dataset';
 
 /**
  * BatchEvalTask 用例分析的核心状态机 (跟 grayscale 对齐, 单 side):
@@ -157,10 +158,11 @@ export async function PATCH(
             const task=await prisma.batchEvalTask.findFirst({where:{id:taskId,user}});
             if(!task)return NextResponse.json({error:'Task not found'},{status:404});
             priorRecord=task;priorConfig=JSON.parse(task.configJson||'{}');priorStates=JSON.parse(task.caseStatesJson||'{}');
+            if((priorConfig.coreDatasetOperation as {phase?:string;cancelRequested?:boolean}|undefined)?.phase==='prepared'&&!(priorConfig.coreDatasetOperation as {cancelRequested?:boolean}).cancelRequested)throw Object.assign(new Error('Batch preparation is already running'),{status:409});
         }
         const data: Record<string, string> = {};
-        if (configJson !== undefined) data.configJson = JSON.stringify(isStorageCoreEnabled()&&(priorConfig.sourceMode==='trace'||configJson?.sourceMode==='trace')?preserveCoreBatchBindings(priorConfig,configJson):configJson);
-        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(isStorageCoreEnabled()&&(priorConfig.sourceMode==='trace'||configJson?.sourceMode==='trace')?{
+        if (configJson !== undefined) data.configJson = JSON.stringify(isStorageCoreEnabled()?preserveCoreBatchBindings(priorConfig,configJson):configJson);
+        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(isStorageCoreEnabled()?{
             ...Object.fromEntries(Object.entries(caseStatesJson as Record<string,unknown>).map(([key])=>[key,{status:'pending'}])),...priorStates,
         }:caseStatesJson);
         if (traceEvalStatesJson !== undefined) data.traceEvalStatesJson = JSON.stringify(traceEvalStatesJson);
@@ -235,6 +237,11 @@ export async function POST(
                     return NextResponse.json(action==='evaluate'?{ok:true,taskId,mode:'evaluate',startedAt:Date.now()}:{ok:true,taskId,retriedAt:Date.now()});
                 }
                 return NextResponse.json({error:'Unknown action'},{status:400});
+            }
+            if(action==='abort')return NextResponse.json(await abortCoreBatchDataset(task));
+            if(action==='start'||action==='retry-execute'||action==='retry-evaluate'){
+                const ids=Array.isArray(body.caseIds)?body.caseIds.map(String):[];await startCoreBatchDataset(task,ids,action);
+                return NextResponse.json(action==='start'?{ok:true,taskId,startedAt:Date.now()}:{ok:true,taskId,retriedAt:Date.now()});
             }
             if(action==='evaluate')return NextResponse.json({error:'Trace source mode required'},{status:400});
         }

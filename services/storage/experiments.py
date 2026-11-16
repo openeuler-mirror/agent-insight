@@ -137,6 +137,12 @@ class ExperimentStore:
         data['comments']=self._comments_tx(con,ws,exp,annotations);data.setdefault('groups',[]);data['cases']=[];size=len(_json(data).encode())
         cases=con.execute("SELECT * FROM experiment_cases WHERE workspace_id=? AND experiment_id=? AND state='active' ORDER BY ordinal,case_id LIMIT ?",(ws,exp,MAX_CASES+1)).fetchall() if include_cases else []
         if len(cases)>MAX_CASES:raise ExperimentTooLarge('Experiment Cases exceed budget')
+        execution_plans={};execution_plan_cases={}
+        def execution_plan(run):
+            if run not in execution_plans:
+                execution_plans[run]=self._plan(con,ws,exp,run)[1]
+                execution_plan_cases[run]={value['id']:value for value in execution_plans[run]['cases']}
+            return execution_plans[run]
         for raw in cases:
             row=dict(raw)
             if case_ids is not None and row['case_id'] not in case_ids:continue
@@ -184,6 +190,23 @@ class ExperimentStore:
             status='failed' if terminal and any(v['status']=='failed' for v in results) else 'cancelled' if terminal and any(v['status']=='cancelled' for v in results) else 'done' if terminal else 'running' if any(v['status']=='running' for v in results) else 'waiting'
             progress={'identity':cps[-1]['attempt_id'] if cps else 'existing:'+row['case_id'],'attemptNo':cps[-1]['attempt_no'] if cps else 0,'generation':row['created_at_ms'],'revision':max([row['updated_at_ms']]+[v['updated_at_ms'] for v in cps]),'evaluationVersion':sum(v['attempts'] for v in results),'source':'generated' if item['traceAttempts'] else 'fault-injection' if item.get('fiRunId') else 'existing','stage':4 if status=='done' else 3,'status':status,'label':{'done':'已完成','failed':'评测失败','cancelled':'已取消','running':'执行评测中','waiting':'等待评测'}[status],'startedAt':_iso(row['created_at_ms']),'finishedAt':_iso(head['updated_at_ms']) if terminal else None,'updatedAt':_iso(head['updated_at_ms']),'traceId':item.get('taskId'),'executionId':item.get('executionId'),'error':next((v.get('errorMessage') for v in results if v.get('errorMessage')),None),'evaluators':[{'id':v['evaluatorId'],'status':v['status'],'error':v.get('errorMessage')} for v in results]}
             execution_slot=next((slot for slot in slots if slot['evaluator_id']==EXECUTION_SLOT),None)
+            item['coreExecution']=None
+            if execution_slot and execution_slot['work_item_id'] and execution_slot['run_id']:
+                work=con.execute("SELECT * FROM work_items WHERE workspace_id=? AND work_item_id=? AND run_id=? AND case_key=? AND evaluator_slot=?",(ws,execution_slot['work_item_id'],execution_slot['run_id'],row['case_id'],EXECUTION_SLOT)).fetchone()
+                if work is None:raise StorageError('Current execution work unavailable')
+                if head['scope']=='benchmark':
+                    job=con.execute("SELECT job_id FROM benchmark_jobs WHERE workspace_id=? AND experiment_id=? AND case_id=? AND run_id=? AND work_item_id=? AND kind='execute'",(ws,exp,row['case_id'],work['run_id'],work['work_item_id'])).fetchone()
+                    if work['phase']!='publish' or job is None:raise StorageError('Current Benchmark execution work differs')
+                    work=None
+                elif work['phase']!='execute':raise StorageError('Current execution work phase differs')
+                if work is not None:
+                    current_cp=max((cp for cp in cps if cp['work_item_id']==work['work_item_id']),key=lambda cp:cp['attempt_no'],default=None)
+                    payload=self._load(current_cp['payload_hash'],current_cp['payload_ref']) if current_cp else {}
+                    checkpoint=payload.get('checkpoint',{});request=payload.get('execution_request')
+                    plan=execution_plan(work['run_id']);source_case=execution_plan_cases[work['run_id']].get(row['case_id'])
+                    if source_case is None:raise StorageError('Current execution Case source unavailable')
+                    if request is None:request=plan['config'].get('execution_request',{})
+                    item['coreExecution']={'runId':work['run_id'],'workItemId':work['work_item_id'],'attemptId':current_cp['attempt_id'] if current_cp else None,'attemptNo':current_cp['attempt_no'] if current_cp else None,'status':work['status'],'stage':checkpoint.get('stage'),'createdAt':_iso(work['created_at_ms']),'startedAt':_iso(current_cp['started_at_ms']) if current_cp else None,'finishedAt':_iso(current_cp['finished_at_ms']) if current_cp and current_cp['finished_at_ms'] is not None else _iso(work['updated_at_ms']) if work['status'] in {'done','failed','cancelled'} else None,'runtimeStartedAtMs':checkpoint.get('runtime_started_at_ms'),'runtimeFinishedAtMs':checkpoint.get('runtime_finished_at_ms'),'evaluateAfterExecution':request.get('evaluate_after_execution',True),'evaluatorIds':json.loads(plan['experiment_config'].get('evaluatorIdsJson','[]')),'skillName':plan['experiment_config'].get('skillName',''),'skillVersion':plan['experiment_config'].get('skillVersion'),'input':source_case.get('input',''),'observedTraceId':checkpoint.get('observed_trace_id'),'error':checkpoint.get('errorMessage')}
             if execution_slot and execution_slot['status']!='done':
                 current_cp=next((cp for cp in reversed(cps) if cp['work_item_id']==execution_slot['work_item_id']),None)
                 payload=self._load(current_cp['payload_hash'],current_cp['payload_ref'])['checkpoint'] if current_cp else {}
@@ -245,7 +268,7 @@ class ExperimentStore:
         if old and old['state']!='active':raise Conflict('Deleted Case ID cannot be reused')
         before=self._load(old['payload_hash'],old['payload_ref']) if old else {}
         value={**before,**value};value['id']=identity
-        for key in ('results','traceAttempts','executionSnapshot','experimentId','createdAt','deletedAt','user'):value.pop(key,None)
+        for key in ('results','traceAttempts','executionSnapshot','coreExecution','experimentId','createdAt','deletedAt','user'):value.pop(key,None)
         value.setdefault('input','');value.setdefault('actualOutput','');value.setdefault('referenceOutput',None)
         head=con.execute('SELECT scope FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,exp)).fetchone()
         logical=self._dataset_case_key(value) if head and head['scope'] in {'skill-workbench','skill-case-analysis','grayscale-ab'} else None
@@ -418,6 +441,15 @@ class ExperimentStore:
 
     def _prepare_start(self,token,ws,body):
         snapshot=self.dispatch('read',token,ws,{'experiment_id':body['experiment_id'],'case_ids':body.get('case_ids')})
+        if body.get('source_execution_run_id') is not None:
+            with self.control.read_transaction() as con:
+                scope=self.iam._scope(con,token);source=self._bound_execution_plan(con,token,ws,body,scope)
+            current=snapshot['experiment']['cases'][0];case=copy.deepcopy(source['cases'][0])
+            if not body.get('_execute'):
+                for name in ('taskId','executionId','actualOutput'):case[name]=current.get(name)
+            snapshot['experiment']=copy.deepcopy(source['experiment_config'])|{'cases':[case]}
+            for name in ('config','releases','frozen_evaluators'):body[name]=copy.deepcopy(source[name])
+            if body.get('_execute'):body['execution_request']=copy.deepcopy(source['config'].get('execution_request',{}))
         traces={}
         if snapshot['experiment'].get('scope')=='trace-flow-analysis' and body.get('evaluator_ids')==['__trace_flow_attribution__']:
             if not callable(self.frozen_assets_verifier) or self.frozen_assets_verifier(token,ws,copy.deepcopy(body)) is not True:raise Forbidden('Private frozen flow attestation required')
@@ -431,6 +463,23 @@ class ExperimentStore:
                 if self.evidence is None:raise ExperimentUnavailable('Bound Trace requires frozen TraceEvidence')
                 traces[case['id']]=self.evidence.read(token,ws,task_id=case.get('taskId'),execution_id=case.get('executionId'))
         return snapshot,traces
+
+    def _bound_execution_plan(self,con,token,ws,body,scope):
+        head=self._head(con,token,ws,body['experiment_id'],'write')
+        self.iam._authorize(con,token,ws,'execute','run',head['experiment_id'])
+        if head['created_by']!=scope.principal_id:raise Forbidden('Bound execution retry requires the owner')
+        selected=body.get('case_ids')
+        if not isinstance(selected,list) or len(selected)!=1:raise ValueError('Bound execution retry requires one Case')
+        case=self._case(con,ws,head['experiment_id'],identifier(selected[0]));run=identifier(body['source_execution_run_id'])
+        slot=con.execute('SELECT run_id,status FROM experiment_result_slots WHERE workspace_id=? AND experiment_id=? AND case_id=? AND evaluator_id=?',(ws,head['experiment_id'],case['case_id'],EXECUTION_SLOT)).fetchone()
+        if not slot or slot['run_id']!=run:raise Conflict('Execution source no longer belongs to the current Case')
+        _,source=self._plan(con,ws,head['experiment_id'],run)
+        if source['phase']!='execute':raise Conflict('Bound source must be an execution RunPlan')
+        chosen=[value for value in source['cases'] if value['id']==case['case_id']]
+        if len(chosen)!=1:raise Conflict('Execution source does not contain the selected Case')
+        if not body.get('_execute') and (slot['status']!='done' or not case['trace_id']):raise Conflict('Evaluation retry requires a completed execution Trace')
+        self._guard_sources(con,token,ws,head['experiment_id'],plan=source)
+        return copy.deepcopy(source)|{'cases':copy.deepcopy(chosen)}
 
     def _flow_parent_evidence(self,con,scope,ws,head,cases,source):
         if head['scope']!='trace-flow-analysis' or head['created_by']!=scope.principal_id or len(cases)!=1 or not isinstance(source,dict) or set(source)!={'machine_result_id','content_hash','run_id'}:raise Conflict('Flow attribution parent is unavailable')
@@ -449,6 +498,7 @@ class ExperimentStore:
         self._check_revision(head,body.get('expected_revision'))
         snapshot,traces=prepared
         if str(head['revision'])!=snapshot['revision']:raise Conflict('Experiment changed while preparing RunPlan')
+        if body.get('source_execution_run_id') is not None:self._bound_execution_plan(con,token,ws,body,scope)
         flow_parent=False
         if head['scope']=='trace-outcome':
             from .trace_outcome import validate_start
@@ -537,8 +587,10 @@ class ExperimentStore:
         if body.get('_execute'):
             request=copy.deepcopy(body.get('execution_request',{}))
             if not isinstance(request,dict):raise ValueError('execution_request must be an object')
+            if 'evaluate_after_execution' in request and type(request['evaluate_after_execution']) is not bool:raise ValueError('evaluate_after_execution must be boolean')
             request['user']=self._owner(con,scope.principal_id);config['execution_request']=request
         plan={'format':'agent-insight.runplan','version':1,'experiment_id':exp,'run_id':run,'generation':generation,'experiment_config':snapshot['experiment']|{'cases':[],'comments':[]},'cases':clean_cases,'frozen_trace_evidence':traces,'frozen_evaluators':frozen,'config':config,'phase':'execute' if body.get('_execute') else 'evaluate','releases':releases,'expected_case_count':len(cases),'work_members':[{'case_key':case['id'],'evaluator_slot':evaluator} for case in cases for evaluator in pending[case['id']]]}
+        if body.get('source_execution_run_id') is not None:plan['parent_execution_run_id']=body['source_execution_run_id']
         digest,ref=self._put(plan,MAX_BYTES)
         dataset=next((release for slot,release in releases.items() if slot=='dataset' or slot.startswith('dataset:')),None)
         con.execute("INSERT INTO runs(workspace_id,run_id,name,plan_hash,plan_manifest_ref,dataset_release_id,expected_case_count,status,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,'draft',?,?)",(ws,run,snapshot['experiment']['name'],digest,ref,dataset,len(cases),now,now))
@@ -623,14 +675,16 @@ class ExperimentStore:
         item=row['work_item_id'];con.execute("UPDATE work_attempts SET status='expired',finished_at_ms=? WHERE workspace_id=? AND work_item_id=? AND status='running' AND lease_until_ms<=?",(now,ws,item,now))
         count=con.execute('SELECT COALESCE(MAX(a.attempt_no),0)+1 FROM work_attempts a JOIN work_items w ON w.workspace_id=a.workspace_id AND w.work_item_id=a.work_item_id WHERE w.workspace_id=? AND w.case_key=? AND w.evaluator_slot=? AND w.phase=?',(ws,row['case_key'],row['evaluator_slot'],row['phase'])).fetchone()[0];fence=revision(row['etag']+1);attempt=_id()
         con.execute("UPDATE work_items SET status='running',etag=?,updated_at_ms=? WHERE workspace_id=? AND work_item_id=?",(fence,now,ws,item));con.execute("INSERT INTO work_attempts(workspace_id,attempt_id,work_item_id,attempt_no,fence,worker_id,status,lease_until_ms,started_at_ms) VALUES(?,?,?,?,?,?,'running',?,?)",(ws,attempt,item,count,fence,worker,now+lease,now))
-        previous=con.execute("SELECT c.payload_hash,c.payload_ref,c.run_id,c.attempt_id FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id JOIN work_items w ON w.workspace_id=c.workspace_id AND w.work_item_id=c.work_item_id WHERE c.workspace_id=? AND c.case_id=? AND w.phase='execute' ORDER BY a.attempt_no DESC LIMIT 1",(ws,row['case_key'])).fetchone() if row['phase']=='execute' else None
+        previous=con.execute("SELECT c.payload_hash,c.payload_ref,c.run_id,c.attempt_id,c.work_item_id,a.status AS attempt_status FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id JOIN work_items w ON w.workspace_id=c.workspace_id AND w.work_item_id=c.work_item_id WHERE c.workspace_id=? AND c.case_id=? AND w.phase='execute' ORDER BY a.attempt_no DESC LIMIT 1",(ws,row['case_key'])).fetchone() if row['phase']=='execute' else None
         checkpoint={}
         if row['phase']=='execute' and previous:
             previous_payload=self._load(previous['payload_hash'],previous['payload_ref']);checkpoint=previous_payload['checkpoint']
             previous_request=previous_payload.get('execution_request')
             if previous_request is None:previous_request=self._plan(con,ws,head['experiment_id'],previous['run_id'])[1]['config'].get('execution_request',{})
             if checkpoint.get('command_id'):checkpoint['_command_target']=checkpoint.get('_command_target') or self._external_target(checkpoint['command_id'],checkpoint,previous_request,previous['attempt_id'])
-            if checkpoint.get('command_id') and not checkpoint.get('cleanup_confirmed'):
+            if previous['work_item_id']!=item and (previous['attempt_status']=='done' or checkpoint.get('cleanup_confirmed') is True):
+                checkpoint={}
+            elif checkpoint.get('command_id') and not checkpoint.get('cleanup_confirmed'):
                 checkpoint['cleanup_required']=True
         if row['phase']=='evaluate' and head['scope'] in {'trace-flow-analysis','trace-outcome'}:
             prior=con.execute('SELECT c.payload_hash,c.payload_ref FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id WHERE c.workspace_id=? AND c.work_item_id=? AND c.run_id=? ORDER BY a.attempt_no DESC LIMIT 1',(ws,item,row['run_id'])).fetchone()
@@ -675,6 +729,11 @@ class ExperimentStore:
         value=body.get('checkpoint')
         if not isinstance(value,dict):raise ValueError('Checkpoint must be an object')
         old=self._load(cp['payload_hash'],cp['payload_ref']);prior=old['checkpoint'];provided=set(value);value={**prior,**value}
+        for name in ('runtime_started_at_ms','runtime_finished_at_ms'):
+            if name in provided:
+                if old.get('phase')!='execute' or type(value[name]) is not int or value[name]<0:raise ValueError('Invalid execution runtime timestamp')
+                if name in prior and prior[name]!=value[name]:raise Conflict('Execution runtime timestamp is immutable')
+        if 'runtime_finished_at_ms' in value and ('runtime_started_at_ms' not in value or value['runtime_finished_at_ms']<value['runtime_started_at_ms']):raise ValueError('Execution runtime finish precedes start')
         old_command=prior.get('command_id') or cp['command_id'];command=value.get('command_id',old_command);trace=value.get('trace_id',cp['trace_id'])
         replacing=old_command and command!=old_command
         if replacing and (old.get('phase')!='execute' or not prior.get('cleanup_confirmed')):raise Conflict('Previous external command cleanup is not confirmed')
@@ -682,7 +741,7 @@ class ExperimentStore:
         if replacing:
             value['cleanup_confirmed']=False
             if old_command not in cleaned:cleaned.append(old_command)
-            for key in ('fi_run_id','fi_task_key','observed_trace_id','trace_id'):
+            for key in ('fi_run_id','fi_task_key','observed_trace_id','trace_id','runtime_started_at_ms','runtime_finished_at_ms'):
                 if key not in provided:value.pop(key,None)
         if len(cleaned)>MAX_ITEMS:raise ExperimentTooLarge('External cleanup history exceeds budget')
         value['_cleaned_commands']=cleaned
@@ -738,7 +797,7 @@ class ExperimentStore:
         cancellations=con.execute("SELECT payload_hash,payload_ref FROM experiment_annotations WHERE workspace_id=? AND experiment_id=? AND kind='cancellation' AND "+subject+' LIMIT ?',parameters).fetchall()
         if len(cancellations)>MAX_ANNOTATIONS:raise ExperimentTooLarge('Experiment cancellation history exceeds budget')
         global_cancelled=any(self._load(row['payload_hash'],row['payload_ref']).get('caseKey')=='' for row in cancellations)
-        rows=con.execute("SELECT s.status FROM experiment_result_slots s JOIN experiment_cases c ON c.workspace_id=s.workspace_id AND c.case_id=s.case_id WHERE s.workspace_id=? AND s.experiment_id=? AND c.state='active'",(ws,exp)).fetchall();states=[r[0] for r in rows]
+        rows=con.execute("SELECT s.status FROM experiment_result_slots s JOIN experiment_cases c ON c.workspace_id=s.workspace_id AND c.case_id=s.case_id WHERE s.workspace_id=? AND s.experiment_id=? AND c.state='active' AND NOT (s.status='skipped' AND s.work_item_id IS NULL AND s.evaluator_id<>'__execution__')",(ws,exp)).fetchall();states=[r[0] for r in rows]
         status='running' if any(s in {'pending','running'} for s in states) else 'cancelled' if states and all(s=='cancelled' for s in states) else 'failed' if states and all(s=='failed' for s in states) else 'partial' if any(s in {'failed','cancelled'} for s in states) else 'done' if states else 'draft'
         if global_cancelled:status='cancelled'
         self._bump(con,ws,exp,status=status)
@@ -1553,12 +1612,16 @@ class ExperimentStore:
         con.execute("UPDATE experiment_attempt_checkpoints SET payload_hash=?,payload_ref=?,trace_id=?,stage='ready',revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND attempt_id=?",(digest,ref,evidence['manifest']['trace_id'],now,ws,cp['attempt_id']))
         self._case_write(con,token,ws,head['experiment_id'],raw,case['ordinal'],preserve_execution=True)
         evaluators=json.loads(parent['experiment_config'].get('evaluatorIdsJson','[]'))
-        if evaluators:
-            snapshot={'experiment':copy.deepcopy(parent['experiment_config'])|{'cases':[raw]},'revision':str(head['revision'])}
-            child={'experiment_id':head['experiment_id'],'case_ids':[cp['case_id']],'config':parent['config'],'releases':parent['releases'],'frozen_evaluators':parent['frozen_evaluators']}
+        if evaluators and parent['config'].get('execution_request',{}).get('evaluate_after_execution',True):
+            scoring_case=copy.deepcopy(raw);frozen_case=next(value for value in parent['cases'] if value['id']==cp['case_id'])
+            for name in ('input','datasetInput','referenceOutput','evaluatorContextJson','caseValuesJson','groupId'):
+                if name in frozen_case:scoring_case[name]=copy.deepcopy(frozen_case[name])
+            snapshot={'experiment':copy.deepcopy(parent['experiment_config'])|{'cases':[scoring_case]},'revision':str(head['revision'])}
+            child={'experiment_id':head['experiment_id'],'case_ids':[cp['case_id']],'source_execution_run_id':cp['run_id'],'config':parent['config'],'releases':parent['releases'],'frozen_evaluators':parent['frozen_evaluators']}
             result=self._start(con,token,ws,child,scope,(snapshot,{cp['case_id']:evidence}),trusted_parent=True)
         else:
-            self._bump(con,ws,head['experiment_id'],status='done');result=self._snapshot(con,ws,self._head(con,token,ws,head['experiment_id']))
+            con.execute("UPDATE experiment_result_slots SET status='skipped',revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND case_id=? AND evaluator_id<>? AND work_item_id IS NULL AND selected_result_id IS NULL AND status='pending'",(self.control.clock(),ws,cp['case_id'],EXECUTION_SLOT))
+            self._settle(con,ws,head['experiment_id']);result=self._snapshot(con,ws,self._head(con,token,ws,head['experiment_id']))
         result['execution_run_id']=cp['run_id'];return result
 
     def _execute_fail(self,con,token,ws,body,scope):
@@ -1576,7 +1639,10 @@ class ExperimentStore:
         con.execute('UPDATE experiment_attempt_checkpoints SET payload_hash=?,payload_ref=?,stage=?,revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND attempt_id=?',(digest,ref,'retry_wait' if retry else 'failed',now,ws,cp['attempt_id']))
         case=self._case(con,ws,head['experiment_id'],cp['case_id']);raw=self._load(case['payload_hash'],case['payload_ref']);raw['traceGenerationError']=message;digest,ref=self._put(raw)
         con.execute('UPDATE experiment_cases SET payload_hash=?,payload_ref=?,revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND case_id=?',(digest,ref,now,ws,cp['case_id']))
-        self._bump(con,ws,head['experiment_id'],status='running' if retry else 'failed')
+        if not retry and payload.get('execution_request',{}).get('evaluate_after_execution') is False:
+            con.execute("UPDATE experiment_result_slots SET status='skipped',revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND case_id=? AND evaluator_id<>? AND work_item_id IS NULL AND selected_result_id IS NULL AND status='pending'",(now,ws,cp['case_id'],EXECUTION_SLOT))
+            self._settle(con,ws,head['experiment_id'])
+        else:self._bump(con,ws,head['experiment_id'],status='running' if retry else 'failed')
         return self._snapshot(con,ws,self._head(con,token,ws,head['experiment_id']))
 
     def _case_lookup(self,con,token,ws,body):
@@ -1928,7 +1994,7 @@ class ExperimentStore:
 
     @staticmethod
     def _request_summary(request):
-        return {key:request[key] for key in ('kind','workerId','targetWorkerId','platform','agent','model','timeoutSeconds') if key in request}
+        return {key:request[key] for key in ('kind','workerId','targetWorkerId','platform','agent','model','timeoutSeconds','evaluate_after_execution') if key in request}
 
     @staticmethod
     def _external_target(command,checkpoint,request,attempt_id=None):

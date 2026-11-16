@@ -471,3 +471,26 @@ apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多
 证据：`exclude/storage-core-next-consumers/20261116-m6gj2c0f/` 的 `final-code-verification.json`、`candidate-v2-final-python-python-report.json`、`candidate-v2-native/`、`normal-source-http-green.json`、`normal-case-final.png`、`normal-case-v0.png` 和 `candidate-v2-main-preservation.json`。原验收界面仍为 http://localhost:58488/skill-eval ，已有隔离账号保持。
 
 下一片按 phase7 已补齐的 Dataset Batch 计划继续：先补 autoEval=false 与持久准备/消费，再多数据集固定版本、重试/取消、原平面进度及真实录制回执闭环。静态 Batch/配置权威、其他采集与控制域、96模型语义迁移仍未完成；本片不代表全产品接管或生产切换。
+
+
+## 2026-11-16 第一版 Dataset Batch 执行接入
+
+原数据集批量任务的 start/retry-execute/retry-evaluate/abort 已接现有 Experiment、RunPlan、工作回执及可信 Agent 录制；静态 Batch/Skill/配置继续原控制权威。一次选择可跨多个固定 Dataset release；同 Task 新启动采用新切片，单 Case 重试沿用自己的原输入、gold、Skill/评估器/模型，不随其他 Case 的新启动漂移。autoEval=false 保留执行 Trace 与时间但不启动评分；自动评测取父执行封存参考答案并保留后续 Case 输入与参考答案编辑。版本0、真实0分、空/null、完成兄弟保留及取消后迟到结果拒绝均有验证。
+
+返回成功前持久提交所有选中执行工作，使用准确 prepared/submitted CAS 与 operation receipt；读进度不启动模型。恢复同实例已观测结果时先重放原 waiting_trace checkpoint 和时间，再提交完成；硬重启无物理退出证明仍 pending/503，不自动重跑。受保护内部绑定和机器结果不能被 PATCH 覆盖，所有 Case 和版本先校验再事务批量写。客户端只保留账号/Task 范围内有界签名，严格成功 ACK 后清除，abort 成功只清同作用域。Agent Recorder 明确携带的 skill_version 映射到原 canonical skillVersion，0 保留，缺失不补最新，不改写历史。
+
+| 验证 | 最终结果与边界 |
+|---|---|
+| 应用完整测试 | 冻结 V5：6020项，5998通过、22跳过、0失败/取消，659.86秒；Node24、完整原 glob/collector类型预检、并行4、独立HOME/SQLite |
+| 后端完整测试 | V5：1101项，922通过、179可选引擎环境跳过、0失败，628.83秒；ResourceWarning作为错误，155个来源文件前后稳定 |
+| PG / 原生openGauss | 各18/18，无跳过；117.15/220.67秒，各21个自有schema清理后回查0，159个来源文件前后/当前一致。事实sink为MemoryFacts，不冒称全CH组合矩阵 |
+| 真实原HTTP与录制 | V4独立SQLite+CH、实际原handler/apiFetch、168次请求、11次本地Mock调用和真实OpenCode通过，旧动态表毒化访问0；覆盖多Dataset/新cut/旧Plan重试、固定v0、取消/迟到、丢ACK、新进程进度、权限和gold不入Agent。V5只增Benchmark投影窄修复与回归，最终原Next另完成真实Agent→评分0→原详情→Trace，耗时6.0s，无外部模型效果验收 |
+| 原界面与限制 | 原数据集面板显示1用例，原实验/Case详情显示完成和有效0分，原Trace展开1 Agent/2 LLM/1工具。TSX/CSS零改动；应用console错误/警告0，IAB Electron宿主另有2错误单列。原双Judge兼容接口只识别任务完成度/轨迹质量ID，精确匹配结果在该页缺双分而显示失败，原映射未改；不将此画面当双Judge评分通过 |
+| 数据与历史保留 | 刷新前2份SQLite备份；65张core、96张旧表原记录及15张CH旧事实逐行/哈希子集保留，仅旧负面Outbox重试元数据正常推进。2个明确新增隔离Dataset（含harness首次成功创建后Python取method错误保留的样本）、1任务/实验/原生Trace与相关事实追加。原4身份、100分实验、0分Workbench和诊断done/report再次读回；默认库/生产未操作 |
+| 静态与独立审查 | 142项聚焦、tsc通过；lint0error，local helper既有2 unused warning保留。V4及V5均经Spec→Quality，V5独立各8项。3078个冻结来源及26个overlay与当前字节一致，无schema/parser/purpose变化，仍015/65+15；用户AGENTS.md未提交 |
+
+完整回归发现的26个后端/7个应用Benchmark失败来自新的coreExecution投影误把Benchmark publish槽当普通execute槽。V5只在scope=benchmark、准确work/run/Case/slot及execute-kind job全部匹配时保留原Benchmark投影，普通缺失/阶段损坏仍明确失败；Benchmark+Experiment157项及完整最终门禁通过。首次完整后端另有1次Trace导入鉴权错误，独立原例及最终整套未复现，失败日志保留，不把首次运行称通过。原生OG首次检查时隔离gaussdb已退出；确认stale PID后用原数据目录gs_ctl恢复，未重建库，失败日志和重跑证据分别保留。
+
+证据在 `exclude/storage-core-batch-dataset/20261116-khyxgzb7/`：`final-code-verification.json`、`candidate-v5-result.json`、`candidate-v5-final-python-report.json`、`candidate-v5-native/`（PG）及`candidate-v5-native-opengauss-recovery/`、`acceptance-native-v4/batch-dataset-http-report.json`、`main-dataset-http-report.json`、`main-data-preservation.json`、`main-regression-readback.json`与三张`main-original-*.png`。仅本地检查点，不切生产/不执行完整历史apply。
+
+后续先排查原Trace读取：多原页面轮询时，单条lookup与列表曾触及原15秒超时；关闭其他轮询后同条原HTTP200、3.998秒，页面最终正常展开。现兼容列表在解析taskId前物化所有可见记录，是需优先验证的窄改进方向；不通过扩大超时/放松来源校验解决，也不将此称千级容量通过。之后继续旧Trigger运行/录制/优化点/AI起草，再按phase7推进采集/控制域及96模型语义迁移。万级Span与容量机制继续第二版。
