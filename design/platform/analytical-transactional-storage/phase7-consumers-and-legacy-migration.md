@@ -209,3 +209,21 @@ Dataset Batch 真实运行补充：Agent 标准记录明确携带的 skill_versi
 原页面按 taskId/executionId/taskIds 钻取时，在当前 IAM 下先解析不可变旧别名或内部 ID，多个选择取交集，再以既有 route/summary 只装载所选 Trace。route 的 created_at_ms 保留原缺失 started_at 时的时间语义，bucket 变化明确拒绝；未 indexed 的事实与旧列表一样为空。投影继续复用原来源预算、主 Skill/历史字段、当前 Outcome 和末尾权限/删除/来源复核，不改 schema、parser、超时或前端。recognized 全局 facets（tags/skills/values）仍走原全局范围，未知 facet 按普通选择请求处理。
 
 本片仅消除准确定位对无关 Trace 的枚举和源读取；通用列表/复杂筛选/容量仍按既有边界，不把准确定位改善称为所有读取性能或千级并发验收。先以禁止全局 list_traces/无关 source 的 RED 与原 DTO/时间/交集/权限/来源变化回归验证，再由独立审查、隔离真实 HTTP/原页面及后端/三库门禁确认。
+
+
+### 第一版可信公共采集与 Infra 迁移前置核对
+
+本节是剩余入口的只读源码核对及实施约束，不表示这些功能已接入。原OTLP Traces的[core提前分支](../../../src/app/api/ingest/otel/v1/traces/route.ts)与内部AgentRecorder已有真实身份、原包/分包、receipt和indexed确认，继续复用；它们下方legacy分支不是重复迁移目标。公共upload/空completion不能直接冒充带work/diagnosis来源的内部Agent记录，bundle导入的冲突ID重映射也不能替代持续快照更新。
+
+依赖顺序为：受信公共source/快照receipt与设备身份桥接 → upload与completion → proxy和原分析/子Agent/线程写入 → logs聚合与新consumer确认 → 必要Infra控制/采样模型及原查询 → 显式映射的旧库/旧spool语义导入。原返回字段、原UI和客户端失败不推进checkpoint语义保持；继续不切生产。
+
+- [upload](../../../src/app/api/ingest/upload/route.ts)、[OpenCode completion](../../../src/app/api/ingest/opencode/session-complete/route.ts)、[proxy存储](../../../src/lib/ingest/proxy-store.ts)与`saveExecutionRecord`仍在旧Session/Execution/ExecutionSkill/子Agent/TraceThread写域。接入需稳定source/revision/receipt、completion先到的空会话意图、后到消息合并与墓碑不复活；显式时间、0/null、扩展字段、技能版本和原消息完整保留。先评估现alias/capsule/生命周期载体，不为套用内部Recorder而丢空completion或改变原payload。
+- [OTLP logs](../../../src/app/api/ingest/otel/v1/logs/route.ts)的原功能是多框架日志聚合成会话和Trace，第一版按该语义接入并保留原包/事件身份，不制造伪Span或顺手扩展完整原生日志查询。现ObservationIngest仅接resourceSpans；无完整severity/body/scope/flags等日志契约，不能宣称通用OTLP Logs存储已具备。
+- [旧consumer](../../../src/lib/ingest/otel-consumer/consumer.ts)存在无归属记录丢弃但返回success的路径，core模式启动代码也仍启动这些旧消费者。新writer不能沿用这个布尔值推进迁移游标；逐原包/会话有明确disposition，所有相关批次indexed后才推进新durable cursor，源文件/旧cursor保留。半行、坏行、无Session和DeepSeek父子重复分片分别处理，不将未确认当成功。
+- 接收时必须区分调用者身份与供应商Authorization。真实APIKey及已校验撤销/clientId的device注册主体需映射到IAM principal/workspace并封存接收证明，不能仅凭body.user、authenticatedUser布尔值、用户名/APIKey目录名、锁文件host/pid/token授权。已查旧server spool未持久化可验证credential身份或新receipt；缺证明的历史包进入blocked/mapping清单并原样保留。旧注册库可作独立核验来源，不能用一次新请求的凭据追溯授权所有旧字节。原keyless/proxy路径需明确受信接收主体配置，不猜成当前账号。
+
+**Infra新模型是原功能必要承载，不是第二版容量扩展。** [metrics入口](../../../src/app/api/ingest/otel/v1/metrics/route.ts)、[源/采样存储](../../../src/lib/infra/store.ts)、[会话关联](../../../src/lib/infra/sessions.ts)及poller仍依赖InfraSource/InfraMetricSample/SessionInfraLink。现15张CH和65张control没有等价表：obs_events是Trace事件，eval_metric_facts绑定评测result_id，asset kind也不接受infra，不能假借这些域存指标。
+
+最小设计应保留control中的source ID、workspace/访问范围、endpoint/scrape URL、push/pull、私有authHeaders、model/硬件参数、采样间隔/enabled及Trace↔source/model人工覆盖关联；CH采样需稳定样本/receipt、原tsMs含0、via、nullable model、gauges、累计counters、histogram buckets/sum/count、waitingByReason。保留+Inf、counter reset和原窗口/排序/最新n/导出含义；原全局唯一endpoint、无owner的历史源与人工关联必须显式迁移归属。后续在核心设计/表字典中细化必要增量迁移并验证三库，不运行或混用已延期的第二版水位/容量草稿。当前vLLM归一化不宣称覆盖所有OTLP metric类型、temporality或exemplar。
+
+验收至少覆盖原客户端upload到原Trace页、同包/丢ACK/改包冲突、新快照不重复Trace、completion先到/迟到/重启/墓碑、APIKey/device冲突/撤销/伪造主体、分包或CH失败时pending且cursor不前移、旧源/旧cursor不变，以及Infra push/pull到历史/最新/model/导出/自动与人工关联及私有源隔离。容量与万级Span继续第二版，不能代替上述第一版原功能闭环。
