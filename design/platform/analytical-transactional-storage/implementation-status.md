@@ -494,3 +494,21 @@ apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多
 证据在 `exclude/storage-core-batch-dataset/20261116-khyxgzb7/`：`final-code-verification.json`、`candidate-v5-result.json`、`candidate-v5-final-python-report.json`、`candidate-v5-native/`（PG）及`candidate-v5-native-opengauss-recovery/`、`acceptance-native-v4/batch-dataset-http-report.json`、`main-dataset-http-report.json`、`main-data-preservation.json`、`main-regression-readback.json`与三张`main-original-*.png`。仅本地检查点，不切生产/不执行完整历史apply。
 
 后续先排查原Trace读取：多原页面轮询时，单条lookup与列表曾触及原15秒超时；关闭其他轮询后同条原HTTP200、3.998秒，页面最终正常展开。现兼容列表在解析taskId前物化所有可见记录，是需优先验证的窄改进方向；不通过扩大超时/放松来源校验解决，也不将此称千级容量通过。之后继续旧Trigger运行/录制/优化点/AI起草，再按phase7推进采集/控制域及96模型语义迁移。万级Span与容量机制继续第二版。
+
+
+## 2026-11-16 原 Trace 准确定位读取修复
+
+原Trace详情用taskId/executionId定位时，兼容接口此前先物化所有可见Trace再过滤。现在先按实时IAM解析原别名/内部ID，按taskId、executionId、taskIds原交集读取所选Trace；复用原Record投影、源字节预算、Outcome选择及授权/删除/来源前后复核。保留route.created_at_ms和bucket校验；缺事实、缺失/foreign选择、0/null、排序/统计/分页均与原结果一致。tags/skills/values全局facet继续原范围，未知facet继续正常过滤。普通列表未优化，不改UI、表结构、parser、purpose或15秒超时。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 完整应用 | 6020项，5998通过、22跳过、0失败/取消，777.90秒；Node24、原完整glob/collector预检、并行4、独立HOME/SQLite |
+| 完整后端 | 1112项，933通过、179可选引擎缺配置跳过、0失败，813.47秒；ResourceWarning作为错误，155个来源文件稳定 |
+| PG / 原生OG | 各18/18、无跳过，404.94/340.95秒；各18个自建schema回查残留0，159个来源文件及当前源一致。Facts为MemoryFacts，不称完整CH组合矩阵 |
+| RED/GREEN及审查 | 写者151项通过；Spec独立18项及588组新旧DTO/统计/分页/facet组合全部一致；Quality17项含201ID两批对照、第二批撤权拒绝部分结果与privateJudge访问，全部通过。3078个冻结来源和6个overlay与当前相同 |
+| 真实原HTTP/CH | 同一原生Trace与旧冻结代码读真实CH的DTO逐字段相同；原Next连续0.311/0.212/0.166秒，四个并发同ID0.606–0.660秒均200。此前原HTTP空闲3.998秒，旧冻结直接读2.843秒；匿名401、伪user不扩权、missing返回空。不同边界分别记录，不把该少量样本当千级容量验证 |
+| 原界面/数据 | 原Trace首次打开即正常展开1Agent/2LLM/1工具，当前console错误/警告0，截图original-trace-green.png。只刷新原隔离helper并保持Python解释器与Next服务不变，先备份两库；65core/96旧表原记录保留，15CH在刷新后读验期间逻辑内容相同，旧100分实验、0分Workbench、诊断done/report及4身份仍可读。旧负面Outbox只正常推进重试元数据；默认库/生产未操作 |
+
+证据：`exclude/storage-core-trace-lookup/20261116-9l5_pk9r/` 的`final-code-verification.json`、`candidate-v1-result.json`、`candidate-v1-final-python-report.json`、`candidate-v1-native/`、`lookup-spec-*`、`lookup-quality-*`、`old-frozen-real-dto.json`、`main-http-report.json`、`main-data-preservation.json`及`main-browser-report.json`。没有启动额外Agent/外部模型，没有修改或重导旧Trace事实。
+
+本片仅恢复准确定位的正常读取，不解决一般列表的完整物化、N+1选择读取及第二版容量目标；后续按已审计的原Trigger、可信公共采集和Infra必要存储缺口继续推进，完整旧库/旧spool迁移及生产切换仍未完成。

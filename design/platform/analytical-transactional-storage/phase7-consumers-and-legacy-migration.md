@@ -202,3 +202,10 @@ Dataset Batch实现补充：同Task新start按当前选择建立新cut，并以T
 Dataset Batch 审查补充：固定 Skill/数据切片及全部选中 Case 的只读校验先于预留和 typed 写；Case 使用现事务批量 upsert。明确失败仅释放未提交 Case 批次的准确本次空预留，未知投递或已提交绑定保留。已观测本机结果恢复时先重放原 waiting_trace checkpoint 与时间戳，再提交完成回执。
 
 Dataset Batch 真实运行补充：Agent 标准记录明确携带的 skill_version 在可信 Trace carrier 中映射到 canonical skillVersion，保留版本 0；缺失/null 不查询最新版本，已录制历史不改写。
+
+
+### 第一版原 Trace 准确定位读取
+
+原页面按 taskId/executionId/taskIds 钻取时，在当前 IAM 下先解析不可变旧别名或内部 ID，多个选择取交集，再以既有 route/summary 只装载所选 Trace。route 的 created_at_ms 保留原缺失 started_at 时的时间语义，bucket 变化明确拒绝；未 indexed 的事实与旧列表一样为空。投影继续复用原来源预算、主 Skill/历史字段、当前 Outcome 和末尾权限/删除/来源复核，不改 schema、parser、超时或前端。recognized 全局 facets（tags/skills/values）仍走原全局范围，未知 facet 按普通选择请求处理。
+
+本片仅消除准确定位对无关 Trace 的枚举和源读取；通用列表/复杂筛选/容量仍按既有边界，不把准确定位改善称为所有读取性能或千级并发验收。先以禁止全局 list_traces/无关 source 的 RED 与原 DTO/时间/交集/权限/来源变化回归验证，再由独立审查、隔离真实 HTTP/原页面及后端/三库门禁确认。

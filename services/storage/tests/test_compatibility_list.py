@@ -3,6 +3,83 @@ from services.storage.tests.test_trace_service import TraceQueryTests
 
 
 class CompatibilityListTests(TraceQueryTests):
+    def test_exact_trace_selection_never_scans_other_trace_summaries(self):
+        from unittest.mock import patch
+        api=self.compatible();baseline=api.read(self.tokens['admin'],'w',{})
+        expected=next(row for row in baseline if row['task_id']=='a')
+        for params in ({'taskId':'a'},{'executionId':'a'},{'taskIds':'a,a'},{'taskId':'a','facet':'unknown'}):
+            with self.subTest(params=params):
+                self.facts.calls=[]
+                with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')):
+                    self.assertEqual(api.read(self.tokens['admin'],'w',params),[expected])
+                queried={value for _,values in self.facts.calls for key,value in values.items() if key.startswith('trace_')}
+                self.assertEqual(queried,{'a'})
+
+    def test_exact_alias_intersections_keep_original_rows_statistics_and_pagination(self):
+        from unittest.mock import patch
+        from services.storage.trace_metadata import TraceMetadata
+        from services.storage.compatibility_list import LegacyTraceList
+        metadata=TraceMetadata(self.store)
+        metadata.register_aliases_for_provisioning('w','a',task_id='old-task-a',execution_id='old-exec-a')
+        api=LegacyTraceList(self.queries,metadata);all_rows=api.read(self.tokens['admin'],'w',{})
+        wanted=[row for row in all_rows if row['task_id']=='old-task-a']
+        both=[row for row in all_rows if row['task_id'] in {'old-task-a','c'}]
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact aliases scanned all traces')):
+            for params in [
+                {'taskId':'old-task-a','executionId':'a','taskIds':'old-task-a,c'},
+                {'taskId':'a','executionId':'old-exec-a','taskIds':'a,old-task-a'},
+            ]:self.assertEqual(api.read(self.tokens['admin'],'w',params),wanted)
+            self.assertEqual(api.read(self.tokens['admin'],'w',{'taskId':'old-task-a','executionId':'b'}),[])
+            page=api.read(self.tokens['admin'],'w',{'taskIds':'old-task-a,c','paginated':'1','pageSize':'1','page':'2'})
+            self.assertEqual(page['records'],both[1:]);self.assertEqual(page['total'],2);self.assertEqual(page['stats']['total'],2)
+            self.assertFalse(page['hasMore']);self.assertTrue(page['canViewAllTraces'])
+
+    def test_empty_exact_selection_is_authorized_and_still_validates_filters(self):
+        from unittest.mock import patch
+        from services.storage.iam import Forbidden,Unauthorized
+        api=self.compatible()
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('empty exact lookup scanned all traces')):
+            for params in ({'taskId':'missing'},{'executionId':'b'},{'taskId':'a','taskIds':'c'}):
+                self.assertEqual(api.read(self.tokens['alice'],'w',params),[])
+            with self.assertRaises(ValueError):api.read(self.tokens['alice'],'w',{'taskId':'missing','filters':'[{"column":"private_gold","operator":"=","value":0}]'})
+            with self.assertRaises(Forbidden):api.read(self.tokens['alice'],'foreign',{'taskId':'missing'})
+            self.iam.revoke_credential(self.tokens['alice'])
+            with self.assertRaises(Unauthorized):api.read(self.tokens['alice'],'w',{'taskId':'missing'})
+        self.assertEqual(self.facts.calls,[])
+
+    def test_exact_selection_does_not_narrow_original_global_facets(self):
+        api=self.compatible()
+        for params in ({'facet':'values','column':'user'},{'facet':'skills'},{'facet':'tags'}):
+            self.assertEqual(api.read(self.tokens['admin'],'w',{**params,'taskId':'a'}),api.read(self.tokens['admin'],'w',params))
+
+    def test_exact_trace_postflight_rejects_revocation_and_deletion(self):
+        from unittest.mock import patch
+        from services.storage.iam import Forbidden
+        api=self.compatible()
+        self.facts.before_return=lambda:self.iam.set_membership(self.tokens['admin'],'g','alice','member',status='disabled',expected_etag=1)
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')):
+            with self.assertRaises(Forbidden):api.read(self.tokens['alice'],'w',{'taskId':'a'})
+        self.facts.before_return=None
+        def remove():
+            with self.store.transaction() as con:con.execute("UPDATE trace_locators SET state='deleting' WHERE trace_id='b'")
+        self.facts.before_return=remove
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')):
+            with self.assertRaises(Forbidden):api.read(self.tokens['admin'],'w',{'executionId':'b'})
+
+    def test_exact_trace_without_indexed_facts_matches_original_empty_result(self):
+        from unittest.mock import patch
+        self.facts.rows=[row for row in self.facts.rows if row['trace_id']!='a']
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')):
+            self.assertEqual(self.compatible().read(self.tokens['alice'],'w',{'taskId':'a'}),[])
+
+    def test_exact_lookup_rechecks_a_shared_trace_after_its_grant_is_revoked(self):
+        from unittest.mock import patch
+        from services.storage.iam import Forbidden
+        self.iam.share_resource(self.tokens['bob'],'w','trace','b','alice')
+        self.facts.before_return=lambda:self.iam.unshare_resource(self.tokens['bob'],'w','trace','b','alice')
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')),self.assertRaises(Forbidden):
+            self.compatible().read(self.tokens['alice'],'w',{'taskId':'b'})
+
     def test_internal_trace_identity_is_opt_in_and_preserves_original_public_aliases(self):
         default=self.compatible().read(self.tokens['alice'],'w',{})
         internal=self.compatible().read(self.tokens['alice'],'w',{'includeCoreIdentity':'1'})

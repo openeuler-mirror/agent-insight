@@ -27,6 +27,55 @@ class TraceExecutionMetadataTests(unittest.TestCase):
         self.assertTrue(callable(getattr(self.service(),'execution_metadata',None)),'bounded source execution metadata is required')
         return LegacyTraceList(self.queries,self.metadata,analytics=self.service())
 
+    def test_exact_alias_lookup_reads_only_its_current_source_and_outcome(self):
+        root=fixture.node();root['execution'].update(skill='root-skill',skillVersion=0,answerScore=0)
+        child=fixture.node('child','child-task',parent='root')
+        trace=self.prepare_source(fixture.bundle([root,child]));api=self.listing()
+        expected=next(row for row in api.read(self.token,'w',{}) if row['task_id']=='task')
+        from services.storage.dataset_generation_sources import GenerationSources
+        from services.storage.trace_outcome import _lookup_tx
+        original=GenerationSources._metadata;sources=[];outcomes=[]
+        def source(reader,begin,*args):
+            sources.append(begin['route']['trace_id']);self.assertEqual(begin['route']['trace_id'],trace)
+            return original(reader,begin,*args)
+        def outcome(store,con,token,workspace,body):
+            outcomes.append(body['trace_ref']);self.assertEqual(body['trace_ref'],trace)
+            return _lookup_tx(store,con,token,workspace,body)
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact alias lookup scanned all traces')),patch.object(GenerationSources,'_metadata',source),patch('services.storage.trace_outcome._lookup_tx',side_effect=outcome):
+            self.assertEqual(api.read(self.token,'w',{'taskId':'task'}),[expected])
+        self.assertEqual(sources,[trace]);self.assertTrue(outcomes)
+
+    def test_exact_lookup_rejects_source_change_and_current_outcome_change(self):
+        from services.storage.dataset_generation_sources import GenerationSources
+        trace=self.prepare_source();api=self.listing();original=GenerationSources._metadata
+        def change(reader,*args):
+            result=original(reader,*args);self.metadata.patch(self.token,'w',trace,{'label':'changed during exact read'});return result
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')),patch.object(GenerationSources,'_metadata',change),self.assertRaises(Conflict):
+            api.read(self.token,'w',{'executionId':'root'})
+        from services.storage.trace_outcome import _lookup_tx
+        seen=0
+        def change_outcome(store,con,token,workspace,body):
+            nonlocal seen
+            seen+=1;value=_lookup_tx(store,con,token,workspace,body)
+            return value if seen==1 else {**value,'selection_hash':'changed-current-selection'}
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')),patch('services.storage.trace_outcome._lookup_tx',side_effect=change_outcome),self.assertRaises(Conflict):
+            api.read(self.token,'w',{'taskId':'task'})
+
+    def test_exact_lookup_keeps_the_real_source_byte_budget(self):
+        from services.storage.trace_evidence import EvidenceTooLarge
+        self.prepare_source()
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')),patch('services.storage.trace_analytics.MAX_EXECUTION_SOURCE_BYTES',1),self.assertRaises(EvidenceTooLarge):
+            self.listing().read(self.token,'w',{'taskId':'task'})
+
+    def test_exact_lookup_discards_metadata_after_credential_revocation(self):
+        from services.storage.dataset_generation_sources import GenerationSources
+        from services.storage.iam import Unauthorized
+        self.prepare_source();original=GenerationSources._metadata
+        def revoke(reader,*args):
+            result=original(reader,*args);self.iam.revoke_credential(self.token);return result
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('exact lookup scanned all traces')),patch.object(GenerationSources,'_metadata',revoke),self.assertRaises(Unauthorized):
+            self.listing().read(self.token,'w',{'taskId':'task'})
+
     def test_unjudged_execution_keeps_root_version_zero_and_historical_fields(self):
         node=fixture.node();node['execution'].update(skill='root-skill',skillVersion=0,
             executionSkills=[{'skillName':'child-skill','skillVersion':2,'isPrimary':True}],
@@ -209,6 +258,10 @@ class TraceExecutionMetadataTests(unittest.TestCase):
         self.assertEqual([row['trace_id'] for row in self.queries.list_traces(admin,'w')['items']],[trace])
         rows=self.listing().read(admin,'w',{'includeSubagents':'1'})
         self.assertEqual([row['task_id'] for row in rows],['task'])
+        api=self.listing()
+        with patch.object(self.queries,'list_traces',side_effect=AssertionError('private exact lookup scanned all traces')),patch.object(api.analytics,'execution_metadata',side_effect=AssertionError('private Judge source read')):
+            self.assertEqual(api.read(admin,'w',{'taskId':'judge-task','includeSubagents':'1'}),[])
+            self.assertEqual(api.read(admin,'w',{'executionId':judge,'includeSubagents':'1'}),[])
 
     def test_encoded_null_historical_json_keeps_original_null_instead_of_rejecting_trace(self):
         node=fixture.node();node['execution'].update(failures='null',skillIssues='null')

@@ -37,7 +37,7 @@ class LegacyTraceList:
     def __init__(self,queries,metadata=None,*,analytics=None):
         self.queries=queries;self.control=queries.control;self.iam=queries.iam;self.metadata=metadata;self.analytics=analytics
 
-    def _records(self,token,workspace):
+    def _records(self,token,workspace,trace_ids=None):
         from .experiments import ExperimentStore
         from .trace_outcome import _lookup_tx
         from .trace_outcome_projection import overlay_record
@@ -45,8 +45,19 @@ class LegacyTraceList:
         from .trace_analytics import MAX_EXECUTION_SOURCE_BYTES
         from .execution_metadata import record_fields
         cursor=None;result=[];scope=self.iam.scope(token);source_budget={'remaining':MAX_EXECUTION_SOURCE_BYTES};boundaries={}
+        self.iam._workspace(scope,workspace,'read')
+        if trace_ids is not None:trace_ids=sorted(trace_ids)
         while True:
-            page=self.queries.list_traces(token,workspace,limit=200,cursor=cursor)
+            if trace_ids is None:page=self.queries.list_traces(token,workspace,limit=200,cursor=cursor)
+            else:
+                offset=cursor or 0;items=[]
+                for trace in trace_ids[offset:offset+200]:
+                    route=self.queries.route(token,workspace,trace)
+                    row=self.queries.summary(token,workspace,trace)['trace']
+                    if row is not None:
+                        if row['trace_bucket']!=route['trace_bucket']:raise Forbidden('Trace route changed during compatibility read')
+                        items.append(dict(row,created_at_ms=route['created_at_ms']))
+                page={'items':items,'next_cursor':offset+200 if offset+200<len(trace_ids) else None}
             captured={}
             if self.analytics and page['items']:
                 with self.control.read_transaction() as con:
@@ -163,10 +174,25 @@ class LegacyTraceList:
         raise ValueError('unsupported Trace filter operator')
 
     def read(self,token,workspace,params):
-        rows,scope=self._records(token,workspace)
+        facet=params.get('facet');task_selection=execution_selection=tasks_selection=None
+        def resolve_refs(refs,kind):
+            found=set()
+            for ref in refs:
+                try:
+                    if self.metadata:found.add(self.metadata.resolve(token,workspace,ref,kind)['trace_id'])
+                    else:self.queries.route(token,workspace,ref);found.add(ref)
+                except Forbidden:pass
+            return found
+        if facet not in ('tags','skills','values'):
+            tasks=set(filter(None,params.get('taskIds','').split(',')))
+            task_selection=resolve_refs([params['taskId']],'task') if params.get('taskId') else None
+            execution_selection=resolve_refs([params['executionId']],'execution') if params.get('executionId') else None
+            tasks_selection=resolve_refs(tasks,'task') if tasks else None
+        selections=[value for value in (task_selection,execution_selection,tasks_selection) if value is not None]
+        trace_ids=set.intersection(*selections) if selections else None
+        rows,scope=self._records(token,workspace,trace_ids)
         grant=self.iam._workspace(scope,workspace,'read')
         can_all=grant.role in ('owner','admin')
-        facet=params.get('facet')
         if facet=='tags':return self.metadata.list_tags(token,workspace,params.get('kind')) if self.metadata else []
         if facet=='skills':
             names=collections.defaultdict(set)
@@ -205,19 +231,7 @@ class LegacyTraceList:
         from_time=self.control.clock()-windows[time_filter] if time_filter in windows else None
         if params.get('timeFrom'):from_time=_milliseconds(params['timeFrom'])
         to_time=_milliseconds(params['timeTo']) if params.get('timeTo') else None
-        tasks=set(filter(None,params.get('taskIds','').split(',')))
         tag_ids=set(filter(None,(params.get('tagIds') or params.get('bizTag') or '').split(',')))
-        def resolve_refs(refs,kind):
-            found=set()
-            for ref in refs:
-                if self.metadata:
-                    try:found.add(self.metadata.resolve(token,workspace,ref,kind)['trace_id'])
-                    except Forbidden:pass
-                else:found.add(ref)
-            return found
-        task_selection=resolve_refs([params['taskId']],'task') if params.get('taskId') else None
-        execution_selection=resolve_refs([params['executionId']],'execution') if params.get('executionId') else None
-        tasks_selection=resolve_refs(tasks,'task') if tasks else None
         for row in rows:
             if task_selection is not None and row['_trace_id'] not in task_selection:continue
             if execution_selection is not None and row['_trace_id'] not in execution_selection:continue
