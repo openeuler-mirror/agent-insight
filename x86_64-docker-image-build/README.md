@@ -32,7 +32,7 @@ SHA256SUMS / BUILD-INFO.txt                      校验和 / 构建信息
 
 脚本每次都完整跑一遍，不跳过。缓存是否命中看日志：标 `CACHED` 的就是直接用了上次的结果，没标的才重做。
 
-为了能多省一些，生成的 Dockerfile 把「装依赖」单独放成一步。只改代码时，这一步不动，装好的 2GB 多 `node_modules` 直接复用，只重新编译打包。镜像里的构建时间标签也挪到了最后，时间变化不会连累前面的步骤。
+为了能多省一些，生成的 Dockerfile 把「装依赖」单独放成一步。只改代码时，`npm install` 这一步不动，装好的 2GB 多 `node_modules` 直接复用，只重新编译打包。运行镜像仍然从编译阶段拷 `node_modules`，保证拿到 build 之后的最终状态（含构建期生成的 prisma client）；改代码后重跑的是镜像里解包、postinstall 这几层，省下的是最慢的装依赖层。镜像里的构建时间标签也挪到了最后，时间变化不会连累前面的步骤。
 
 ## 运行
 
@@ -56,6 +56,8 @@ docker run -d --name agent-insight \
   -p 3000:3000 \
   -v /data/agent-insight:/data/agent-insight \
   agent-insight:0.9.0-amd64
+
+Windows 自验  docker run -d --name agent-insight -p 3000:3000 -v "D:\agent-insight:/data/agent-insight" agent-insight:0.9.0-amd64
 ```
 
 ## 常见问题

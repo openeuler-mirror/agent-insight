@@ -41,7 +41,8 @@ if not exist "%REPO%\package.json" (
 
 docker info >nul 2>&1
 if errorlevel 1 (
-  echo [ERROR] Docker daemon is not running. Start Docker Desktop first.
+  echo [ERROR] Docker daemon is not running, or Docker Desktop is in Windows container mode.
+  echo         Start Docker Desktop and switch to Linux containers, then run this again.
   goto :fail
 )
 
@@ -138,7 +139,7 @@ if errorlevel 1 (
   docker rm -f ai-pkg-verify >nul 2>&1
   goto :fail
 )
-docker exec ai-pkg-verify sh -c "node -v; python3 -V; test -x /app/node_modules/.bin/opencode"
+docker exec ai-pkg-verify sh -c "node -v && python3 -V && test -x /app/node_modules/.bin/opencode"
 if errorlevel 1 (
   echo [ERROR] container self-check failed.
   docker rm -f ai-pkg-verify >nul 2>&1
@@ -212,4 +213,12 @@ echo.
 echo ============================================================
 echo  BUILD ABORTED
 echo ============================================================
+call :hold_window
 exit /b 1
+
+:hold_window
+REM Keep the window open when a fresh cmd.exe started this script (double-click),
+REM so the error above stays readable. Interactive runs skip it.
+echo %cmdcmdline% | find /i "%~nx0" >nul
+if not errorlevel 1 pause
+goto :eof

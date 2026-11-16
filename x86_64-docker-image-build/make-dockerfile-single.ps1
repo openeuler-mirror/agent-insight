@@ -10,7 +10,8 @@ param(
 # On top of that the stages are split so Docker's layer cache survives a code change:
 #   deps     - package files only + npm install; unchanged deps stay cached
 #   builder  - FROM deps + source + npm run build
-#   runtime  - copies node_modules from deps, not from builder
+# node_modules still comes from the builder stage: whatever the build writes into it
+# (prisma client, patched binaries) must land in the image, so it is not taken from deps.
 # The build id (ARG/LABEL/ENV, metadata only) is emitted right before CMD, so a new
 # timestamp no longer invalidates the expensive runtime layers.
 # Every anchor must match Dockerfile.local, otherwise this throws.
@@ -123,9 +124,6 @@ if (-not $text.Contains($cmdLine)) {
 }
 $text = $text.Replace($cmdLine, $cmdNew)
 
-# node_modules must come from the deps stage, which only depends on package files.
-$text = Replace-Once $text 'COPY --from=builder /src/node_modules' 'COPY --from=deps /src/node_modules' 'node_modules copy'
-
 # --- header ---------------------------------------------------------------
 $header = @(
   '# AUTO-GENERATED from Dockerfile.local by make-dockerfile-single.ps1. DO NOT EDIT.'
@@ -143,7 +141,7 @@ if ($text -match '(?m)^FROM\s+node:') {
 }
 $text = $text -replace "\n{3,}", "`n`n"
 if (-not $text.Contains('FROM deps AS builder')) { throw 'missing "FROM deps AS builder" stage' }
-if ($text.Contains('COPY --from=builder /src/node_modules')) { throw 'node_modules still copied from the builder stage' }
+if (-not $text.Contains('COPY --from=builder /src/node_modules')) { throw 'node_modules must come from the builder stage, not deps' }
 $depsAt = $text.IndexOf('AS deps')
 $builderAt = $text.IndexOf('FROM deps AS builder')
 $npmInstallAt = $text.IndexOf('RUN npm install --no-audit --no-fund')
