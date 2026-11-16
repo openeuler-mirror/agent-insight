@@ -335,7 +335,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
             workspace=runtime.workspace(token,params.get('workspace_id'),None if compat_path in (['benchmarks'],['experiments'],['analytics']) and self.command=='POST' else 'read' if self.command=='GET' or dataset_path else 'delete' if deleting_root else 'execute' if report_path else 'write')
             metadata=TraceMetadata(runtime.control)
-            listing=LegacyTraceList(runtime.queries,metadata)
+            from .trace_analytics import TraceAnalytics
+            listing=LegacyTraceList(runtime.queries,metadata,analytics=TraceAnalytics(runtime.queries,runtime.authorized))
             reads=LegacyTraceReads(runtime.queries,runtime.authorized)
             path=pieces[2:]
             def respond(value,status=200,limit=4*1024*1024):self.reply(status,{'value':value},max_bytes=limit)

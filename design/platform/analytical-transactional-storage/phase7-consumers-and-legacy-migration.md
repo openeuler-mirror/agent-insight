@@ -174,3 +174,25 @@ Trace evaluate/retry-evaluate 的一次逻辑请求使用独立 `idempotency-key
 
 
 Batch 静态 shell 继续服从实时 IAM capability：现私有 Experiment RPC 增 `batch_scope` 只读动作，operation 固定映射为 read / read+write / read+write+execute，不写 head/receipt，不从角色猜 API credential 权限。所有入口在访问静态 Config/Skill/模型或写 Prisma 前预检；同主体 read-only、write-only 和 write-no-execute 均按实际 capability 拒绝。read 可携 `experiment_id`，仅同 principal 经 `_head(deleted=True)` 证实 lifecycle=deleted 时隐藏 Task；unknown/未迁/foreign 继续报错，通用 read 的删除语义保持不变。
+
+
+### 第一版普通 Trace 的原列表字段补齐
+
+原 Case 页面在未重评的普通 Trace 上依赖 `root_skill/rootSkill`；兼容列表从真实源 Execution 补主 Skill、原历史版本、显式 `ExecutionSkill.isPrimary`、两种调用 Skill 别名及历史评分/原因/失败/Skill issues。根执行自身主引用优先，其次显式 primary，再用自身真实引用兜底；不从子调用猜根，不读最新 Skill 回填未知版本，0 与 null 保留。原已捕获的 compact 集合在源字段缺失时保留，默认 `is_skill_correct=false`、`skill_issues=[]`。
+
+复用现 analytics 私有端口新增只读 `execution_metadata`，每批1..200个已授权 Trace/boundary。只返回上述白名单与原可选 token 指标，不组装完整 Trace/RunPlan，不向 Node 返回 Session/query/output；原 failures/Skill issues 的业务内容依旧按原 DTO 保留。复用 GenerationSources 的不可变工件校验和来源/路由 incarnation、epoch、owner、注解、head revision/hash 与 IAM 指纹前后复核。源工件可能包含 Session 正文字节，仍需枚举 Span 元数据；parser1 未声明字段完整性，不能因其缺字段就当空值，所以本片仍需读取源。响应含封装不超过8MiB，实际读取的工件文件字节累计不超过128MiB；同一次旧列表枚举的所有分页共用预算，超限413，不截断伪装完整。015、parser1的发布hash及前端不变。
+
+筛选以源是否明确捕获 ExecutionSkill 关系区分：显式空数组表示可用空集，不能把 root 偷补进关系筛选；未捕获关系才按真实 Execution.skill/version 降级。Skill facet 在整个可见关系集合为空时才按真实主引用降级，未知版本只保留名称。当前已验证 Outcome 的 record_projection 明确提供调用引用时，列表及关系筛选/facet共同使用它；否则保留源历史值。Query reset仍清当前答案，原调用/路由引用沿用原封存规则，不以普通实验分数填答案。查询SQL先排除他人的私有Judge Trace，组管理员普通列表不会因该项整体403。
+
+
+本片性能边界：隔离环境32条可见Trace的原Next列表，在本任务全量门禁结束后的三次读取为4.09、4.44、4.92秒；Node/Python/原生库门禁同时运行的高负载期间曾触及原15秒请求限制，返回502，页面按原错误处理显示空列表。未扩大超时、放宽来源一致性或新增缓存协议。此证据不代表容量验收，逐Trace来源校验和重复CH读取的性能优化留后续专项；普通UI验收应与压测负载分别记录。
+
+
+### 第一版 Dataset Batch 执行接入计划
+
+1. 原 `start/retry-execute/retry-evaluate/abort` 增 core 分支，沿用实时 `batch_scope`、实际兼容账号和原平面 DTO。静态 Batch shell 仅保配置、内部绑定及 prepared/submitted 操作，PATCH 不得伪造动态成功或覆盖内部绑定；旧模式继续原路径。
+2. 从实际选中的多个 Dataset 固定不可变 release、Case 归属、输入与参考答案，复用 `coreAssets.releases[dataset:<id>]`；固定 Skill/Evaluator/模型，重试不转向最新 casesJson。执行侧不读取私有 gold。
+3. 在现本地执行 helper 内拆出准备与消费步骤；返回原成功响应前，一次 `execute_start` 持久建立全部选中 execute work。后台只消费该 run/case，不重复 force-new；保持原并发槽和 `skill-debug-executor` 参数，可信 recorder indexed 后提交执行回执。
+4. 在既有 frozen execution_request 支持 `evaluate_after_execution=false`（默认 true），同现完成事务跳过子评测；关闭自动评测时原状态为 executed，后续 retry-evaluate 保留 Trace 与执行耗时，只启动评测。零分、部分成功均分及全失败语义沿原算法。
+5. 同操作优先核对准确回执，再恢复 prepared/submitted，不因响应或静态 CAS 丢失重新运行 Agent。单行重执行只替代该 Case；取消先持久 fence，再核实本地进程退出。queued 未启动工作可恢复，running/清理未确认/未知投递不得当作安全重跑；硬崩溃后的旧进程清理证明仍是明确边界。
+6. 先 RED/GREEN 覆盖上述状态、两数据集版本固定、权限、丢响应、取消与迟到回执；再独立审查，隔离真实 HTTP/本地 Mock/原界面与后端全量、三库专项。保留已有数据，不改 schema/前端，不切生产，不把本片称为静态控制域或全部旧库迁移完成。

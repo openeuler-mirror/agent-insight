@@ -276,3 +276,15 @@ Trace 启动/重试使用 `idempotency-key` 标识一次操作；客户端仅保
 BatchEvalTask、Skill/版本仍使用原静态控制存储。Dataset start/retry-execute 尚沿用原执行链路，此片不代表 Batch 全部迁移完成。
 
 Batch 请求还会通过现有私有 Experiment RPC 的 `batch_scope` 固定动作核验凭据的实时权限：读取需 read，创建/配置更新/取消需 read+write，执行/评测及重试需 read+write+execute。身份相同或 workspace 角色相同不能替代凭据权限。读取绑定时仅在实时 owner 校验证实 backing 已删除后隐藏该项；不存在、未迁移或属于他人的绑定继续明确失败。
+
+
+### 普通 Trace 的主 Skill 与历史评测字段
+
+原 Trace/Case 列表从已校验来源补齐 `skill/skill_version`、`root_skill/rootSkill`、`invokedSkills/invoked_skills`、历史答案/Skill评分、原因、失败、Skill issues、路由正确性与原可选 token 指标。根执行自身主 Skill 优先，之后仅接受显式 ExecutionSkill primary，再用自身真实引用兜底；未知版本保持 null，版本0有效，不查最新版本回填。当前专属 Outcome 在源历史字段之后覆盖，Query reset再清答案；一般 Experiment 的分数不能充当答案评分。
+
+现 analytics 私有RPC的 `execution_metadata` 每批接收1..200个 Trace/boundary，保留 IAM 和来源版本前后校验。响应连封装最多8MiB，同次列表所有分页实际读取的工件文件字节累计最多128MiB，超限413而不返回部分成功。只发送字段白名单，不返回 Session/query/output 或组装完整Trace/RunPlan；原失败与Skill issues业务内容仍保留。读取不可变 carrier 工件可能反序列化包含Session的字节，并枚举Span元数据，不能称为零正文读取。既有parser1无法证明缺字段等于空值，故本片没有把旧摘要直接当完整历史字段缓存。没有新表、迁移、parser版本或前端变化。
+
+Skill筛选区分明确的关系空数组与未捕获关系：前者不匹配任何关系Skill，后者按真实主引用降级；facet仅在整个可见关系集合无Skill时按主引用降级。当前Outcome明确投影调用引用时，列表、facet和版本筛选使用同一当前值。缺失的源集合不覆盖已捕获的compact集合，未知值不补当前版本；私有Judge仍在授权列表SQL中排除。
+
+
+性能验证边界：本片隔离环境32条可见Trace的原列表在本任务全量门禁结束后读取约4.1–4.9秒；多套全量测试同时运行时曾触及原15秒请求上限并返回502，原页面错误处理显示空列表。未扩大请求超时或放宽来源一致性，也未完成混合并发容量验收；这一成本与后续优化需求须与功能接通分别看待。

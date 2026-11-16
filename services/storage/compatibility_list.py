@@ -34,17 +34,26 @@ def _flag(value):return value in ('1','true',True)
 
 
 class LegacyTraceList:
-    def __init__(self,queries,metadata=None):
-        self.queries=queries;self.control=queries.control;self.iam=queries.iam;self.metadata=metadata
+    def __init__(self,queries,metadata=None,*,analytics=None):
+        self.queries=queries;self.control=queries.control;self.iam=queries.iam;self.metadata=metadata;self.analytics=analytics
 
     def _records(self,token,workspace):
         from .experiments import ExperimentStore
         from .trace_outcome import _lookup_tx
         from .trace_outcome_projection import overlay_record
         outcome_store=ExperimentStore(self.control)
-        cursor=None;result=[];scope=self.iam.scope(token)
+        from .trace_analytics import MAX_EXECUTION_SOURCE_BYTES
+        from .execution_metadata import record_fields
+        cursor=None;result=[];scope=self.iam.scope(token);source_budget={'remaining':MAX_EXECUTION_SOURCE_BYTES};boundaries={}
         while True:
             page=self.queries.list_traces(token,workspace,limit=200,cursor=cursor)
+            captured={}
+            if self.analytics and page['items']:
+                with self.control.read_transaction() as con:
+                    selections=[{'trace_id':row['trace_id'],'boundary':self.analytics._boundary(con,token,workspace,row['trace_id'],scope)[0]} for row in page['items']]
+                snapshot=self.analytics.execution_metadata(token,workspace,selections,source_budget=source_budget)
+                captured={row['trace_id']:row for row in snapshot['items']}
+                boundaries.update({row['trace_id']:row['boundary'] for row in snapshot['items']})
             with self.control.read_transaction() as con:
                 for row in page['items']:
                     owner=con.execute('SELECT normalized_login_name FROM iam_principals WHERE principal_id=?',(row['owner_principal_id'],)).fetchone()
@@ -88,16 +97,24 @@ class LegacyTraceList:
                     record['has_failures']=metrics.get('has_failures')
                     record['trace_started_at']=metrics.get('session_start') if metrics.get('session_captured') else record['timestamp']
                     if metrics.get('session_captured'):record['trace_completed_at']=metrics.get('session_end')
+                    if row['trace_id'] in captured:record.update(record_fields(captured[row['trace_id']]['execution']))
+                    if 'invokedSkills' not in record:record['invokedSkills']=record.get('invoked_skills')
                     current=_lookup_tx(outcome_store,con,token,workspace,{'trace_ref':row['trace_id']})
                     record=overlay_record(record,current);record['_outcome_selection']=current['selection_hash']
+                    projection=current['outcome']['value'].get('record_projection') if current.get('outcome') else None
+                    if self.analytics and isinstance(projection,dict):
+                        if 'skill' in projection:record['_source_skill']=projection['skill'];record['_source_skill_version']=projection.get('skill_version')
+                        if 'invokedSkills' in projection:
+                            record['_execution_relations']=[{'skillName':item['name'],'skillVersion':item.get('version')} for item in projection['invokedSkills'] or []]
                     result.append(record)
             if len(result)>100000:raise CompatibilityListLimit('narrow the legacy query scope')
             cursor=page.get('next_cursor')
             if not cursor:break
-        self._recheck(token,workspace,scope,[row['_trace_id'] for row in result],{row['_trace_id']:row['_outcome_selection'] for row in result})
+        self._recheck(token,workspace,scope,[row['_trace_id'] for row in result],{row['_trace_id']:row['_outcome_selection'] for row in result},boundaries)
+        for row in result:row['_execution_boundary']=boundaries.get(row['_trace_id'])
         return result,scope
 
-    def _recheck(self,token,workspace,scope,trace_ids=(),outcomes=None):
+    def _recheck(self,token,workspace,scope,trace_ids=(),outcomes=None,boundaries=None):
         from .experiments import ExperimentStore
         from .trace_outcome import _lookup_tx
         with self.control.read_transaction() as con:
@@ -113,6 +130,7 @@ class LegacyTraceList:
                 if _lookup_tx(store,con,token,workspace,{'trace_ref':trace})['selection_hash']!=selection:
                     from .control import Conflict
                     raise Conflict('Outcome selection changed during Trace list read')
+        if self.analytics and boundaries:self.analytics._recheck(token,workspace,scope,boundaries)
 
     @staticmethod
     def _value(row,column):
@@ -153,10 +171,18 @@ class LegacyTraceList:
         if facet=='skills':
             names=collections.defaultdict(set)
             for row in rows:
-                for item in row.get('invoked_skills',[]):
+                relations=row.get('_execution_relations')
+                values=[{'name':item.get('skillName',item.get('name')),'version':item.get('skillVersion',item.get('version'))} for item in relations] if relations is not None else [] if '_execution_relations' in row else row.get('invoked_skills') or []
+                for item in values:
                     if isinstance(item,dict) and item.get('name'):
                         if item.get('version') is not None:names[item['name']].add(item['version'])
                         else:names[item['name']]
+            if not names:
+                for row in rows:
+                    if row.get('_source_skill'):
+                        name=row['_source_skill'];version=row.get('_source_skill_version')
+                        if version is not None:names[name].add(version)
+                        else:names[name]
             return [{'name':name,'versions':sorted(versions)} for name,versions in sorted(names.items())]
         if facet=='values':
             counter=collections.Counter()
@@ -199,8 +225,17 @@ class LegacyTraceList:
             if params.get('parentExecutionId') and row['parent_execution_id']!=params['parentExecutionId']:continue
             if params.get('traceUser') and row['user']!=params['traceUser']:continue
             if any(params.get(key) and params[key]!=row.get(target) for key,target in [('framework','framework'),('sourceKind','source_kind'),('agentName','agentName'),('ownership','agentOwnership')]):continue
-            if params.get('skill') and params['skill'] not in row.get('skills',[]):continue
-            if params.get('skillVersion') and not any(i.get('name')==params.get('skill') and str(i.get('version'))==params['skillVersion'] for i in row['invoked_skills']):continue
+            if '_execution_relations' in row:
+                relations=row['_execution_relations']
+                if relations is not None:
+                    if params.get('skill') and not any(i.get('skillName',i.get('name'))==params['skill'] and (not params.get('skillVersion') or str(i.get('skillVersion',i.get('version')))==params['skillVersion']) for i in relations):continue
+                    if not params.get('skill') and params.get('skillVersion') and str(row.get('_source_skill_version'))!=params['skillVersion']:continue
+                else:
+                    if params.get('skill') and params['skill']!=row.get('_source_skill'):continue
+                    if params.get('skillVersion') and str(row.get('_source_skill_version'))!=params['skillVersion']:continue
+            else:
+                if params.get('skill') and params['skill'] not in row.get('skills',[]):continue
+                if params.get('skillVersion') and not any(i.get('name')==params.get('skill') and str(i.get('version'))==params['skillVersion'] for i in row.get('invoked_skills') or []):continue
             if _flag(params.get('onlySubagents')) and not row['is_subagent']:continue
             if not _flag(params.get('includeSubagents')) and not _flag(params.get('onlySubagents')) and row['is_subagent']:continue
             status=params.get('status','all')
@@ -225,10 +260,11 @@ class LegacyTraceList:
         latencies=[r['latency'] for r in selected if r['latency'] is not None]
         calls=sum(int(r.get('tool_call_count') or 0) for r in selected);errors=sum(int(r.get('tool_call_error_count') or 0) for r in selected)
         stats={'total':len(selected),'failedCount':sum(r['trace_status']=='failed' for r in selected),'avgLatencyMs':sum(latencies)/len(selected) if selected else 0,'toolErrorRate':math.floor(errors/calls*1000+0.5)/10 if calls else 0}
-        self._recheck(token,workspace,scope,[row['_trace_id'] for row in selected],{row['_trace_id']:row['_outcome_selection'] for row in selected})
+        self._recheck(token,workspace,scope,[row['_trace_id'] for row in selected],{row['_trace_id']:row['_outcome_selection'] for row in selected},{row['_trace_id']:row['_execution_boundary'] for row in selected if row.get('_execution_boundary')})
         for row in selected:
             trace_id=row.pop('_trace_id',None)
             row.pop('_outcome_selection',None)
+            for key in ('_execution_boundary','_execution_relations','_source_skill','_source_skill_version'):row.pop(key,None)
             if _flag(params.get('includeCoreIdentity')):row['core_trace_id']=trace_id
         if not _flag(params.get('paginated')):return selected
         page=int(params.get('page',1));size=int(params.get('pageSize',20))

@@ -13,6 +13,7 @@ from .trace_evidence import TraceEvidence
 
 MAX_PROJECTION_BYTES=2*1024*1024
 MAX_PAGE_BYTES=8*1024*1024
+MAX_EXECUTION_SOURCE_BYTES=128*1024*1024
 MAX_RAS_EVENTS=10000
 MAX_RAS_SCAN=100000
 MAX_RAS_READ_TOKEN_BYTES=3*1024*1024
@@ -495,6 +496,45 @@ class TraceAnalytics:
         scope=self.iam.scope(token);self._recheck(token,workspace,scope,boundaries)
         return {'scope_fingerprint':scope.fingerprint}
 
+    def execution_metadata(self,token,workspace,items,*,source_budget=None):
+        from .dataset_generation_sources import GenerationSources
+        from .execution_metadata import select_execution
+        if not isinstance(items,list) or not 1<=len(items)<=200:raise ValueError('Execution metadata requires 1..200 sources')
+        boundaries={}
+        for item in items:
+            if not isinstance(item,dict) or set(item)!={'trace_id','boundary'}:raise ValueError('Invalid execution metadata selection')
+            trace=identifier(item['trace_id']);boundary=_digest(item['boundary'])
+            if trace in boundaries:raise ValueError('Duplicate execution metadata source')
+            boundaries[trace]=boundary
+        scope=self.iam.scope(token);self._recheck(token,workspace,scope,boundaries)
+        budget=source_budget if source_budget is not None else {'remaining':MAX_EXECUTION_SOURCE_BYTES}
+        reader=GenerationSources(self.queries,self.authorized,source_budget=budget);result=[]
+        for item in items:
+            trace=item['trace_id'];begin,summary,rows,heads,_=reader._boundary(token,workspace,trace)
+            execution,_,capsule,_=reader._metadata(begin,summary,rows,heads)
+            if not capsule:
+                candidates={}
+                for row in rows:
+                    if row.get('parent_span_id'):continue
+                    source=reader._source(row,heads[row['span_id']]);fields=TraceEvidence._fields(source,analytics_fields=True)
+                    attrs=json.loads(source['sections']['attributes']);attrs={**attrs.get('resource',{}),**attrs.get('span',{})}
+                    for camel,snake in (('answerScore','answer_score'),('skillScore','skill_score'),('judgmentReason','judgment_reason'),('isSkillCorrect','is_skill_correct'),('expectedSkillVersion','expected_skill_version')):
+                        for name in ('legacy.'+snake,snake,camel):
+                            if name in attrs:fields[camel]=attrs[name];break
+                    for key,value in select_execution(fields).items():candidates.setdefault(key,[]).append(value)
+                execution={}
+                for key,values in candidates.items():
+                    if len({_json(value) for value in values})!=1:raise AnalyticsUnavailable('Root execution metadata is ambiguous')
+                    execution[key]=values[0]
+            execution=select_execution(execution)
+            reader._verify_end(token,workspace,None,None,begin,trace)
+            result.append({'trace_id':trace,'boundary':item['boundary'],'execution':execution})
+            if len(_json(result).encode('utf-8'))>MAX_PAGE_BYTES:raise AnalyticsTooLarge('Execution metadata page exceeds 8MiB')
+        self._recheck(token,workspace,scope,boundaries)
+        value={'items':result,'scope_fingerprint':scope.fingerprint}
+        if len(_json({'value':value}).encode('utf-8'))>MAX_PAGE_BYTES:raise AnalyticsTooLarge('Execution metadata page exceeds 8MiB')
+        return value
+
     def agent_metadata(self,token,workspace,items):
         from .dataset_generation_sources import GenerationSources
         from .compatibility import LegacyTraceReads
@@ -758,6 +798,7 @@ class TraceAnalytics:
         if action=='ras_ingest':return self.ras_ingest(token,workspace,value.get('events'))
         if action=='validate':return self.validate(token,workspace,value.get('items'))
         if action=='agent_metadata':return self.agent_metadata(token,workspace,value.get('items'))
+        if action=='execution_metadata':return self.execution_metadata(token,workspace,value.get('items'))
         if action=='enrich':return self.enrich(token,workspace,value.get('trace_ids'))
         if action=='prepare_sources':return self.prepare_sources(token,workspace,value.get('experiment_id'),value.get('run_id'))
         if action=='validate_enrichment':return self.validate_enrichment(token,workspace,value.get('read_tokens'))

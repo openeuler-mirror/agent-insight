@@ -108,6 +108,10 @@ def _native_pair(row,sections):
 
 
 class GenerationSources(TraceEvidence):
+    def __init__(self,*args,source_budget=None,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.source_budget=source_budget
+
     def _artifact(self,head):
         self._deadline();target=Path(head['artifact_ref']);directory=self.control.artifact_directory
         if target.parent!=directory or directory.is_symlink() or len(target.name)!=64:raise EvidenceUnavailable('Invalid generation source artifact')
@@ -121,6 +125,9 @@ class GenerationSources(TraceEvidence):
                     self._deadline();block=stream.read(65536)
                     if not block:break
                     size+=len(block)
+                    if self.source_budget is not None:
+                        self.source_budget['remaining']-=len(block)
+                        if self.source_budget['remaining']<0:raise EvidenceTooLarge('Execution metadata sources exceed cumulative byte budget')
                     if size>limit:raise EvidenceTooLarge('Generation source artifact exceeds kernel budget')
                     digest.update(block);parts.append(block)
             if digest.hexdigest()!=target.name:raise EvidenceUnavailable('Generation artifact checksum differs')

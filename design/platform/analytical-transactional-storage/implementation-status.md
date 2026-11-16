@@ -450,3 +450,24 @@ apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多
 证据：`exclude/storage-core-batch-trace/20261116-sj_6m2rd/` 中 `batch-v2-node-full-{result.json,log}`、`batch-v1-python-full-{report,manifest}.json`、`native-v1-*`、`acceptance/batch-*-report.json`、`ack-no-duplicate-work-proof.json`、`batch-http-storage-proof.json`、`batch-v2-main-{preservation,readback}.json`、`final-code-verification.json`、`main-original-case-layout.png`。最初缺少隔离SQLite空文件的harness失败、被替代的v1和数据保留校验首次假设过窄的失败均保留，未重置夹具、放宽旧记录保留或修改原断言换取通过。
 
 下一依赖在原用例页面审查中明确：未独立重评的普通Trace，其compact兼容DTO还缺主Skill/版本引用，前端严格root_skill匹配可能无法选择；已在隔离普通checking@1源实际复现，不能因主验收环境3条grayscale按原规则隐藏而误判。先补该原DTO/筛选来源（不改UI、不猜未知版本），再接Dataset start/retry-execute、Trigger与后续phase7清单。生产切换、完整历史apply与第二版容量目标仍未执行。
+
+
+## 2026-11-16 普通 Trace 主 Skill 与历史字段补齐
+
+本片补齐原 Case/Trace 列表所需的真实主 Skill、历史版本、调用引用、历史答案/Skill评分、原因、失败与 Skill issues；未重评普通 Trace 不再依赖后续 Outcome 才能显示主引用。未知版本仍为 null，0 有效；显式关系空集、未捕获关系与全局 facet 降级分别遵循原规则，当前专属 Outcome/reset 与筛选共享同一选择。合法 JSON 字符串 null 保留原字段语义，非法集合仍拒绝。
+
+复用 analytics 私有 execution_metadata 与现来源/IAM 校验，1..200项、含RPC外封装8MiB、同次列表所有分页实际工件读取累计128MiB，超限413。无新 schema/parser/公共路由/前端变更；读取 carrier 仍可能涉及 Session 字节及 Span 元数据，不能声称零正文读取或容量已达标。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 应用全量 | 5973项：5951通过、22跳过、0失败/取消，618.73秒；candidate-v1冻结快照。其2367个Web源码文件与最终candidate-v2完全一致；后续仅Python合法null/响应cap及测试、文档变更，由最终后端全量与真实接口补验，不混称两个后端快照相同 |
+| 最终后端全量 | 1090项：911通过、179环境条件跳过、0失败，241.27秒；155个源码/目录文件指纹前后及当前一致 |
+| PG / 原生openGauss | 各17/17专项、无跳过，41.91/48.41秒；各21个自有schema清理后残留0，159个测试来源文件读回一致。Facts为内存夹具，不称全CH组合矩阵 |
+| 独立审查 | Spec与Quality均通过；合法encoded-null与RPC外封装cap问题修复后17/17复审通过；RED与旧失败日志保留 |
+| 真实原HTTP/界面 | 实际CH+SQLite上增加3条隔离普通Trace：版本1、0与未知；原页面v1/v0各只显示对应1条、v1可勾选，未知不补最新；控制台错误/警告0。原实验100分、Workbench0分与诊断done/报告继续读回 |
+| 数据保留 | 刷新前2份SQLite一致性备份；65控制表、96旧表行保持，只有既有负例Outbox重试时间/次数元数据推进；15个CH表逻辑摘要保持。3条验收Trace为明确新增隔离样本，未迁移/清理默认业务库 |
+| UI与性能 | 本片TSX/CSS零变更；对原恢复基线，已有4个前端文件仅请求鉴权/ETag快照处理变化，28个JSX根源码全部相同。32条可见Trace空闲原HTTP为4.09/4.44/4.92秒，门禁高负载重叠曾触及原15秒超时；未扩大超时或放宽来源一致性，第二版再做容量与读取优化 |
+
+证据：`exclude/storage-core-next-consumers/20261116-m6gj2c0f/` 的 `final-code-verification.json`、`candidate-v2-final-python-python-report.json`、`candidate-v2-native/`、`normal-source-http-green.json`、`normal-case-final.png`、`normal-case-v0.png` 和 `candidate-v2-main-preservation.json`。原验收界面仍为 http://localhost:58488/skill-eval ，已有隔离账号保持。
+
+下一片按 phase7 已补齐的 Dataset Batch 计划继续：先补 autoEval=false 与持久准备/消费，再多数据集固定版本、重试/取消、原平面进度及真实录制回执闭环。静态 Batch/配置权威、其他采集与控制域、96模型语义迁移仍未完成；本片不代表全产品接管或生产切换。
