@@ -15,11 +15,17 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import type {BatchEvalTask} from '@prisma/client';
 import { prisma } from '@/lib/storage/prisma';
 import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
+import {projectCoreBatchTask,assertCoreBatchScope} from '@/lib/storage-core/batch-trace';
 
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest): Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>GET(normalized));
     const { searchParams } = new URL(req.url);
     const user = searchParams.get('user');
 
@@ -28,25 +34,28 @@ export async function GET(req: NextRequest) {
     }
 
     try {
-        const tasks = await (prisma as any).batchEvalTask.findMany({
+        if(isStorageCoreEnabled())await assertCoreBatchScope('read');
+        const tasks = await prisma.batchEvalTask.findMany({
             where: { user },
             orderBy: { createdAt: 'desc' },
             take: 50,
         });
-        const parsed = tasks.map((t: any) => ({
+        const parsed = tasks.map((t: BatchEvalTask) => ({
             ...t,
             configJson: JSON.parse(t.configJson || '{}'),
             caseStatesJson: JSON.parse(t.caseStatesJson || '{}'),
             traceEvalStatesJson: JSON.parse(t.traceEvalStatesJson || '{}'),
         }));
-        return NextResponse.json((await Promise.all(parsed.map(visibleExperimentTask))).filter(Boolean));
+        return NextResponse.json((await Promise.all(parsed.map(isStorageCoreEnabled()?projectCoreBatchTask:visibleExperimentTask))).filter(Boolean));
     } catch (err) {
         console.error('[BATCH_TASKS_GET] Failed:', err);
+        if(isStorageCoreEnabled())return coreExperimentFailure(err);
         return NextResponse.json({ error: 'Failed to fetch tasks' }, { status: 500 });
     }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: NextRequest): Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>POST(normalized));
     try {
         const body = await req.json();
         const { user, taskName } = body;
@@ -55,7 +64,8 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: 'user and taskName are required' }, { status: 400 });
         }
 
-        const task = await (prisma as any).batchEvalTask.create({
+        if(isStorageCoreEnabled())await assertCoreBatchScope('create');
+        const task = await prisma.batchEvalTask.create({
             data: { user, taskName: taskName.trim() },
         });
 
@@ -64,6 +74,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(task);
     } catch (err) {
         console.error('[BATCH_TASKS_POST] Failed:', err);
+        if(isStorageCoreEnabled())return coreExperimentFailure(err);
         return NextResponse.json({ error: 'Failed to create task' }, { status: 500 });
     }
 }

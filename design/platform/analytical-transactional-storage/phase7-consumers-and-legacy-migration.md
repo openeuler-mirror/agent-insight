@@ -166,4 +166,11 @@ FI run Trace纯读沿用原FI控制域及模型/marker优先级，使用真实�
 
 Trace批次先校验所有来源/Skill版本/已关联评测任务属于实际actor，持久记录准确的backing Experiment及Case绑定，再对选中Case一次封存并建立工作；返回原成功响应前必须有durable任务。任务状态和分数由当前typed work/result选择投影，JSON中自报的分数/状态不能冒充机器事实。取消持久化，单条重试只替代该Case当前代，其余已完成结果保留。响应丢失和静态控制更新失败时重用同请求操作回执/稳定绑定，不能盲启新模型请求；重启只恢复现worker已冻结的可执行工作，unknown投递仍pending。Dataset/外部Agent执行另用现可信录制与执行receipt闭环，不以改入库入口代替采集完成确认。
 
+Batch 原 `startedAt`/完成时间只投影当前结果槽位 `run_id + work_item_id` 的 typed `coreWork` 时间。内部 `coreWork` 仅含当前工作身份、工作创建时间、当前 attempt 起止时间；attempt 按该工作内递增 `attempt_no` 选择，同时间戳不能混入旧代。只查 control metadata，不加载 RunPlan，queued 尚无 attempt 时起止可空；不改其它域原 `createdAt` 含义，也不向公开 Experiment DTO 暴露内部元数据。
+
+Trace evaluate/retry-evaluate 的一次逻辑请求使用独立 `idempotency-key`。apiFetch 仅对这两个原动作保存有界 SHA-256 请求签名（含账号凭据、任务和selection参与计算，但不落盘正文/凭据）与 UUID/时间；网络或完整响应体丢失保留同键，完整 JSON 可解析且 `ok: true` 后清除（200 坏 JSON 或非成功确认仍保留原键），后续明确操作另起新键。静态 binding/ack 使用原 config/state 精确 CAS；prepared 或同请求重试先查已有 start receipt，命中只激活该原工作，避免再次读取最新模型/重新freeze。不同活动请求保留原409；原 agentMaxConcurrency 继续传给 typed worker。取消仅影响未完成工作，完成兄弟保持原结果，取消后可复用准确Case重试或通过原case_upsert加入新本人Trace。
+
 独立重评取消的返回规则补充：模型晚返回后的录制仍受原attempt fence约束。只有录制边界明确的409/410拒绝（或明确取消类型）穿过Judge及模型投递包装，并且授权复核证明同一Outcome的本次run已取消或已被新run替换，等待中的原重评请求才返回原`{success:false,cancelled:true,message:'Evaluation cancelled'}`。未取消、来源漂移、真实录制失败、未知投递、授权或状态复核失败继续报错，不能通过泛化catch把它们当取消；不向已失效attempt补写checkpoint或迟到结果。
+
+
+Batch 静态 shell 继续服从实时 IAM capability：现私有 Experiment RPC 增 `batch_scope` 只读动作，operation 固定映射为 read / read+write / read+write+execute，不写 head/receipt，不从角色猜 API credential 权限。所有入口在访问静态 Config/Skill/模型或写 Prisma 前预检；同主体 read-only、write-only 和 write-no-execute 均按实际 capability 拒绝。read 可携 `experiment_id`，仅同 principal 经 `_head(deleted=True)` 证实 lifecycle=deleted 时隐藏 Task；unknown/未迁/foreign 继续报错，通用 read 的删除语义保持不变。

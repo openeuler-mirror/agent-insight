@@ -1066,6 +1066,7 @@ interface EvalExperimentCaseInput {
 }
 
 export function addEvalExperimentCase(experimentId: string, c: EvalExperimentCaseInput): Promise<string>;
+export function addEvalExperimentCase(experimentId: string, c: EvalExperimentCaseInput, options: { allowCancelled: true }): Promise<string>;
 export function addEvalExperimentCase(
   experimentId: string,
   c: EvalExperimentCaseInput,
@@ -1074,12 +1075,12 @@ export function addEvalExperimentCase(
 export async function addEvalExperimentCase(
   experimentId: string,
   c: EvalExperimentCaseInput,
-  options?: { onlyIfNew: true },
+  options?: { onlyIfNew?: true; allowCancelled?: true },
 ): Promise<string | null> {
   if (isStorageCoreEnabled()) {
     const context = requireCoreExperimentContext();
     const snapshot = await context.rpc('read', {experiment_id: experimentId}) as {experiment: {status: string; cases: Array<Record<string, unknown>>}};
-    if (snapshot.experiment.status === 'cancelled') throw Object.assign(new Error('实验已取消'), {status: 409, code: 'EXPERIMENT_CANCELLED'});
+    if (snapshot.experiment.status === 'cancelled' && !options?.allowCancelled) throw Object.assign(new Error('实验已取消'), {status: 409, code: 'EXPERIMENT_CANCELLED'});
     const existing = c.taskId ? snapshot.experiment.cases.find(row => row.taskId === c.taskId || (options?.onlyIfNew && c.executionId && row.executionId === c.executionId)) : undefined;
     if (existing && options?.onlyIfNew) return null;
     const id = existing ? String(existing.id) : c.taskId ? `trace-${createHash('sha256').update(JSON.stringify([experimentId, c.taskId])).digest('hex')}` : randomUUID();
@@ -1214,12 +1215,13 @@ export async function startEvalExperimentCases(
   experimentId: string,
   caseIds: string[],
   user: string,
+  options: {concurrency?: number} = {},
 ): Promise<StartEvalExperimentCasesResult | null> {
   if (isStorageCoreEnabled()) {
     const context = requireCoreExperimentContext();
     if (user !== context.actor.username) throw Object.assign(new Error('Experiment actor mismatch'), {status: 403});
     await startCoreExperiment(context, experimentId, {caseIds: Array.from(new Set(caseIds.map(String).filter(Boolean)))});
-    return {status: 'running', completion: activateExperimentWork(context, experimentId)};
+    return {status: 'running', completion: activateExperimentWork(context, experimentId, options)};
   }
   await assertExperimentActive(experimentId);
   return withKeyedLock(`eval-start:${experimentId}`, async () => {

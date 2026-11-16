@@ -84,6 +84,78 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(con.execute('SELECT COUNT(*) FROM result_selections').fetchone()[0],1)
             self.assertEqual(con.execute("SELECT COUNT(*) FROM outbox_events WHERE event_type='evaluation.result.accepted.v1'").fetchone()[0],1)
 
+    def test_current_evaluation_work_times_follow_selected_retry_generation(self):
+        self.create();self.start();first=self.claim()
+        self.now+=100
+        failed=self.call('fail',**self.handle(first),error='真实评测错误',operation_key='first-fail')
+        result=failed['experiment']['cases'][0]['results'][0]
+        self.assertIsNotNone(result['coreResult'])
+        self.assertEqual(result['coreWork']['runId'],first['run_id'])
+        self.assertIsNotNone(result['coreWork']['startedAt'])
+        self.assertIsNotNone(result['coreWork']['finishedAt'])
+        original=result['createdAt'];self.now+=1000
+        retried=self.call('start',experiment_id='exp',case_ids=['case'],operation_key='selected-retry',frozen_evaluators={'judge':{'id':'judge'}})
+        current=retried['experiment']['cases'][0]['results'][0]
+        self.assertEqual(current['createdAt'],original)
+        self.assertNotEqual(current['coreWork']['runId'],first['run_id'])
+        self.assertGreater(current['coreWork']['createdAt'],result['coreWork']['createdAt'])
+        self.assertIsNone(current['coreWork']['startedAt'])
+        self.assertIsNone(current['coreWork']['finishedAt'])
+
+    def test_evaluation_work_metadata_ignores_machine_supplied_internal_fields(self):
+        self.create();self.start();one=self.claim()
+        completed=self.call('complete',**self.handle(one),result={'score':0,'coreWork':{'runId':'forged','createdAt':'1900-01-01'}},operation_key='complete-forged')
+        result=completed['experiment']['cases'][0]['results'][0]
+        self.assertEqual(result['coreWork']['runId'],one['run_id'])
+        self.assertEqual(result['coreWork']['workItemId'],one['work_item_id'])
+        self.assertNotEqual(result['coreWork']['createdAt'],'1900-01-01')
+
+    def test_evaluation_work_same_timestamp_retry_uses_current_identity_and_queued_cancel_time(self):
+        self.create();self.start();one=self.claim()
+        self.call('complete',**self.handle(one),result={'score':80},operation_key='complete')
+        retried=self.call('start',experiment_id='exp',operation_key='retry-at-same-time',frozen_evaluators={'judge':{'id':'judge'}})
+        result=retried['experiment']['cases'][0]['results'][0]
+        self.assertNotEqual(result['coreWork']['runId'],one['run_id'])
+        self.assertNotEqual(result['coreWork']['workItemId'],one['work_item_id'])
+        self.assertIsNone(result['coreWork']['startedAt'])
+        self.assertIsNone(result['coreWork']['finishedAt'])
+        self.now+=500
+        cancelled=self.call('cancel',experiment_id='exp',operation_key='cancel-queued')
+        result=cancelled['experiment']['cases'][0]['results'][0]
+        self.assertEqual(result['status'],'cancelled')
+        self.assertIsNone(result['coreWork']['startedAt'])
+        self.assertIsNotNone(result['coreWork']['finishedAt'])
+
+    def test_batch_scope_checks_real_credential_capabilities_before_static_shell_writes(self):
+        readonly=self.iam.issue_api_credential(self.token,'w',['read'])
+        self.assertEqual(self.service().dispatch('batch_scope',readonly,'w',{'operation':'read'})['operation'],'read')
+        for operation in ['create','patch','evaluate','retry-evaluate','start','retry-execute','abort']:
+            with self.subTest(operation=operation):
+                with self.assertRaises(Forbidden):self.service().dispatch('batch_scope',readonly,'w',{'operation':operation})
+        write_only=self.iam.issue_api_credential(self.token,'w',['write'])
+        with self.assertRaises(Forbidden):self.service().dispatch('batch_scope',write_only,'w',{'operation':'patch'})
+        write_no_execute=self.iam.issue_api_credential(self.token,'w',['read','write'])
+        allowed=self.service().dispatch('batch_scope',write_no_execute,'w',{'operation':'patch'})
+        self.assertEqual(allowed['principal_id'],'alice')
+        with self.assertRaises(Forbidden):self.service().dispatch('batch_scope',write_no_execute,'w',{'operation':'evaluate'})
+        self.assertEqual(self.call('batch_scope',operation='evaluate')['workspace_id'],'w')
+        with self.assertRaises(ValueError):self.call('batch_scope',operation='unknown')
+        with self.control.read_transaction() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM experiment_heads').fetchone()[0],0)
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM experiment_operation_receipts').fetchone()[0],0)
+
+    def test_batch_read_scope_distinguishes_deleted_owned_head_from_unknown_or_foreign(self):
+        self.create()
+        live=self.call('batch_scope',operation='read',experiment_id='exp')
+        self.assertEqual(live['lifecycle'],'active')
+        self.iam.share_resource(self.token,'w','run','exp','bob')
+        with self.assertRaises(Forbidden):self.service().dispatch('batch_scope',self.bob,'w',{'operation':'read','experiment_id':'exp'})
+        self.call('remove',experiment_id='exp',operation_key='remove')
+        with self.assertRaises(self.not_found()):self.call('read',experiment_id='exp')
+        deleted=self.call('batch_scope',operation='read',experiment_id='exp')
+        self.assertEqual(deleted['lifecycle'],'deleted');self.assertEqual(deleted['experiment_id'],'exp')
+        with self.assertRaises(self.not_found()):self.call('batch_scope',operation='read',experiment_id='unknown')
+
     def test_expired_claim_renew_and_old_fence_cannot_finish(self):
         self.create();self.start();one=self.claim();self.now+=30001;two=self.claim();self.assertNotEqual(one['attempt_id'],two['attempt_id'])
         with self.assertRaises(Conflict):self.call('complete',**self.handle(one),result={'score':99},operation_key='stale')

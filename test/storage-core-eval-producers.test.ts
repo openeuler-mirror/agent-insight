@@ -6,7 +6,7 @@ import ts from 'typescript';
 import {createHash} from 'node:crypto';
 
 function fixture(race=false,freezeUnavailable=false,lookupExisting=false){
- let legacy=0;const calls:Array<{action:string;payload:Record<string,unknown>}>=[];const starts:Array<Record<string,unknown>>=[];let activations=0;
+ let legacy=0;const calls:Array<{action:string;payload:Record<string,unknown>}>=[];const starts:Array<Record<string,unknown>>=[];let activations=0;const workerOptions:Array<{concurrency?:number}>=[];
  const experiment={id:'exp',user:'alice',status:'draft',evaluatorIdsJson:'["first","second"]',cases:[] as Array<Record<string,unknown>>};
  const context={actor:{workspace:'w',principal:'p',username:'alice'},operationKey:'request',rpc:async(action:string,payload:Record<string,unknown>)=>{
   calls.push({action,payload});if(action==='read')return {experiment:structuredClone(experiment),revision:'1'};
@@ -21,14 +21,14 @@ function fixture(race=false,freezeUnavailable=false,lookupExisting=false){
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},
   '@/lib/storage-core/experiments':{requireCoreExperimentContext:()=>context},
   '@/lib/storage-core/experiment-assets':{freezeExperimentAssets:async(_ctx:unknown,value:unknown)=>{if(freezeUnavailable)throw Error('Latest evaluator is unavailable');return value;},startCoreExperiment:async(_ctx:unknown,id:string,options:Record<string,unknown>)=>{starts.push({id,...options});}},
-  '@/lib/storage-core/experiment-worker':{activateExperimentWork:async()=>{activations++;for(const row of experiment.cases)row.results=[{evaluatorId:'first',status:'done',score:0,pointsJson:null,evidenceJson:null,errorMessage:null},{evaluatorId:'second',status:'done',score:null,verdict:'unscored',pointsJson:null,evidenceJson:null,errorMessage:null}];}},
+  '@/lib/storage-core/experiment-worker':{activateExperimentWork:async(_context:unknown,_id:string,options:{concurrency?:number}={})=>{workerOptions.push(options);activations++;for(const row of experiment.cases)row.results=[{evaluatorId:'first',status:'done',score:0,pointsJson:null,evidenceJson:null,errorMessage:null},{evaluatorId:'second',status:'done',score:null,verdict:'unscored',pointsJson:null,evidenceJson:null,errorMessage:null}];}},
   '@/lib/evaluators/evaluator-case-context':{normalizeEvaluatorCaseContext:(x:unknown)=>x},
   './dataset-case-binding':{withExperimentDatasetCaseBinding:(value:unknown,binding:unknown)=>({...value as object,datasetCaseBinding:binding})},
   './cancellation-context':{assertExperimentActive:async()=>{}},
   'node:crypto':{createHash,randomUUID:()=> 'new-case'},
  };
  vm.runInNewContext(source,{module,exports:module.exports,require:(name:string)=>dependencies[name]||{},console,Buffer,URL,setTimeout,clearTimeout,setInterval,clearInterval});
- return {api:module.exports as Record<string,Function>,context,experiment,calls,starts,get legacy(){return legacy;},get activations(){return activations;}};
+ return {api:module.exports as Record<string,Function>,context,experiment,calls,starts,workerOptions,get legacy(){return legacy;},get activations(){return activations;}};
 }
 
 test('core producer ensure uses actor-owned typed command and stable semantic receipt',async()=>{
@@ -66,4 +66,16 @@ test('concurrent producer add cannot overwrite existing input or gold with creat
 
 test('producer reuses existing sealed experiment after latest evaluator is unavailable',async()=>{
  for(const existingId of ['exp',undefined]){const f=fixture(false,true,true);assert.equal(await f.api.ensureEvalExperiment({user:'alice',name:'session',evaluatorIds:['deleted-custom'],existingId}),'exp');assert.equal(f.calls.some(call=>call.action==='ensure'),false);}
+});
+
+test('Batch can explicitly append a new Trace after durable abort without relaxing the default guard',async()=>{
+ const f=fixture();f.experiment.status='cancelled';
+ await assert.rejects(()=>f.api.addEvalExperimentCase('exp',{taskId:'new-task',input:'input',actualOutput:'output'}),{code:'EXPERIMENT_CANCELLED'});
+ const id=await f.api.addEvalExperimentCase('exp',{taskId:'new-task',input:'input',actualOutput:'output'},{allowCancelled:true});
+ assert.equal(typeof id,'string');assert.equal(f.experiment.cases[0].taskId,'new-task');assert.equal(f.legacy,0);
+});
+
+test('Batch start preserves configured evaluation worker concurrency',async()=>{
+ const f=fixture();await f.api.startEvalExperimentCases('exp',['case'],'alice',{concurrency:1});
+ assert.equal(f.workerOptions.at(-1)?.concurrency,1);
 });

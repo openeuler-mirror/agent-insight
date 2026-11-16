@@ -15,6 +15,18 @@
  */
 
 const URL_PREFIX = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+const BATCH_OPERATION_STORAGE='agent-insight.batch-trace.operations.v1';
+interface BatchOperation {signature:string;key:string;createdAt:number}
+function batchOperations():BatchOperation[]{
+  try{
+    const parsed:unknown=JSON.parse(sessionStorage.getItem(BATCH_OPERATION_STORAGE)||'[]');
+    return Array.isArray(parsed)?parsed.filter((value):value is BatchOperation=>!!value&&typeof value==='object'&&typeof value.signature==='string'&&/^[a-f0-9]{64}$/.test(value.signature)&&typeof value.key==='string'&&/^[\x21-\x7e]{1,512}$/.test(value.key)&&typeof value.createdAt==='number'&&Number.isFinite(value.createdAt)).slice(-32):[];
+  }catch{return [];}
+}
+function saveBatchOperations(operations:BatchOperation[]){
+  try{if(operations.length)sessionStorage.setItem(BATCH_OPERATION_STORAGE,JSON.stringify(operations.slice(-32)));else sessionStorage.removeItem(BATCH_OPERATION_STORAGE);}catch{}
+}
+
 
 export async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
   const fullUrl = URL_PREFIX + url;
@@ -22,10 +34,26 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
   const pathname=url.split(/[?#]/,1)[0];
   const method=(options?.method||'GET').toUpperCase();
   let transportedKey: string | null | undefined;
-  const consumerAuth=method==='GET'&&(pathname==='/api/modelconfig/pricing'||pathname==='/api/skills'||pathname==='/api/skills/logs'||pathname==='/api/agents'||pathname==='/api/ingest/ras-events'||/^\/api\/fault-injection\/runs\/[^/]+\/trace$/.test(pathname)||/^\/api\/skills\/[^/]+\/(runs|versions)$/.test(pathname)||/^\/api\/skills\/by-name\/[^/]+\/optimization-points$/.test(pathname))||method==='PATCH'&&/^\/api\/skills\/by-name\/[^/]+\/optimization-points\/resolve$/.test(pathname);
+  const batchAuth=/^\/api\/debug\/batch-tasks(?:\/[^/]+)?$/.test(pathname)&&['GET','POST','PATCH'].includes(method);
+  const consumerAuth=batchAuth||method==='GET'&&(pathname==='/api/modelconfig/pricing'||pathname==='/api/skills'||pathname==='/api/skills/logs'||pathname==='/api/agents'||pathname==='/api/ingest/ras-events'||/^\/api\/fault-injection\/runs\/[^/]+\/trace$/.test(pathname)||/^\/api\/skills\/[^/]+\/(runs|versions)$/.test(pathname)||/^\/api\/skills\/by-name\/[^/]+\/optimization-points$/.test(pathname))||method==='PATCH'&&/^\/api\/skills\/by-name\/[^/]+\/optimization-points\/resolve$/.test(pathname);
   if (typeof window !== 'undefined' && (consumerAuth || url.startsWith('/api/observe/') || url.startsWith('/api/fault/diagnosis/') || url.startsWith('/api/fleet/') || url.startsWith('/api/quality/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/user-evaluators') || url.startsWith('/api/skill-workbench/') || url.startsWith('/api/eval/settings') || url.startsWith('/api/evaluation/') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/rejudge') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key')) {
     const key = localStorage.getItem('api_key');
     if (key) {headers.set('x-witty-api-key', key);transportedKey=key;}
+  }
+  let batchOperation:BatchOperation|undefined;
+  if(batchAuth&&method==='POST'&&/^\/api\/debug\/batch-tasks\/[^/]+$/.test(pathname)&&typeof options?.body==='string'&&!headers.has('idempotency-key')){
+    let action:unknown;
+    try{action=JSON.parse(options.body).action;}catch{}
+    if((action==='evaluate'||action==='retry-evaluate')&&typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'){
+      const key=crypto.randomUUID();headers.set('idempotency-key',key);
+      try{
+        const bytes=new TextEncoder().encode(JSON.stringify([fullUrl,options.body,headers.get('x-witty-api-key'),headers.get('authorization')]));
+        const signature=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
+        const pending=batchOperations();batchOperation=pending.find(value=>value.signature===signature)||{signature,key,createdAt:Date.now()};
+        headers.set('idempotency-key',batchOperation.key);
+        saveBatchOperations([...pending.filter(value=>value.signature!==signature),batchOperation]);
+      }catch{}
+    }
   }
   let response = await fetch(fullUrl, { ...options, headers });
   const started=Date.now();
@@ -36,6 +64,12 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
     await new Promise(resolve=>setTimeout(resolve,1000));
     if(options?.signal?.aborted||transportedKey!==undefined&&localStorage.getItem('api_key')!==transportedKey)break;
     response=await fetch(fullUrl,{...options,headers});
+  }
+  if(batchOperation&&response.ok){
+    const acknowledgement:unknown=await response.clone().json();
+    if(acknowledgement&&typeof acknowledgement==='object'&&!Array.isArray(acknowledgement)&&'ok' in acknowledgement&&acknowledgement.ok===true){
+      saveBatchOperations(batchOperations().filter(value=>value.signature!==batchOperation!.signature||value.key!==batchOperation!.key));
+    }
   }
   return response;
 }

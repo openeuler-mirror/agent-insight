@@ -51,3 +51,11 @@ test('native execution rows apply the original non-null Prisma root default and 
  const original={...snapshot,executions:[{id:'root',taskId:'local-task',isSubagent:null},{id:'child',taskId:'child-task',isSubagent:true}]};
  const source=createExperimentReadView([original]);const rows=await source.execution.findMany({where:{isSubagent:false},select:{id:true}});assert.deepEqual(rows,[{id:'root'}]);assert.equal(original.executions[0].isSubagent,null);
 });
+
+test('internal current work metadata stays out of ordinary and nested public read DTOs',async()=>{
+ const {createExperimentReadView}=await import('@/lib/storage-core/experiment-view');
+ const result={id:'result',caseId:'case',experimentId:'exp',score:0,coreWork:{runId:'current',workItemId:'private-work',createdAt:'2026-11-16T00:00:00Z'}};
+ const view=createExperimentReadView([{coverage:'complete',experiment:{id:'exp',cases:[{id:'case',experimentId:'exp',results:[result],executionSnapshot:{results:[structuredClone(result)]}}],groups:[],comments:[]}}]);
+ const plain=await view.experimentEvalResult.findUnique({where:{id:'result'}});assert.equal(JSON.stringify(plain).includes('coreWork'),false);
+ const caseRow=await view.experimentCase.findUnique({where:{id:'case'}});assert.equal(JSON.stringify(caseRow).includes('coreWork'),false);
+});

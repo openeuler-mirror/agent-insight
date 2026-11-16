@@ -265,3 +265,14 @@ RAS专题读取通过现analytics端口的`ras_read`/`validate_ras_read`读取�
 独立rejudge、Final Result编辑与取消复用内部`trace-outcome` Experiment/RunPlan。编辑和持久任务同事务交接，取消/替换通过现lease/fence阻止迟到结果；首个无任务取消也保存精确操作回执。模型选择与实际来源封存，observed响应恢复复用，未知投递保持pending。仅专属Outcome结果可覆盖答案字段，普通实验分数不会当成答案分；真实0分与未知null分开。Trace列表、Skill记录和统计读取同一当前选择，并复核其签名边界；统计读取不加载完整RunPlan或Session。
 
 Query编辑不启动模型：同事务保存新query、按原算法重算的路由标量/快照、清分标记及取消事实；新一代成功结果才覆盖该标记。无真实Skill调用时，原路由标量可为null而快照触发率为0，保留两者含义。上述操作以真实凭据授权，仅Trace本人可重评、编辑答案或取消；查询/正文中的user不扩权。没有新增表、迁移或前端布局，其他控制域及完整历史导入仍按剩余清单推进。
+
+
+### Batch Trace 用例分析
+
+原 `debug/batch-tasks` 的 Trace 模式 evaluate、单条 retry-evaluate、abort 与进度读取已接入 typed Experiment/RunPlan/worker。凭据解析的兼容账号限定 Batch 控制记录，Trace 来源必须属于同一主体，Skill 必须使用明确版本。启动成功前会持久记录 backing Experiment/Case 绑定并建立 durable 工作；读取只投影当前 typed 结果凭据，保留原扁平状态和数值均分口径，0 分仍表示评测已完成。取消保留已经完成的兄弟结果，重试只替代所选 Case；取消后仍可评测新 Trace。
+
+Trace 启动/重试使用 `idempotency-key` 标识一次操作；客户端仅保存最多 32 个请求哈希、操作键及时间。网络或响应体丢失会保留该键，收到可解析且 `ok: true` 的完整 JSON 确认后清除，下一次明确操作使用新键。服务器以持久操作键恢复原 start 回执及工作，不重复封存或发模型。原 `startedAt` 来自当前工作创建时间，完成时间来自当前工作/attempt metadata；内部 `coreWork` 不进入公开 Experiment DTO。
+
+BatchEvalTask、Skill/版本仍使用原静态控制存储。Dataset start/retry-execute 尚沿用原执行链路，此片不代表 Batch 全部迁移完成。
+
+Batch 请求还会通过现有私有 Experiment RPC 的 `batch_scope` 固定动作核验凭据的实时权限：读取需 read，创建/配置更新/取消需 read+write，执行/评测及重试需 read+write+execute。身份相同或 workspace 角色相同不能替代凭据权限。读取绑定时仅在实时 owner 校验证实 backing 已删除后隐藏该项；不存在、未迁移或属于他人的绑定继续明确失败。

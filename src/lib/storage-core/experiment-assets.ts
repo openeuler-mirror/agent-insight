@@ -30,12 +30,17 @@ export async function freezeExperimentAssets(context:CoreExperimentContext,data:
  snapshot.coreAssets={schemaVersion:1,evaluators,releases};
  return {...data,configSnapshotJson:JSON.stringify(snapshot)};
 }
+export function coreExperimentStartOperation(context:Pick<CoreExperimentContext,'operationKey'>,experimentId:string,options:{caseIds?:string[];evaluatorIds?:string[]}={}){
+ const selection={case_ids:options.caseIds||null,evaluator_ids:options.evaluatorIds||null};
+ const suffix=createHash('sha256').update(JSON.stringify(selection)).digest('hex').slice(0,24);
+ return {key:context.operationKey+':start:'+suffix,request:{experiment_id:experimentId,...selection}};
+}
 export async function prepareCoreExperimentStart(context:CoreExperimentContext,experimentId:string,options:{caseIds?:string[];evaluatorIds?:string[];allowPersistedRunning?:boolean}={}):Promise<{experiment:ObjectValue;payload:ObjectValue}>{
  const found=await context.rpc('read',{experiment_id:experimentId}) as {experiment:ObjectValue;revision:string};
  if(!found?.experiment)throw Object.assign(new Error('Experiment not found'),{status:404});
  let data=found.experiment;let snapshot=data.configSnapshotJson?object(JSON.parse(String(data.configSnapshotJson))):{};
  if(!snapshot.coreAssets){data=await freezeExperimentAssets(context,data);snapshot=object(JSON.parse(String(data.configSnapshotJson)));}
- const suffix=createHash('sha256').update(JSON.stringify({case_ids:options.caseIds||null,evaluator_ids:options.evaluatorIds||null})).digest('hex').slice(0,24);
+ const operation=coreExperimentStartOperation(context,experimentId,options);
  const assets=object(snapshot.coreAssets);const model=await getActiveConfig(context.actor.username);
  const modelSelection=Object.prototype.hasOwnProperty.call(context,'frozenStartModelSelection')?context.frozenStartModelSelection:freezeModelSelection(model);
  const source=experimentSkillSource(data);let skillConfig:Record<string,unknown>={...await freezeDerivedSkillScope(context,snapshot.coreDirectSkills)};
@@ -46,7 +51,7 @@ export async function prepareCoreExperimentStart(context:CoreExperimentContext,e
   const ids=skillConfig.derived_skill_ids as string[];const versions=skillConfig.derived_skill_versions as Record<string,number[]>;
   skillConfig={derived_skill_ids:[...new Set([...ids,skill.id])],derived_skill_versions:{...versions,[skill.id]:[...new Set([...(versions[skill.id]||[]),data.skillVersion as number])]},...(skill.user!==null&&skill.user!==context.actor.username?{derived_public_business_skill_id:skill.id}:{}),experiment_skill_scope:{skill_id:skill.id,skill_name:data.skillName,version:data.skillVersion,source,preset:data.preset??null,scope:data.scope||''}};
  }
- return {experiment:found.experiment,payload:{experiment_id:experimentId,...(options.caseIds?{case_ids:options.caseIds}:{}),...(options.evaluatorIds?{evaluator_ids:options.evaluatorIds}:{}),expected_revision:found.revision,releases:object(assets.releases),frozen_evaluators:object(assets.evaluators),config:{model_selection:modelSelection,...skillConfig},operation_key:context.operationKey+':start:'+suffix,operation_request:{experiment_id:experimentId,case_ids:options.caseIds||null,evaluator_ids:options.evaluatorIds||null}}};
+ return {experiment:found.experiment,payload:{experiment_id:experimentId,...(options.caseIds?{case_ids:options.caseIds}:{}),...(options.evaluatorIds?{evaluator_ids:options.evaluatorIds}:{}),expected_revision:found.revision,releases:object(assets.releases),frozen_evaluators:object(assets.evaluators),config:{model_selection:modelSelection,...skillConfig},operation_key:operation.key,operation_request:operation.request}};
 }
 
 export async function startCoreExperiment(context:CoreExperimentContext,experimentId:string,options:{caseIds?:string[];evaluatorIds?:string[];allowPersistedRunning?:boolean}={}):Promise<unknown>{

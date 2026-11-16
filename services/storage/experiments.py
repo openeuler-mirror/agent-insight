@@ -161,6 +161,12 @@ class ExperimentStore:
                     if slot['review_id']:
                         review=next((v for v in annotations if v['annotation_id']==slot['review_id'] and v['machine_result_id']==slot['selected_result_id']),None)
                         if review:result.update(self._load(review['payload_hash'],review['payload_ref']))
+                result['coreWork']=None
+                if slot['work_item_id'] and slot['run_id']:
+                    work=con.execute('SELECT run_id,work_item_id,created_at_ms,updated_at_ms,status FROM work_items WHERE workspace_id=? AND run_id=? AND work_item_id=? AND case_key=? AND evaluator_slot=?',(ws,slot['run_id'],slot['work_item_id'],row['case_id'],slot['evaluator_id'])).fetchone()
+                    if work is None:raise StorageError('Current evaluation work unavailable')
+                    attempt=con.execute('SELECT attempt_id,started_at_ms,finished_at_ms FROM work_attempts WHERE workspace_id=? AND work_item_id=? ORDER BY attempt_no DESC LIMIT 1',(ws,work['work_item_id'])).fetchone()
+                    result['coreWork']={'runId':work['run_id'],'workItemId':work['work_item_id'],'createdAt':_iso(work['created_at_ms']),'startedAt':_iso(attempt['started_at_ms']) if attempt else None,'finishedAt':_iso(attempt['finished_at_ms']) if attempt and attempt['finished_at_ms'] is not None else _iso(work['updated_at_ms']) if work['status'] in {'done','failed','cancelled'} else None}
                 results.append(result)
             item['results']=results
             cps=con.execute('SELECT c.*,a.attempt_no,a.worker_id,a.started_at_ms,a.finished_at_ms,a.status AS attempt_status FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id WHERE c.workspace_id=? AND c.case_id=? ORDER BY a.started_at_ms,a.attempt_no,c.attempt_id',(ws,row['case_id'])).fetchall()
@@ -848,6 +854,20 @@ class ExperimentStore:
         if action in {'outcome_begin','outcome_lookup','outcome_cancel','outcome_query'}:
             from .trace_outcome import dispatch_outcome
             return dispatch_outcome(self,action,token,ws,body)
+        if action=='batch_scope':
+            operations={'read':('read',),'create':('read','write'),'patch':('read','write'),'abort':('read','write'),'evaluate':('read','write','execute'),'retry-evaluate':('read','write','execute'),'start':('read','write','execute'),'retry-execute':('read','write','execute')}
+            operation=body.get('operation')
+            if operation not in operations:raise ValueError('Unsupported Batch operation')
+            with self.control.read_transaction() as con:
+                scope=self.iam._scope(con,token)
+                for capability in operations[operation]:self.iam._workspace(scope,ws,capability)
+                result={'authorized':True,'operation':operation,'principal_id':scope.principal_id,'workspace_id':ws}
+                if body.get('experiment_id'):
+                    if operation!='read':raise ValueError('Batch lifecycle lookup requires read scope')
+                    head=self._head(con,token,ws,body['experiment_id'],deleted=True)
+                    if head['created_by']!=scope.principal_id:raise Forbidden('Batch Experiment must belong to the actor')
+                    result.update(experiment_id=head['experiment_id'],lifecycle=head['state'])
+                return result
         if action=='derived_issue_resolve':return self._resolve_derived_issues(token,ws,body)
         if action=='derived_resolution_scope':
             with self.control.read_transaction() as con:

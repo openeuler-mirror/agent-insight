@@ -427,3 +427,26 @@ Benchmark原创建/启动/实际device命令/提交/真实评测HTTP/规范化/�
 证据位于 `exclude/storage-core-next-consumers/20261115-dz8_dnl_/`：`consumers-final-v7-node-full.log`、`consumers-final-v5-python-sequential-{report,manifest}.json`、`final-v4-relational-*`、`acceptance-current-consumers-v9/{outcome,current-consumer}-http-report.json`、`final-v7-code-verification.json`、`final-v7-consumers-main-{preservation,readback}.json`、`final-v7-next-runtime.json` 与三张 `final-v7-*.png`。失败、超时和被后续审查替代的快照均保留；v4 三项应用失败中两项为 OTel 测试时序假设（已本地提交受控时钟回归），另一项超大输入去重在低竞争隔离单文件复验 38 秒通过；v4 存储整套触及脚本 900 秒上限，不算通过，最终顺序运行结果如上。没有扩大业务超时或放宽原断言以换取通过。
 
 原验收入口仍为 `http://localhost:58488/config/skills`，沿用原 admin。下一步按 phase7 接 Batch Trace evaluate/retry/abort 与当前进度，再接 Dataset start/retry、Trigger、可信采集和旧积压确认；Agent/RAS 删除、Infra、FI/客户端控制、静态资产/配置/会话、Goal Plus/协作/Usage 及 96 模型完整语义 apply 仍未完成。生产停写/切换/回退未执行，万级 Span/水位/千级混合容量继续留第二版，不把本批接线当作全产品切换完成。
+
+## 2026-11-16 第一版 Batch Trace 接口接入
+
+本片接通原 Batch Trace 的 evaluate、retry-evaluate、abort 与进度查询，保留 collection 创建时 JSON 字符串、detail 解析后的 JSON、原 flat CaseState、0 分 done 仍为 pass 的含义。静态 BatchEvalTask/配置仍由原控制域保存，动态 Case、冻结输入、RunPlan、当前工作与结果使用现 Experiment 接口；不把 Dataset 执行或整个 Batch 宣称为已迁移。原前端 TSX/CSS、数据库表和迁移均未改。
+
+现私有 Experiment RPC 的 `batch_scope` 按固定操作实时检查 read/write/execute，先于静态写、Skill/配置和模型读取；不按 workspace role 推断 API credential capabilities。主体验证使用真实 principal，兼容登录名与 IAM 名不同的旧数据归属。静态绑定及 PATCH 使用精确 CAS；启动与响应恢复共用已有 start operation identity/回执，完成后新意图建立新代；单条重试和取消不抹掉已完成兄弟，取消后仍可重试或追加 Trace。`coreWork` 从当前 slot/work/attempt 读取真实时间，机器 JSON 不能覆盖，普通 DTO 不枚举内部字段。仅已授权证实删除的 backing head 隐藏任务，未知/foreign 绑定不吞成删除。
+
+apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多32项，不存正文或凭据），响应丢失/坏 JSON 保留同 key；确认可解析的 `{ok:true}` 后才清除。显式 key、其他 API 及普通非 JSON 请求保持原行为。没有新增通用请求框架。
+
+| 验证 | 最终结果与边界 |
+|---|---|
+| 应用全量 | 最终 v2 共 5973 项，5951 通过、22 跳过、0 失败/取消，406.12 秒；原 collector 类型预检与完整 test glob，Node24/独立 HOME/SQLite/并行4。旧 v1 为客户端 ACK 新回归主动中断，3023 项中 412 取消，不作为通过 |
+| 存储整套 | 1073 项，894 通过、179 项可选引擎未配置跳过，0失败/错误，238.50秒；ResourceWarning作为错误。153个后端文件前后和最终源码SHA相同，ACK后续只改客户端及测试/说明 |
+| PG / 原生 openGauss | 本片5项新合同及5项关键回归，各10/10，无跳过；26.54/31.66秒，各10个新建schema回查残留0。原生OG为Linux aarch64驱动；测试事实sink不是CH，不宣称全矩阵 |
+| 原HTTP / CH / 模型 | 原handler+实际apiFetch在新SQLite/独立CH中46请求通过，6次本地Mock模型HTTP调用、最大并发确为配置1；真实0分仍pass，单条重试使用当前时间，取消保留完成兄弟，取消后可重试及追加Trace。丢响应重试不重复模型，另一个Node进程能恢复进度。旧动态表毒化计数0，9张旧动态表实际均0行 |
+| 补充真实合同 | 原HTTP软删后集合仍200且仅隐藏删除项、单查404；完整但坏JSON的200正文被拒绝，同操作恢复后确认并清key，Run/Work/receipt计数均不增加；有execute权限的真实组管理员可读成员源200，但私人评分403且模型配置读取0。Readonly、write-only、无execute的同主体权限路径均实际验证 |
+| 类型 / 复核 | 最终tsc与目标源ESLint退出0；eval-producers测试原有两项lint与HEAD对照未新增。主体和ACK增量分别spec/quality通过。3072个已列快照源码SHA不变，当前实现与冻结overlay相同；无schema/TSX/CSS变化 |
+| 原环境保留 | 刷新前core/legacy两库备份及完整性检查通过，schema15、65张core/96张旧表保留，原凭据、注册行、业务行未删除/修改。原评测页首次打开触发**未改动的既有内置可靠性数据集初始化**：只追加1组定义/发布/兼容索引、133个工件元数据、1个发布Outbox及两张CH各33条新数据集事实；逐行证明旧记录全部保留，CH排除该新dataset/release后的逻辑哈希与原15张表相同。两个旧负面Outbox仅正常更新重试元数据。没有操作默认业务库/生产 |
+| 实际原界面 | 原Skill评测概览/用例分析布局正常，原导航、控件、原admin登录保留；当前浏览器0错误/警告。未启动真实外部Agent或把本地Mock当模型效果验收；Dataset执行未作浏览器运行验收。普通实验100分、Workbench0分、诊断done/report和4组身份再次通过实际Next读回 |
+
+证据：`exclude/storage-core-batch-trace/20261116-sj_6m2rd/` 中 `batch-v2-node-full-{result.json,log}`、`batch-v1-python-full-{report,manifest}.json`、`native-v1-*`、`acceptance/batch-*-report.json`、`ack-no-duplicate-work-proof.json`、`batch-http-storage-proof.json`、`batch-v2-main-{preservation,readback}.json`、`final-code-verification.json`、`main-original-case-layout.png`。最初缺少隔离SQLite空文件的harness失败、被替代的v1和数据保留校验首次假设过窄的失败均保留，未重置夹具、放宽旧记录保留或修改原断言换取通过。
+
+下一依赖在原用例页面审查中明确：未独立重评的普通Trace，其compact兼容DTO还缺主Skill/版本引用，前端严格root_skill匹配可能无法选择；已在隔离普通checking@1源实际复现，不能因主验收环境3条grayscale按原规则隐藏而误判。先补该原DTO/筛选来源（不改UI、不猜未知版本），再接Dataset start/retry-execute、Trigger与后续phase7清单。生产切换、完整历史apply与第二版容量目标仍未执行。
