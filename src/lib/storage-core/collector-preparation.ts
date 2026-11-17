@@ -4,7 +4,7 @@ import {
   prepareTraceThread, prepareSubagentExecutions, prepareUploadQuickData, computeOwnSkills,
   readConfig, readEvaluationResults, fillConfigKeyActionsFromParsedFlows, findBestRoutingConfig,
   findBestOutcomeConfig, buildRecordEvaluationSnapshots, allowsSnapshotShrinkForFramework,
-  supportsSubagentExecutionDerivation, resolveExecutionPreparationFramework, getRoutingExpectedSkills, type ExecutionRecord, type ConfigItem, type InvokedSkill,
+  supportsSubagentExecutionDerivation, resolveExecutionPreparationFramework, getRoutingExpectedSkills, prepareExecutionSkills, type ExecutionRecord, type ConfigItem, type InvokedSkill,
 } from '@/lib/storage/data-service';
 import {db,prismaRaw} from '@/lib/storage/prisma';
 import {getUserSettings,getActiveConfig} from '@/lib/storage/server-config';
@@ -18,13 +18,15 @@ import {isVerifiedCoreCollectorIdentity,withCoreCollectorIdentity,type CoreColle
 
 type Row=Record<string,any>;
 interface FrozenSkill extends Row {id:string;name:string;activeVersion:number|null;versions:Array<{version:number;content:string}>}
-export interface CollectorReservation {
+export interface CollectorSourceReservation {
  trace_id:string;task_id:string;execution_id:string;operation_key:string;operation:'snapshot'|'complete';state:string;
  input_hash:string;base_revision:string;source_revision:string;received_at_ms:number;completed_at_ms:number|null;
  operation_request:Row;provenance:{legacy_username:string;verified_client_id?:string|null;framework?:string|null};
  snapshot:{execution:Row;session:Row|null}|null;
 }
-interface CollectorBinding {trace_id:string;task_id:string;execution_id:string;operation_key:string;input_hash:string;base_revision:string;request_hash:string;reservation_hash:string}
+export interface CollectorThreadReservation extends Omit<CollectorSourceReservation,'trace_id'|'task_id'|'execution_id'|'operation'> {trace_id:null;task_id:null;execution_id:null;operation:'thread_only'}
+export type CollectorReservation=CollectorSourceReservation|CollectorThreadReservation;
+interface CollectorBinding {trace_id:string|null;task_id:string|null;execution_id:string|null;operation_key:string;input_hash:string;base_revision:string;request_hash:string;reservation_hash:string}
 export interface FrozenCollectorPreparation {
  version:1;actor:{principal:string;workspace:string;username:string};binding:CollectorBinding;
  configs:ConfigItem[];skills:FrozenSkill[];active_skill_versions:Record<string,number>;evaluation_results:Record<string,string>;
@@ -33,6 +35,7 @@ export interface FrozenCollectorPreparation {
  routing_skills?:Array<{name:string;activeVersion:number|null}>;
  registered_agents?:Array<{id:string;platform:string;name:string}>;
  parsed_flows?:Array<{skillId:string;version:number;flowJson:string|null}>;
+ graph_context?:Row;
 }
 const bindingKeys=['trace_id','task_id','execution_id','operation_key','input_hash','base_revision'] as const;
 const failure=(status:number,message:string)=>Object.assign(new Error(message),{status});
@@ -82,14 +85,21 @@ function portableSession(value:Row|null):Row|null{
   user:value.user??null,...(value.langfuseTraceNodes!=null?{langfuseTraceNodes:value.langfuseTraceNodes}:{})});
 }
 
-export async function captureCoreCollectorPreparation(identity:CoreCollectorIdentity,reservation:CollectorReservation,projection:{previousSession?:Row|null;executionMatch?:Row|null;threadId?:string|null}={}):Promise<FrozenCollectorPreparation>{
+export async function captureCoreCollectorPreparation(identity:CoreCollectorIdentity,reservation:CollectorReservation,projection:{previousSession?:Row|null;executionMatch?:Row|null;threadId?:string|null;graphContext?:(input:{children:Row[];thread:Row|null;sweep:boolean})=>Promise<Row>}={}):Promise<FrozenCollectorPreparation>{
  if(!isVerifiedCoreCollectorIdentity(identity))throw failure(403,'Verified collector identity required');
  return withCoreCollectorIdentity(identity,async actor=>{
-  if(actor.username!==reservation.provenance.legacy_username||identity.operation!==reservation.operation)throw failure(403,'Collector preparation owner differs');
+  if(actor.username!==reservation.provenance.legacy_username||identity.operation!==(reservation.operation==='thread_only'?'snapshot':reservation.operation))throw failure(403,'Collector preparation owner differs');
   const username=actor.username;
   const frozen:FrozenCollectorPreparation={version:1,actor:{principal:actor.principal,workspace:actor.workspace,username},binding:binding(reservation),configs:[],skills:[],active_skill_versions:{},evaluation_results:{},settings:{autoEvaluationEnabled:false},allow_snapshot_shrink:false,execution_match:jsonClone(projection.executionMatch??null),thread_id:projection.threadId??null,previous_session:jsonClone(projection.previousSession??null)};
   check(reservation,frozen,reservation.operation);
   if(reservation.operation==='complete'){await identity.revalidate();return frozen;}
+  if(reservation.operation==='thread_only'){
+   const raw=reservation.operation_request.data??reservation.operation_request;
+   if(!raw.threadOnly||!raw.framework||!raw.traceThread?.sourceThreadId)throw failure(400,'Thread-only collector input required');
+   frozen.thread_id=projection.threadId??`collector-thread:${createHash('sha256').update([actor.workspace,actor.principal,raw.framework,raw.traceThread.sourceThreadId].join('\0')).digest('hex')}`;
+   if(projection.graphContext){frozen.graph_context=await projection.graphContext({children:[],thread:{framework:raw.framework,source_thread_id:raw.traceThread.sourceThreadId},sweep:false});frozen.thread_id=frozen.graph_context.thread_id??frozen.thread_id;}
+   await identity.revalidate();return jsonClone(frozen);
+  }
   const raw=reservation.operation_request.data??reservation.operation_request;
   const data:ExecutionRecord={...structuredClone(raw),task_id:reservation.task_id,upload_id:reservation.execution_id,user:username,clientId:reservation.provenance.verified_client_id??undefined};
   const thread=raw.traceThread;
@@ -119,7 +129,8 @@ export async function captureCoreCollectorPreparation(identity:CoreCollectorIden
   const add=(name:string|undefined|null,version?:number|null)=>{if(!name)return;const key=name.toLowerCase();if(!related.has(key))related.set(key,new Set());if(typeof version==='number')related.get(key)!.add(version);};
   add(state.targetRecord.skill,state.targetRecord.skill_version);
   const own=state.explicitSkillVersionRewrite?state.targetRecord.invokedSkills??[]:state.mergedInteractionsForSession?.length?computeOwnSkills(state.targetRecord.framework,state.mergedInteractionsForSession):state.targetRecord.invokedSkills??[];
-  const children=supportsSubagentExecutionDerivation(state.targetRecord.framework)?prepareSubagentExecutions({parentExecutionId:reservation.execution_id,parentTaskId:reservation.task_id,parentFramework:state.targetRecord.framework,parentUser:username,interactions:state.mergedInteractionsForSession??[]},new Date(reservation.received_at_ms).toISOString()).children:[];
+  const childPlan=!state.skipped&&supportsSubagentExecutionDerivation(state.targetRecord.framework)?prepareSubagentExecutions({parentExecutionId:reservation.execution_id,parentTaskId:reservation.task_id,parentFramework:state.targetRecord.framework,parentUser:username,interactions:state.mergedInteractionsForSession??[]},new Date(reservation.received_at_ms).toISOString()):{children:[],sweep:false};
+  const children=childPlan.children;
   const invoked=[...own,...children.flatMap(child=>child.skills)] as InvokedSkill[];
   for(const skill of invoked)add(skill.name,skill.version);
   for(const config of [routing,outcome])if(config){add(config.skill,config.skillVersion);for(const expected of config.expectedSkills??[])add(expected.skill,expected.version);}
@@ -148,11 +159,17 @@ export async function captureCoreCollectorPreparation(identity:CoreCollectorIden
   const agentName=state.targetRecord.agentName||getFrameworkPrimaryAgentName(state.targetRecord.framework);
   const names=extractObservedAgentRegistrations(state.mergedInteractionsForSession,agentName).map(agent=>agent.name);
   frozen.registered_agents=state.targetRecord.framework&&names.length?await prismaRaw.registeredAgent.findMany({where:{user:username,platform:state.targetRecord.framework,name:{in:names}},select:{id:true,platform:true,name:true}}):[];
+  if(projection.graphContext){
+   const pending=String(data.framework||'').toLowerCase()==='codex'&&reservation.execution_id.startsWith('pending:');
+   frozen.graph_context=await projection.graphContext({children:pending?[]:children.map(child=>({execution_id:child.execution.id,task_id:child.execution.taskId,started_at_ms:new Date(child.execution.timestamp).getTime()})),thread:!pending&&raw.traceThread?.sourceThreadId&&raw.framework?{framework:raw.framework,source_thread_id:raw.traceThread.sourceThreadId}:null,sweep:pending?false:childPlan.sweep});
+   frozen.thread_id=frozen.graph_context.thread_id??frozen.thread_id;
+  }
   check(reservation,frozen);await identity.revalidate();return jsonClone(frozen);
  });
 }
 
 export async function prepareCoreCollectorSnapshot(reservation:CollectorReservation,frozen:FrozenCollectorPreparation){
+ if(reservation.operation!=='snapshot')throw failure(400,'Collector snapshot reservation required');
  check(reservation,frozen);
  const original=reservation.operation_request.data??reservation.operation_request;
  const data:ExecutionRecord={...structuredClone(original),task_id:reservation.task_id,upload_id:reservation.execution_id,user:frozen.actor.username,
@@ -204,7 +221,10 @@ export async function prepareCoreCollectorSnapshot(reservation:CollectorReservat
  const childPlan=supportsSubagentExecutionDerivation(record.framework)?prepareSubagentExecutions({parentExecutionId:reservation.execution_id,parentTaskId:reservation.task_id,parentFramework:record.framework,parentUser:frozen.actor.username,clientId:fields.clientId,hostIp:fields.hostIp,hostName:fields.hostName,observedIp:fields.observedIp,interactions:state.mergedInteractionsForSession??[],lastIngestedAt:fields.lastIngestedAt},timestamp):{children:[],sweep:false};
  const children=childPlan.children.map(child=>{
   const skills=pinnedSkills(child.skills,frozen);
-  return {snapshot:{execution:portableExecution({...child.execution,invokedSkills:skills,skills:skills.map(skill=>skill.name)}),session:portableSession(child.session)},skills};
+  const prior=frozen.graph_context?.children?.find((member:Row)=>member.execution_id===child.execution.id);
+  const priorSession=prior?.session_json?JSON.parse(prior.session_json):prior?.snapshot?.session;
+  const session=portableSession({...priorSession,...child.session,startTime:child.sessionHasStart?child.session.startTime:priorSession?.startTime??child.session.startTime,endTime:prior?.completion_at_ms!=null?new Date(prior.completion_at_ms).toISOString():child.session.endTime||priorSession?.endTime||null});
+  return {snapshot:{execution:portableExecution({...child.execution,invokedSkills:skills,skills:skills.map(skill=>skill.name)},prior?.snapshot?.execution),session},skills,serialized_session_json:JSON.stringify(session),execution_skills:prepareExecutionSkills(skills,{user:frozen.actor.username},prior?.execution_skills??[])};
  });
  const postHooks:Row[]=[];
  if(record.framework){
@@ -217,15 +237,25 @@ export async function prepareCoreCollectorSnapshot(reservation:CollectorReservat
  for(const update of configUpdates)postHooks.push({kind:'config_key_actions',...update});
  const background=!isInProgressOpencodeSnapshot(data)&&frozen.settings.autoEvaluationEnabled;
  return jsonClone({binding:binding(reservation),skipped:false,snapshot:{execution:portableExecution(fields,reservation.snapshot?.execution),session:portableSession(session.session)},record:session.record,normalized,
-  root_skills:rootSkills,skill_origins:record.skill_origins??[],children,retire_missing_children:childPlan.sweep,thread,post_hooks:postHooks,background_analysis:background,
+  root_skills:rootSkills,skill_origins:record.skill_origins??[],execution_skills:prepareExecutionSkills(rootSkills,{user:frozen.actor.username,primaryName:record.skill,origins:record.skill_origins},frozen.graph_context?.root_execution_skills??[]),children,retire_missing_children:childPlan.sweep,thread,post_hooks:postHooks,background_analysis:background,
   analysis:{kind:'upload_analysis',enabled:background,model_selection:frozen.model_selection??null,expected_base_revision:reservation.base_revision,query:record.query??null,skill:record.skill??null,configs,execution_match:frozen.execution_match}});
 }
 
 export function prepareCoreCollectorCompletion(reservation:CollectorReservation,frozen:FrozenCollectorPreparation){
+ if(reservation.operation!=='complete')throw failure(400,'Collector completion reservation required');
  check(reservation,frozen,'complete');
  if(!Number.isSafeInteger(reservation.completed_at_ms)||reservation.completed_at_ms!<0)throw failure(400,'Invalid collector completion time');
  const endTime=new Date(reservation.completed_at_ms!).toISOString();
  const previous=reservation.snapshot?.session??frozen.previous_session;
  const session=previous?{...jsonClone(previous),endTime}:{taskId:reservation.task_id,user:frozen.actor.username,label:'opencode',query:null,model:null,startTime:new Date(reservation.received_at_ms).toISOString(),endTime,interactions:[]};
  return {binding:binding(reservation),disposition:'completion',session,snapshot:reservation.snapshot?{execution:jsonClone(reservation.snapshot.execution),session}:null,response:{success:true,task_id:reservation.task_id,endTime}};
+}
+
+export function prepareCoreCollectorThread(reservation:CollectorReservation,frozen:FrozenCollectorPreparation){
+ if(reservation.operation!=='thread_only')throw failure(400,'Collector Thread-only reservation required');
+ check(reservation,frozen,'thread_only');
+ const raw=reservation.operation_request.data??reservation.operation_request;
+ if(!raw.threadOnly)throw failure(400,'Collector Thread-only input required');
+ const thread=prepareTraceThread({data:{...structuredClone(raw),user:frozen.actor.username},threadId:frozen.thread_id??undefined});
+ return {binding:binding(reservation),disposition:'thread_only',snapshot:null,session:null,children:[],thread,post_hooks:[],background_analysis:false};
 }

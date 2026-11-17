@@ -178,9 +178,30 @@ function preferExplicitPrimarySkillVersion(
  * 幂等地把某条 Execution(= 某一层 agent)本层用到的 skill 写入 ExecutionSkill:
  * 先按 executionId 清空再重建,不依赖 NULL 版本的唯一约束。
  */
+export function prepareExecutionSkills(skills:InvokedSkill[],opts:{user?:string|null;primaryName?:string|null;origins?:Array<{skillName?:string;skillVersion?:number|null;clientId?:string|null;platform?:string;targetMode?:string;originRef?:string|null;displayPath?:string|null;observedContentHash?:string|null}>}={},previous:Array<{skillName:string;skillVersion:number|null;origin?:any}>=[]) {
+    const seen=new Set<string>();
+    const result:Array<{skillName:string;skillVersion:number|null;isPrimary:boolean;user:string|null;origin:any}>=[];
+    for(const skill of skills){
+        if(!skill?.name)continue;
+        const key=`${skill.name}@@${skill.version??''}`;if(seen.has(key))continue;seen.add(key);
+        const row={skillName:skill.name,skillVersion:skill.version??null,isPrimary:opts.primaryName!=null&&skill.name===opts.primaryName,user:opts.user??null,origin:null as any};
+        const incoming=opts.origins?.find(origin=>origin.skillName===row.skillName&&(origin.skillVersion==null||row.skillVersion==null||origin.skillVersion===row.skillVersion));
+        const prior=previous.find(item=>item.skillName===row.skillName&&(item.skillVersion==null||row.skillVersion==null||item.skillVersion===row.skillVersion))?.origin;
+        const origin=incoming||prior;
+        if(origin?.clientId&&origin?.platform&&origin?.targetMode){
+            const platform=String(origin.platform).trim().toLowerCase(),targetMode=String(origin.targetMode),originRef=typeof origin.originRef==='string'?origin.originRef.trim():'';
+            if(['opencode','pi-agent','xiaoo','jiuwenswarm'].includes(platform)&&(targetMode==='execution_origin'||targetMode==='framework_global')&&(targetMode!=='execution_origin'||/^origin_[a-f0-9]{24}$/.test(originRef))&&(targetMode!=='framework_global'||platform==='jiuwenswarm')){
+                row.origin={clientId:origin.clientId,platform,targetMode,originRef:originRef||null,displayPath:typeof origin.displayPath==='string'?origin.displayPath.slice(0,2048):null,observedSkillVersion:incoming?.skillVersion??row.skillVersion,observedContentHash:origin.observedContentHash||null};
+            }
+        }
+        result.push(row);
+    }
+    return result;
+}
+
 async function persistExecutionSkills(
-    executionId: string,
-    skills: InvokedSkill[],
+    executionId:string,
+    skills:InvokedSkill[],
     opts: {
         user?: string | null;
         primaryName?: string | null;
@@ -195,61 +216,21 @@ async function persistExecutionSkills(
             observedContentHash?: string | null;
         }>;
     } = {},
-): Promise<void> {
-    if (!EXECUTION_SKILL_ENABLED || !executionId) return;
-    try {
-        const previous = await prismaRaw.executionSkill.findMany({
-            where: { executionId }, include: { origin: true },
-        }).catch(() => []);
-        await prismaRaw.executionSkill.deleteMany({ where: { executionId } });
-        if (!skills.length) return;
-        const seen = new Set<string>();
-        const data = [] as { executionId: string; skillName: string; skillVersion: number | null; isPrimary: boolean; user: string | null }[];
-        for (const s of skills) {
-            if (!s?.name) continue;
-            const key = `${s.name}@@${s.version ?? ''}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            data.push({
-                executionId,
-                skillName: s.name,
-                skillVersion: s.version ?? null,
-                isPrimary: opts.primaryName != null && s.name === opts.primaryName,
-                user: opts.user ?? null,
-            });
+):Promise<void> {
+    if(!EXECUTION_SKILL_ENABLED||!executionId)return;
+    try{
+        const previous=await prismaRaw.executionSkill.findMany({where:{executionId},include:{origin:true}}).catch(()=>[]);
+        await prismaRaw.executionSkill.deleteMany({where:{executionId}});
+        if(!skills.length)return;
+        const prepared=prepareExecutionSkills(skills,opts,previous);
+        const data=prepared.map(({origin:_origin,...row})=>({executionId,...row}));
+        if(data.length)await prismaRaw.executionSkill.createMany({data});
+        const created=await prismaRaw.executionSkill.findMany({where:{executionId}});
+        for(const row of created){
+            const origin=prepared.find(item=>item.skillName===row.skillName&&item.skillVersion===row.skillVersion)?.origin;
+            if(origin)await prismaRaw.executionSkillOrigin.create({data:{executionSkillId:row.id,...origin}});
         }
-        if (data.length) await prismaRaw.executionSkill.createMany({ data });
-        const created = await prismaRaw.executionSkill.findMany({ where: { executionId } });
-        for (const row of created) {
-            const incoming = opts.origins?.find(origin => origin.skillName === row.skillName
-                && (origin.skillVersion == null || row.skillVersion == null || origin.skillVersion === row.skillVersion));
-            const prior = previous.find(item => item.skillName === row.skillName
-                && (item.skillVersion == null || row.skillVersion == null || item.skillVersion === row.skillVersion))?.origin;
-            const origin = incoming || prior;
-            if (!origin?.clientId || !origin?.platform || !origin?.targetMode) continue;
-            const platform = String(origin.platform).trim().toLowerCase();
-            const targetMode = String(origin.targetMode);
-            const originRef = typeof origin.originRef === 'string' ? origin.originRef.trim() : '';
-            if (!['opencode', 'pi-agent', 'xiaoo', 'jiuwenswarm'].includes(platform)) continue;
-            if (targetMode !== 'execution_origin' && targetMode !== 'framework_global') continue;
-            if (targetMode === 'execution_origin' && !/^origin_[a-f0-9]{24}$/.test(originRef)) continue;
-            if (targetMode === 'framework_global' && platform !== 'jiuwenswarm') continue;
-            await prismaRaw.executionSkillOrigin.create({
-                data: {
-                    executionSkillId: row.id,
-                    clientId: origin.clientId,
-                    platform,
-                    targetMode,
-                    originRef: originRef || null,
-                    displayPath: typeof origin.displayPath === 'string' ? origin.displayPath.slice(0, 2048) : null,
-                    observedSkillVersion: incoming?.skillVersion ?? row.skillVersion,
-                    observedContentHash: origin.observedContentHash || null,
-                },
-            });
-        }
-    } catch (e) {
-        console.warn(`[Data-Service] persistExecutionSkills failed for ${executionId}:`, e);
-    }
+    }catch(e){console.warn(`[Data-Service] persistExecutionSkills failed for ${executionId}:`,e);}
 }
 
 /**

@@ -34,7 +34,9 @@ async function rpc(identity:CoreCollectorIdentity,action:string,payload:Row):Pro
 export async function beginCoreCollectorPreparation(identity:CoreCollectorIdentity,reservation:Row,operationRequest:Row):Promise<DurableCollectorPreparation>{
  return withCoreCollectorIdentity(identity,async actor=>{
   const operation_request_json=JSON.stringify(operationRequest);
-  return rpc(identity,'begin_preparation',{reservation:{...reservation,operation:identity.operation,legacy_username:actor.username,verified_client_id:identity.clientId??null},operation_request_json});
+  const raw=operationRequest.data??operationRequest;
+  const selected=identity.operation==='snapshot'&&raw.threadOnly?{operation:'thread_only',operation_key:reservation.operation_key,source_thread_id:raw.traceThread?.sourceThreadId,framework:raw.framework,legacy_username:actor.username}:{...reservation,operation:identity.operation,legacy_username:actor.username,verified_client_id:identity.clientId??null};
+  return rpc(identity,'begin_preparation',{reservation:selected,operation_request_json});
  });
 }
 export function sealCoreCollectorCapture(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation,capture:FrozenCollectorPreparation):Promise<DurableCollectorPreparation>{
@@ -50,19 +52,26 @@ export function commitCoreCollectorPreparation(identity:CoreCollectorIdentity,re
 export function coreCollectorPreparationStatus(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation):Promise<DurableCollectorPreparation>{
  return rpc(identity,'preparation_status',reference(receipt));
 }
+async function graphContext(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation,input:{children:Row[];thread:Row|null;sweep:boolean}):Promise<Row>{
+ return withCoreCollectorIdentity(identity,async(actor,options)=>{
+  const body=JSON.stringify({action:'capture_graph_context',...reference(receipt),context_hash:receipt.context_hash,...input});
+  const response=await requestCore('/v1/compat/collector-source?'+new URLSearchParams({workspace_id:actor.workspace}),{token:actor.token,method:'POST',body,headers:await controllerHeaders(actor,body,'collector-source/v1'),responseLimit:256*1024*1024},options.fetcher||fetch);
+  const value=response.data.value as Row;if(!value||value.version!==1||!Array.isArray(value.children))throw failure(502,'Invalid collector graph context');return value;
+ });
+}
 export async function captureDurableCoreCollectorPreparation(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation,projection:{executionMatch?:Row|null;threadId?:string|null}={}):Promise<DurableCollectorPreparation>{
  const current=await coreCollectorPreparationStatus(identity,receipt);
  if(current.capture_json!==null||current.source_state!=='reserved')return current;
  const {captureCoreCollectorPreparation}=await import('./collector-preparation');
- const frozen=await captureCoreCollectorPreparation(identity,current.reservation,{...projection,previousSession:JSON.parse(current.prior_session_json)});
+ const frozen=await captureCoreCollectorPreparation(identity,current.reservation,{...projection,previousSession:JSON.parse(current.prior_session_json),graphContext:input=>graphContext(identity,current,input)});
  return sealCoreCollectorCapture(identity,current,frozen);
 }
 export async function prepareDurableCoreCollectorPlan(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation):Promise<DurableCollectorPreparation>{
  const current=await coreCollectorPreparationStatus(identity,receipt);
  if(current.plan_json!==null||current.source_state!=='reserved')return current;
  if(current.capture_json===null)throw failure(409,'Collector capture must be sealed first');
- const {prepareCoreCollectorSnapshot,prepareCoreCollectorCompletion}=await import('./collector-preparation');
+ const {prepareCoreCollectorSnapshot,prepareCoreCollectorCompletion,prepareCoreCollectorThread}=await import('./collector-preparation');
  const frozen=JSON.parse(current.capture_json) as FrozenCollectorPreparation;
- const plan=current.reservation.operation==='complete'?prepareCoreCollectorCompletion(current.reservation,frozen):await prepareCoreCollectorSnapshot(current.reservation,frozen);
+ const plan=current.reservation.operation==='thread_only'?prepareCoreCollectorThread(current.reservation,frozen):current.reservation.operation==='complete'?prepareCoreCollectorCompletion(current.reservation,frozen):await prepareCoreCollectorSnapshot(current.reservation,frozen);
  return sealCoreCollectorPlan(identity,current,plan);
 }

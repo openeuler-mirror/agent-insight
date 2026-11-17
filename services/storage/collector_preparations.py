@@ -51,6 +51,9 @@ class CollectorPreparations:
         snapshot=self.sources._load(state.get('snapshot_ref'));session=snapshot.get('session') if snapshot else self.sources._load(state.get('session_ref'))
         marker=state.get('prepared_session')
         if isinstance(marker,dict) and marker.get('source_revision')==state['source_revision'] and marker.get('snapshot_ref')==state.get('snapshot_ref') and marker.get('session_hash')==_hash(session):
+            if marker.get('text_ref'):
+                text=self._load_text(marker['text_ref'],marker['text_hash'])
+                if _hash(json.loads(text))==_hash(session):return text,'node'
             row=marker.get('receipt');plan=self.ingest._load(row['plan_ref']) if row else None
             if isinstance(plan,dict) and 'text' in plan:
                 text=json.loads(plan['text']).get('serialized_session_json')
@@ -79,6 +82,7 @@ class CollectorPreparations:
         with self.control.transaction() as con:
             self._require_schema(con)
             reservation=self.sources._reserve(con,token,workspace,body);trace=reservation['trace_id'];_,scope,state=self.sources._owned(con,token,workspace,trace);op=state['operations'][_hash(reservation['operation_key'])]
+            if op.get('graph_parent_receipt') and op['graph_parent_receipt'].get('scope_key')!=trace:raise CollectorSourcePending('Derived child is reserved by its root graph')
             identity={'scope_kind':'source','scope_key':trace,'operation_key':op['operation_key']}
             existing=con.execute('SELECT 1 FROM collector_preparation_receipts WHERE workspace_id=? AND scope_kind=? AND scope_key=? AND operation_key=?',(workspace,'source',trace,op['operation_key'])).fetchone()
             if not existing:
@@ -116,6 +120,9 @@ class CollectorPreparations:
             current=self.sources._view(con,workspace,row['scope_key'],state,op)
             reservation.update({key:current[key] for key in ('state','source_revision','batch_refs','error_code')})
             snapshot=self.sources._load(state.get('snapshot_ref'));session=snapshot.get('session') if snapshot else self.sources._load(state.get('session_ref'))
+        if row['scope_kind']=='thread' and con.execute('SELECT 1 FROM schema_meta WHERE version=17').fetchone():
+            from .collector_graphs import CollectorGraphs
+            if CollectorGraphs(self).applied(con,row):source_state='indexed';reservation['state']='indexed'
         result={key:row[key] for key in ('scope_kind','scope_key','operation_key','input_hash','context_hash','capture_hash','plan_hash','seal_revision')}
         result.update(reservation=reservation,source_state=source_state,public_ready=False,session=session,
             operation_request_json=self._load_text(row['input_text_ref'],row['input_text_hash']),representation_origin=context['representation_origin'],
@@ -146,6 +153,9 @@ class CollectorPreparations:
                 selected=parsed.get('snapshot',{}).get('session') if isinstance(parsed.get('snapshot'),dict) else parsed.get('session')
                 serialized,_=_text(parsed.get('serialized_session_json'),MAX_INPUT_BYTES)
                 if _hash(serialized)!=_hash(selected):raise Conflict('Serialized collector Session differs')
+            if slot=='capture' and parsed.get('graph_context') is not None:
+                from .collector_graphs import CollectorGraphs
+                CollectorGraphs(self).reserve_capture(con,token,row,parsed)
             ref=self._persist_text(value[slot+'_json']);now=max(self.control.clock(),row['updated_at_ms'])
             con.execute('UPDATE collector_preparation_receipts SET '+slot+'_hash=?,'+slot+'_ref=?,seal_revision=seal_revision+1,updated_at_ms=? WHERE workspace_id=? AND scope_kind=? AND scope_key=? AND operation_key=? AND '+slot+'_ref IS NULL',(digest,ref,now,workspace,row['scope_kind'],row['scope_key'],row['operation_key']))
             return self._view(con,token,workspace,self._row(con,token,workspace,value))
@@ -157,37 +167,54 @@ class CollectorPreparations:
         if not isinstance(value,dict) or set(value)!={'scope_kind','scope_key','operation_key'}:raise ValueError('Collector preparation identity required')
         with self.control.read_transaction() as con:return self._view(con,token,workspace,self._row(con,token,workspace,value))
 
+    def capture_graph_context(self,token,workspace,value):
+        from .collector_graphs import CollectorGraphs
+        with self.control.read_transaction() as con:
+            row=self._row(con,token,workspace,value)
+            return CollectorGraphs(self).context(con,token,row,value)
+
+    def _apply_source(self,con,row,route,state,op,plan):
+        workspace=row['workspace_id'];trace=route['trace_id'];slot=_hash(op['operation_key'])
+        if op['stage']!='reserved' or state.get('pending')!=slot or state['source_revision']!=op['base_revision']:raise Conflict('Collector source revision changed')
+        snapshot=plan.get('snapshot');session=plan.get('session') if snapshot is None else snapshot.get('session');framework=state['framework'];sources=[]
+        if op['operation']=='complete':
+            previous=self.sources._load(state.get('snapshot_ref'))
+            if (previous is None)!=(snapshot is None) or previous is not None and snapshot.get('execution')!=previous['execution']:raise Conflict('Completion cannot replace the execution')
+            if not isinstance(session,dict) or session.get('taskId')!=state['task_id'] or session.get('user')!=state['legacy_username'] or not isinstance(session.get('interactions'),list):raise ValueError('Completion Session required')
+            _ms(session.get('startTime'))
+            if session.get('endTime')!=_iso(op['completed_at_ms']):raise Conflict('Completion clock differs')
+            state['completion_at_ms']=op['completed_at_ms']
+        elif snapshot is None:raise CollectorSourcePending('Collector non-execution preparation is retained without a Trace commit')
+        if snapshot is not None:
+            snapshot,framework=self.sources._snapshot(state,op,snapshot);session=snapshot['session']
+            if 'execution_skills' in plan:
+                if not isinstance(plan['execution_skills'],list):raise ValueError('Prepared ExecutionSkill array required')
+                state['execution_skills']=copy.deepcopy(plan['execution_skills'])
+            sources=self.sources._sources(workspace,route,snapshot,state);_,state['snapshot_ref']=self.ingest._persist(snapshot)
+            state['relations']={key:copy.deepcopy(snapshot['execution'].get(key)) for key in ('isSubagent','parentExecutionId','rootExecutionId')};state['execution_retired']=False
+        text=plan['serialized_session_json'];serialized=json.loads(text)
+        if _hash(serialized)!=_hash(session):raise Conflict('Applied Session differs from sealed representation')
+        _,state['session_ref']=self.ingest._persist(session)
+        state['source_revision']+=1;state['framework']=framework
+        state['prepared_session']={'source_revision':state['source_revision'],'snapshot_ref':state.get('snapshot_ref'),'session_hash':_hash(session),'text_ref':self._persist_text(text),'text_hash':hashlib.sha256(text.encode('utf-8')).hexdigest()}
+        op.update(stage='committed',source_revision=state['source_revision'],snapshot_hash=_hash(snapshot),snapshot_ref=state.get('snapshot_ref'),prepared_plan_hash=row['plan_hash'])
+        op['batch_refs']=self.sources._enqueue(con,workspace,trace,state,op,sources)
+        if not op['batch_refs']:state['pending']=None
+
     def commit_prepared(self,token,workspace,value):
         if not isinstance(value,dict) or set(value)!={'scope_kind','scope_key','operation_key','plan_hash'}:raise ValueError('Sealed collector plan required')
         with self.control.transaction() as con:
             row=self._row(con,token,workspace,value)
             if row['plan_hash'] is None or row['plan_hash']!=value['plan_hash']:raise Conflict('Collector sealed plan differs')
             plan=json.loads(self._load_text(row['plan_ref'],row['plan_hash']))
+            capture=json.loads(self._load_text(row['capture_ref'],row['capture_hash']))
+            if capture.get('graph_context') is not None:
+                from .collector_graphs import CollectorGraphs
+                CollectorGraphs(self).apply(con,token,row,plan,capture)
+                return self._view(con,token,workspace,row)
             if plan.get('children') or plan.get('thread') or plan.get('retire_missing_children'):raise CollectorSourcePending('Collector graph preparation awaits atomic graph support')
             if row['scope_kind']=='thread':return self._view(con,token,workspace,row)
-            trace=row['scope_key'];route,_,state=self.sources._owned(con,token,workspace,trace);slot=_hash(row['operation_key']);op=state['operations'][slot]
+            trace=row['scope_key'];route,_,state=self.sources._owned(con,token,workspace,trace);op=state['operations'][_hash(row['operation_key'])]
             if op['stage']!='reserved':return self._view(con,token,workspace,row)
-            if state['pending']!=slot or state['source_revision']!=op['base_revision']:raise Conflict('Collector source revision changed')
-            snapshot=plan.get('snapshot');session=plan.get('session') if snapshot is None else snapshot.get('session');framework=state['framework'];sources=[]
-            if op['operation']=='complete':
-                previous=self.sources._load(state.get('snapshot_ref'))
-                if (previous is None)!=(snapshot is None) or previous is not None and snapshot.get('execution')!=previous['execution']:raise Conflict('Completion cannot replace the execution')
-                if not isinstance(session,dict) or session.get('taskId')!=state['task_id'] or session.get('user')!=state['legacy_username'] or not isinstance(session.get('interactions'),list):raise ValueError('Completion Session required')
-                _ms(session.get('startTime'))
-                if session.get('endTime')!=_iso(op['completed_at_ms']):raise Conflict('Completion clock differs')
-                state['completion_at_ms']=op['completed_at_ms']
-            elif snapshot is None:raise CollectorSourcePending('Collector non-execution preparation is retained without a Trace commit')
-            if snapshot is not None:
-                snapshot,framework=self.sources._snapshot(state,op,snapshot);session=snapshot['session']
-                sources=self.sources._sources(workspace,route,snapshot,state);_,state['snapshot_ref']=self.ingest._persist(snapshot)
-                state['relations']={key:copy.deepcopy(snapshot['execution'].get(key)) for key in ('isSubagent','parentExecutionId','rootExecutionId')}
-            serialized=json.loads(plan['serialized_session_json'])
-            if _hash(serialized)!=_hash(session):raise Conflict('Applied Session differs from sealed representation')
-            _,state['session_ref']=self.ingest._persist(session)
-            state['source_revision']+=1;state['framework']=framework
-            state['prepared_session']={'source_revision':state['source_revision'],'snapshot_ref':state.get('snapshot_ref'),'session_hash':_hash(session),'receipt':{'plan_ref':row['plan_ref']}}
-            op.update(stage='committed',source_revision=state['source_revision'],snapshot_hash=_hash(snapshot),snapshot_ref=state.get('snapshot_ref'),prepared_plan_hash=row['plan_hash'])
-            op['batch_refs']=self.sources._enqueue(con,workspace,trace,state,op,sources)
-            if not op['batch_refs']:state['pending']=None
-            self.sources._write(con,workspace,trace,state)
+            self._apply_source(con,row,route,state,op,plan);self.sources._write(con,workspace,trace,state)
             return self._view(con,token,workspace,row)

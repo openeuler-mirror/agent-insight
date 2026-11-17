@@ -14,7 +14,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，015新增3张统计控制索引，016新增1张首次采集准备封存表，CH002新增2张统计事实表，合计 **66 张事务表 + 15 张 CH 表 = 81 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，015新增3张统计控制索引，016新增1张首次采集准备封存表，017新增3张Thread控制关系表，CH002新增2张统计事实表，合计 **69 张事务表 + 15 张 CH 表 = 84 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - `observations.py`可靠接收完成OTLP Span、冻结准备计划、全局强序Outbox worker及幂等CH物化；`trace_service.py`提供loopback HTTP查询/接收，Next服务端原接口兼容及旧身份显式映射。
@@ -26,7 +26,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–016。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前016（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015、私有采集准备最低016），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–017。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前017（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015、私有采集准备最低016、采集图和Thread最低017），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -379,7 +379,7 @@ API 与设备均有效时须指向同一主体/空间，旧别名允许不同，
 
 threadOnly 保留真实线程计划且没有 Execution/伪 Span；更小快照被原护栏拒绝时，仍保留原先在护栏之前产生的线程写计划。completion 的纯准备保留已有 Session 字段，缺失时给出原 label=opencode、空 interactions 和首次默认 startTime 的 Session 计划；无 Execution 时不补造 Execution。未关联父级的 Codex pending 单元也不转成普通根执行。
 
-**持久化接线仍在后续入口切片。** 当前 capture/plan 是可序列化准备值，必须由后续 C 在模型调用和后置处理之前，以首次 CAS 封存到 source operation；恢复先读原 capture/plan，不重新查询最新静态资产。`execution_match`、独立的 `previous_session` 与已校验 Thread ID 是明确前态接口：生产者须使用新库的 typed Flow/Session/Thread 读取，不回落旧动态表。当前 capture 默认没有 execution_match，尚未接通该生产者。A 的 headless completion 仍需承载原空 Session/默认时钟，Thread/Event 也尚无新库持久表；仅返回计划不表示已经落库。子 Agent 图、所有分包 indexed ACK、具名后置处理的当前授权/来源 fence、Config key-action 的 expected_config CAS，以及原公共 Session DTO/页面验证，均由 C 闭环。
+016已封存首次capture/plan及独立Session，017继续接通私有子Agent图和Thread/event/member控制效果。实际 `execution_match` 的typed Flow生产者、原公共Session DTO/handler/异步分析仍待C2/C3；这些输入不允许回落旧动态表。原界面与公共采集入口尚未切换，新片段只完成逻辑和快速专项，完整验收待剩余接入后集中执行。
 
 共享 Session 准备区分旧存储表示与已验证的 canonical 表示：旧 interactions/graph JSON 可以损坏，正常 metadata 或消息更新不得额外解析、清洗或覆盖无关旧字段；只有确有 incoming Langfuse nodes 数组时，才沿原条件尝试解码旧 graph 并合并。core 直接传入已校验的数组，不借共享准备自动迁移旧坏 JSON。框架能力按实际字段覆盖语义选择：未传 framework 继承前态，显式 null/空串保持 Generic，不能用逻辑或回退。
 
@@ -393,3 +393,14 @@ threadOnly 保留真实线程计划且没有 Execution/伪 Span；更小快照�
 空 completion 独立保存原 Session 元数据，不制造 Execution 或 CH Span；后到 snapshot 使用可信 previous_session 保留首次时钟。人工标注继续保留。C1a 只执行根 Source 与空 Session，非空 child/Thread/retirement 图明确 pending；ThreadOnly 可保留准备回执而无 Trace locator。原公共 upload/completion 仍未在本片激活，`public_ready` 始终为 false。016 必须显式升级，不重写旧 A 回执，不是生产切换。
 
 接管旧 A 的未提交 reserved 操作时，包括恢复旧 pending 意图或已有准备回执，begin 在同事务持久化封存守卫，旧 commit/complete 不能绕过计划。失败时准备回执和守卫一起回滚；已经 committed 的旧历史保留原状态与回放兼容性，仍标记 `legacy_canonical`。
+
+
+### 017 私有采集图与原Thread控制
+
+017增加 `collector_trace_threads`、`collector_trace_thread_events`、`collector_trace_thread_executions`，保存原自然Thread身份、事件和Execution成员；不增加CH表或新的graph ledger。普通成员保留原source turn规则与undefined字段更新语义，不为sourceExecutionId加唯一约束。ThreadOnly沿既有snapshot写权限应用并通过现inbox幂等，无Trace/Execution/Span；公共pending Codex应由原上层先拦截，私有准备不能代替该入口护栏。
+
+服务端typed `capture_graph_context` 捕获候选child前态、独立Session原表示及Skill来源；`seal_capture`同事务通过A pending预留实际候选/待退休意图，捕获失败全回滚。普通child输入不能接管parent graph的derived操作，须待图完成后重试。首次sealed plan原子提交root/child/Thread/member、退休墓碑和既有Outbox；各source保留自身batch refs，immutable descriptor只绑定完整vector，实际worker indexed才确认整图可读。旧indexed ACK不会重放或回退后续单独上报。
+
+派生退休只作用于同root的真实派生集合，保留locator/alias、Session、工件及回执；可信墓碑隐藏Execution/列表，普通缺事实仍失败。每个child独立封存Session字符串，缺显式start保留首次Session时间；子Execution未写的旧评分/label/cost/sourceKind保留。Skill/origin复用原版本/dedupe/locator规则纯准备，完整投影存Source工件，小范围检索字段沿现Span属性输出；不新建技能关联表。
+
+本片 `public_ready` 仍false；原公共API、原UI及生产数据未切换。当前为逻辑完成、待剩余链路接入后集中完整回归/三库/CH/迁移与原界面验收，不能将快速专项解释为全功能迁移完成。

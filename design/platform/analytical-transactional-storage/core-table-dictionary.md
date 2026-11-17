@@ -1,16 +1,16 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-17。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，016新增1张首次采集准备封存表，当前 **66 张事务表 + 15 张 ClickHouse 表，共81张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-17。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，016新增1张首次采集准备封存表，017新增3张采集Thread控制表，当前 **69 张事务表 + 15 张 ClickHouse 表，共84张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这81张表对应**66张事务控制表 + 15张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这84张表对应**69张事务控制表 + 15张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共66表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共69表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -18,6 +18,8 @@ flowchart TB
     RUN[运行、任务、结果控制 6表]
     SUPPORT[投递、路由、制品、维护 7表]
     INGEST[可靠采集、实体版本及首次准备封存 3表]
+    THREAD[采集Thread、事件与执行成员 3表]
+    THREAD -->|同事务控制关系及实际Trace授权| INGEST
     META[Trace旧ID、标注与标签 4表]
     DIAG[诊断会话、消息、报告及当前指针和结果诊断绑定 6表]
     DATASET[Dataset兼容head、回执及生成任务 3表]
@@ -2894,3 +2896,28 @@ private_*_artifact为既有私有文件工件，非新增SQL表。Source实际�
 C1a不增加reject_changed_context，不因annotation变化释放或终止合法采集意图，也不清/覆盖人工annotation；异步结果fence留C3。Root Source/IAM/deletion guard沿A。Session元数据独立保存为state.session_ref及op.prior_session_ref：无Execution完成只有控制数据，重复完成保留首次start；已有Execution无Session的完成则索引真实原空Session投影。
 
 输入的semantic hash与原JSON表示hash分开。字符串解析值必须与canonical结构逐值一致，数组顺序、0/null/扩展保留；新输入在首次reserve返回前保存。后续prior Session必须取最新已applied、source revision及snapshot hash匹配的计划serialized表示；旧A/unprepared写入没有对应表示时标legacy_canonical，禁止套用更早计划的字符串。旧A receipts/heads不重写，不编造不可恢复的旧key order或payload hash。
+
+
+## 017：采集Thread与执行成员（C1b）
+
+新增三表（69事务表+15CH）。TEXT identifier非空且1..512字符；BIGINT时间0..2^63-1，SQLite同时要求实际integer；revision默认1且更新精确+1；created_at_ms不变、modified_at_ms不倒退。原业务started/updated/completed允许NULL，不添加时间先后约束或新默认时钟。JSON字段保留Node字符串，不在Python重排。
+
+| 表 | 字段（?为可空） | 主键、外键与唯一约束 | 索引 |
+|---|---|---|---|
+| collector_trace_threads | workspace_id TEXT, thread_id TEXT, owner_principal_id TEXT, framework TEXT, source_thread_id TEXT, legacy_username TEXT, source_kind TEXT?, started_at_ms BIGINT?, updated_at_ms BIGINT?, metadata_json TEXT?, revision BIGINT=1, created_at_ms BIGINT, modified_at_ms BIGINT | PK(workspace_id,thread_id); FK workspace/owner；UNIQUE(workspace_id,owner_principal_id,framework,source_thread_id)；identity/owner/natural key不可改 | (workspace_id,owner_principal_id,framework,updated_at_ms,thread_id) |
+| collector_trace_thread_events | workspace_id TEXT, event_key TEXT, event_id TEXT, thread_id TEXT, execution_trace_id TEXT?, related_trace_id TEXT?, kind TEXT, status TEXT?, source_turn_id TEXT?, phase_id TEXT?, started_at_ms BIGINT, completed_at_ms BIGINT?, payload_json TEXT?, revision BIGINT=1, created_at_ms BIGINT, modified_at_ms BIGINT | PK(workspace_id,event_key); UNIQUE(workspace_id,event_id)；FK(workspace_id,thread_id)→threads；两个可空trace引用同workspace locator；event identity/thread不可改 | (workspace_id,thread_id,started_at_ms,event_key); (workspace_id,execution_trace_id,started_at_ms,event_key) |
+| collector_trace_thread_executions | workspace_id TEXT, trace_id TEXT, thread_id TEXT, owner_principal_id TEXT, execution_id TEXT, task_id TEXT, source_execution_id TEXT?, timestamp_ms BIGINT | PK(workspace_id,trace_id)；同workspace FK locator/thread，FK owner；一个Execution仅一个当前Thread；source_execution_id没有unique | (workspace_id,thread_id,timestamp_ms,trace_id); (workspace_id,thread_id,source_execution_id) |
+
+事件指向locator不要求属于当前member；成员移动/派生退休只调整关系，不级联删Thread/event或Session。实际owner在同一业务事务内根据IAM/source核验，不能凭传入owner写入其他人的Thread。事务库提供关系原子性；CH无跨库FK，继续通过immutable descriptor和ingest_batches的实际indexed回执建立完整图读屏障。三种DDL只新增017，历史001–016不改写，显式升级须备份原库；新增catalog参与关系库source evidence。
+
+```mermaid
+erDiagram
+  workspaces ||--o{ collector_trace_threads : contains
+  iam_principals ||--o{ collector_trace_threads : owns
+  collector_trace_threads ||--o{ collector_trace_thread_events : has
+  collector_trace_threads ||--o{ collector_trace_thread_executions : groups
+  trace_locators ||--o| collector_trace_thread_executions : current_thread
+  trace_locators o|--o{ collector_trace_thread_events : optional_reference
+```
+
+图descriptor为现私有artifact，不是SQL表。ThreadOnly的effect inbox是现inbox_receipts，source_id固定collector-preparation-effects/v1，event_id为workspace内scope/op稳定hash、content_hash为首次plan_hash；它只去重同事务控制效果，不镜像indexed。原A source operation仍保留自身batch refs，descriptor额外绑定同一sealed计划全部member refs；不得把其他Trace batch refs塞入自身packet验证结构。

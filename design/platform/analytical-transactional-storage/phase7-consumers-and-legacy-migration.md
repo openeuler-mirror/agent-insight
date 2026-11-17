@@ -22,6 +22,8 @@ Trace CRUD/标签/bundle、Dataset版本/回流/生成、实验/比较/直接轨
 
 ### 决策与取舍
 
+执行节奏按2026-11-17最新用户要求调整：先连续完成剩余逻辑，模块间只做必要类型检查/快速专项并保存本地检查点，接入全部完成后再集中独立审查、全量/三库/原界面端到端/旧数据迁移演练。后续不再为内部小片逐轮停下来做完整验收；开发检查点不等同完整验收，不切生产。可并行只读梳理无共享写入的后续调用点，编码仍按依赖推进。
+
 先补只读迁移计划和已接领域的窄操作闭环，再接共享摘要读源，能提前发现数据归属/漏字段并恢复原页面行为。直接批量替换Prisma或让旧writer盲转新库会绕过原授权、版本与接收回执；完整新表重建所有静态域又会延迟现有页面恢复。本轮沿已批准的双存储和不可变事实架构逐域推进，不引入替代前端。
 
 ## 2. 96模型旧数据迁移清单
@@ -355,3 +357,10 @@ C额外边界：纯存储plan的skipped/background字段不代表原public handl
 最终后端1213项（1034通过、179跳过、零失败），PG/nativeOG各62/62（MemoryFacts、schema残留0），Node→真实CH193次HTTP及数据保留通过，Spec32/Quality27通过。完整Node6141项（6119通过、22跳过）在v1完成，v2只2个Python文件变化、Node/TS/DDL/JSON逐文件相同，严格指纹复用并另外验证v2真实Node私有HTTP/CH；不称v2重新完整跑应用。完整证据和首次失败/超时边界见implementation-status.md与同collector目录source-c1a-v2-*。
 
 此片public_ready仍false，未启公共采集，277个TSX/CSS不变，原验收服务未刷新。非空图效果提前pending，不以半份root成功冒充整个原行为；下一片按原功能接子Agent/Thread，再接原Session DTO与upload/completion/异步分析，随后proxy/logs/consumer及其余清单。第二版容量工作继续延期。
+
+
+### C1b开发检查点：子Agent/Thread逻辑已接，集中验收待后续统一执行
+
+017新增原Thread所需head/event/member三表，保留原upsert/reconcile、Thread-before-shrink、ThreadOnly及child前态/来源语义；沿A私有账本原子应用整图，ACK/读屏障核对完整member batch vector，派生退休保留Session与历史。seal_capture成员预留、普通child误resume保护和当前owner/别名/删除校验一起实现，不另造图状态系统。开发快速专项/类型检查已过，完整结果及未覆盖边界见implementation-status.md。
+
+按用户新节奏直接进入C2/C3，不等待本片完整验收。接下来保留原Session Node算法，仅替换授权数据加载，接原upload/completion/异步分析/hooks和proxy/logs/consumer。待剩余全部逻辑接入后集中独立审查、full/三库/CH/原UI及旧数据迁移演练，当前不切生产。

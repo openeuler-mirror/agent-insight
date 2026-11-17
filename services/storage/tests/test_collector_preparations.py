@@ -148,7 +148,10 @@ class CollectorPreparationTests(unittest.TestCase):
         entry=self.begin()
         with self.control.read_transaction() as con:
             columns=con.execute('PRAGMA table_info(collector_preparation_receipts)').fetchall();self.assertEqual([row['name'] for row in columns],[row['name'] for row in catalog['columns']])
-            self.assertEqual(con.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone()[0],66)
+            known_catalogs=[json.loads(path.read_text()) for path in (Path(__file__).parents[1]/'schema').glob('*catalog.json') if path.name not in ('legacy-catalog.json','clickhouse-catalog.json','analytics-clickhouse-catalog.json')]
+            expected={table['name'] for item in known_catalogs for table in item.get('tables',[])}
+            actual={row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            self.assertEqual(actual,expected)
             self.assertEqual(con.execute('PRAGMA foreign_key_check').fetchall(),[])
             original=dict(con.execute('SELECT * FROM collector_preparation_receipts').fetchone())
         for changes in ({'scope_kind':'bad'},{'trace_id':None},{'input_text_hash':'G'*64},{'capture_hash':'a'*64},{'seal_revision':1.5},{'updated_at_ms':-1}):

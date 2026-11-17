@@ -108,10 +108,32 @@ def order_rows(begin,rows):
     return sorted(rows,key=lambda row:(entities[row['span_id']].get('primary_index') is None,entities[row['span_id']].get('primary_index',0) or 0,row['span_id']))
 
 
+def graph_state(sources,con,workspace,op):
+    vector=sources.ingest._load(op['graph_ref'])
+    if not isinstance(vector,dict) or vector.get('version')!=1 or not isinstance(vector.get('members'),list):raise CollectorSourcePending('Collector graph vector unavailable')
+    states=[]
+    own=False
+    for member in vector['members']:
+        trace=member['trace_id'];route=con.execute('SELECT state FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
+        owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(workspace,trace)).fetchone()
+        if route is None or route[0]!='active' or owner is None or owner[0]!=member['actor_id']:raise CollectorSourcePending('Collector graph route or owner changed')
+        if member['operation_key']==op['operation_key'] and member['input_hash']==op['input_hash']:own=True
+        for ref in member['batch_refs']:
+            row=con.execute('SELECT state,principal_id,packet_hash,trace_ids_json FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(workspace,ref['batch_id'])).fetchone()
+            if row is None or row['principal_id']!=member['actor_id'] or row['packet_hash']!=ref['packet_hash'] or json.loads(row['trace_ids_json'])!=[trace]:raise CollectorSourcePending('Collector graph receipt batch differs')
+            states.append(row['state'])
+    if not own:raise CollectorSourcePending('Collector operation is absent from graph vector')
+    if any(state=='failed' for state in states):return 'failed'
+    if all(state=='indexed' for state in states):return 'indexed'
+    return 'prepared' if any(state=='prepared' for state in states) else 'accepted'
+
+
 def indexed_boundary(control,workspace,candidates):
     selected=[candidate for candidate in candidates if candidate.get('source_namespace')==NAMESPACE]
     if not selected:return {}
     result={}
+    from .observations import ObservationIngest
+    sources=CollectorSources(control,ObservationIngest(control,None))
     with control.read_transaction() as con:
         for candidate in selected:
             trace=candidate['trace_id'];route=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
@@ -123,11 +145,13 @@ def indexed_boundary(control,workspace,candidates):
                 op=state.get('operations',{}).get(pending)
                 if not isinstance(op,dict):raise CollectorSourcePending('Collector source receipt is unavailable')
                 if op['stage']=='committed':
+                    if op.get('graph_ref') and graph_state(sources,con,workspace,op)!='indexed':raise CollectorSourcePending('Collector graph is not fully indexed')
                     for ref in op['batch_refs']:
                         row=con.execute('SELECT state,principal_id,packet_hash,trace_ids_json FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(workspace,ref['batch_id'])).fetchone()
                         if (row is None or row['state']!='indexed' or row['principal_id']!=state['actor_id'] or row['packet_hash']!=ref['packet_hash'] or json.loads(row['trace_ids_json'])!=[trace]):raise CollectorSourcePending('Collector snapshot is not fully indexed')
             head=con.execute("SELECT revision,content_hash FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='trace' AND entity_id=?",(workspace,trace,trace)).fetchone()
             result[trace]={'revision':str(head['revision']) if head else None,'hash':head['content_hash'] if head else None,'bucket':route['trace_bucket']}
+            if state.get('execution_retired') is True:result[trace]['retired']=True
     return result
 
 
@@ -181,7 +205,13 @@ def rebuild_summary(ingest,con,workspace,trace,route):
         source=ingest._load(head['artifact_ref'])
         if source['row'].get('is_deleted'):continue
         sources.append(source);ingest._delta(state,source['row'],1);starts.append(source['row']['started_at_ms']);ends.append(source['row']['ended_at_ms'])
-    if not sources:raise Conflict('Collector current snapshot has no metadata carrier')
+    if not sources:
+        _,_,collector=CollectorSources(ingest.control,ingest)._state(con,workspace,trace)
+        if not collector or collector.get('execution_retired') is not True:raise Conflict('Collector current snapshot has no metadata carrier')
+        old=con.execute("SELECT artifact_ref FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='trace' AND entity_id=?",(workspace,trace,trace)).fetchone()
+        if old is None:raise Conflict('Retired collector summary has no prior indexed source')
+        state=ingest._load(old[0]);state.update(span_count=0,error_count=0,running_count=0,llm_call_count=0,tool_call_count=0,input_known_sum=0,output_known_sum=0,input_missing_count=0,output_missing_count=0,tool_error_count=0,collector_execution_retired=True,collector_session_running=False)
+        return state
     for source in sources:
         _,fields=_source_projection(source);_merge_projection(state,source,fields)
     chosen=next((source for source in sources if 'legacy_trace' in source['sections']),sources[0])
@@ -252,6 +282,8 @@ class CollectorSources:
     def _op_state(self,con,workspace,trace,op):
         if op['stage']=='reserved':return 'reserved'
         if op['stage']=='failed':return 'failed'
+        if op.get('graph_ref'):
+            return graph_state(self,con,workspace,op)
         states=[]
         for ref in op['batch_refs']:
             row=con.execute('SELECT * FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(workspace,ref['batch_id'])).fetchone()
@@ -349,6 +381,12 @@ class CollectorSources:
     def _sources(self,workspace,route,snapshot,state):
         bundle={'executions':[snapshot]};packets,_=_PacketBuilder(route)._packets(workspace,bundle,'public',timestamp_ms=_ms,normalizer=lambda body,ws:_normalize(body,ws,timestamp_minimum=0))
         raw=[span for packet in packets for resource in packet['resourceSpans'] for scope in resource['scopeSpans'] for span in scope['spans']]
+        if 'execution_skills' in state:
+            skills=state['execution_skills'];origins=[dict(item['origin'],skillName=item.get('skillName'),skillVersion=item.get('skillVersion')) for item in skills if isinstance(item,dict) and isinstance(item.get('origin'),dict)]
+            for span in raw:
+                for key,value in (('legacy.execution_skills',skills),('legacy.skill_origins',origins)):
+                    text=_json(value)
+                    if len(text.encode('utf-8'))<=4096:span.setdefault('attributes',[]).append({'key':key,'value':{'stringValue':text}})
         previous=state['entities'];entities=copy.deepcopy(previous);mapping={};keys=[];primary=snapshot['session'] or {}
         kind='langfuse_node' if primary.get('langfuseTraceNodes') else 'interaction' if primary.get('interactions') else 'carrier'
         source_items=primary.get('langfuseTraceNodes') if kind=='langfuse_node' else primary.get('interactions',[])

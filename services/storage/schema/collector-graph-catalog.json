@@ -1,0 +1,432 @@
+{
+  "version": 17,
+  "tables": [
+    {
+      "name": "collector_trace_threads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "thread_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "framework",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_thread_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "legacy_username",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_kind",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "started_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "metadata_json",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "modified_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "thread_id"
+      ],
+      "checks": [
+        "length(workspace_id) BETWEEN 1 AND 512",
+        "length(thread_id) BETWEEN 1 AND 512",
+        "length(owner_principal_id) BETWEEN 1 AND 512",
+        "length(framework) BETWEEN 1 AND 512",
+        "length(source_thread_id) BETWEEN 1 AND 512",
+        "length(legacy_username) BETWEEN 1 AND 512",
+        "started_at_ms IS NULL OR (started_at_ms>=0 AND started_at_ms<=9223372036854775807)",
+        "updated_at_ms IS NULL OR (updated_at_ms>=0 AND updated_at_ms<=9223372036854775807)",
+        "(revision>=1 AND revision<=9223372036854775807)",
+        "(created_at_ms>=0 AND created_at_ms<=9223372036854775807)",
+        "(modified_at_ms>=0 AND modified_at_ms<=9223372036854775807)",
+        "modified_at_ms>=created_at_ms"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "owner_principal_id",
+          "framework",
+          "source_thread_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "owner_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "owner_principal_id",
+          "framework",
+          "updated_at_ms",
+          "thread_id"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "collector_trace_thread_events",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "thread_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "execution_trace_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "related_trace_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "source_turn_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "phase_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "started_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "completed_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "payload_json",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "modified_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "event_key"
+      ],
+      "checks": [
+        "length(workspace_id) BETWEEN 1 AND 512",
+        "length(event_key) BETWEEN 1 AND 1024",
+        "length(event_id) BETWEEN 1 AND 512",
+        "length(thread_id) BETWEEN 1 AND 512",
+        "length(kind) BETWEEN 1 AND 512",
+        "(started_at_ms>=0 AND started_at_ms<=9223372036854775807)",
+        "completed_at_ms IS NULL OR (completed_at_ms>=0 AND completed_at_ms<=9223372036854775807)",
+        "(revision>=1 AND revision<=9223372036854775807)",
+        "(created_at_ms>=0 AND created_at_ms<=9223372036854775807)",
+        "(modified_at_ms>=0 AND modified_at_ms<=9223372036854775807)",
+        "modified_at_ms>=created_at_ms"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "event_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "thread_id"
+          ],
+          "table": "collector_trace_threads",
+          "target": [
+            "workspace_id",
+            "thread_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "execution_trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "related_trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "thread_id",
+          "started_at_ms",
+          "event_key"
+        ],
+        [
+          "workspace_id",
+          "execution_trace_id",
+          "started_at_ms",
+          "event_key"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "collector_trace_thread_executions",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "thread_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "execution_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_execution_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "timestamp_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id"
+      ],
+      "checks": [
+        "length(workspace_id) BETWEEN 1 AND 512",
+        "length(trace_id) BETWEEN 1 AND 512",
+        "length(thread_id) BETWEEN 1 AND 512",
+        "length(owner_principal_id) BETWEEN 1 AND 512",
+        "length(execution_id) BETWEEN 1 AND 512",
+        "length(task_id) BETWEEN 1 AND 512",
+        "(timestamp_ms>=0 AND timestamp_ms<=9223372036854775807)"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "thread_id"
+          ],
+          "table": "collector_trace_threads",
+          "target": [
+            "workspace_id",
+            "thread_id"
+          ]
+        },
+        {
+          "columns": [
+            "owner_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "thread_id",
+          "timestamp_ms",
+          "trace_id"
+        ],
+        [
+          "workspace_id",
+          "thread_id",
+          "source_execution_id"
+        ]
+      ],
+      "immutable": false
+    }
+  ]
+}

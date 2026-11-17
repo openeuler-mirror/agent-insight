@@ -79,7 +79,12 @@ class TraceQueries:
         if not candidates:
             return {}
         from .collector_sources import indexed_boundary, CollectorSourcePending
-        source_boundary=indexed_boundary(self.control,workspace_id,candidates)
+        boundary_candidates=candidates
+        source_boundary=indexed_boundary(self.control,workspace_id,boundary_candidates)
+        candidates=[candidate for candidate in candidates if not source_boundary.get(candidate['trace_id'],{}).get('retired')]
+        if not candidates:
+            if indexed_boundary(self.control,workspace_id,boundary_candidates)!=source_boundary:raise Conflict('Collector source changed during query')
+            return {}
         params={'workspace_id':workspace_id}
         pairs=[]
         for i,row in enumerate(candidates):
@@ -99,8 +104,8 @@ class TraceQueries:
         sql='SELECT * FROM obs_trace_current FINAL WHERE '+' AND '.join(predicates)+' FORMAT JSONEachRow'
         raw=self.facts._request(sql,parameters=params)
         rows=[json.loads(line) for line in raw.splitlines() if line]
-        if indexed_boundary(self.control,workspace_id,candidates)!=source_boundary:raise Conflict('Collector source changed during query')
-        expected_ids={trace for trace,value in source_boundary.items() if value['revision'] is not None}
+        if indexed_boundary(self.control,workspace_id,boundary_candidates)!=source_boundary:raise Conflict('Collector source changed during query')
+        expected_ids={trace for trace,value in source_boundary.items() if value['revision'] is not None and not value.get('retired')}
         missing=expected_ids-{row.get('trace_id') for row in rows}
         verified=[]
         if missing and (status or agent or search):
@@ -111,7 +116,7 @@ class TraceQueries:
             presence_sql='SELECT * FROM obs_trace_current FINAL WHERE workspace_id={workspace_id:String} AND is_deleted=0 AND ('+' OR '.join(presence_pairs)+') FORMAT JSONEachRow'
             raw=self.facts._request(presence_sql,parameters=presence_params)
             verified=[json.loads(line) for line in raw.splitlines() if line]
-            if indexed_boundary(self.control,workspace_id,candidates)!=source_boundary:raise Conflict('Collector source changed during presence verification')
+            if indexed_boundary(self.control,workspace_id,boundary_candidates)!=source_boundary:raise Conflict('Collector source changed during presence verification')
         selected={candidate['trace_id']:candidate for candidate in candidates}
         for group,allowed in ((rows,set(selected)),(verified,missing)):
             for row in group:
@@ -372,7 +377,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                         runtime.iam._workspace(scope,workspace,'write')
                         response={'authorized':True,'operation':value['operation'],'principal_id':scope.principal_id,'workspace_id':workspace}
                     self.reply(200,{'value':response});return
-                preparation_actions=('begin_preparation','seal_capture','seal_plan','commit_prepared','preparation_status')
+                preparation_actions=('begin_preparation','seal_capture','seal_plan','commit_prepared','preparation_status','capture_graph_context')
                 if action not in ('reserve','commit','complete','status','reject_preparation')+preparation_actions:raise ValueError('Invalid collector source action')
                 if action not in preparation_actions and int(self.headers['Content-Length'])>MAX_INPUT_BYTES:self.reply(413,{'error':'Bounded collector JSON required'});return
                 workspace=runtime.workspace(token,params.get('workspace_id'),'write')

@@ -2,6 +2,8 @@
 
 日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；016补齐私有采集准备与中断恢复，公共采集尚未激活；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
+**后续执行节奏（2026-11-17用户调整）**：先按依赖连续完成剩余接入逻辑并保存本地开发检查点；开发期只做必要类型检查和快速专项，不再对每个内部片段分别做Spec/Quality、应用全量、三库及浏览器验收。全部接入逻辑完成后集中独立审查、全量测试、三库、原界面端到端及旧数据迁移演练。未集中验收的片段明确标为“逻辑完成、待统一验收”，不能据此切换生产。
+
 ## 产品验收纠偏（2026-11-12）
 
 用户明确要求保留原有全部功能，仅变化其背后的数据支持。此前core技术样例的单Trace导航、全页替换、独立登录后落点和未接管操作501不符合此要求；本批已撤回前端替换，恢复原页面与登录。**产品验收未通过；先前“可打开验收”仅证明技术样例可运行，不能代表原产品完成切换。** 下文历史实测数字与截图继续保留，完成状态按此纠偏解释。
@@ -613,3 +615,12 @@ C1a完成016单表 `collector_preparation_receipts`，现为66事务表+15CH。�
 证据：`exclude/storage-core-collector/20261117-i_wpbhkw/` 的 `source-c1a-v2-final-code-verification.json`、`source-c1a-v2-node-fingerprint-reuse.json`、`source-c1a-v2-final-python-report.json`、`source-c1a-v2-native/`、`source-c1a-v2-upgrade-fixture/real-node-ch-v2-report.json`、`after-upgrade-preservation.json`及 `spec/quality-source-c1a-v2-report.json`。
 
 公共upload/completion/proxy/logs仍未接线，public_ready恒false；非空子Agent/Thread/退休计划在root副作用前返回pending，ThreadOnly只有不造Trace的准备回执，实际图写入/原DTO/原异步分析留待C1b/C2/C3。继续第一版原功能等价，不增加万级Span或容量增强；随后仍需Infra、其他控制域及完整旧库语义迁移，不代表全产品接管。
+
+
+## 2026-11-17 子Agent与Thread接线：开发检查点，待集中验收
+
+C1b逻辑实现017三张Thread head/event/member控制表（代码目标69事务表+15CH），复用A账本及batch vector做整图原子提交/indexed屏障；ThreadOnly不造Trace，子Agent独立Session字符串/未写评分字段及缺时钟时原开始时间保留，派生退休保留Session/aliases/工件。首次capture同事务预留实际图成员，普通child不能把父graph派生pending误接管为普通upload。Skill/origin复用原纯处理并保存在source精确投影。
+
+按最新执行节奏，只做开发快检：后端130项（102通过/28可选环境跳过），随后最终Graph10项通过（与前130有重叠，不相加）；根再次独立执行Graph10项、2.284秒通过。Node采集47项和直接相关旧Skill53项通过，最终tsc及diff-check为0，21交付文件hash一致，原TSX/CSS未改。证据在同collector目录source-c1b-development-checkpoint.json及/tmp/collector-c1b-handoff.json所列日志。**未对本片做完整应用/后端、真实PG/openGauss/CH、016→017演练、浏览器或独立Spec/Quality验收；这些统一留到剩余接入逻辑完成后。**
+
+公共入口仍未激活；C2/C3继续补read-capability的原Session/Thread/精确Skill来源读取、原Node DTO流水线、upload/completion/分析/hooks及proxy/logs消费者。公开pending:Codex必须在begin前拦截；root seal后commit前删除的派生成员协调需在公共接线时补齐。016已sealed但缺graph_context的旧私有图保持明确pending，不重封首输入；独立来源alias不隐式认领。当前为开发检查点，不作为全功能完成或生产切库依据。

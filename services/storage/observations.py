@@ -684,7 +684,7 @@ class ObservationIngest:
                     'input_tokens':None if state['input_missing_count'] else state['input_known_sum'],
                     'output_tokens':None if state['output_missing_count'] else state['output_known_sum'],
                     'attributes_json':canonical_json(metadata),
-                    'schema_version':1,'revision':version,'is_deleted':0}
+                    'schema_version':1,'revision':version,'is_deleted':int(state.get('collector_execution_retired') is True)}
                 self._put_head(con,ws,trace,'trace',trace,version,1,state,head,now)
                 plan['summaries'].append(summary)
             _,ref=self._persist(plan)

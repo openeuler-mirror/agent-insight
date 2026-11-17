@@ -65,6 +65,29 @@ test('Node JSON representation, frozen preparation and completion survive real p
   assert.equal((await api.captureDurableCoreCollectorPreparation(identity,afterCapture)).capture_json,afterCapture.capture_json);
   assert.equal((await api.prepareDurableCoreCollectorPlan(identity,afterPlan)).plan_json,afterPlan.plan_json);
   await api.commitCoreCollectorPreparation(identity,afterPlan);
+  const threadInput={data:{threadOnly:true,framework:'codex',traceThread:{sourceThreadId:'durable-thread',metadata:{z:0,a:null},events:[{eventKey:'event',kind:'turn',startedAt:'2026-11-17T00:00:00.000Z',payload:{z:0,a:null}}]}}};
+  const threadBegin=await api.beginCoreCollectorPreparation(identity,{operation_key:'thread-only'},threadInput);
+  assert.equal(threadBegin.scope_kind,'thread');assert.equal(threadBegin.reservation.trace_id,null);
+  const threadCapture=await api.captureDurableCoreCollectorPreparation(identity,threadBegin);
+  const threadPlan=await api.prepareDurableCoreCollectorPlan(identity,threadCapture);
+  const threadDone=await api.commitCoreCollectorPreparation(identity,threadPlan);assert.equal(threadDone.source_state,'indexed');assert.equal(threadDone.reservation.snapshot,null);
+  assert.equal((await api.commitCoreCollectorPreparation(identity,threadPlan)).source_state,'indexed');
+  const againInput={data:{...threadInput.data,traceThread:{...threadInput.data.traceThread,events:[{...threadInput.data.traceThread.events[0],status:'done',payload:{z:1,a:null}}]}}};
+  const threadAgain=await api.prepareDurableCoreCollectorPlan(identity,await api.captureDurableCoreCollectorPreparation(identity,await api.beginCoreCollectorPreparation(identity,{operation_key:'thread-only-again'},againInput)));
+  assert.equal((await api.commitCoreCollectorPreparation(identity,threadAgain)).source_state,'indexed');
+  const childGolden=(await import('./fixtures/collector-preparation-golden.json')).default.cases.find((item:any)=>item.children?.length) as any;
+  const graphInput={data:structuredClone(childGolden.input)};
+  const graphBegin=await api.beginCoreCollectorPreparation(identity,{operation_key:'actual-child-graph',task_id:graphInput.data.task_id,execution_id:graphInput.data.upload_id||graphInput.data.task_id,framework:graphInput.data.framework},graphInput);
+  const graphCapture=await api.captureDurableCoreCollectorPreparation(identity,graphBegin);
+  const graphPlan=await api.prepareDurableCoreCollectorPlan(identity,graphCapture);const preparedGraph=JSON.parse(graphPlan.plan_json!);assert.ok(preparedGraph.children.length);
+  let graphStatus=await api.commitCoreCollectorPreparation(identity,graphPlan);
+  while(graphStatus.source_state!=='indexed'){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,30));graphStatus=await api.coreCollectorPreparationStatus(identity,graphPlan);}
+  const derivedChild=preparedGraph.children[0];
+  const childBegin=await api.beginCoreCollectorPreparation(identity,{operation_key:'independent-child-after-graph',task_id:derivedChild.snapshot.execution.taskId,execution_id:derivedChild.snapshot.execution.id,framework:graphInput.data.framework},{data:{task_id:derivedChild.snapshot.execution.taskId,framework:graphInput.data.framework,interactions:[]}});
+  assert.equal(childBegin.prior_session_origin,'node');assert.equal(childBegin.prior_session_json,derivedChild.serialized_session_json);assert.notEqual(childBegin.prior_session_json,preparedGraph.serialized_session_json);
+  assert.equal((await api.coreCollectorPreparationStatus(identity,graphPlan)).source_state,'indexed');
+
+
  }finally{
   if(child.exitCode===null)child.kill('SIGTERM');await exited;
   for(const [key,value] of [['AGENT_INSIGHT_STORAGE_CORE_URL',old.url],['AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE',old.key]] as const){if(value===undefined)delete process.env[key];else process.env[key]=value;}
