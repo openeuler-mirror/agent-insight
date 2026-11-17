@@ -245,7 +245,9 @@ class BenchmarkStore:
         if action=='artifact_lookup':return self._lookup_artifact(token,ws,body)
         if action=='artifact_read':
             with self.control.read_transaction() as con:
-                row=self._job(con,token,ws,body['job_id'],'execute');return self._artifact_read_tx(con,row,body)
+                scope=self._scope(con,token,ws,'execute');row=self._job_scope(con,scope,ws,body['job_id'])
+                self.iam._authorize_scope(con,scope,ws,'execute','run',row['experiment_id'])
+                return self._artifact_read_tx(con,row,body)
         if action in {'load_work','load_dispatch','resume_work'}:
             self._trusted(token,ws,body)
             with self.control.read_transaction() as con:
