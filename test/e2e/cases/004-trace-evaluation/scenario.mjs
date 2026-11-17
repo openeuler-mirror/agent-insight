@@ -13,6 +13,9 @@ import { verifyOptimizationReopen, reopenTraceExperiment } from './trace-only-re
 import { businessTraceAudit, assertFactComparison, assertNativeSkillBinding, assertSkillVerification, assertTraceOnlyRequest, assertTraceOnlyResult, assertFourFieldSummary, assertLoadedSkill, decodeTraceInput, assertDatasetFreeVerification, interactionProof } from './trace-only-evidence.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
+// 内置可靠性评测集由 /api/agent-datasets 首次访问时懒创建（名字见 src/lib/agent-dataset-builtin.ts），
+// 与 Trace 评测/优化流程是否新建数据集无关，比较"数据集无变化"时排除。
+const BUILTIN_RELIABILITY_DATASET_NAME = '可靠性故障注入评测集（内置）';
 export async function scenario004(ctx) {
   const { root, project, runId, baseUrl, stage } = ctx;
   ctx.caseId = '004';
@@ -33,7 +36,7 @@ export async function scenario004(ctx) {
   const name = `e2e-messages-trace-${runId}`, marker = `E2E-${runId}-004`;
   const database = path.join(root, 'app/data/witty_insight.db');
   const read = fn => { const db = new DatabaseSync(database, { readOnly: true });try { return fn(db); } finally { db.close(); } };
-  const datasets = () => read(db => db.prepare('SELECT id, user, name, targetSkill, casesJson, referenceCasesJson, caseCount FROM AgentEvalDataset WHERE user=? ORDER BY id').all(ctx.account.username));
+  const datasets = () => read(db => db.prepare('SELECT id, user, name, targetSkill, casesJson, referenceCasesJson, caseCount FROM AgentEvalDataset WHERE user=? AND name<>? ORDER BY id').all(ctx.account.username, BUILTIN_RELIABILITY_DATASET_NAME));
   const traceAudit=()=>read(db=>businessTraceAudit(db.prepare('SELECT taskId, query, agentName FROM Execution WHERE user=? ORDER BY taskId').all(ctx.account.username),prompt));
   const businessIds=()=>traceAudit().businessTraceIds;
   const installFiles = snapshot => {

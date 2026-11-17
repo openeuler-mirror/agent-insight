@@ -555,6 +555,8 @@
     "test/agent-insight-home-types.test.ts",
     "test/agent-insight-home.test.ts",
     "test/agent-runtime-detection.test.ts",
+    "test/agent-runtime-discovery.test.ts",
+    "test/agent-runtime-preference.test.ts",
     "test/auth-apikey-registration.test.ts",
     "test/auth-restore.test.ts",
     "test/builtin-demo-cleanup.test.ts",

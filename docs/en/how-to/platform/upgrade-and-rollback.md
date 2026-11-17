@@ -51,7 +51,7 @@ After upgrading to a release with OpenCode data isolation, restart the platform 
 
 ## Built-in example data cleanup
 
-Older releases injected example Agents, Skills, datasets, and Traces when a user first logged in. Current releases no longer inject them and, on each startup, delete leftover records from existing databases using the fixed identifiers written at injection time (Agent name and description, dataset name, Skill name, and the `builtin_msg_` taskId prefix). All conditions are exact matches, so user-created data is unaffected, and repeated startups do not delete anything further. A `builtin demo cleanup` line in the startup log reports records removed by that run.
+Older releases injected example Agents, Skills, datasets, and Traces when a user first logged in. Current releases no longer inject them and, on each startup, delete leftover records from existing databases using the fixed identifiers written at injection time (Agent name and description, dataset name, Skill name and description, and the `builtin_msg_` taskId prefix). All conditions are exact matches, so user-created data is unaffected, and repeated startups do not delete anything further. A `builtin demo cleanup` line in the startup log reports records removed by that run.
 
 Cleanup only covers database records. Client-local files such as `~/.agent-insight/example/messages` are not removed and can be deleted manually.
 

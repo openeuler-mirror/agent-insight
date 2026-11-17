@@ -38,7 +38,8 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   let timeout!: ReturnType<typeof setTimeout>;
   // Production polling is unref'ed, so the test must own its bounded wait.
   const deadline = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error('Experiment cancellation did not complete within 5000ms')), 5000);
+    // 上限只为兜住"永远不结束"，不是性能断言；并发跑全量 UT 时 5s 会被调度延迟打满。
+    timeout = setTimeout(() => reject(new Error('Experiment cancellation did not complete within 30000ms')), 30000);
   });
   const running = withExperimentCancellation(experiment.id, 'case-a', (signal) => new Promise((resolve) => {
     signal.addEventListener('abort', () => resolve('aborted'), { once: true });
