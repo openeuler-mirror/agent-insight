@@ -33,7 +33,6 @@ const prisma = new PrismaClient();
 
 const USER = 'skill-insight@huawei.com';
 const DATASET_ID = 'demo_traj_dataset_001';
-const DEMO_RUN_ID = `trun_demo_${Date.now()}`;
 const TASK_PREFIX = 'demo_traj_'; // session.taskId 都用这个前缀
 
 // 时间基准：3 小时前 → 现在

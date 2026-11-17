@@ -1,5 +1,8 @@
 ---
 title: "概念与原理"
+description: "汇集平台架构、核心概念和各业务模块的原理说明，帮助理解模块职责与数据流。"
+keywords: ["Agent Insight", "架构原理", "核心概念", "模块职责"]
+changefreq: "monthly"
 ---
 
 理解概念、架构、数据流与职责边界。

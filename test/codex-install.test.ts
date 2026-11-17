@@ -70,13 +70,17 @@ const LEGACY_ASSETS = [
 ]
 
 const BUNDLE_ENTRIES = [
+  "codex/app-server-proxy.cjs",
   "codex/build-vsix.cjs",
   "codex/codex-trace-core.cjs",
   "codex/config-core.cjs",
   "codex/hook-handler.cjs",
   "codex/install.cjs",
+  "codex/lifecycle-reducer.cjs",
   "codex/relay.cjs",
+  "codex/rollout-reader.cjs",
   "codex/self-check.cjs",
+  "codex/source-classifier.cjs",
   "codex/uninstall.cjs",
   "codex/vscode-extension/[Content_Types].xml",
   "codex/vscode-extension/extension.cjs",
@@ -226,7 +230,7 @@ async function assertInstallerLifecycle(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const installed = await runInstaller(source, homeDir)
     assert.equal(installed.code, 0, installed.stderr || installed.stdout)
-    assert.match(installed.stdout, /Agent Insight Codex collector installed/)
+    assert.match(installed.stdout, /Agent Insight Codex collector(?: \d+\.\d+\.\d+)? installed/)
     assert.equal(
       await fsp.readFile(path.join(collectorDir, "vscode-extension", "[Content_Types].xml"), "utf8")
         .then(() => true, () => false),
@@ -409,6 +413,33 @@ test("OTel installer reports an existing exporter conflict without changing conf
     assert.equal(result.changed, false)
     assert.equal(result.source, original)
   }
+})
+
+test("desktop rollout backfill boundary is written on install and preserved on reinstall (Bug 446-3)", async (t) => {
+  const homeDir = await tempDir(t)
+  const previousKey = process.env.AGENT_INSIGHT_API_KEY
+  process.env.AGENT_INSIGHT_API_KEY = "test-api-key"
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.AGENT_INSIGHT_API_KEY
+    else process.env.AGENT_INSIGHT_API_KEY = previousKey
+  })
+  const options = {
+    homeDir,
+    sourceDir: path.join(process.cwd(), "scripts", "agent-trace-collectors", "codex"),
+    relayPort: 43191,
+    startRelay: false,
+    installEditors: false,
+    skipVersionCheck: true,
+  }
+  await install(options)
+  const collectorConfigPath = path.join(homeDir, ".agent-insight", "collectors", "codex", "config.json")
+  const first = JSON.parse(await fsp.readFile(collectorConfigPath, "utf8"))
+  assert.ok(Number(first.desktopRolloutBackfillAfterMs) > 0, "install 必须写入回填边界（启用前历史不回灌）")
+  const boundary = first.desktopRolloutBackfillAfterMs
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await install(options)
+  const second = JSON.parse(await fsp.readFile(collectorConfigPath, "utf8"))
+  assert.equal(second.desktopRolloutBackfillAfterMs, boundary, "重装必须保留既有边界，不得后移")
 })
 
 test("source installer roundtrip preserves unrelated hooks and restores config", async (t) => {

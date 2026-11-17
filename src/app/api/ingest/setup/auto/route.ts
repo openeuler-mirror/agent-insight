@@ -18,6 +18,7 @@ import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home'
 import { NextResponse } from 'next/server';
 
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from '../inference-proxy-setup';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -27,6 +28,7 @@ import {
   ACTRAIL_WINDOWS_SETUP_BLOCK,
 } from '../actrail-setup';
 import { getAgentInsightClientPackageSpec, getAgentInsightRasBashInstaller, getAgentInsightClientBashInstaller } from '@/lib/ingest/setup-package';
+import { DIFY_BASH_SETUP_FUNCTION, DIFY_WINDOWS_SETUP, difySetupScript } from '@/lib/ingest/setup/dify';
 import {
     parseFrameworks,
     resolveInstallProfile,
@@ -105,10 +107,15 @@ export async function GET(request: Request) {
     
     // Detect base path from request URL
     const requestUrl = new URL(request.url);
-    const basePath = requestUrl.pathname.replace(/\/api\/setup\/auto\/?$/, '');
+    const basePath = requestUrl.pathname.replace(/\/api\/(?:ingest\/)?setup\/auto\/?$/, '');
     
     const baseUrl = `${protocol}://${requestHost}${basePath}`;
     const platform = detectPlatform(request);
+    if (preselected.some(item => item.value === 'dify') && (preselected.length === 1 || platform === 'windows')) {
+        return new NextResponse(difySetupScript(baseUrl, apiKey, platform), {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+    }
 
     if (platform === 'windows') {
         return generatePowerShellScript(
@@ -168,6 +175,7 @@ AUTO_ADDED_FRAMEWORKS="${bashDoubleQuoted(autoAddedFrameworks.join(','))}"
 AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
 QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
+${DIFY_BASH_SETUP_FUNCTION}
 ${getAgentInsightRasBashInstaller()}
 ${getAgentInsightClientBashInstaller()}
 
@@ -241,7 +249,8 @@ const frameworks = [
     { name: 'DeepSeek Harness', value: 'deepseek-harness' },
     { name: 'QwenPaw', value: 'qwenpaw' },
     { name: 'MCTS (xGovernor)', value: 'mcts-xgovernor' },
-    { name: 'WorkBuddy', value: 'workbuddy' }
+    { name: 'WorkBuddy', value: 'workbuddy' },
+    { name: 'Dify', value: 'dify' }
 ];
 
 async function select() {
@@ -313,6 +322,8 @@ if [[ ",$SELECTED_FRAMEWORKS," == *",goal-plus,"* ]]; then
 fi
 
 # Set installation flags based on selection
+INSTALL_DIFY=false
+if [[ ",$SELECTED_FRAMEWORKS," == *",dify,"* ]]; then INSTALL_DIFY=true; fi
 INSTALL_OPENCODE=false
 INSTALL_CLAUDE=false
 INSTALL_CODEAGENT=false
@@ -391,7 +402,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"workbuddy"* ]]; then
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
+if [ "$INSTALL_DIFY" = "false" ] && [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -776,6 +787,8 @@ echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
 
+if [ "$INSTALL_DIFY" = "true" ]; then agent_insight_setup_dify "${bashDoubleQuoted(baseUrl)}" "$AGENT_INSIGHT_API_KEY" || exit 1; fi
+
 if [ "$INSTALL_DEEPSEEK_HARNESS" = "true" ]; then
     if [ -z "$AGENT_INSIGHT_API_KEY" ]; then
         echo "Warning: DeepSeek Harness observability requires an API key; configure one and rerun setup."
@@ -1064,6 +1077,8 @@ CLAUDE_OTEL_EOF
     rm -f "$AGENT_INSIGHT_HOME/claude_watcher_client.ts" "$AGENT_INSIGHT_HOME/start_claude_watcher.sh" "$AGENT_INSIGHT_HOME/stop_claude_watcher.sh" "$AGENT_INSIGHT_HOME/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
+
+${INFERENCE_PROXY_UNIX_SETUP_BLOCK.replaceAll("$FINAL_KEY", "$AGENT_INSIGHT_API_KEY")}
 
 ${CODEAGENT_UNIX_SETUP_BLOCK}
 
@@ -1399,7 +1414,8 @@ function generatePowerShellScript(
         '    "    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },"',
         '    "    { name: \'QwenPaw\', value: \'qwenpaw\' },"',
         '    "    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },"',
-        '    "    { name: \'WorkBuddy\', value: \'workbuddy\' }"',
+        '    "    { name: \'WorkBuddy\', value: \'workbuddy\' },"',
+        '    "    { name: \'Dify\', value: \'dify\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1473,6 +1489,7 @@ function generatePowerShellScript(
         '}',
         '',
         '# Set installation flags based on selection',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)dify(,|$)") { ' + DIFY_WINDOWS_SETUP + ' }',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
         '$INSTALL_CODEAGENT = $false',

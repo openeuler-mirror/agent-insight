@@ -263,10 +263,10 @@ class OpenCodeAdapter(PlatformAdapter):
                 reason = TerminationReason.TIMEOUT
             elif not capture.fault_activated:
                 reason = TerminationReason.FAULT_NOT_ACTIVATED
-            elif exit_code == 0:
-                reason = TerminationReason.PROCESS_EXITED
             elif self._was_fault_intercepted(artifacts, capture.session_id):
                 reason = TerminationReason.FAULT_INTERCEPTED
+            elif exit_code == 0:
+                reason = TerminationReason.PROCESS_EXITED
             else:
                 reason = TerminationReason.PLATFORM_ERROR
 
@@ -307,10 +307,10 @@ class OpenCodeAdapter(PlatformAdapter):
     ) -> bool:
         """Return whether OpenCode reports an abort after fault activation.
 
-        ``run --format json`` emits a structured ``MessageAbortedError`` when
-        RAS successfully stops the active generation. The caller checks fault
-        activation first, so unrelated startup/process failures remain platform
-        errors instead of being promoted to successful interception.
+        ``run --format json`` can emit ``MessageAbortedError`` even when the
+        process exits with code zero. This identifies an interrupted generation,
+        not proof of RAS action success or recovery. The caller checks timeout
+        and fault activation before using this evidence.
         """
 
         try:
@@ -476,9 +476,7 @@ class OpenCodeAdapter(PlatformAdapter):
 
     @classmethod
     def _load_user_opencode_config(cls) -> dict[str, Any] | None:
-        """Load ~/.config/opencode config (jsonc preferred over json)."""
-
-        config_home = Path.home() / ".config" / "opencode"
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode"
         candidates = (
             config_home / "opencode.jsonc",
             config_home / "opencode.json",
@@ -735,7 +733,6 @@ class OpenCodeAdapter(PlatformAdapter):
         return list_opencode_agents(executable=executable, config=config)
 
     def list_models(self, **kwargs: Any) -> dict[str, Any]:
-        """Enumerate models: config provider.*.models first, else credentialed CLI."""
         from .catalog import list_opencode_models
 
         executable = kwargs.get("executable")

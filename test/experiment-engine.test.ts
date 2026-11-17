@@ -17,14 +17,15 @@
 // 实验执行引擎测试：不真调 LLM——通过 setJudgeLlmCallerForTest / setFaithfulPresetRunnerForTest 注入 fake。
 // 覆盖：忠实版预置行 + 自建 LLM 行成功解析落库 /
 // 解析失败重试用尽→failed+errorMessage / 单项 retry 成功 / 实验终态流转 / 防重入。
-// 落仓库 data/witty_insight.db（同 experiments-api.test.ts：钉住 DATABASE_URL）。
-import path from 'node:path';
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
+// 落临时隔离数据库（同 experiments-api.test.ts），不依赖仓库 data 目录是否已初始化。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { prisma } from '@/lib/storage/prisma';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
@@ -144,6 +145,8 @@ test.after(async () => {
   await cleanup();
   setJudgeLlmCallerForTest(null);
   setFaithfulPresetRunnerForTest(null);
+  await prisma.$disconnect();
+  database.dispose();
 });
 
 test('configured execution uses frozen budgets, exact retries and persists policy through manual retry', async () => {

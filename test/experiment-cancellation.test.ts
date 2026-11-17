@@ -33,13 +33,25 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   const experiment = await prisma.experiment.create({ data: { user: 'owner', name: 'cancel test', status: 'running', cases: { create: [{ id: 'case-a' }, { id: 'case-b' }] } } });
   await assert.rejects(() => deleteExperimentExecution('other', experiment.id), /不存在/);
   await assert.rejects(() => deleteExperimentExecution('owner', experiment.id, 'foreign'), /不属于/);
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  let timeout!: ReturnType<typeof setTimeout>;
+  // Production polling is unref'ed, so the test must own its bounded wait.
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error('Experiment cancellation did not complete within 5000ms')), 5000);
+  });
   const running = withExperimentCancellation(experiment.id, 'case-a', (signal) => new Promise((resolve) => {
     signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+    enter();
   }));
-  // Wait until the operation has entered its cancellable body.
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  const cancelled = await deleteExperimentExecution('owner', experiment.id, 'case-a');
-  await assert.rejects(() => running, /已取消/);
+  let cancelled: Awaited<ReturnType<typeof deleteExperimentExecution>>;
+  try {
+    await Promise.race([entered, running, deadline]);
+    cancelled = await Promise.race([deleteExperimentExecution('owner', experiment.id, 'case-a'), deadline]);
+    await assert.rejects(Promise.race([running, deadline]), /已取消/);
+  } finally {
+    clearTimeout(timeout);
+  }
   await assert.rejects(() => assertExperimentActive(experiment.id, 'case-a'), /已取消/);
   await assertExperimentActive(experiment.id, 'case-b');
   assert.equal((await prisma.experiment.findUniqueOrThrow({ where: { id: experiment.id } })).deletedAt, null);

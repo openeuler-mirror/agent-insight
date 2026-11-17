@@ -53,7 +53,7 @@ function copyBenchmarkExecutionRuntime(packageRoot, standaloneDir) {
   }
   const executorCatalog = path.join(packageRoot, 'generated/benchmark-catalog/executors.cjs')
   const executorFiles = fs.existsSync(executorCatalog) ? require(executorCatalog).generatedExecutorPackageFiles : []
-  for (const file of ['scripts/xgovernor.cjs', 'scripts/reliability-client.cjs', 'scripts/install-ras-client.js', 'scripts/agent-insight-home.cjs', 'scripts/lib/fi-python-runtime.js', 'scripts/agent-trace-collectors/shared/trace-transport.cjs', 'generated/benchmark-catalog/executors.cjs', ...executorFiles]) {
+  for (const file of ['scripts/xgovernor.cjs', 'scripts/reliability-client.cjs', 'scripts/jiuwen-experiment-runtime.cjs', 'scripts/install-ras-client.js', 'scripts/agent-insight-home.cjs', 'scripts/lib/fi-python-runtime.js', 'scripts/agent-trace-collectors/shared/trace-transport.cjs', 'generated/benchmark-catalog/executors.cjs', ...executorFiles]) {
     const source = path.join(packageRoot, file)
     if (!fs.existsSync(source)) continue
     const destination = path.join(standaloneDir, file)

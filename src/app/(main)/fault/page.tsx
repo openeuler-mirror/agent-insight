@@ -45,6 +45,7 @@ import remarkGfm from 'remark-gfm';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageToolbar } from '@/components/shell/PageContainer';
+import { DiagnosisRunPanel } from '@/components/diagnosis/DiagnosisRunPanel';
 import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
 import { AgentDebugCapabilitySheet } from '@/components/observe/AgentDebugCapabilitySheet';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
@@ -206,6 +207,29 @@ export default function FaultPage() {
 }
 
 function FaultPageContent() {
+    const searchParams = useSearchParams();
+    const { user } = useAuth();
+    const { t, locale } = useLocale();
+    const router = useRouter();
+    const runId = searchParams?.get('runId');
+    if (!runId) return <FaultExecutionPageContent />;
+    return <>
+        <AppTopBar title={<Term id="fault-diagnosis" label={t('nav.fault')} />} showDefaultActions={false} />
+        <PageContainer>
+            <DiagnosisRunPanel key={runId} runId={runId}>
+                {(snapshot, createdAt, content) => <FaultDetailView key={runId}
+                    execution={{ timestamp: createdAt, framework: snapshot.execution.framework || '',
+                        task_id: snapshot.execution.taskId || snapshot.execution.id, upload_id: snapshot.execution.id,
+                        query: snapshot.case.input, final_result: snapshot.case.actualOutput,
+                        agentName: snapshot.execution.agentName || undefined, invokedSkills: snapshot.skills }}
+                    locale={locale} user={user || ''} onBack={() => router.push('/fault')}
+                    diagnosisContent={content} />}
+            </DiagnosisRunPanel>
+        </PageContainer>
+    </>;
+}
+
+function FaultExecutionPageContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { user } = useAuth();
@@ -539,7 +563,7 @@ function FaultPageContent() {
     );
 }
 
-function FaultDetailView({ execution, locale, user, onBack }: { execution: Execution; locale: string; user: string; onBack: () => void }) {
+function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: { execution: Execution; locale: string; user: string; onBack: () => void; diagnosisContent?: (onNodeRefClick: (nodeId: string) => void) => React.ReactNode }) {
     const taskId = execution.task_id || execution.upload_id || '';
 
     // ── Data state (unchanged logic) ──
@@ -634,7 +658,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                 setFinalResult(fr);
             })
             .catch(() => {});
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then((d: SessionData) => setSession(d))
             .catch(err => setSession({ error: err instanceof Error ? err.message : String(err), interactions: [] }))
@@ -646,7 +670,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                 if (d.messages?.length) setMessages(d.messages.map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content })));
             })
             .catch(() => {});
-    }, [taskId]);
+    }, [taskId, user]);
 
     useEffect(() => {
         chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight });
@@ -1024,13 +1048,14 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
 
                     {/* Chat scroll */}
                     <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 24px 16px', minHeight: 0 }}>
-                        <AgentDebugCard
+                        {diagnosisContent ? diagnosisContent(scrollToNode) : <AgentDebugCard
+                            hasInvokedSkill={getInvokedSkillNames(execution).length > 0}
                             executionId={taskId}
                             user={user || ''}
                             locale={locale}
                             traceExplicitErrors={traceExplicitErrors}
                             onNodeRefClick={scrollToNode}
-                        />
+                        />}
                         {messages.map(msg => <ChatBubble key={msg.id} message={msg} onNodeRefClick={scrollToNode} locale={locale} nodeMap={treeNodeMap} />)}
                         {messages.length === 0 && (
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0 0 40px' }}>
@@ -1964,24 +1989,6 @@ function FaultFilterPill({ label, count, active }: { label: string; count?: numb
     );
 }
 
-function MiniMetric({ label, value, tone = 'normal' }: { label: string; value: string; tone?: 'normal' | 'danger' }) {
-    return (
-        <div style={{ padding: '8px 9px', borderRadius: 8, background: tone === 'danger' ? 'var(--error-subtle)' : 'var(--background-secondary)', border: `1px solid ${tone === 'danger' ? 'var(--error-subtle-border)' : 'var(--border)'}` }}>
-            <div style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{label}</div>
-            <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: tone === 'danger' ? 'var(--error)' : 'var(--foreground)' }}>{value}</div>
-        </div>
-    );
-}
-
-function InlineFact({ label, value }: { label: string; value: string }) {
-    return (
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '7px 8px', background: 'var(--background-secondary)' }}>
-            <div style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{label}</div>
-            <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{value}</div>
-        </div>
-    );
-}
-
 function Avatar({ role }: { role: 'assistant' | 'user' }) {
     const isUser = role === 'user';
     return (
@@ -2172,22 +2179,6 @@ function pageNumbers(current: number, total: number): (number | '...')[] {
 function truncateText(input: string, max: number): string {
     const s = String(input || '').trim();
     return s.length > max ? `${s.slice(0, max)}...` : s;
-}
-
-function stringifyShort(value: unknown): string {
-    if (value == null) return '';
-    if (typeof value === 'string') return value.slice(0, 500);
-    try {
-        return JSON.stringify(value).slice(0, 500);
-    } catch {
-        return String(value).slice(0, 500);
-    }
-}
-
-function safeTime(value?: string): string {
-    if (!value) return '-';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '-' : date.toLocaleTimeString();
 }
 
 function bubbleStyle(role: 'assistant' | 'user') {

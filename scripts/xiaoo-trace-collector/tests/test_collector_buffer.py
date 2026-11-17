@@ -127,6 +127,27 @@ class CollectorBufferTests(unittest.TestCase):
         self.assertTrue(buf.has_content())
         self.assertFalse(buf.has_trace_spans())
 
+    def test_skill_tool_registers_only_a_real_origin(self) -> None:
+        insight_home = Path(self._tmpdir.name) / "insight"
+        client_home = insight_home / "client"
+        client_home.mkdir(parents=True)
+        (client_home / "config.json").write_text(json.dumps({"clientId": "client-xiaoo"}), encoding="utf-8")
+        skill_dir = Path(self._tmpdir.name) / "project" / ".xiaoo" / "skills" / "demo.skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# demo", encoding="utf-8")
+        with patch.dict(os.environ, {"AGENT_INSIGHT_HOME": str(insight_home)}):
+            buf = SessionSpanBuffer("skill-origin")
+            buf.on_tool(name="load_skill", arguments={"name": "demo.skill", "path": str(skill_dir)})
+            payload = buf.build_resource_spans()
+        spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        tool = next(span for span in spans if span["name"] == "tool load_skill")
+        attrs = {item["key"]: item["value"] for item in tool["attributes"]}
+        self.assertEqual(attrs["skill.name"], {"stringValue": "demo.skill"})
+        self.assertEqual(attrs["agent.insight.client_id"], {"stringValue": "client-xiaoo"})
+        origin_ref = attrs["skill.origin_ref"]["stringValue"]
+        registry = json.loads((client_home / "skill-origins.json").read_text(encoding="utf-8"))
+        self.assertEqual(registry["origins"][origin_ref]["targetDir"], str(skill_dir.resolve()))
+
     def test_flush_skips_user_only_without_post(self) -> None:
         sid = "xiaoo:sess-user-only-flush"
         otel_trace.note_chat(sid, {"message": {"text": "alone"}})

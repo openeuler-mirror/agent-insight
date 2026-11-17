@@ -17,20 +17,34 @@
 import { loadAgentInsightEnv } from '../src/lib/env';
 import { PrismaClient } from '@prisma/client';
 import { repairTraceLatency } from '../src/lib/storage/repair-trace-latency';
+import fs from 'node:fs';
+import { parseArgs } from 'node:util';
 
 async function main() {
     loadAgentInsightEnv();
     if (process.env.DB_HOST) throw new Error('This repair command supports SQLite deployments only.');
-    const args = process.argv.slice(2);
-    if (args.some(arg => arg.startsWith('-') && arg !== '--apply')) {
-        throw new Error('Usage: node --import tsx scripts/repair_trace_latency.ts [--apply] [taskId ...]');
-    }
+    const { values, positionals } = parseArgs({
+        options: { apply: { type: 'boolean', default: false }, framework: { type: 'string', default: 'opencode' }, report: { type: 'string' } },
+        allowPositionals: true,
+    });
+    const framework = values.framework;
+    if (framework !== 'opencode' && framework !== 'jiuwenswarm') throw new Error('Supported frameworks: opencode, jiuwenswarm');
+    const report = values.report ? fs.openSync(values.report, 'wx', 0o600) : undefined;
+    const journal = (event: unknown) => {
+        if (report === undefined) return;
+        fs.writeFileSync(report, JSON.stringify(event) + '\n');
+        fs.fsyncSync(report);
+    };
     const client = new PrismaClient();
     try {
-        const apply = args.includes('--apply');
-        const result = await repairTraceLatency(client, { apply, taskIds: args.filter(arg => arg !== '--apply') });
-        console.log(JSON.stringify({ mode: apply ? 'apply' : 'dry-run', ...result }));
+        const mode = values.apply ? 'apply' : 'dry-run';
+        journal({ type: 'start', mode, framework });
+        const result = await repairTraceLatency(client, { apply: values.apply, framework, taskIds: positionals, audit: journal });
+        const { changes: _, ...counts } = result;
+        journal({ type: 'summary', mode, framework, ...counts });
+        console.log(JSON.stringify({ mode, framework, ...counts, report: values.report }));
     } finally {
+        if (report !== undefined) fs.closeSync(report);
         await client.$disconnect();
     }
 }

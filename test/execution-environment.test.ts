@@ -26,6 +26,7 @@ const require = createRequire(import.meta.url)
 const { prepareEnvironment, checkEnvironment, loadEnvironmentAdapter } = require('../services/executor/src/environment/registry.cjs')
 const { executePreparation, recoverPreparations } = require('../services/executor/src/environment/task-runner.cjs')
 const { checkBuildTools } = require('../services/executor/src/xgovernor/toolchain.cjs')
+const { createServices } = require('../services/executor/src/environment/services.cjs')
 const base: EnvironmentContext = { protocol: PROTOCOL, clientId: 'client-1', dataset: { id: 'dataset-1', adapterKey: 'swe-bench', revision: 'v1', caseIds: ['case-1'], faultTypes: [] }, platform: 'pi-agent', agent: 'pi-agent', model: 'provider/model', experiment: { mode: 'generate', timeoutSeconds: 600, concurrency: 1 } }
 
 test('environment context binds dataset revision, selected Agent, model, Cases and options', () => {
@@ -55,6 +56,17 @@ test('manual prerequisites stop before installation; already-ready checks do not
   adapter.checkEnvironment = async () => ({ issues: [], prepare: [] })
   assert.equal((await prepareEnvironment(base, {}, async () => {}, () => adapter)).state, 'ready')
   assert.equal(installs, 0)
+})
+
+test('JiuwenSwarm gateway target needs no same-named host CLI', async () => {
+  const context = { ...base, dataset: { ...base.dataset, adapterKey: 'generic' }, platform: 'jiuwenswarm', agent: 'main_agent', model: '' }
+  const ready = createServices({ cfg: {}, client: { probeExperimentRuntime: () => ({ ready: true, canResolveTraceId: true, models: ['deepseek-flash'] }) } })
+  assert.deepEqual(await ready.checkAgent(context), [])
+  assert.deepEqual(ready.capabilityUpdate().capabilities.components['agent-runtime/jiuwenswarm/v1'], { ready: true })
+  const missing = createServices({ cfg: {}, client: { probeExperimentRuntime: () => ({ ready: false }) } })
+  assert.equal((await missing.checkAgent(context))[0].code, 'AGENT_TRACE_NOT_READY')
+  assert.deepEqual(await ready.checkAgent({ ...context, model: 'deepseek-flash' }), [])
+  assert.equal((await ready.checkAgent({ ...context, model: 'custom/model' }))[0].code, 'MODEL_UNAVAILABLE')
 })
 
 test('installation is followed by a fresh check; a successful install alone never means ready', async () => {

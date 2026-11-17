@@ -38,8 +38,12 @@ const CONTROL_PATH = '/api/reliability/client/v1/control'
 const PORT = Number(process.env.PORT || 3000)
 const HOSTNAME = process.env.HOSTNAME || '0.0.0.0'
 const HEARTBEAT_MS = 30_000
+const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || PORT + 1)
+process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT = String(dispatchPort)
 
-const STANDALONE_ROOT = path.join(__dirname, '..', '.next', 'standalone')
+const STANDALONE_ROOT = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.join(__dirname, '..', '.next', 'standalone')
 
 /**
  * 控制面业务逻辑跑在 Next 的模块图里（用到 @/ 别名与 Prisma 单例），
@@ -81,7 +85,8 @@ async function main() {
   process.chdir(STANDALONE_ROOT)
   const requiredServerFiles = require(path.join(nextDir, 'required-server-files.json'))
   process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(requiredServerFiles.config)
-  const next = require(path.join(STANDALONE_ROOT, 'node_modules', 'next'))
+  const standaloneRequire = require('node:module').createRequire(path.join(STANDALONE_ROOT, 'server.js'))
+  const next = standaloneRequire('next')
   const app = next({
     dev: false,
     dir: STANDALONE_ROOT,
@@ -186,7 +191,6 @@ async function main() {
   })
 
   // Next 侧要投递指令时回调这里。绑定 127.0.0.1，不对外暴露。
-  const dispatchPort = Number(process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT || PORT + 1)
   const dispatcher = http.createServer((req, res) => {
     if (req.method !== 'POST') {
       res.statusCode = 405

@@ -31,14 +31,14 @@ function killProcessByName(pattern) {
     try {
       execSync(`powershell -Command "Get-Process | Where-Object { $_.CommandLine -like '*${pattern}*' } | Stop-Process -Force"`, { stdio: 'ignore' })
       return true
-    } catch (e) {
+    } catch {
       return false
     }
   } else {
     try {
       execSync(`pkill -f "${pattern}"`, { stdio: 'ignore' })
       return true
-    } catch (e) {
+    } catch {
       return false
     }
   }

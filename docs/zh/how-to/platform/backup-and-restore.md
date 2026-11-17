@@ -1,6 +1,8 @@
 ---
 title: "备份与恢复"
 description: "自管部署的停机备份、独立目录恢复与验证边界。"
+keywords: ["Agent Insight", "备份恢复", "SQLite", "运行数据"]
+changefreq: "monthly"
 ---
 
 本指南说明自管 Agent Insight 的停机备份与恢复。默认 SQLite 部署可以备份运行目录；使用外部数据库、外部配置目录或独立客户端时，需要同时备份对应存储。平台目前没有统一的 `backup` / `restore` CLI 命令。

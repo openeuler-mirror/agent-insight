@@ -169,7 +169,7 @@ test('会话固定 Skill 并恢复工作版本，顶部资产控制右栏全部�
   const picker = readFileSync('src/components/skill-workbench/SkillManagementPicker.tsx', 'utf8');
   const publishService = readFileSync('src/lib/skill-workbench/publish-service.ts', 'utf8');
   assert.match(shell, /pickerPurpose === 'bind'[\s\S]*\/context/);
-  assert.match(shell, /openHistorySession[\s\S]*showSessionAsset\(session\)/);
+  assert.match(shell, /openHistorySession[\s\S]*showSessionAsset\(session, true\)/);
   assert.match(shell, /const viewingSessionAsset = Boolean/);
   assert.match(shell, /右栏使用.*不会改变当前会话/);
   assert.match(shell, /disabled=\{!selectedAsset\}/);
@@ -513,8 +513,11 @@ test('Skill 优化点击即提交当前诉求，保留空请求拦截、归并�
   assert.match(adapter, /beginSkillOptimizationRecord/);
   assert.match(records, /行为验证通过/);
   assert.match(records, /行为验证未通过/);
-  assert.match(records, /静态通过，待完整复测/);
-  assert.match(records, /发布为 \{getOptimizationTargetVersion\(selected\)\}/);
-  assert.doesNotMatch(shell, /\/retest|optimizationRecordId=/);
+  assert.match(records, /前置质量通过，可发布/);
+  assert.match(records, /发布待验证 \{getOptimizationTargetVersion\(selected\)\}/);
+  assert.match(shell, /\/retest/);
+  assert.match(shell, /onRetest=\{retestDiagnosis\}/);
+  assert.match(records, /selected.sourceKind === 'diagnosis'[\s\S]*onRetest/);
+  assert.doesNotMatch(shell, /optimizationRecordId=/);
   assert.match(shell, /role="dialog"[\s\S]*确认发布/);
 });

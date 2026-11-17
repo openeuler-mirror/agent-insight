@@ -15,13 +15,16 @@
  */
 
 import { OpenAI } from 'openai';
-import { getOpenAICompatibleClientConfig, type ModelConnectionConfig } from '@/lib/shared/model-connection';
+import { resolveModelConnection, type ModelConnectionConfig } from '@/lib/shared/model-connection';
 import { ModelTestValidationError, type ModelTestErrorCode } from '@/lib/shared/model-connection-test';
+import { getModelClientConfig } from './model-client';
+import { createModelTestDiagnostics } from './model-connection-diagnostics';
 
 export async function probeModelConnection(
   config: ModelConnectionConfig,
   options: { timeoutMs: number; signal: AbortSignal; fetch?: typeof fetch },
 ): Promise<void> {
+  const diagnostics = createModelTestDiagnostics(config, options.timeoutMs, options.fetch);
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancel = () => {};
@@ -42,16 +45,19 @@ export async function probeModelConnection(
   try {
     await Promise.race([deadline, (async () => {
       if (controller.signal.aborted) throw controller.signal.reason;
+      const { baseUrl, model } = resolveModelConnection(config);
+      if (!model || (config.provider === 'custom' && !baseUrl)) {
+        throw new ModelTestValidationError('A model name is required. Custom models also require a Base URL.');
+      }
       const client = new OpenAI({
-        ...getOpenAICompatibleClientConfig(config),
-        fetch: options.fetch,
+        ...getModelClientConfig(config, diagnostics.fetch),
         timeout: options.timeoutMs,
         maxRetries: 0,
       });
       const completion = await client.chat.completions.create({
-        model: config.model!,
-        messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 5,
+        model,
+        messages: [{ role: 'user', content: 'Reply with OK.' }],
+        max_tokens: 128,
       }, { signal: controller.signal }).catch((error: unknown) => {
         if (error instanceof SyntaxError) throw new Error('Invalid model response', { cause: 'invalid_response' });
         throw error;
@@ -60,6 +66,10 @@ export async function probeModelConnection(
         throw new Error('Invalid model response', { cause: 'invalid_response' });
       }
     })()]);
+    diagnostics.finish('success');
+  } catch (error) {
+    diagnostics.finish(classifyModelTestError(error).code, error);
+    throw error;
   } finally {
     clearTimeout(timer);
     options.signal.removeEventListener('abort', cancel);
@@ -70,7 +80,8 @@ export function classifyModelTestError(error: unknown): { code: ModelTestErrorCo
   if (error instanceof ModelTestValidationError || error instanceof SyntaxError) {
     return { code: 'invalid_request', status: 400, error: 'Invalid connection test parameters' };
   }
-  const e = error as { name?: string; status?: number; cause?: unknown } | null;
+  const e = error as { name?: string; status?: number; cause?: unknown; type?: string } | null;
+  if (e?.type === 'agent_insight_invalid_response') return { code: 'invalid_response', status: 502, error: 'Invalid model response' };
   if (e?.name === 'TimeoutError' || error instanceof OpenAI.APIConnectionTimeoutError || e?.status === 408 || e?.status === 504) {
     return { code: 'timeout', status: 504, error: 'Connection test timed out' };
   }
@@ -81,7 +92,11 @@ export function classifyModelTestError(error: unknown): { code: ModelTestErrorCo
   if (e?.status === 429) return { code: 'rate_limit', status: 429, error: 'Model service rate limit exceeded' };
   if (e?.status && e.status >= 500) return { code: 'server', status: 502, error: 'Model service unavailable' };
   if (e?.status && e.status >= 400) return { code: 'invalid_request', status: 400, error: 'Model rejected the request; check model and endpoint' };
-  if (e?.cause === 'invalid_response') return { code: 'invalid_response', status: 502, error: 'Invalid model response' };
+  let nested: unknown = error;
+  for (let depth = 0; depth < 8 && nested instanceof Error; depth++) {
+    if (nested.cause === 'invalid_response') return { code: 'invalid_response', status: 502, error: 'Invalid model response' };
+    nested = nested.cause;
+  }
   if (error instanceof OpenAI.APIConnectionError) return { code: 'network', status: 502, error: 'Cannot reach model service' };
   return { code: 'unknown', status: 500, error: 'Connection test failed' };
 }

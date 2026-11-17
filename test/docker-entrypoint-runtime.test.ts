@@ -62,8 +62,12 @@ function fixture(t: TestContext) {
     fs.writeFileSync(path.join(packageRoot, '.next/standalone/server.js'), `
         const { runtimeOwner } = require(${JSON.stringify(path.resolve('src/lib/runtime-cleanup/ownership.ts'))});
         const owner = runtimeOwner(process.env.AGENT_INSIGHT_HOME);
-        process.stdout.write('RUNTIME_READY ' + JSON.stringify({ owner, pid: process.pid }) + '\\n');
+        process.stdout.write('RUNTIME_READY ' + JSON.stringify({ owner, pid: process.pid, gateway: process.env.FIXTURE_CONTROL_GATEWAY === '1', dispatchPort: process.env.AGENT_INSIGHT_RAS_DISPATCH_PORT }) + '\\n');
         setInterval(() => {}, 1000);
+    `);
+    fs.writeFileSync(path.join(packageRoot, 'scripts/control-server.js'), `
+        process.env.FIXTURE_CONTROL_GATEWAY = '1';
+        require('../.next/standalone/server.js');
     `);
     fs.writeFileSync(path.join(home, '.env'), 'AGENT_INSIGHT_RUNTIME_OWNER="forged-by-env-file"\nAGENT_INSIGHT_LOG_DIR=/var/log/agent-insight\n');
     const env: NodeJS.ProcessEnv = {
@@ -91,7 +95,7 @@ function fixture(t: TestContext) {
                 if (line) { clearTimeout(timeout); resolve(line.slice('RUNTIME_READY '.length)); }
             });
         });
-        return { child, ...JSON.parse(ready) as { owner?: { id: string; scope: string; fd: number }; pid: number } };
+        return { child, ...JSON.parse(ready) as { owner?: { id: string; scope: string; fd: number }; pid: number; gateway: boolean; dispatchPort?: string } };
     }
     return { root, home, env, entrypoint, markerFile, workdir, launch };
 }
@@ -107,6 +111,29 @@ test('real Docker entrypoint preserves the kernel-owned descriptor through shell
     assert.equal(fs.readFileSync(setup.markerFile, 'utf8'), 'prepare\ndb-push\ngenerate\n');
     assert.equal(JSON.parse(fs.readFileSync(path.join(setup.home, '.runtime-owner.lock'), 'utf8')).id, running.owner.id);
     assert.match(fs.readFileSync(path.join(setup.home, '.env'), 'utf8'), /forged-by-env-file/);
+});
+
+test('real Docker entrypoint starts the control gateway through the runtime owner', async t => {
+    if (process.platform === 'win32') return t.skip('container flock requires a Unix host');
+    const setup = fixture(t);
+    const running = await setup.launch();
+    assert.equal(running.gateway, true, 'the delivery image must start the same control gateway as production E2E');
+    assert.equal(running.pid, running.child.pid);
+    assert.ok(running.owner);
+});
+
+test('Docker entrypoint supplies the matching dispatch port to packaged gateway versions', async t => {
+    if (process.platform === 'win32') return t.skip('container flock requires a Unix host');
+    const setup = fixture(t);
+    setup.env.PORT = '38123';
+    assert.equal((await setup.launch()).dispatchPort, '38124');
+});
+
+test('Docker entrypoint preserves an explicitly configured dispatch port', async t => {
+    if (process.platform === 'win32') return t.skip('container flock requires a Unix host');
+    const setup = fixture(t);
+    setup.env.AGENT_INSIGHT_RAS_DISPATCH_PORT = '38133';
+    assert.equal((await setup.launch()).dispatchPort, '38133');
 });
 
 test('real Docker entrypoint rejects a second instance before database preparation', async t => {

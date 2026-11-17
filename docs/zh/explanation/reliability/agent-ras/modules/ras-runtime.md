@@ -1,3 +1,10 @@
+---
+title: "ras-runtime 模块"
+description: "说明 JS 与 FFI 宿主使用同进程运行时调用 SessionHub 的机制，以及异步检测决策和观测旁路。"
+keywords: ["Agent Insight", "Agent RAS", "同进程运行时", "SessionHub"]
+changefreq: "monthly"
+---
+
 # ras-runtime 模块
 
 > AET 模块详情口径：新人读完应能独立修改本模块。模板：`aet-analyzing-project` / `module-detail-template.md`。

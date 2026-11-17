@@ -43,9 +43,11 @@ changefreq: monthly
 
 ## Dify 原生 OTLP 接入
 
-可在「客户端安装」页顶部的 Dify 入口复制两组当前账号配置；身份刷新完成后才提供复制。
+在「客户端安装」页勾选 **Dify** 后，使用同一条 curl 命令配置现有 Docker Compose 部署。脚本备份并维护 `.env` 中的受管配置块，检查 Compose 渲染结果，只重新加载 API、Worker 与已存在的 Agent 服务，再核对容器实际环境及接收端连接。Docker Desktop 本机地址自动适配；Linux Docker 可填写容器可达的上报地址。详细步骤与支持边界见 [Dify 统一接入](../platform/settings/access-control.md#dify-统一接入)。特殊部署可参考下文的两组进程环境变量；安装页仅保留统一 curl 入口。
 
-自建 Dify 可使用已有 OpenTelemetry 导出能力，无需修改 Dify 源码或安装 Agent Insight 采集插件。以下配置已在 Dify 1.18.0 的原生 Workflow（Start → LLM → End）与 DeepSeek 实际调用中验证；它与应用内配置的 Langfuse 观测服务是不同入口。
+Dify 1.14.0 的默认 Compose 未将 `OTEL_EXPORTER_OTLP_TRACES_HEADERS` 传入 API/Worker。安装器会生成仅引用环境变量的 `compose.agent-insight.yaml`，并在 `.env` 的受管配置块中维护 `COMPOSE_FILE`，保留原文件顺序和默认 override；后续在同目录执行 `docker compose up` 仍会带上鉴权头。原 Compose 文件不会被改写，同名非受管文件不会被覆盖，配置校验失败时恢复原配置。若终端已导出 `COMPOSE_FILE` 且没有包含受管文件，自动配置会停止；请先取消该终端变量或按自定义部署方式显式传入鉴权头。
+
+自建 Dify 可使用已有 OpenTelemetry 导出能力，无需修改 Dify 源码或安装 Agent Insight 采集插件。以下配置已在 Dify 1.14.0、1.18.0 的原生 Workflow（Start → LLM → End）与 DeepSeek 实际调用中验证；它与应用内配置的 Langfuse 观测服务是不同入口。1.14.0 使用官方 Compose 镜像和原生签名 DeepSeek 插件，通过已发布 Workflow 服务 API 完成真实调用，自动入库 1 次模型调用、119 Tokens，与 Dify 返回用量一致，浏览器已核对正文与完成状态；重复安装保持配置和容器不变，无效 API Key 返回 401。下述 Agent v2 验收使用 1.18.0，不代表 1.14.0 提供同一能力。
 
 在运行 Dify API 与 Worker 的进程环境中设置，并重启相应进程：
 
@@ -65,9 +67,13 @@ OTEL_SAMPLING_RATE=1.0
 - 使用 `dify:<traceId>` 作为固定聚合键，隔离同 Trace 的其他框架；按 `traceId` 固定分组，分批到达与重复投递使用同一条 Trace；不会按静态 `service.instance.id` 合并不同执行。
 - 保留 Workflow 根 Span 和业务节点，过滤 SQL、Redis、HTTP 等基础设施 Span；只有 `llm` / `tool` 节点分别计入对应调用数。
 - 恢复文本消息角色、模型、Token、工具输入输出及错误，并将控制流节点保留在轨迹树中。Dify 的运行 ID 等系统字段保留于 Start 节点输出。
-- 收到已结束的 Workflow 根 Span，且存在 End 节点或根 Span 显式失败时，记录完成时间。缺少根 Span、缺少结束证据时不推断完成。
+- 同时识别 1.14.0 的 `core.app.apps.workflow.app_runner.WorkflowAppRunner.run` 和新版本的 `services.workflow_run_agg.WorkflowRunAgg.run` 根 Span；收到已结束的根 Span，且存在 End 节点或根 Span 显式失败时，记录完成时间。缺少根 Span、缺少结束证据时不推断完成。
 
-在链路追踪页按 `dify` 框架查看，检查实际消息、调用数与 Token。HTTP 200 仅表示接收成功，还需确认消费和入库。当前通过完整验收的范围包括原生 Workflow 文本模型调用，以及下述原生 Workflow 内两名 Agent v2 的串行编排。补充 Chatflow 两轮真实验证已确认消息角色、历史上下文、回答和 Token 正常；但 Answer 节点未被现有完成判定接受，任务成功后界面仍显示“执行中”，之后变为“观测超时”，该场景尚未通过完整验收。Agent v2 运行环境需要支持 Landlock；本地 Docker Desktop 从 4.41.0 升级至 4.97.0 后，实测内核支持 ABI 8，原生应用验证已解除该环境阻塞。循环/并发/重试、暂停恢复、多模态及失败工作流仍需真实任务验证。工具和错误映射已有合成回归测试。不同 Trace 不会按 `sys.conversation_id` 或 `sys.workflow_run_id` 自动跨 Trace 合并，暂停恢复不在本轮保证范围内。
+在链路追踪页按 `dify` 框架查看，检查实际消息、调用数与 Token。HTTP 200 仅表示接收成功，还需确认消费和入库。当前通过完整验收的范围包括原生 Workflow 文本模型调用，以及下述原生 Workflow 内两名 Agent v2 的串行编排。
+
+1.14.0 另实跑了插件参数错误导致的失败 Workflow：Dify 返回 failed，原生根 Span 保留异常事件，却仍上报成功状态且没有 End 节点；当前适配器保留原始异常，但未将其投影为失败与结束，页面仍显示“执行中”，该失败场景未通过完整验收。
+
+补充 Chatflow 两轮真实验证已确认消息角色、历史上下文、回答和 Token 正常；但 Answer 节点未被现有完成判定接受，任务成功后界面仍显示“执行中”，之后变为“观测超时”，该场景尚未通过完整验收。Agent v2 运行环境需要支持 Landlock；本地 Docker Desktop 从 4.41.0 升级至 4.97.0 后，实测内核支持 ABI 8，原生应用验证已解除该环境阻塞。循环/并发/重试、暂停恢复、多模态及其他失败工作流仍需真实任务验证。工具和错误映射已有合成回归测试。不同 Trace 不会按 `sys.conversation_id` 或 `sys.workflow_run_id` 自动跨 Trace 合并，暂停恢复不在本轮保证范围内。
 
 
 ### Agent 内部执行轨迹
@@ -347,7 +353,7 @@ function newFrameworkTraceEvent(overrides: Partial<OtelTraceEvent>): OtelTraceEv
 
 **适用场景**：框架内置OpenTelemetry支持，可以直接配置OTLP exporter指向平台。
 
-**参考实现**：`scripts/jiuwenswarm_extension/`
+**参考实现**：`scripts/jiuwen_extension/`
 
 **核心步骤**：
 
@@ -355,6 +361,12 @@ function newFrameworkTraceEvent(overrides: Partial<OtelTraceEvent>): OtelTraceEv
 2. **配置OTEL环境变量**：设置 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`、`OTEL_EXPORTER_OTLP_HEADERS` 等
 3. **初始化观测**：调用框架内置的 `init_observability` 或类似API
 4. **拦截配置**：确保exporter协议为HTTP，添加鉴权header
+
+JiuwenSwarm 新版 SDK 还需要获取单 Agent 观测 demand，才能让宿主创建 root span。
+当前扩展通过能力检测调用 `openjiuwen.harness.observability.acquire_observability`；
+旧 SDK 不提供该接口时沿用初始化方式。服务端兼容新旧 Span 契约，读取新版结构化消息、
+工具调用及用量，且不把 reasoning/event Span 再计作一次推理。工具归属只使用明确父链或
+调用 ID，缺少证据时独立保留。升级操作和验证范围见[客户端兼容性](../../reference/observability/client-compatibility.md#jiuwenswarm)。
 
 **配置优先级示例**：
 
@@ -456,7 +468,7 @@ return NextResponse.json({
 |------|---------|--------|------|
 | Hermes | `adapters/hermes.ts` | `scripts/hermes_agent_insight_plugin.py` | Hook模式，支持subagent |
 | Langfuse LangGraph | `adapters/langfuse-langgraph.ts` | Langfuse SDK自带 | 标准OTLP，支持skill追踪 |
-| JiuwenSwarm | `otel/jiuwenswarm/` | `scripts/jiuwenswarm_extension/` | Telemetry扩展模式 |
+| JiuwenSwarm | `otel/jiuwen/` | `scripts/jiuwen_extension/` | Telemetry扩展模式 |
 | Qwen Code | `adapters/qwencode.ts` | `scripts/qwencode-collector/` + Qwen Code 原生 OTLP | 原生 Telemetry 模式，支持 Agent/Subagent/LLM/Tool/Skill/MCP/Plan，按账号隔离 spool |
 | Qoder CN 产品家族 | `adapters/qoder.ts` | `scripts/qoder_trace_collector.mjs`、Desktop VSIX、JetBrains Plugin、Work setup | 共享 Hook/OTLP 核心，按产品与账号隔离 spool，支持 Quest/Experts/Subagent/Skill/MCP/连接器 |
 | Generic | `adapters/generic.ts` | 标准OTLP SDK | 兜底适配，支持OpenInference标准 |
@@ -547,6 +559,62 @@ AC33 综合验收使用一个 Qoder Desktop 标准任务，在同一 session 和
 - `src/lib/ingest/otel/adapters/qoder.ts`：服务端 Qoder OTLP 聚合。
 - `test/qoder-trace-collector.test.ts` / `test/qoder-desktop-extension.test.ts` / `test/qoder-performance.test.ts`：确定性、账号/产品隔离、重试、Skill/MCP/连接器、最新版 snapshot、多层 Subagent、安装卸载、四端启动预算和首 Token 开销验证。
 
+## 十、Codex Desktop 与 App Server 生命周期契约
+
+Codex 的 CLI、IDE、Desktop rollout 和 App Server proxy 必须先归一化为同一套 lifecycle event，再
+进入 `lifecycle-reducer.cjs`。产品来源由 `source-classifier.cjs` 解析，不能用 `source=exec` 或
+`source=vscode` 单独推断产品形态；来源不确定时保留 `unknown`。
+
+- 同一 App Server `turn/steer` 复用原 `sourceExecutionId`，追加 `input_kind=steer` 和 phase；首个
+  input 永远作为 `Execution.query`。
+- 原生 OTel 内部 turn id 与 Hook/rollout turn id 可以不同。初始与已接受的追加输入均经过
+  同一脱敏规则后，在同线程、10 秒内且候选唯一时建立跨通道 alias；同通道不同 ID、过期或
+  歧义候选不合并。保留首个已发射的 execution identity，后到的 lifecycle 快照、正文、用量
+  和终态经 alias 归入同一执行；不能只在 Adapter 中隐藏重复 USER。
+- Desktop UI 如果证据是 `turn_aborted` 后新的 `task_started + user_message`，必须产生两个
+  Execution；前一个状态为 `interrupted`，线程事件使用 `interrupt_followed_by_execution`，不得假标为
+  同 turn steer。
+- `compacted` 与兼容 `context_compacted` 合并为一个 ThreadEvent。高保真 window/item id 优先；无
+  ID 的 legacy completed 信号只有在同线程、5 秒内存在高保真 compaction 时才复用其 key，否则保留
+  独立但可追溯的兼容事件。
+- rollout `timestamp` 同时支持数值和 ISO-8601 字符串；解析失败才回退采集时刻，避免重放改变事件
+  顺序和幂等键。
+- compaction 使用 `threadOnly` batch，不能创建假 Execution，也不能增加用户 Tool/LLM/Token 或
+  latency；`TraceThreadEvent` 保存 transition、interrupt、steer 和 compaction 的时间线。
+- 0.164+ 的冷 rollout 可能被压缩为 `rollout-*.jsonl.zst`，恢复会话时再 materialize 回
+  `.jsonl` 追加。reader 必须同时扫描 plain/zst，plain 优先；checkpoint 使用去掉 `.zst` 的稳定
+  文件键和 `recordsProcessed`/`mtimeMs` 游标，保证压缩、恢复、追加都不重复上报。Node < 22.15
+  不支持 zstd 时由 self-check 明确报告，不得静默丢会话。
+- 0.164+ 的 `task_complete` 字段为 `last_agent_message`（并接受 `turn_complete` 别名）；
+  0.166 新增 `dynamic_tools_updated` 等顶层类型，reader 必须跳过未知类型而不是报错。
+- rollout content/usage 必须保留 reader 解析出的 `sourceKind`，不能硬编码 Desktop；0.166 OTel
+  `exec` 的包装输出需解转义后再与 Hook `Bash` 合并，同一 execution 的 Hook 生命周期根与 OTel
+  根也需合并，避免重复工具/USER 节点。
+
+实现入口：`scripts/agent-trace-collectors/codex/rollout-reader.cjs`、
+`scripts/agent-trace-collectors/codex/lifecycle-reducer.cjs`、
+`scripts/agent-trace-collectors/codex/app-server-proxy.cjs`、
+`src/lib/ingest/otel/adapters/codex.ts`、`src/lib/storage/data-service.ts` 和
+`src/components/observe/CodexThreadTimeline.tsx`。回归入口为
+`test/codex-desktop-rollout.test.ts`、`test/codex-rollout-zstd.test.ts` 和
+`test/l1-replay-codex-rollout.test.ts`。
+
+### Desktop 终态与响应合并
+
+采集器 0.2.1 先持久化 rollout 的完成/中断事件，再主动触发上传，不再等待默认五分钟批次。
+正常情况下延迟由 rollout 扫描周期（默认十秒）和服务端入库处理组成；网络失败继续走 durable
+spool 重试。自检通过只说明链路可达，不等于某个执行已经结束。
+
+文件身份取首个 session_meta；子 Agent fork 文件嵌入的父历史（包括 synthetic abort）
+不再改变父执行状态或耗时。遇子线程自身设置/任务归属边界后恢复采集，真实子任务继续进入
+现有 Subagent/Trace 链路。普通下一轮、中断后继续与失败后继续分别展示。
+
+Rollout 计量与正文只在同执行、同归属、唯一响应时间窗内合并；一条真实回复不会再变成
+一个有 Token 的空壳加一个 0ms 正文。工具响应没有明文、或关联证据不唯一时保留降级信息，
+不伪造模型正文。Desktop 明确来源优先于底层共享 App Server 服务名。
+
+回归：`test/codex-desktop-completion.test.ts` 覆盖终态主动上传、乱序、重启、fork 历史、
+首输入/追加别名和正文计量配对；数据库回归从公开 schema 建空临时库，不读取或复制用户数据库。
 
 ## OpenCode 1.x / 2.x 采集兼容
 

@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="README.zh.md">简体中文</a> |
-  <a href="README_en.md">English</a>
+  <a href="README.md">English</a>
 </p>
 
 ---
@@ -135,7 +135,7 @@ Agent RAS inproc 插件。RAS runtime 保存到 `~/.agent-insight/ras/runtime/`�
 适用于需要二次开发或深度定制的场景。
 
 ```bash
-git clone https://gitcode.com/openJiuwen/agent-insight.git
+git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
 # 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）

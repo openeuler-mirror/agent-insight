@@ -49,18 +49,25 @@ export async function verifyFromSourceExperiment(input: {
   candidateFiles: Record<string, string>; optimizationRecordId?: string; sourceExperimentId?: string; maxCases: number; issueIds?: string[];
   budgetYuan?: number; signal?: AbortSignal; onProgress?: (message: string) => void; verificationPurpose?: 'optimization' | 'retest';
 }): Promise<BehavioralResult | null> {
+  const record = input.optimizationRecordId ? await prismaRaw.skillOptimizationRecord.findFirst({
+    where: { id: input.optimizationRecordId, user: input.user, skillName: input.skillName },
+    select: { sourceKind: true, sourceExperimentId: true },
+  }) : null;
+  const diagnosisSource = record?.sourceKind === 'diagnosis';
+  const sourceExperimentId = diagnosisSource ? record.sourceExperimentId : input.sourceExperimentId;
+  if (diagnosisSource && !sourceExperimentId) return incompleteBehavior('诊断缺少来源实验，无法进行同配置验证');
   const issues = input.issueIds?.length ? await prismaRaw.skillIssue.findMany({
     where: { id: { in: input.issueIds }, user: input.user, version: input.baseVersion, Evaluation: { Skill: { name: input.skillName } } },
     select: { id: true, Evaluation: { select: { runId: true, executionId: true } } },
   }) : [];
   const preferredIds = issues.flatMap((issue) => issue.Evaluation.runId ? [issue.Evaluation.runId.replace(/^experiment:([^:]+):.*$/, '$1')] : []);
   const sources = await prismaRaw.experiment.findMany({
-    where: { id: input.sourceExperimentId, user: input.user, deletedAt: null, scope: 'skill-workbench', skillName: input.skillName,
+    where: { id: sourceExperimentId || undefined, user: input.user, deletedAt: null, scope: 'skill-workbench', skillName: input.skillName,
       skillVersion: input.baseVersion, preset: { in: ['use-case', 'skill-ab'] }, status: { in: ['done', 'partial'] } },
     orderBy: { updatedAt: 'desc' }, take: 30,
   });
   const source = sources.find((row) => preferredIds.includes(row.id)) || sources[0];
-  if (!source) return null;
+  if (!source) return diagnosisSource ? incompleteBehavior('请在优化记录中按诊断来源实验复测') : null;
   const snapshot = parse<{
     datasetId?: string; caseIds?: string[]; evaluatorIds?: string[]; grayscaleTaskId?: string;
     boundSide?: 'a' | 'b'; baselineSide?: 'a' | 'b'; executionTarget?: SkillExecutionTarget;

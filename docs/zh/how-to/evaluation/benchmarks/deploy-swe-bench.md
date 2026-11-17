@@ -1,3 +1,10 @@
+---
+title: "SWE-bench 部署指南"
+description: "说明 SWE-bench 数据集、执行工作区及评测镜像的配置方法与部署验收要求。"
+keywords: ["Agent Insight", "SWE-bench", "基准评测", "部署验收"]
+changefreq: "monthly"
+---
+
 # SWE-bench 部署指南
 
 本指南与 [ZSoft 部署指南](./deploy-zsoft.md) 同级，说明 SWE-bench 的数据、执行工作区、镜像配置和验收。平台、执行客户端和 Evaluator 的安装、互访地址及共享镜像池见 [Benchmark 通用服务部署指南](./deploy-services.md)。
@@ -104,7 +111,7 @@ benchmarks:
 
 执行端访问私有 SWR 时，通过客户端运行账号及对应 Docker daemon 的现有认证配置准备，不在任务或 YAML 中填写密钥。执行端使用 Docker 本地缓存；[镜像池与预取](./deploy-services.md#53-可选跨-benchmark-共享镜像池) 由 Evaluator 管理。
 
-执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](./develop-benchmark.md#工作区提交与诊断)。
+执行与评测使用独立容器，分别选择镜像，不强制两端 digest、image ID 或架构相同，也不保证环境内容完全一致。执行端直接使用镜像内源码，不 reset/clean；记录本次镜像身份与来源，官方安装提交与 Patch 基线处理见 [工作区、提交与诊断](../../../../../design/evaluation/benchmark-xgovernor-local-docker/phase2-requirements-design.md#工作区提交与诊断)。
 
 ## 4. 评测端准备
 

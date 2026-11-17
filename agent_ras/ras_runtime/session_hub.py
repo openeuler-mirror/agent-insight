@@ -337,7 +337,7 @@ class SessionHub:
         session_id: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record host-side action execution result (platform-agnostic ack)."""
+        """Record host-side action signals/results, preserving their execution stage."""
         raw = dict(payload or {})
         state = self._sessions.get(session_id)
         platform = state.platform if state else str(raw.get("platform") or "")
@@ -348,6 +348,8 @@ class SessionHub:
             "error": raw.get("error"),
             "message": raw.get("message"),
         }
+        if raw.get("phase") in ("terminating", "failed"):
+            body["phase"] = raw["phase"]
         explicit_anchor = raw.get("trace_anchor")
         if isinstance(explicit_anchor, dict) and explicit_anchor:
             body["trace_anchor"] = {

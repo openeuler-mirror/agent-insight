@@ -121,9 +121,11 @@ agent-insight-mcts-run --upstream http://127.0.0.1:8787 -- <原 MCTS 命令>
 
 客户端会直接调用配置的 Python 解释器，保留该虚拟环境中的依赖，不需要在交互终端中激活环境。
 
-启动检查只确认 Python 版本与 `datasets` 模块是否可发现，不在探测阶段导入整个依赖包。“未找到 datasets”表示配置的 Python 环境缺少该模块；“环境检查超过 5 秒”表示探测超时，应检查执行机负载后重试，不能据此判断依赖未安装。Case 的 Agent 执行超时则由实验保存的执行上限决定，与环境检查超时不同。
+启动检查按 Benchmark 分别探测公共前提和专用依赖，SWE-bench 与 ZSoft 的准备要求分别见对应部署指南。SWE-bench 提示“未找到 datasets”时检查所配置的 Python；探测超时需结合执行机负载诊断，不能据此判断缺包。Case 的 Agent 执行上限与环境探测期限分别处理。
 
-平台自动通过严格模式代理运行 MCTS，传入 Case ID、`--testbench sweverified` 和 `--output-dir <runId>`；选择支持参数能力的执行主机后，实验向导提供树形/JSON 编辑、JSON 导入导出和个人模板。MCTS 默认模板保持平铺，key 使用执行端 CLI 原名并省略 `--`：`max-iters/branching/max-turns-init/max-turns-step/max-turns-author/max-turns-author-step/token-fuse-limit`，默认值依次为 `5、3、160、80、160、80、30000000`。“恢复默认”使用执行机上报配置，Token 阈值 `0` 关闭熔断。新增 MCTS 已支持的业务参数只需在平台增加同名标量 key/value，原名直传，不维护逐字段映射；通用编辑器允许新增嵌套草稿并原样下发；CLI 不支持的结构或调度参数覆盖在执行客户端报错。完整快照保留字段类型和删除语义，历史值不改写；复用时确认完整原配置，平台不转换别名或层级。详情见 [运行参数说明](../evaluation/experiments.md)。Pi 与后续 xiaoO 使用相同 MCTS 配置项。用户无需手动运行命令或填写输出路径。执行器读取最终选中的 `artifact.patch`，生成并上传 `model.patch`，关联本次根 Trace；平台独立运行 Benchmark 评测。停止实验向进程组发送 SIGINT，留出 30 秒释放本次会话/checkpoint 并刷新 Trace。Agent 超时从 MCTS 命令启动计时，覆盖准备、搜索、官测和退出上传；根 Trace 从首次 xGovernor 调用开始记录，耗时可能短于实验执行耗时。采集到分支 Trace 不代表已生成最终提交物。
+选择支持运行参数的主机后，在实验向导配置本次搜索参数，或导入并保存个人模板；默认值来自执行机，编辑只影响当前实验。详情见[运行参数说明](../evaluation/experiments.md)。用户无需手动填写 Case ID 或输出路径。
+
+SWE-bench 执行完成后，应同时看到最终 `model.patch`、根 Trace 和平台独立评测结果；采集到分支 Trace 不代表已生成提交物。停止实验后等待本次运行退出、上传并释放资源。Agent 超时覆盖 MCTS 命令执行全程；根 Trace 从首次 xGovernor 调用开始，显示时长可能更短。
 
 常驻客户端需要包含 `executor/mcts-runtime.cjs` 和 `pi-mcts` 能力发现逻辑；仅安装采集代理不会自动获得 Benchmark 执行能力。公共服务与客户端更新见 [Benchmark 通用服务部署指南](../evaluation/benchmarks/deploy-services.md#72-参数配置与客户端更新)，Benchmark 专属准备分别见 [SWE-bench](../evaluation/benchmarks/deploy-swe-bench.md) 与 [ZSoft](../evaluation/benchmarks/deploy-zsoft.md)。
 
@@ -180,3 +182,5 @@ xGovernor 把工具输入放在 `tool_activity(begin)`、把结果放在 `tool_a
 5. 用 `--upstream` 明确指定原 xGovernor 地址，避免安装时配置已过期。
 
 如果执行记录显示“观测超时”但远端任务仍在运行，先检查 `agent-insight-mcts-run` 是否仍存活。启动器存活时应至少每 60 秒产生一次 coordinator 快照；只有 xGovernor/E2B 远端任务存活而本地启动器已经退出时，Agent Insight 无法继续确认其执行状态。
+
+开发维护参考：[采集器安装与运行边界](../../../../design/observability/mcts-trace-observability/phase2-requirements-design.md#23-安装与运行边界)、[Benchmark 执行器实现](../../../../design/evaluation/benchmark/executor.md#11-zsoft-与-mcts-实例实现)。

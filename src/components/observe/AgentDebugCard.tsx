@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import {
   AlertTriangle,
   BrainCircuit,
@@ -56,6 +57,7 @@ import type {
 } from '@/lib/engine/agent-debug/types';
 
 interface AgentDebugCardProps {
+  hasInvokedSkill?: boolean;
   executionId: string;
   user: string;
   locale: string;
@@ -195,8 +197,10 @@ export function AgentDebugCard(props: AgentDebugCardProps) {
   return <AgentDebugCardContent key={props.executionId} {...props} />;
 }
 
-function AgentDebugCardContent({ executionId, user, locale, traceExplicitErrors = [], onNodeRefClick }: AgentDebugCardProps) {
+function AgentDebugCardContent({ executionId, user, locale, traceExplicitErrors = [], onNodeRefClick, hasInvokedSkill }: AgentDebugCardProps) {
   const zh = locale === 'zh';
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState('');
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AgentDebugReportPayload | null>(null);
   const [skillsAnalysis, setSkillsAnalysis] = useState<AgentDebugSkillsAnalysis | null>(null);
@@ -447,6 +451,19 @@ function AgentDebugCardContent({ executionId, user, locale, traceExplicitErrors 
               <ReportView key={report.generatedAt} report={report} zh={zh} traceExplicitErrors={traceExplicitErrors}
                 onNodeRefClick={onNodeRefClick} onRerun={() => run(true)} />
             )}
+            {hasInvokedSkill && report && !loading && !error && !!report.findings?.length && <div>
+              <Button size="sm" variant="outline" disabled={importing} onClick={async () => {
+                setImporting(true); setImportError('');
+                try {
+                  const response = await apiFetch('/api/diagnosis-runs/from-trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ executionId, generatedAt: report.generatedAt }) });
+                  const data = await response.json();
+                  if (!response.ok) throw new Error(data.error);
+                  window.location.assign(`${process.env.NEXT_PUBLIC_URL_PREFIX || ''}/fault?runId=${encodeURIComponent(data.runId)}`);
+                } catch (failure) { setImportError(failure instanceof Error ? failure.message : 'Failed'); }
+                finally { setImporting(false); }
+              }}>{zh ? '选择诊断发现用于 Skill 优化' : 'Select diagnosis findings for Skill optimization'}</Button>
+              {importError && <p role="alert" className="mt-2 text-xs text-warning">{importError}</p>}
+            </div>}
           </div>
         </AssistantArticle>
       )}
@@ -671,12 +688,12 @@ function ModuleEvidenceLocation({ step, traceStepIndex, anchorId, zh, onNodeRefC
     : <span className="text-xs tabular-nums text-foreground-muted">{label}</span>;
 }
 
-function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }: {
+export function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }: {
   report: AgentDebugReportPayload;
   zh: boolean;
   traceExplicitErrors: TraceExplicitError[];
   onNodeRefClick?: (nodeId: string) => void;
-  onRerun: () => void;
+  onRerun?: () => void;
 }) {
   const findings = useMemo(() => normalizeReportFindings(report), [report]);
   const detectorFindings = useMemo(
@@ -715,14 +732,14 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
               <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
                 {totalFindings > 0
                   ? (zh ? `${totalFindings} 条发现 · ${issueCount} 条证据节点` : `${totalFindings} findings · ${issueCount} evidence nodes`)
-                  : (zh ? '未发现明确关键问题' : 'No clear key finding')}
+                  : (zh ? '本次诊断未形成关键发现' : 'This diagnosis produced no key findings')}
               </div>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={onRerun}>
+          {onRerun && <Button variant="outline" size="sm" onClick={onRerun}>
             <RefreshCw className="size-3.5" />
             {zh ? '重新诊断' : 'Rerun'}
-          </Button>
+          </Button>}
         </div>
 
         {totalFindings > 0 ? (
@@ -768,7 +785,7 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
             ))}
           </div>
         ) : (
-          <p className="text-sm text-foreground-muted">{zh ? '初筛未检测到足够明确的问题。' : 'Phase 1 did not find a clear issue.'}</p>
+          <p className="text-sm text-foreground-muted">{zh ? '本次诊断未形成关键发现，不代表执行不存在问题。' : 'This diagnosis produced no key findings; this does not establish that the execution is problem-free.'}</p>
         )}
       </div>
     </div>
@@ -878,7 +895,7 @@ function FatalDiagnosisCard({ report, zh, onNodeRefClick, onRerun }: {
   report: AgentDebugReportPayload;
   zh: boolean;
   onNodeRefClick?: (nodeId: string) => void;
-  onRerun: () => void;
+  onRerun?: () => void;
 }) {
   const fatal = report.triage?.fatalDiagnosis;
   if (!fatal) return null;
@@ -897,10 +914,10 @@ function FatalDiagnosisCard({ report, zh, onNodeRefClick, onRerun }: {
             </div>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={onRerun}>
+        {onRerun && <Button variant="outline" size="sm" onClick={onRerun}>
           <RefreshCw className="size-3.5" />
           {zh ? '重新诊断' : 'Rerun'}
-        </Button>
+        </Button>}
       </div>
       <p className="mt-3 text-[13px] leading-7 text-foreground">{fatal.summary}</p>
       {(fatal.affectedTraceStepIndexes?.length || fatal.affectedSteps.length) > 0 && (
@@ -1325,6 +1342,34 @@ export function SkillsAnalysisSection({ executionId, user, zh, analysis, submitt
     if (!data.error || isSkillsAnalysisRunningResponse(data)) {
       setError('');
     }
+  }
+
+  if (localAnalysis?.status === 'skipped') {
+    const missingSkill = localAnalysis.skipReason === 'missing-skill';
+    const reason = missingSkill
+      ? (zh ? '该 Skill 未在 Skill 管理中心注册，或当前账号不可见。' : 'This Skill is unregistered or not visible to your account in Skill Management.')
+      : (zh ? '当前 Trace 未关联可核验的 Skill。' : 'This trace has no linked Skill to review.');
+    return (
+      <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">{zh ? 'Skills 步骤核验' : 'Skills step review'}</span>
+          <StatusBadge status="cancelled" label={zh ? '已跳过' : 'Skipped'} />
+        </div>
+        <p className="mt-1 text-sm text-foreground-secondary">
+          {reason}{zh ? '不影响智能诊断结果。' : ' This does not affect the diagnosis.'}
+        </p>
+        {missingSkill && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="link" size="sm" asChild>
+              <Link href="/config/skills">{zh ? '前往 Skill 管理中心' : 'Open Skill Management'}</Link>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => generateSkillsAnalysis(true)} disabled={!canGenerate}>
+              {zh ? '重新核验' : 'Review again'}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   return (

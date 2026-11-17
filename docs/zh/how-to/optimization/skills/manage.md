@@ -14,6 +14,8 @@ Skills 管理页是 Skill 资产的统一入口，用于查看当前 Workspace �
 > Skills 管理页承担 Skill 资产展示、入口组织与版本管理职责。
 > 相关操作通常从该页面开始，包括新建 Skill、查看详情、核对激活版本，以及进入分析与优化流程。
 
+HTTP 资产与版本管理见 [Skill 管理接口参考](../../../reference/optimization/skills-api.md)。该页区分按名称与遗留 ID 路由，并逐项说明当前身份处理。
+
 ## 核心能力
 
 - **查看 Skill 列表**：集中展示当前 Workspace 下的 Skill 资产
@@ -38,7 +40,7 @@ Skills 管理的常见使用流程如下：
 - **新建入口**：点击右上角按钮创建新的 Skill
 
 <p align="center">
-  <img src="../../../../images/skills/list.png" alt="Skills 管理列表与新建入口示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../../images/skills/list.png" alt="Skills 列表展示技能卡片、筛选与新建入口" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 该区域用于完成 Skill 定位、状态判断与后续操作入口选择。
@@ -88,7 +90,7 @@ Skills 管理的常见使用流程如下：
 该区域主要用于形成对当前 Skill 生命周期状态的整体判断。
 
 <p align="center">
-  <img src="../../../../images/skills/overview.png" alt="Skill 详情概览示意图" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../../images/skills/overview.png" alt="Skill 概览展示生命周期阶段与使用说明" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 ### 3. 内容
@@ -108,11 +110,12 @@ Skills 管理的常见使用流程如下：
 
 - 版本时间线或版本列表
 - 哪个版本当前处于激活状态
+- 优化发布版本是否处于待外部验证、验证通过或验证失败状态
 - 每个版本的基础说明与状态
 - 对比差异、切换激活版本或删除旧版本
 
 <p align="center">
-  <img src="../../../../images/skills/version.png" alt="Skill 详情版本管理示意图" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../../images/skills/version.png" alt="Skill 版本历史展示当前版本与变更记录" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 当 Skill 经过多轮生成与优化后，版本页是判断当前应使用版本的关键入口。
@@ -129,12 +132,14 @@ Skill 往往不止一个版本，但同一时刻通常只有一个“当前激�
 
 - `v0`、`v1`、`v2` 是不同阶段的历史快照
 - **激活版本** 是当前实际使用的版本
-- 新版本生成或优化完成后，通常还需要显式切换为激活状态
+- 优化候选发布后先成为不可变的“待外部验证”正式版本，不会自动替换激活版本
+- 用户可以在优化会话卡片下载该版本 ZIP，在自己的环境完成行为验证并登记通过或失败
+- 只有外部验证通过的优化版本才能显式切换为激活状态；待验证或验证失败版本会被激活入口拒绝
 
 在仅查看文件内容而未核对激活状态时，容易误判当前系统实际使用的版本。
 
 <p align="center">
-  <img src="../../../../images/skills/skill_run.png" alt="Skill 详情运行记录示意图" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../../images/skills/skill_run.png" alt="Skill 运行记录展示调用统计与关联 Trace" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 ## 适用场景

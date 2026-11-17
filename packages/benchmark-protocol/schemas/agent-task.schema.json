@@ -20,7 +20,6 @@
             "sourceRevision",
             "implementationDigest",
             "network",
-            "resources",
             "timeouts",
             "targets",
             "models",
@@ -49,7 +48,7 @@
               "pattern": "^sha256:[a-f0-9]{64}$"
             },
             "network": {
-              "const": "deny"
+              "enum": ["deny", "allow", "client-default"]
             },
             "resources": {
               "type": "object",
@@ -138,6 +137,8 @@
           "additionalProperties": false
         },
         "environment": {
+          "oneOf": [
+            {
           "type": "object",
           "required": [
             "kind",
@@ -167,6 +168,9 @@
             }
           },
           "additionalProperties": false
+        },
+            { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "workspace" } }, "additionalProperties": false }
+          ]
         }
       },
       "additionalProperties": false

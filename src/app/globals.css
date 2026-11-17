@@ -750,6 +750,31 @@ button, input, select, textarea, div, span, a, p {
 }
 .ai-tab:hover:not(.on) { color: var(--foreground-secondary); }
 
+.ai-artifact-markdown {
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.ai-artifact-markdown :is(h1, h2, h3, h4, h5, h6) { margin: 1em 0 0.5em; font-weight: 650; line-height: 1.4; }
+.ai-artifact-markdown h1 { font-size: 1.7em; }
+.ai-artifact-markdown h2 { font-size: 1.4em; }
+.ai-artifact-markdown h3 { font-size: 1.2em; }
+.ai-artifact-markdown p { margin: 0.6em 0; }
+.ai-artifact-markdown :is(ul, ol) { padding-left: 1.8em; margin: 0.6em 0; }
+.ai-artifact-markdown ul { list-style: disc; }
+.ai-artifact-markdown ol { list-style: decimal; }
+.ai-artifact-markdown a { color: var(--primary); text-decoration: underline; }
+.ai-artifact-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0.8em 0; }
+.ai-artifact-markdown :is(th, td) { border: 1px solid var(--border); padding: 6px 10px; }
+.ai-artifact-markdown th { background: var(--background-secondary); font-weight: 650; }
+.ai-artifact-markdown blockquote { margin: 0.8em 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--foreground-muted); }
+.ai-artifact-markdown code { font-family: var(--font-mono, monospace); background: var(--background-secondary); border-radius: var(--radius-sm); padding: 0.15em 0.3em; }
+.ai-artifact-markdown pre { overflow-x: auto; background: var(--background-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; }
+.ai-artifact-markdown pre code { padding: 0; }
+.ai-artifact-markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
+.ai-artifact-markdown img { max-width: 100%; height: auto; }
+
 * {
   box-sizing: border-box;
 }

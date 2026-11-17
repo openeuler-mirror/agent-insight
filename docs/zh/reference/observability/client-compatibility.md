@@ -1,6 +1,8 @@
 ---
 title: "客户端版本与框架兼容性"
 description: "共享采集模块更新、框架安装差异与已验证范围。"
+keywords: ["Agent Insight", "客户端兼容性", "采集器升级", "框架接入"]
+changefreq: "monthly"
 ---
 
 Pi Agent、Codex 和 Goal Plus 共用采集传输模块。重新安装时，已校验的官方旧版会先备份到
@@ -44,3 +46,32 @@ QwenPaw plugins 目录。安装后必须重启 QwenPaw；新建对话时会在�
 [QwenPaw Trace Collector 接入指南](../../how-to/observability/qwenpaw-trace-collector.md)。
 
 这些是安装行为和已有验证范围，不代表任意版本、操作系统或真实模型均通过验证。安装入口见[客户端安装](../../how-to/platform/settings/access-control.md)。
+
+## JiuwenSwarm
+
+在安装指导中选择 JiuwenSwarm，重新执行当前平台生成的安装命令以更新观测扩展，然后重启
+JiuwenSwarm AgentServer。容器部署时，把扩展装到容器可见的扩展目录，保留已有
+`EXTENSION_DIRS` 并追加该目录；上报地址必须从容器内可达。本机 Docker Desktop 可使用
+`http://host.docker.internal:3000/api/ingest/otel/v1/traces`，并配置当前账号的 API Key。
+
+新版 SDK 将共享 exporter 初始化与单 Agent 追踪启用分开；当前扩展会同时完成两者，旧 SDK
+没有新接口时保留原路径。仅看到“已接入”日志不足以验收，应检查 Trace 的用户输入、最终回答、
+每次模型调用、工具参数与结果、Token 和结束状态。
+
+服务端兼容旧 `llm.call` / `tool.*` 契约及新版结构化 GenAI 契约。新版普通单 Agent 的
+task-iteration Span 不作为团队标记；工具按调用 ID 或父 Span 关联，异步子 Agent 使用明确的
+execution-subject 父关系及创建工具返回的子会话 ID。同名子 Agent 按 subject / session 身份区分，
+reasoning 与 context event 不重复计数。
+接入实现与手动配置见[Telemetry 扩展模式](../../how-to/observability/develop-trace-collector.md#32-模式二telemetry扩展模式)。
+
+同一条 OTLP Trace 内的子 Agent 通过平台统一派生机制保存为独立 Execution 和 Session，
+以子会话 ID 作为 taskId，保存直接父级和根执行关联，开始时间取源调用树时间。
+树内 Trace 按钮和概览卡片打开对应子 Agent 的独立 Trace 详情，并可返回父 Agent；
+同名子 Agent 按子会话 ID 区分。概览优先展示父子卡片，窄窗口上下排列调用树和详情。
+
+已用 `0.0.13y` ARM64 核心镜像（内含 workswarm `0.2.5b1`、openJiuwen `0.1.20`）
+以个人版独立 AgentServer 连接本地平台，使用真实模型验证普通对话、文件读取、工具失败及异步
+子 Agent 委派，并对照原始 Span 核验消息、调用数、Token、层级和源开始/结束时间。
+旧协议由回归测试覆盖；未据此声称旧镜像、AMD64 或完整 OpenShift 部署均已实测。
+
+[English](../../../en/reference/observability/client-compatibility.md)

@@ -13,9 +13,12 @@
 # limitations under the License.
 
 import json
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_fault_injection.fault_inject.catalog.definition import FaultRegistry
 from agent_fault_injection.pipeline.models import (
@@ -25,6 +28,7 @@ from agent_fault_injection.pipeline.models import (
     TerminationReason,
 )
 from agent_fault_injection.platform_adapters.base import PlatformAdapter
+from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
 from agent_fault_injection.platform_adapters.opencode.mapper import (
     OpenCodeTrajectoryMapper,
 )
@@ -153,6 +157,58 @@ class PluginStartFailedRegistry:
 
 
 class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_abort_takes_precedence_over_process_exit_code(self) -> None:
+        """Check native JSON evidence through the real adapter and runner artifacts."""
+        scenarios = [
+            (0, "MessageAbortedError", "ses_business", True, TerminationReason.FAULT_INTERCEPTED, "interrupted"),
+            (1, "MessageAbortedError", "ses_business", True, TerminationReason.FAULT_INTERCEPTED, "interrupted"),
+            (0, None, "ses_business", True, TerminationReason.PROCESS_EXITED, "finished"),
+            (1, "ProviderError", "ses_business", True, TerminationReason.PLATFORM_ERROR, "interrupted"),
+            (0, "MessageAbortedError", "ses_other", True, TerminationReason.PROCESS_EXITED, "finished"),
+            (0, "MessageAbortedError", "ses_business", False, TerminationReason.FAULT_NOT_ACTIVATED, "finished"),
+        ]
+        script = textwrap.dedent("""
+            import json, os, sys
+            from pathlib import Path
+            raw = Path(os.environ["AGENT_FI_RAW_DIR"])
+            exit_code, error_name, error_session, activated = json.loads(sys.argv[1])
+            events = [{"sequence": 1, "kind": "run.session.bound",
+                       "payload": {"sessionID": "ses_business"}}]
+            if activated:
+                events.append({"sequence": 2, "kind": "fault.activation.completed",
+                               "payload": {"sessionID": "ses_business"}})
+            (raw / "events.jsonl").write_text("".join(json.dumps(e) + "\\n" for e in events))
+            (raw / "plugin-ready.json").write_text("{}")
+            if error_name:
+                print(json.dumps({"type": "error", "sessionID": error_session,
+                      "error": {"name": error_name, "data": {"message": "Aborted"}}}), flush=True)
+            sys.exit(exit_code)
+        """)
+        for exit_code, error_name, error_session, activated, reason, execution_status in scenarios:
+            with self.subTest(exit_code=exit_code, error=error_name, session=error_session, activated=activated):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    progress = []
+                    request = RunRequest(
+                        platform="opencode", agent="build", fault="thinking-dead-loop",
+                        prompt="fixture", workspace=root, output_dir=root / "artifacts",
+                        timeout_seconds=10, platform_options={"executable": sys.executable},
+                    )
+                    runner = ExperimentRunner(progress_callback=lambda event, details: progress.append((event, details)))
+                    command = [sys.executable, "-c", script, json.dumps([exit_code, error_name, error_session, activated])]
+                    with patch.object(OpenCodeAdapter, "_build_command", return_value=command):
+                        result = await runner.run(request)
+                    self.assertEqual(result.termination_reason, reason)
+                    self.assertEqual(result.status, RunStatus.COMPLETED if activated else RunStatus.FAILED)
+                    manifest = json.loads(result.artifacts.manifest_file.read_text(encoding="utf-8"))
+                    self.assertEqual(manifest["exit_code"], exit_code)
+                    self.assertEqual(manifest["termination_reason"], reason)
+                    self.assertEqual(manifest["agent_execution_status"], execution_status)
+                    details = next(details for event, details in progress if event == "agent_execution_finished")
+                    self.assertEqual(details["execution_status"], execution_status)
+                    self.assertEqual(details["exit_code"], exit_code)
+                    self.assertTrue((result.artifacts.root / "collect-result.json").is_file())
+
     async def test_runner_selects_adapter_and_writes_trajectory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

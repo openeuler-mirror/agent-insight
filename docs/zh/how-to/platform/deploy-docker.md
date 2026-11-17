@@ -1,6 +1,8 @@
 ---
 title: "用 Docker 部署服务端"
 description: "在线镜像、离线导入、源码挂载与持久化运行目录。"
+keywords: ["Agent Insight", "Docker", "服务部署", "容器配置"]
+changefreq: "monthly"
 ---
 
 如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
@@ -161,8 +163,8 @@ ZIP 更新前请备份数据库，并确认新分支的依赖、数据库 schema
 需要了解的行为：
 
 - **不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致**，容器直接运行镜像里打好的 `agent-insight` npm 包。
-- 配置之后，容器启动时会把源码复制到容器内的 `/app/source`（跳过 `node_modules`、`.next`、`.git`、`data/`、`exclude/`），再依次执行 `prisma db push`、`prisma generate`、`npm run build`，最后和默认模式一样跑 `node .next/standalone/server.js`。宿主机源码目录以只读挂载即可，不会被写入构建产物，也不需要迁就容器里 `node` 用户的属主。
-- 依赖用的是镜像预装的那一份（含 `tailwindcss`、`typescript` 等构建期依赖），源码目录不需要 `npm install`。**因此源码改了 `package.json` 新增依赖时必须重新构建镜像**；启动日志会打印镜像里缺失的依赖清单作为告警。
+- 配置之后，容器启动时会把源码复制到容器内的 `/app/source`（跳过 `node_modules`、`.next`、`.git`、`data/`、`exclude/`），再依次执行 `prisma db push`、`prisma generate`、`npm run build`，最后和默认模式一样由控制网关加载 standalone 服务。宿主机源码目录以只读挂载即可，不会被写入构建产物，也不需要迁就容器里 `node` 用户的属主。
+- 依赖用的是镜像预装的那一份（含 `tailwindcss`、`typescript` 等构建期依赖），源码目录不需要 `npm install`。**因此源码改了 `package.json` 新增依赖或调整精确锁定版本时，必须重新构建镜像**；启动时会检查缺失依赖和精确版本不匹配，列出问题并直接退出，不再仅告警。版本范围声明不等同于完整的兼容性验证。
 - 首次启动是冷构建，需要几分钟；构建期间端口还没起，容器健康状态显示 `health: starting` 属正常。之后重启会保留 `.next/cache` 走增量构建；容器被删掉重建时，只有像上面那样给 `/app/source` 挂了 volume 才保得住缓存。
 - 构建期间服务不可用（分钟级）。不能停机的话，先用另一个端口起一份新容器验证通过，再切端口或流量。
 - 路径写错（拼错、忘了挂 volume、误填宿主机路径）时容器会**直接报错退出，不会静默回退到镜像内置版本**。配了 `restart: unless-stopped` 就表现为反复重启，`docker logs` 里第一行就是原因。校验在复制源码之前完成，失败时数据目录和上一次的构建缓存都不受影响。
@@ -207,7 +209,34 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 
 如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
 
+## UBI9/OpenShift 镜像
+
+完整步骤见[在 OpenShift 上部署服务端](./deploy-openshift.md)，包括项目权限、镜像准备、PVC/SCC、HTTPS Route、Developer Sandbox 构建、业务验收与排障。
+
+需要 UBI9、完整 DNF 及客户派生补丁构建能力时，使用从源码制作的独立 `Dockerfile.openshift` 镜像，构建及补丁验收步骤见[镜像发布](./release-docker-image.md#构建-ubi9openshift-交付候选)。它与通用 Docker Hub 镜像是不同的交付入口。
+
+UBI9 候选按预构建方式运行，不支持 `AGENT_INSIGHT_SOURCE_DIR` 运行时源码挂载；代码升级请重新构建镜像。
+
+更新后的共享 Docker 入口通过控制网关同时承载应用 HTTP 和 WebSocket 控制通道。控制指令分发端口默认为应用端口加一，只绑定容器内回环地址，无需额外暴露。升级后还需更新并重启已安装的客户端，客户端脚本不会随服务端镜像替换自动更新。公网验收应覆盖 WSS 正常连接及降级长轮询；任务下发后断连、缺少 ACK 也应有明确的超时结果，不能只检查首页健康状态。
+
+部署模板为 [`deploy/openshift.yaml`](../../../../deploy/openshift.yaml)。先替换示例镜像为可访问的交付镜像或 digest，确认节点架构、PVC 大小和默认 StorageClass，再执行：
+
+```bash
+oc apply -n <项目名称> -f deploy/openshift.yaml
+oc rollout status -n <项目名称> deployment/agent-insight
+oc get -n <项目名称> route/agent-insight
+```
+
+镜像默认 UID 0 供派生构建继承；在 OpenShift 运行时使用目标 SCC 分配的非 root UID，不设置固定 `runAsUser`，也不申请 `anyuid` 或特权。Pod 可设置 `runAsNonRoot: true`、`allowPrivilegeEscalation: false`、`capabilities.drop: [ALL]` 和 `seccompProfile.type: RuntimeDefault`。先按单副本部署，并使用 `Recreate` 更新策略，避免两个实例同时访问同一运行根。部署前确认集群节点架构、项目配额及实际使用的 SCC。
+
+将 PVC 挂到 `/data/agent-insight`，按存储类型核验 SCC 分配的组权限和 SQLite 文件锁；模型凭据通过 Secret/外部配置提供。镜像已将 HOME 和 XDG 目录放入运行根，Prisma 初始化需要写入镜像内预留目录，因此当前不声明支持只读根文件系统。OpenShift 探针需要在工作负载中配置，Docker HEALTHCHECK 不会自动转换为探针。通过 Service/Route 发布端口 3000，并验证 HTTPS、SSE、WebSocket 和网关超时。
+
+先执行镜像验证，再在真实 OpenShift 环境验证非 root UID/SCC、PVC 重建持久化、登录、Trace、评测和优化。基础镜像迁移、Docker 启动成功或漏洞扫描结果不能相互替代。备份、升级和恢复仍遵循[升级与回滚](./upgrade-and-rollback.md)，不能只回退镜像而忽略数据库结构变化。
+
+
 ---
 
 
 完成部署后继续[首次接入教程](../../tutorial/platform/01-quick-start.md)。升级前先阅读[升级与回滚](./upgrade-and-rollback.md)。
+
+[English](../../../en/how-to/platform/deploy-docker.md)

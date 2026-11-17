@@ -42,6 +42,7 @@ export async function PUT(req: Request) {
         actions: body.actions,
         components: body.components,
         executionProfiles: body.executionProfiles,
+        executionBindings: body.executionBindings,
         faultInjection: body.faultInjection,
       },
     })

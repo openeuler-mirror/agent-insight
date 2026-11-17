@@ -16,6 +16,7 @@
 
 import { db } from '@/lib/storage/prisma';
 import { recomputeExecutionSkills } from '@/lib/storage/data-service';
+import { jiuwenLegacyLatencyCorrection } from '@/lib/engine/observability/jiuwen-latency';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     TRACE_BUNDLE_FORMAT,
@@ -135,24 +136,25 @@ function portableSession(
     };
 }
 
-function ownsTrace(record: any, user: string): boolean {
-    return record?.user == null || record.user === user;
+function ownsTrace(record: { user?: string | null }, user: string): boolean {
+    return record.user === user;
 }
 
-export async function exportTraceBundle(executionId: string, user: string): Promise<TraceBundleV1> {
+export async function exportTraceBundle(executionId: string, user: string, options?: { allUsers?: boolean }): Promise<TraceBundleV1> {
+    const canRead = (record: { user?: string | null }) => options?.allUsers || ownsTrace(record, user);
     const selected = await db.findExecutionById(executionId);
-    if (!selected || !ownsTrace(selected, user)) throw new Error('Trace not found');
+    if (!selected || !canRead(selected)) throw new Error('Trace not found');
 
     const rootId = selected.isSubagent
         ? (selected.rootExecutionId || selected.parentExecutionId)
         : selected.id;
     if (!rootId) throw new Error('Trace root not found');
     const root = rootId === selected.id ? selected : await db.findExecutionById(rootId);
-    if (!root || !ownsTrace(root, user)) throw new Error('Trace root not found');
+    if (!root || !canRead(root)) throw new Error('Trace root not found');
 
     const possibleChildren = await db.findExecutions({ rootExecutionId: root.id }, { timestamp: 'desc' });
     const children = possibleChildren
-        .filter((record: any) => record.id !== root.id && record.rootExecutionId === root.id && record.isSubagent === true && ownsTrace(record, user))
+        .filter((record: any) => record.id !== root.id && record.rootExecutionId === root.id && record.isSubagent === true && canRead(record))
         .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     const records = [root, ...children];
     const subagentSessionBySpanId = new Map<string, string>();
@@ -165,7 +167,7 @@ export async function exportTraceBundle(executionId: string, user: string): Prom
     }
     const executions: TraceBundleNodeV1[] = await Promise.all(records.map(async (record: any) => {
         const storedSession = record.taskId ? await db.findSessionByTaskId(record.taskId) : null;
-        const session = storedSession && ownsTrace(storedSession, user) ? storedSession : null;
+        const session = storedSession && (storedSession.user == null || canRead(storedSession)) ? storedSession : null;
         return {
             execution: portableExecution(record),
             session: portableSession(session, record.taskId ?? null, subagentSessionBySpanId),
@@ -190,7 +192,10 @@ async function identityTaken(identity: string): Promise<boolean> {
     return !!execution || !!session || taskExecutions.length > 0;
 }
 
-function executionCreateData(execution: PortableTraceExecution, user: string): Record<string, unknown> {
+function executionCreateData(execution: PortableTraceExecution, user: string, session: PortableTraceSession | null): Record<string, unknown> {
+    const correction = execution.framework === 'jiuwenswarm'
+        ? jiuwenLegacyLatencyCorrection(execution.latency, session?.interactions)
+        : undefined;
     return {
         id: execution.id,
         taskId: execution.taskId,
@@ -198,7 +203,7 @@ function executionCreateData(execution: PortableTraceExecution, user: string): R
         framework: execution.framework,
         tokens: execution.tokens,
         cost: execution.cost,
-        latency: execution.latency,
+        latency: correction?.latencyMs ?? execution.latency,
         toolCallCount: execution.toolCallCount,
         llmCallCount: execution.llmCallCount,
         inputTokens: execution.inputTokens,
@@ -279,7 +284,7 @@ export async function importTraceBundle(value: unknown, user: string): Promise<I
             const execution = node.execution;
             await db.upsertExecution({
                 where: { id: execution.id },
-                create: executionCreateData(execution, user),
+                create: executionCreateData(execution, user, node.session),
                 update: {},
             });
             createdExecutionIds.push(execution.id);

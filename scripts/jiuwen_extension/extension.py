@@ -189,6 +189,8 @@ class AgentInsightObservabilityExtension(_BaseExtension):
 
     def __init__(self) -> None:
         self._initialized = False
+        self._owns_provider = False
+        self._release_agent = None
 
     async def initialize(self, config: Any) -> None:  # noqa: D401 - 契约方法
         # loader 不调用 initialize（只调 register_extensions）；真正接线在 wire() 完成。
@@ -209,22 +211,31 @@ class AgentInsightObservabilityExtension(_BaseExtension):
             _log("warning", f"import agent-core observability failed: {exc}")
             return
 
-        if is_initialized():
-            _log("info", "observability 已初始化，跳过 re-init")
-            self._initialized = True
-            return
-
         _apply_header_env(settings["headers"])
+        self._owns_provider = not is_initialized()
         try:
-            init_observability(
-                ObservabilityConfig(
-                    enabled=True,
-                    exporter=settings["exporter"],
-                    endpoint=settings["endpoint"],
-                    service_name=settings["service_name"],
-                    sample_rate=settings["sample_rate"],
-                )
+            config = ObservabilityConfig(
+                enabled=True,
+                exporter=settings["exporter"],
+                endpoint=settings["endpoint"],
+                service_name=settings["service_name"],
+                sample_rate=settings["sample_rate"],
             )
+            if self._owns_provider:
+                init_observability(config)
+            else:
+                _log("info", "observability 已初始化，复用已有 provider")
+            try:
+                from openjiuwen.harness.observability import (
+                    acquire_observability,
+                    release_observability,
+                )
+            except ImportError:
+                pass
+            else:
+                # 新版 SDK 只有 acquire 后才允许宿主创建单 Agent 的 root span。
+                acquire_observability(config)
+                self._release_agent = release_observability
         except Exception as exc:
             _log("warning", f"init_observability failed: {exc}")
             # init 先建 provider 再建 exporter 才抛 → 复位，避免 is_initialized() 假阳 +
@@ -232,7 +243,8 @@ class AgentInsightObservabilityExtension(_BaseExtension):
             try:
                 from openjiuwen.agent_teams.observability import shutdown_observability
 
-                shutdown_observability()
+                if self._owns_provider:
+                    shutdown_observability()
             except Exception:
                 pass
             return
@@ -248,9 +260,14 @@ class AgentInsightObservabilityExtension(_BaseExtension):
         if not self._initialized:
             return
         try:
+            if self._release_agent is not None:
+                self._release_agent()
+                self._release_agent = None
             from openjiuwen.agent_teams.observability import shutdown_observability
 
-            shutdown_observability()  # flush + 释放 provider
+            if self._owns_provider:
+                shutdown_observability()
+            self._initialized = False
         except Exception as exc:
             _log("warning", f"shutdown_observability failed: {exc}")
 

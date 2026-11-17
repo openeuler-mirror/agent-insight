@@ -128,7 +128,13 @@ function lifecycle(now: number): Prisma.Sql {
     const received = timestampMs(Prisma.sql`e."lastIngestedAt"`);
     const created = timestampMs(Prisma.sql`e.timestamp`);
     const latest = Prisma.sql`CASE WHEN ${received} > 0 THEN ${received} WHEN ${created} > 0 THEN ${created} ELSE NULL END`;
-    return Prisma.sql`(CASE WHEN ${completedAt} > 0 THEN CASE WHEN ${failed} THEN 'failed' ELSE 'success' END
+    // 与 getTraceLifecycle（trace-lifecycle.ts）保持同一语义：采集端显式
+    // executionStatus 优先于时间推断；只有采集端会写 interrupted（PR #446 审查项 5，
+    // 否则数据库分页的「已中断」筛选恒为空、与内存分页路径不一致）。
+    const explicitStatus = Prisma.sql`lower(trim(coalesce(${Prisma.raw('e."executionStatus"')}, '')))`;
+    return Prisma.sql`(CASE WHEN ${explicitStatus} = 'interrupted' THEN 'interrupted'
+        WHEN ${explicitStatus} = 'failed' THEN 'failed'
+        WHEN ${completedAt} > 0 THEN CASE WHEN ${failed} THEN 'failed' ELSE 'success' END
         WHEN ${latest} <= ${now - TRACE_INACTIVITY_TIMEOUT_MS} THEN 'timed_out' ELSE 'running' END)`;
 }
 
@@ -154,12 +160,15 @@ export async function aggregateExecutionList(
     client: Pick<typeof prismaRaw, '$queryRaw'> = prismaRaw,
 ) {
     const latency = options.avgNullAsZero ? Prisma.sql`COALESCE(e.latency, 0)` : Prisma.sql`e.latency`;
+    // 单次取值供 SUM 与 WHERE 共用，避免缺省 lifecycleNow 时同查询内多次
+    // Date.now() 在 timed_out 边界上产生自相矛盾。
+    const lifecycleNow = options.lifecycleNow ?? Date.now();
     const [row] = await client.$queryRaw<Array<{
         total: bigint; failedCount: bigint; avgLatencyMs: number | null; totalTools: number | null; totalToolErrors: number | null;
     }>>(Prisma.sql`SELECT COUNT(*) AS total,
-        SUM(CASE WHEN ${completedAt} > 0 AND ${failed} THEN 1 ELSE 0 END) AS "failedCount",
+        SUM(CASE WHEN ${lifecycle(lifecycleNow)} = 'failed' THEN 1 ELSE 0 END) AS "failedCount",
         AVG(${latency}) AS "avgLatencyMs", SUM(e."toolCallCount") AS "totalTools", SUM(e."toolCallErrorCount") AS "totalToolErrors"
-        ${from} WHERE ${predicate(where, options)}`);
+        ${from} WHERE ${predicate(where, { ...options, lifecycleNow })}`);
     const totalTools = Number(row.totalTools ?? 0);
     const totalToolErrors = Number(row.totalToolErrors ?? 0);
     return {
@@ -191,7 +200,7 @@ export async function selectExecutionListIds(where: Prisma.ExecutionWhereInput, 
     const fixedOptions = { ...options, lifecycleNow: options.lifecycleNow ?? Date.now() };
     const status = lifecycle(fixedOptions.lifecycleNow);
     const sort = options.sortKey === 'status'
-        ? Prisma.sql`CASE ${status} WHEN 'running' THEN 0 WHEN 'timed_out' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END`
+        ? Prisma.sql`CASE ${status} WHEN 'running' THEN 0 WHEN 'timed_out' THEN 1 WHEN 'interrupted' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END`
         : options.sortKey === 'cost' ? cost()
             : options.sortKey === 'timestamp' || options.sortKey === 'agentName' ? Prisma.raw(`e."${options.sortKey}"`)
                 : Prisma.sql`COALESCE(${Prisma.raw(`e."${options.sortKey}"`)}, 0)`;

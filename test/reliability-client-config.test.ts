@@ -333,6 +333,65 @@ test('camel-case URL submissions are validated and the snake-case key takes prec
   }
 })
 
+test('concurrent first config view reuses one record and keeps revision and override', async () => {
+  try {
+    const client = await newClient()
+    const originalDelegate = prismaRaw.reliabilityClientConfig
+    const originalFindUnique = originalDelegate.findUnique.bind(originalDelegate)
+    const originalCreate = originalDelegate.create.bind(originalDelegate)
+    let reads = 0
+    let conflicts = 0
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => { release = resolve })
+    const patched = Object.create(originalDelegate) as typeof originalDelegate
+    // 两次首次读取都读到空后再放行 create，稳定复现唯一约束竞争。
+    patched.findUnique = (async (args: Parameters<typeof originalFindUnique>[0]) => {
+      const row = await originalFindUnique(args)
+      if (reads < 2) {
+        reads++
+        if (reads === 2) release()
+        await barrier
+      }
+      return row
+    }) as unknown as typeof originalDelegate.findUnique
+    patched.create = (async (args: Parameters<typeof originalCreate>[0]) => {
+      try {
+        return await originalCreate(args)
+      } catch (error) {
+        if ((error as { code?: string }).code === 'P2002') conflicts++
+        throw error
+      }
+    }) as unknown as typeof originalDelegate.create
+    Object.defineProperty(prismaRaw, 'reliabilityClientConfig', { value: patched, configurable: true, writable: true })
+    try {
+      const [first, second] = await Promise.all([
+        getClientConfigView(TEST_USER, client.clientId, 'opencode'),
+        getClientConfigView(TEST_USER, client.clientId, 'opencode'),
+      ])
+      assert.equal(conflicts, 1, 'both first reads must race through the real uniqueness check')
+      assert.equal(first.revision, 0)
+      assert.equal(second.revision, 0)
+      assert.deepEqual(first.overrideDiff, {})
+      assert.deepEqual(second.overrideDiff, {})
+      assert.equal(
+        await prismaRaw.reliabilityClientConfig.count({ where: { clientId: client.clientId, platform: 'opencode' } }),
+        1,
+      )
+      await prismaRaw.reliabilityClientConfig.update({
+        where: { clientId_platform: { clientId: client.clientId, platform: 'opencode' } },
+        data: { revision: 7, overrideJson: JSON.stringify({ enabled: false }) },
+      })
+      const retained = await getClientConfigView(TEST_USER, client.clientId, 'opencode')
+      assert.equal(retained.revision, 7)
+      assert.deepEqual(retained.overrideDiff, { enabled: false })
+    } finally {
+      Object.defineProperty(prismaRaw, 'reliabilityClientConfig', { value: originalDelegate, configurable: true, writable: true })
+    }
+  } finally {
+    await cleanup()
+  }
+})
+
 test('install token is single-use and expires', async () => {
   try {
     const { installToken } = await createInstallToken({ user: TEST_USER, expiresInSeconds: 600 })

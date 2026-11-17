@@ -79,4 +79,6 @@ export async function setup(context) {
   return async () => { abort.abort(); await events }
 }
 
-export default { id: 'agent-insight.experiment-events', setup }
+const experimentEventsPlugin = { id: 'agent-insight.experiment-events', setup }
+
+export default experimentEventsPlugin

@@ -99,7 +99,7 @@ function cleanup() {
   if (spawnedProc) {
     try {
       spawnedProc.kill()
-    } catch (e) {}
+    } catch {}
   }
 }
 
@@ -141,19 +141,17 @@ async function run(options) {
   const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
   const standaloneDir = path.dirname(standaloneServer)
 
-  const envPath = path.join(dataRoot, '.env')
-
   if (fileEnv.DB_HOST) {
     console.log('OpenGauss configuration detected (DB_HOST=' + fileEnv.DB_HOST + ')')
     console.log('Initializing OpenGauss database with project schema...')
 
     try {
       execSync(`${pythonCmd} -c "import psycopg2"`, { stdio: 'pipe' })
-    } catch (e) {
+    } catch {
       console.log('psycopg2 not found. Installing psycopg2-binary...')
       try {
         execSync(`${pipCmd} install psycopg2-binary`, { stdio: 'inherit' })
-      } catch (pipError) {
+      } catch {
         console.log('Warning: Could not install psycopg2-binary. OpenGauss init may fail.')
       }
     }
@@ -196,7 +194,7 @@ async function run(options) {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
-    await runCommand('npx prisma db push', {
+    await runCommand('npx prisma db push --skip-generate', {
       cwd: PACKAGE_ROOT,
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
@@ -287,47 +285,38 @@ async function run(options) {
     AGENT_INSIGHT_RAS_DISPATCH_PORT: dispatchPort.toString()
   }
 
-  let command, args
-
-  if (isStandalone) {
-    const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
-    if (fs.existsSync(controlServer)) {
-      console.log('Mode: production (standalone + control channel)')
-      command = 'node'
-      args = [controlServer]
-    } else {
-      console.log('Mode: production (standalone)')
-      command = 'node'
-      args = [standaloneServer]
-    }
-  } else if (isProduction) {
-    console.log('Mode: production')
-    command = 'npm'
-    args = ['run', 'start']
-  } else {
-    console.log('Mode: development')
-    command = 'npm'
-    args = ['run', 'dev']
-  }
-
   try {
-    const logFd = fs.openSync(logPath, 'a')
+    let args
 
-    if (isWindows) {
-      spawnedProc = spawn(command, args, {
+    if (isStandalone) {
+      const controlServer = path.join(PACKAGE_ROOT, 'scripts', 'control-server.js')
+      if (fs.existsSync(controlServer)) {
+        console.log('Mode: production (standalone + control channel)')
+        args = [controlServer]
+      } else {
+        console.log('Mode: production (standalone)')
+        args = [standaloneServer]
+      }
+    } else {
+      console.log(isProduction ? 'Mode: production' : 'Mode: development')
+      if (!isProduction) {
+        const { generate } = await import('./benchmark/generate-catalog.cjs')
+        console.log(`[benchmark catalog] generated: ${generate().join(', ')}`)
+      }
+      args = [require.resolve('next/dist/bin/next'), isProduction ? 'start' : 'dev', '--port', String(port)]
+    }
+
+    const logFd = fs.openSync(logPath, 'a')
+    try {
+      spawnedProc = spawn(process.execPath, args, {
         stdio: ['ignore', logFd, logFd],
         env,
         detached: true,
         cwd: PACKAGE_ROOT,
         windowsHide: true
       })
-    } else {
-      spawnedProc = spawn(command, args, {
-        stdio: ['ignore', logFd, logFd],
-        env,
-        detached: true,
-        cwd: PACKAGE_ROOT
-      })
+    } finally {
+      fs.closeSync(logFd)
     }
 
     spawnedProc.on('error', (error) => {

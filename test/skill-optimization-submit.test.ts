@@ -50,6 +50,7 @@ function submissionFixture(plan: Plan | null = null, issues: { id: string; summa
   const state = { messages: [] as Message[] };
   const context: Record<string, unknown> = {
     Error, DOMException, AbortController, TextDecoder, hasOptimizationInput,
+    diagnosisPlan: null, setDiagnosisPlan: () => {},
     busy: false, user: 'owner', skillName: 'test', baseVersion: 0,
     optSessionId: 'opt', workbenchSessionId: 'session', baselineFiles: { 'SKILL.md': 'baseline' }, issues,
     ownsStreamRef: { current: false }, snapshotRequestRef: { current: 0 }, stopRequestedRef: { current: false },

@@ -27,6 +27,12 @@ changefreq: monthly
 
 对应文档： [链路追踪](../../how-to/observability/view-traces.md)
 
+### Token 与任务分析
+
+Token 与任务分析把 root Trace 汇总为成本与调度视图：按任务类型、用户和单条任务拆 Token 与估算成本，综合耗时、Token、工具/LLM 调用次数识别长时任务，并标出可放到夜间低峰执行的长任务。它只读既有 Execution 字段，不改变 Trace 采集与执行链路。
+
+对应文档： [Token 与任务分析](../../how-to/observability/token-task-insight.md)
+
 ### Agent 概览
 
 Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent，并处理登记、归属与接入信息。
@@ -59,6 +65,7 @@ Agent 概览沿用原 Agent 管理页面，用于查看平台识别到的 Agent�
 ## 下一步
 
 - 查看单次执行细节： [链路追踪](../../how-to/observability/view-traces.md)
+- 分析 Token 成本与长时任务： [Token 与任务分析](../../how-to/observability/token-task-insight.md)
 - 查看异常样本归因： [诊断分析](../../how-to/diagnosis/agent-debug/diagnosis.md)
 - 将线上问题沉淀为回归验证： [评估与实验](../evaluation/overview.md)
 
@@ -71,6 +78,8 @@ Goal Plus 的 Pi 主 Trace 由原生 Pi collector 采集；随 Pi 内置的只�
 ## OpenCode Skill 调用识别
 
 OpenCode v2 采集器关闭时会停止接收新事件，等待正在进行的写入，并继续排空此前已接收的事件队列，再结束 JSONL 输出流。等待底层写回调期间入队的尾部事件也会写入。
+
+OpenCode 的 Trace 任务输入取自 `chat.message` 钩子捕获的用户原始文本。对于 `/aet-pr` 等会展开为长路由提示的斜杠命令，列表和下游评测展示用户实际输入，而不是展开后的提示；旧版缺少该钩子数据时才回退到消息文本 part。
 
 OpenCode 采集器保留原始工具参数。平台在采集入库、Trace 展示和根 Agent 的 Skill 步骤核验中同时识别 v1 的 `name` 与 v2 的 `id` 参数；`id` 仅在 `skill` / `load_skill` 调用中作为名称回退，不读取普通工具的 ID、tool call ID 或输出文本来推断 Skill。Trace 的结构预览也保留该参数，保证懒加载前后结果一致。
 
@@ -235,6 +244,33 @@ node scripts/qoder_work_setup.mjs uninstall --purge
 
 ## Codex CLI 与 IDE Extension 接入
 
+### Codex Desktop 与 App Server（实验性）
+
+桌面版本默认不读取 `~/.codex/sessions`，也不会监听 Codex Desktop 已建立的私有连接。需要采集
+桌面任务时，必须在安装后显式启用只读 rollout reader：
+
+```bash
+node ~/.agent-insight/collectors/codex/install.cjs --home "$HOME" --enable-desktop-rollout
+```
+
+Windows PowerShell 使用同一 Node 命令，将 `"$HOME"` 换成 `$env:USERPROFILE`。启用后 relay
+只增量读取新的 rollout 文件，保留断尾 offset；不会自动回填启用前的历史，也不会修改、移动或上传
+原始 rollout。卸载只停止 Agent Insight reader，保留 Codex 原文件和已写入的 Trace。
+
+桌面生命周期按以下口径展示：同一 App Server `turn/steer` 是一个 Execution 的新 phase；桌面
+UI 若实际发出 `interrupt + new task`，前一个 Execution 标记为 `interrupted`，后一个单独计数，
+两者通过 thread transition 关联。`compaction` 只出现在 thread 时间线，不创建任务，也不污染前后
+Execution 的 Token、LLM 或 Tool 统计。来源属性区分 `desktop`、`app_server`、`cli` 与 `ide`；
+证据不足时保留 `unknown`，不根据相邻时间猜测。
+
+App Server proxy 同样默认不启动。需要代理一个显式 client 时，以
+`node ~/.agent-insight/collectors/codex/app-server-proxy.cjs` 代替 `codex app-server` 启动命令；
+该进程原样双向转发 JSONL，并把成功的 lifecycle 事件发送给同机 loopback relay。只有经过
+Agent Insight proxy 的 JSON-RPC 连接才会记录成功的
+`turn/start`、`turn/steer`、`turn/interrupt` 和 `contextCompaction`，不会宣称能够观察已运行的
+Desktop 私有连接。详情与开发边界见
+[Codex App Server 与 Desktop Trace 升级设计](../../../../design/observability/codex-app-server-desktop-trace-upgrade/design.md)。
+
 Codex 通过公开 Hook 与原生 OTel Logs 双通道采集，使用 loopback relay 合并为同一条 Trace；安装器接受 `>=0.145.0` 的可解析 Codex CLI 版本。可在安装指导中勾选 **Codex**，完成后启动 Codex、运行 `/hooks` 并信任 Agent Insight handlers。采集器不会读取 `transcript_path`，写入 spool 与上报前会递归脱敏 API Key、token、secret、password 等密钥赋值以及本地 Windows、UNC、`/Users/...`、`/home/...` 路径；Token 用量字段保留数值。VS Code、Cursor 与 Windsurf 可安装同一 VSIX，以公开 API 采集 FileEdit 和 Terminal 事件。
 
 仅在前两种精确来源都不可用时，才可在 `~/.agent-insight/config` 中显式设置 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1`，实验性地估算当前轮 transcript 中可见的用户消息、助手输出、工具参数和工具结果。Trace 详情以 `≈` 标识，并记录 `local_visible_transcript`、`visible_transcript` 和 `missing_context=true`。估算不包含客户端隐藏的 system prompt、Rules、Skill/MCP schema、内部推理与被压缩上下文，在真实 Agent 会话中可能严重低估，因此不能用于账单核对，也不会填充执行记录的精确 input/output Token 字段。CLI/Work 未提供 usage 时仍显示不可用，不启用该兜底。
@@ -250,6 +286,8 @@ WorkBuddy 是腾讯的闭源 Electron 桌面 Agent，不提供 Hook/插件扩展
 详见 [WorkBuddy Trace Collector 接入指南](../../how-to/observability/workbuddy-trace-collector.md)。
 
 ## OpenCode 有效执行时延
+
+持久化 `Execution.latency` 的单位为毫秒。Jiuwen OTLP 聚合将纳秒跨度除以 `1_000_000`；旧秒值使用 `jiuwen-latency.ts` 对照原始交互时间识别，Trace Bundle 导入与历史修复共用该规则。校正只换单位，保留原始总跨度及等待时间，不改为 OpenCode 的轮次有效耗时口径；缺少可靠时间证据的值保持不变。操作步骤见[Jiuwen 历史耗时单位校正](../../how-to/observability/view-traces.md#jiuwen-历史耗时单位校正)。
 
 `execution-timing.ts` 从用户轮次边界和模型、工具执行区间计算 `activeDurationMs`，合并重叠区间，排除轮次间用户空闲；`elapsedDurationMs` 表示原始时间跨度。`opencode-derived-metrics.ts` 将有效耗时写入 `Execution.latency`，主/子 Trace 使用各自 Session ID 选择边界。调用树保留原始起止时间和 `durationMs` 供真实时间轴使用，前端耗时、慢节点筛选和耗时比例使用有效耗时。
 
