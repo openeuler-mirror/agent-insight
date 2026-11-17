@@ -273,7 +273,9 @@ class ExperimentStore:
         if not any(c.get('traceGenerationCommandId') or any(a.get('commandId') for a in c['traceAttempts']) for c in data['cases']):supplementary['commands']=[]
         if head['scope']!='benchmark':supplementary['benchmark_runs']=[]
         if head['scope'] not in {'skill-workbench','skill-case-analysis','grayscale-ab'}:supplementary['grayscale_tasks']=[]
-        return {**supplementary,'coverage':('subset' if case_ids is not None else 'complete') if include_cases else 'head','executions':executions,'_owner_principal_id':head['created_by'],'experiment':data,'revision':str(head['revision']),'lifecycle_revision':str(head['lifecycle_revision']),'etag':self._etag(head),'current_run_id':head['current_run_id']}
+        result={**supplementary,'coverage':('subset' if case_ids is not None else 'complete') if include_cases else 'head','executions':executions,'_owner_principal_id':head['created_by'],'experiment':data,'revision':str(head['revision']),'lifecycle_revision':str(head['lifecycle_revision']),'etag':self._etag(head),'current_run_id':head['current_run_id']}
+        from .legacy_import_experiments import enrich_snapshot
+        return enrich_snapshot(self,con,ws,head,result)
 
     def _case_write(self,con,token,ws,exp,value,ordinal,preserve_execution=False,only_if_new=False):
         if not isinstance(value,dict):raise ValueError('Case must be an object')
@@ -1027,7 +1029,7 @@ class ExperimentStore:
                     limit=body.get('limit',100)
                     if type(limit) is not int or not 1<=limit<=MAX_ITEMS:raise ValueError('Invalid list limit')
                     grant=self.iam._workspace(scope,ws,'read');where="e.workspace_id=? AND e.state='active' AND e.scope<>'skill-trigger-analysis' AND e.experiment_id>?";params=[ws,body.get('after_id','')]
-                    if body.get('_hide_internal') is True:where+=" AND e.scope NOT IN ('trace-flow-analysis','trace-outcome','skill-trigger-analysis')"
+                    if body.get('_hide_internal') is True:where+=" AND e.scope NOT IN ('trace-flow-analysis','trace-outcome','skill-trigger-analysis','legacy-flow-analysis','trace-metrics-history','legacy-skill-evaluation')"
                     for key,col in [('scope','scope'),('skill_name','skill_name')]:
                         if key in body:where+=' AND e.'+col+'=?';params.append(body[key])
                     if grant.role not in {'owner','admin','personal'}:where+=" AND (a.owner_principal_id=? OR a.visibility='group' OR EXISTS(SELECT 1 FROM iam_resource_grants g WHERE g.workspace_id=a.workspace_id AND g.resource_kind=a.resource_kind AND g.resource_id=a.resource_id AND g.grantee_principal_id=?))";params.extend([scope.principal_id,scope.principal_id])
@@ -1374,11 +1376,17 @@ class ExperimentStore:
                 if attribution:
                     derived=selected(attribution[0],'coreAlignmentAttribution');expected={key:values['match'][key] for key in ('machine_result_id','content_hash','run_id')}
                     if _json(derived['value'].get('match_source'))==_json(expected):values['attribution']=derived
+            from .legacy_import_experiments import historical_flow_lookup
+            legacy=None
+            if values['match'] is None:
+                legacy=historical_flow_lookup(self,con,ws,scope,trace,body.get('experiment_id'))
+                values['match']=legacy
             if len(_json(values).encode())>MAX_BYTES:raise ExperimentTooLarge('Flow response exceeds budget')
             fingerprint=scope.fingerprint
         with self.control.read_transaction() as con:
             current=self.iam._scope(con,token);self.iam._workspace(current,ws,'read');TraceMetadata(self.control)._trace(con,token,ws,trace)
             if current.fingerprint!=fingerprint:raise Forbidden('Flow authorization changed during read')
+            if legacy is not None and _json(historical_flow_lookup(self,con,ws,current,trace,body.get('experiment_id')))!=_json(legacy):raise Conflict('Historical Flow selection changed during read')
             for exp,metadata_hash,lifecycle,slot_id,machine,digest,run,routes in checked:
                 head=self._head(con,token,ws,exp);slot=self._slot(con,ws,exp,slot_id)
                 receipt=con.execute('SELECT * FROM result_receipts WHERE workspace_id=? AND result_id=?',(ws,machine)).fetchone()
@@ -1404,7 +1412,7 @@ class ExperimentStore:
                 for result in case['results']:result.update(score=None,humanScore=None,errorMessage=None)
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);grant=self.iam._workspace(scope,ws,'read')
-            where="e.workspace_id=? AND e.state='active' AND e.scope NOT IN ('trace-flow-analysis','trace-outcome','skill-trigger-analysis')";params=[ws]
+            where="e.workspace_id=? AND e.state='active' AND e.scope NOT IN ('trace-flow-analysis','trace-outcome','skill-trigger-analysis','legacy-flow-analysis','trace-metrics-history','legacy-skill-evaluation')";params=[ws]
             if body.get('experiment_id'):where+=' AND e.experiment_id=?';params.append(identifier(body['experiment_id']))
             if body.get('task_id'):
                 task=identifier(body['task_id']);alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(ws,task)).fetchone()
@@ -1862,6 +1870,8 @@ class ExperimentStore:
             con.execute('INSERT INTO experiment_annotations(workspace_id,experiment_id,annotation_id,kind,case_id,result_id,machine_result_id,subject_id,actor_principal_id,payload_hash,payload_ref,created_at_ms,lookup_key) VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?,?)',(ws,head['experiment_id'],identity,kind,cp['case_id'],slot['result_id'],machine,scope.principal_id,digest,ref,self.control.clock(),skill))
 
     def _derived_source_guard(self,con,token,ws,scope,head,run):
+        from .legacy_import_experiments import guard_historical_skill
+        guard_historical_skill(self,con,ws,head)
         if head['scope']=='skill-trigger-analysis':
             from .trigger import guard_derived_sources
             guard_derived_sources(self,con,token,ws,scope,head,run)
@@ -2078,7 +2088,9 @@ class ExperimentStore:
             dto.setdefault('createdAt',_iso(row['created_at_ms']))
             if con is not None and con.execute('SELECT 1 FROM schema_meta WHERE version=14').fetchone():
                 annotation=con.execute('SELECT * FROM experiment_derived_issue_annotations WHERE workspace_id=? AND issue_id=? ORDER BY resolved_at_ms DESC,annotation_id DESC LIMIT 1',(row['workspace_id'],row['annotation_id'])).fetchone()
-                dto['resolvedAt']=_iso(annotation['resolved_at_ms']) if annotation else None;dto['resolvedRunId']=self._resolution_run(con,annotation) if annotation else None
+                from .legacy_history import is_historical_control
+                if annotation or not is_historical_control(con,row['workspace_id'],'experiment',row['experiment_id']):
+                    dto['resolvedAt']=_iso(annotation['resolved_at_ms']) if annotation else None;dto['resolvedRunId']=self._resolution_run(con,annotation) if annotation else None
         return dto
 
     def _resolution_run(self,con,annotation):

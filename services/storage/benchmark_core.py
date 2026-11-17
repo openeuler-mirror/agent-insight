@@ -190,6 +190,9 @@ class BenchmarkStore:
         return self._job_scope(con,scope,ws,identity,cap)
 
     def _source_acl(self,con,scope,ws,exp,run):
+        from .legacy_import_experiments import historical_benchmark_plan
+        historical=historical_benchmark_plan(self,con,scope,ws,exp,run)
+        if historical is not None:return historical
         self.experiments._source_assets(con,scope,ws,exp,run)
         binding=con.execute('SELECT * FROM benchmark_experiment_bindings WHERE workspace_id=? AND experiment_id=?',(ws,exp)).fetchone()
         if binding is None:raise BenchmarkNotFound('Benchmark binding unavailable')
@@ -1157,5 +1160,6 @@ class BenchmarkStore:
             if source is None:raise BenchmarkUnavailable('Benchmark Case lacks its frozen Dataset source')
             runs.append({'id':'erun_'+_identity('benchmark-initial-execution',ws,exp,case_id).replace('-',''),'experimentId':exp,'experimentCaseId':case_id,'retryOfRunId':None,'ordinal':list(sources).index(case_id),'status':'pending','taskEnvelopeJson':None,'publicPayloadJson':_json(source['dataset_case']['publicPayload']),'cleanupJson':None,'progressJson':None,'startedAt':None,'finishedAt':None,'lastProgressAt':None,'runFactsJson':'{}','submissionSource':'imported' if binding['run_config'].get('submissionSource')=='imported' else 'execution','failureCode':None,'failureMessage':None,'datasetCase':{'externalCaseId':source['dataset_case']['externalCaseId']},'artifacts':[],'experimentCase':case,'evaluations':[],'createdAt':_iso(head['created_at_ms']),'updatedAt':_iso(head['updated_at_ms'])})
         snapshot['benchmark_runs']=runs
-        return snapshot
+        from .legacy_import_experiments import enrich_benchmark_view
+        return enrich_benchmark_view(self,con,ws,head,snapshot,scope)
 

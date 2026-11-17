@@ -201,6 +201,9 @@ def _head(store,con,token,ws,scope,identity):
 
 
 def _run(store,con,token,ws,scope,head):
+    from .legacy_import_experiments import historical_trigger_run
+    historical=historical_trigger_run(store,con,ws,scope,head)
+    if historical is not None:return historical
     store._guard_sources(con,token,ws,head['experiment_id'])
     _,plan=store._plan(con,ws,head['experiment_id'],head['current_run_id'])
     manifest=plan.get('config',{}).get('core_trigger')
