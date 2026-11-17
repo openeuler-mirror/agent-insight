@@ -54,7 +54,14 @@ export async function syncLocalUserExternalAccount(
 }
 
 export async function findOrCreateLocalUser(username: string, rawExternalAccount?: string) {
-  if(isStorageCoreEnabled()){const user=await bootstrapCoreControlUser(username,rawExternalAccount);if(user._created)await withCoreControlRequest(new Request('http://localhost/internal/builtin-seed',{headers:{authorization:'Bearer '+user.apiKey}}),()=>seedBuiltinExampleForUser(user.username));return user;}
+  if(isStorageCoreEnabled()){
+    const user=await bootstrapCoreControlUser(username,rawExternalAccount);
+    return withCoreControlRequest(new Request('http://localhost/internal/local-user',{headers:{authorization:'Bearer '+user.apiKey}}),async()=>{
+      const synced=await syncLocalUserExternalAccount(user,rawExternalAccount);
+      if(user._created)await seedBuiltinExampleForUser(synced.username);
+      return synced;
+    });
+  }
   const externalAccount = String(rawExternalAccount || '').trim();
   let user = await db.findUserByUsername(username);
   let isNewUser = false;

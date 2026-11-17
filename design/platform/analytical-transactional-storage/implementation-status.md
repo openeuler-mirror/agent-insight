@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；016补齐私有采集准备与中断恢复，017公共采集、018 Infra、019静态控制及RAS/FI接入逻辑已汇总、待L7及完整迁移逻辑与集中验收；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；016补齐私有采集准备与中断恢复，017公共采集、018 Infra、019静态控制及RAS/FI接入逻辑已汇总、待完整迁移逻辑与集中验收；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 **后续执行节奏（2026-11-17用户调整）**：先按依赖连续完成剩余接入逻辑并保存本地开发检查点；开发期只做必要类型检查和快速专项，不再对每个内部片段分别做Spec/Quality、应用全量、三库及浏览器验收。全部接入逻辑完成后集中独立审查、全量测试、三库、原界面端到端及旧数据迁移演练。未集中验收的片段明确标为“逻辑完成、待统一验收”，不能据此切换生产。
 
@@ -649,3 +649,10 @@ Infra也已在独立分支2800da7d完成整域逻辑（018两控制表+CH003，�
 39f59b08汇总152个交付文件，019一张固定领域表使目标为72事务表+16CH，40原领域kind/488字段；元数据轻量查询、版本/私有文件、真实request上下文、客户端安装/设备凭据/改绑/命令、工作台会话/消息/VFS/任务/候选和新用户示例均接原流程。4个TSX仅批准的请求封装及runtime动态header变化，原JSX/CSS/文案/布局保持。writer快检Python13项、Node9项及tsc通过；root集成后tsc通过。证据交接/tmp/storage-control-implementation-handoff.json，不能把此开发检查点称完整原功能已验收。
 
 运行保护复用legacy-inert-control/v1回执，不改历史status/时间：普通read保留，执行选择排除历史Task、设备/install不鉴权、Infra选取和真正scrape前复核、FI不领取、Experiment/Benchmark不启动/claim/callback。旧username已绑定实际IAM时，bootstrap先沿唯一旧User记录返回其当前有效API凭据，不重建principal或权限。新任务允许新ID；Agent删除复用同事务TraceMetadata._delete，保留collector图预留取消。Python7项与Node同actor上下文2项快速通过，初次Node新增用例缺隔离URL的失败日志保留并修正fixture。诊断/report保护与完整历史转换仍在接，history fence version仍0；集中完整套件、原生三库、真实CH、原UI、迁移演练均尚待。日志见exclude/storage-core-collector/20261117-i_wpbhkw/integrated-control-history-development/。
+
+
+## 2026-11-17 GoalPlus、协作与Usage整域汇总（开发检查点）
+
+主树250d8aca汇总55文件，020新增5事务表、CH004新增3事实表，总计77事务表/19CH。原Goal快照/Run/候选/迭代/完整性与精确Trace关联、两层协作report/bind/graph/Trace投影、真实actor携带的Usage队列/去重/日报/管理员统计均接线，未增加TSX/CSS变化。writer开发快检Python6项、Node2项通过，后者包含原handler→loopback Python→隔离SQLite+MemoryFacts以及部分owner失败只重试未完成项；最终tsc实际exit0。实例使用已indexed Trace关联，旧Goal/协作/Usage表0行，core关闭后legacy分支也验证；不是原生数据库/真实CH/UI验收。精确handoff与未验收边界在同collector目录semantic-usage-development-checkpoint.json。
+
+功能接入已汇总，剩余历史转换和diagnosis/report/generation运行保护仍在各自工作区连续实施；它们全部冻结后统一执行完整/三库/CH/原界面和迁移演练。旧数据/原58488服务保持，不切生产，第二版容量不实施。

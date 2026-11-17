@@ -17,7 +17,7 @@ Trace CRUD/标签/bundle、Dataset版本/回流/生成、实验/比较/直接轨
 | L4 | Infra原功能逻辑已汇总，待集中验收 | 018两事务表及CH003采样事实；metrics/poller/source/人工关联与原查询算法已接 | source配置/密钥、CH时序事实与人工关系分域；新Trace root/endpoint/model/window完整，不猜目标 |
 | L5 | RAS/FI逻辑已汇总，待019依赖及集中验收 | RAS POST/GET沿既有015事实，DELETE补屏障；FI Task/Run/Worker、Trace、claim/collect/stop及Experiment发布已接 | 复用既有RAS事实与授权读取，不重复建事件存储；补删除屏障及必要旁路，再接FI控制事务；已有实验collect桥接不代表整个FI接管 |
 | L6 | 资产/配置/会话与客户端控制域逻辑已汇总，待集中验收 | Skill/版本/文件、Config/UserSettings、RegisteredAgent、Workbench/优化会话/计划、客户端凭据/命令/配置、FI Task/Run/Worker | 真实事务权威逐域迁移；迁移在线/busy/lease/outbox只能历史化，不能自动重启外部执行 |
-| L7 | Goal Plus、协作、Usage | goal-plus/collaboration ingest/query/resolve及usage queue仍旧域 | 来源同步checkpoint、事件/快照与关系解析、计量去重；daily与event不双计 |
+| L7 | Goal Plus、协作、Usage逻辑已汇总，待集中验收 | 020固定12投影与Usage真实actor队列/永久去重/日报；Trace精确关联和原handlers已接 | 来源同步checkpoint、事件/快照与关系解析、计量去重；daily与event不双计 |
 | L8 | 旧库完整语义导入、增量、切换/回退与容量 | 需L0登记的所有转换/身份/制品依赖，所有旧消费者逐项接管 | 显式停写/备份/最终快照/影子读/回退另行授权；本轮无生产操作，无1000采集端/HA认证 |
 
 ### 决策与取舍
@@ -381,3 +381,8 @@ Infra已集成为9b8d9b3d，RAS/FI已集成为fc5206ef；后者依赖正在收�
 ### 019控制域汇总与历史运行保护
 
 L6已集成为39f59b08，40固定kind/488字段、72事务表+16CH；原登录、Skill版本与文件、配置、客户端管理、工作台/优化/生成会话和新用户内置示例保留原流程。4个TSX仅请求传输import/runtime headers变化，JSX/CSS/文案布局不改。root另接inbox历史marker运行保护：普通历史读保留原状态，自动执行选择/设备鉴权/Infra抓取/FI/Experiment/Benchmark执行不得激活历史记录；新任务使用新身份。诊断/report及完整语义转换仍在接入，HISTORY_FENCE_VERSION尚0，不能提前宣称完整历史可apply。开发Python7项、Node2项通过，非全量或界面验收；最终统一验证。
+
+
+### 020语义与Usage域汇总
+
+主树250d8aca汇总L7，77事务表/19CH，原Goal/协作/用量算法及前端保持，开发快速Python6项/Node2项和最终types通过。功能消费者接入进入整体验证前收尾；完整旧库转换及diagnosis/report/generation历史运行保护继续实施，未以raw存档冒充typed历史。全部逻辑冻源后集中验收，暂无本批全量/原生/真实CH/浏览器通过声明。

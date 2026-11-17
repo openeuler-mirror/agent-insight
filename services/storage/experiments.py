@@ -992,7 +992,10 @@ class ExperimentStore:
         if action in {'derived_lookup','derived_list'}:return self._derived_read(action,token,ws,body)
         if action=='execute_start':body['_execute']=True
         if action=='execute_reconcile':
-            with self.control.read_transaction() as con:body['experiment_id']=self._case_lookup(con,token,ws,body)['experiment_id']
+            from .legacy_history import assert_control_live
+            with self.control.read_transaction() as con:
+                body['experiment_id']=self._case_lookup(con,token,ws,body)['experiment_id']
+                assert_control_live(con,ws,'experiment',body['experiment_id'])
         if action=='case_lookup':
             with self.control.read_transaction() as con:return self._case_lookup(con,token,ws,body)
         if action in {'cancellation_lookup','cancellation_update'}:

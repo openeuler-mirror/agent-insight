@@ -10,7 +10,7 @@ export async function lookupCoreControlUserByKey(apiKey:string){
 }
 export function currentCoreControlUser(username:string){const context=getCoreControlContext();if(!context||context.actor.username!==username)throw Object.assign(new Error('Verified current user required'),{status:403});return {id:context.actor.principal,username,apiKey:context.actor.token,externalAccount:null};}
 export async function bootstrapCoreControlUser(username:string,externalAccount?:string){
- const mode=resolveLoginMode();const existing=await verifiedCoreLoginBinding(username);if(existing)return {id:existing.principal,username,apiKey:existing.token,externalAccount:externalAccount||null,_created:false};
+ const mode=resolveLoginMode();const existing=await verifiedCoreLoginBinding(username);if(existing)return {id:existing.principal,username,apiKey:existing.token,externalAccount:null,_created:false};
  const body=JSON.stringify({action:'login',username,mode,...(externalAccount?{external_account:externalAccount}:{})});
  const headers=await controllerHeaders({principal:'platform-login',workspace:'platform-login'},body,'platform-control-bootstrap/v1');
  const {data}=await requestCore('/v1/compat/platform-control-bootstrap',{method:'POST',body,headers,responseLimit:1024*1024},fetch);
