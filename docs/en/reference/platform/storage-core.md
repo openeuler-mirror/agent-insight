@@ -289,7 +289,7 @@ Cancellation fences work before verifying process exit. Same-instance observed T
 The implementation-status page records final real HTTP/runtime/UI, full-suite and engine evidence. This adds no schema, migration, analytics parser or UI layout; static control migration and complete legacy semantic import remain separate work.
 
 
-### V1 original Trigger evaluation runtime (under review)
+### V1 original Trigger evaluation runtime (isolated acceptance complete)
 
 Original Trigger endpoints check actual IAM capabilities before reading static configuration. The trusted legacy account identifies static ownership and the original DTO owner; request user fields never authorize access. Each Run creates a private Experiment with one aggregate evaluate work item before acknowledging success. Exact operation receipts recover lost responses. An active run for the same actor, Skill and version returns the original 409 with its Run; different versions remain independent. Internal heads are excluded from ordinary Experiment list/statistics reads. latestOnly selects completed runs only.
 
@@ -297,19 +297,19 @@ The RunPlan freezes the test-set version/items, target Skill version and full by
 
 Cancellation persists its fence before exact-attempt cleanup. Original success=true acknowledgements, DTOs and UI remain. The client clears only the pending start identified by the trusted operation digest, preserving other versions. Missing model credentials do not become empty or placeholder authentication.
 
-A–C and D have passed independent review. E drafting/deletion is the current review slice; final acceptance and explicit legacy history migration remain separate, with no production switch. Static Skills/versions, UserSettings and TriggerSets retain their existing authority. Final isolated HTTP, native local-Mock, original UI and three-database acceptance belong to the implementation status record.
+A–E, including drafting/deletion, have passed independent review and isolated acceptance, with no production switch. Explicit legacy history migration remains separate. Static Skills/versions, UserSettings and TriggerSets retain their existing authority. Final HTTP, native local-Mock, original UI and three-database evidence is recorded in the [implementation status](../../../../design/platform/analytical-transactional-storage/implementation-status.md).
 
 The private Trigger start RPC serializes the original HTTP idempotency key/request unchanged across transport retries. The client clears a pending operation only after success=true with a complete Run matching the requested Skill/version/test set, or a valid versioned Set. An ID alone, incomplete DTO, malformed JSON or lost response retains the intent. Cancellation also matches the exact Run ID. Default generic list and ID-selected read_view hide internal Trigger heads; authorized dedicated Trigger history/detail reads remain available.
 
 
-### Original Trigger aggregate issues and resolution (D under review)
+### Original Trigger aggregate issues and resolution
 
 Each original Trigger Run produces at most one aggregate issue using the original summary, evidence and suggestedFix builder, including the tested version description and frozen other-version history. The dedupKey remains trigger:<skillName>, generator remains trigger-evaluator@1.0, and runId is the public Trigger history ID. ruleId, dimension and reasoning remain null. All-pass without competition creates no issue; all-pass with a competing Skill still creates one low-severity issue.
 
 Machine completion, the new issue and automatic resolution of previous typed trigger issues commit in one transaction. Formal idempotency receipts and migration-014 annotations preserve resolvedAt, resolvedRunId and includeResolved history. Failed, cancelled or late results cannot clear old issues. Derived list/detail/frontier and manual resolution recheck current authorization and provenance of actual sample Traces. Original optimization endpoints retain legitimate legacy static/feedback reads. Legacy dynamic Trigger history requires explicit semantic migration, with no ordinary fallback or read-time fabrication. AI drafting and deletion are described in the E review slice below; production has not switched.
 
 
-### Original Trigger AI drafting and set deletion (E under review)
+### Original Trigger AI drafting and set deletion
 
 Drafting retains the original direct model call and prompt: it requests 18 examples, while the original parser accepts any valid nonempty output, including two items. A new version never merges existing user-edited items. A stable placeholder and independent typed work exist before acknowledgement, with frozen Skill bytes/version and model descriptor. Actual direct JudgeTrace indexing precedes the observed response/failure checkpoint. Unknown submission or a five-minute-old placeholder never causes blind resubmission; replay does not call the model again. Original success/conflict/version DTOs remain.
 
@@ -322,3 +322,14 @@ A transient Trigger history head-version change uses the narrowly whitelisted TR
 
 
 Draft ready confirmation compares Item structure, avoiding false 409 responses when Python sorts JSON object keys. Object key order and optional undefined fields absent from the wire do not affect confirmation; array order, actual values and null remain significant, and user edits still conflict. Existing SQL CAS conditions and JSON storage format are unchanged.
+
+
+### Public collector identity preflight (reception pipeline not enabled)
+
+`resolveCoreCollectorIdentity` verifies actual API credentials or registered OpenCode device credentials and returns a frozen server-only identity. Body user/authenticatedUser/clientId claims grant no permission. Private mappings distinguish the legacy owner from the IAM login. A verified device owner must map to exactly one current principal/workspace; all matching mapping credentials are authenticated, while revoked unrelated owners do not block this request. At most 16 distinct mapping credentials per owner are accepted. A direct core API without a verified legacy alias retains its IAM username.
+
+`POST /v1/compat/collector-source?workspace_id=…` currently accepts only a maximum 4096-byte `{action:"scope", operation:"snapshot"|"complete"}` request. It requires an API credential whose current capability and workspace role both permit write, and returns the corresponding principal/workspace/operation authorization. It writes no source, Trace or receipt and accepts no work/diagnosis context. An `/auth/me` workspace role alone cannot establish an API write capability.
+
+When both API and device credentials are valid, principal/workspace must match. Legacy aliases may differ: the actual API token remains in use and the verified device mapping supplies the legacy static owner. A 401 invalid API may fall back to a valid device; an authenticated API denied with 403 cannot borrow another credential's permission. A valid API may accept an invalid device without binding its claimed clientId. Missing, ambiguous or unavailable mappings for an authenticated device fail closed. Upstream unavailability is not rewritten as an invalid credential. Proxy callers must explicitly select `authorizationKind:"provider"` to exclude provider Authorization from user authentication, using x-witty-api-key separately for collector identity.
+
+The identity is branded: object copies are not trusted, and tokens remain in private closures rather than identity JSON. Private callers of `withCoreCollectorIdentity(identity, (actor, options) => …)` must use the second argument's origin-pinned `options.fetcher` for subsequent RPCs. The receiver must still check IAM inside its actual write transaction; preflight is not a durable grant. `revalidate()` and the private callback entry recheck original credentials, device revocation, mappings and current write permission before acceptance. Principal/workspace/alias/client-binding changes are rejected. Every actual request boundary also pins the core origin to prevent sending an old credential to a newly configured instance. This slice does not change the original upload, completion, proxy or logs handlers. Snapshot idempotency, indexed acknowledgements and preserved legacy spool identity/migration remain in the [implementation plan](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md).

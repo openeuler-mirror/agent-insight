@@ -304,7 +304,7 @@ Dataset 模式的原 start、retry-execute、retry-evaluate、abort 与平面进
 本片的最终真实 HTTP、本机运行器、原界面与全量/三库验收由实现状态页记录。没有新表、迁移、parser 或前端布局变化；静态控制域与全部旧库语义迁移尚未完成。
 
 
-### 第一版原 Trigger 评测主链路（复核中）
+### 第一版原 Trigger 评测主链路（已隔离验收）
 
 原 Trigger API 在访问静态配置前校验实际 IAM，兼容账号仅供静态归属和原 DTO 展示，请求 user 不授权。每次 Run 使用独立私有 Experiment 和一个聚合 evaluate work，成功返回前已持久建立。重复操作恢复准确回执；同主体/Skill/版本 active 返回原 409+run；不同版本可独立运行。通用 Experiment 列表/统计不包含内部 head。latestOnly 仅取完成 Run。
 
@@ -312,19 +312,19 @@ Dataset 模式的原 start、retry-execute、retry-evaluate、abort 与平面进
 
 取消使用持久 fence 和准确 attempt 清理证明。原 success=true ACK、原 DTO 和页面保留；客户端仅按可信操作摘要清除对应的待确认启动意图，不清其他版本。未配置模型 key 时不新增空/占位认证。
 
-A–C 主链与 D 聚合优化点已独立复核；E 起草/删除为当前复核切片，最终门禁完成前不宣称全部 Trigger 已完成或切生产。静态 Skill/版本、UserSettings、TriggerSet 及旧历史语义迁移继续按原边界；最终隔离原 HTTP/原生 Mock/界面和三库门禁见实现状态记录。
+A–E 已完成独立复核及隔离验收，包含起草/删除；未切生产。静态 Skill/版本、UserSettings、TriggerSet 及旧历史语义迁移继续按原边界；最终原 HTTP/原生 Mock/界面和三库门禁见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
 
 Trigger 启动的私有 RPC 序列化包含原 HTTP 幂等 key/request，网络重试不更换意图。客户端仅收到 success=true 及对应 Skill/请求版本/测试集的完整 Run 或有效版本 Set 后清理待确认操作；仅 ID、不完整 DTO、坏 JSON 或响应丢失均保留。取消 ACK 还须匹配准确 Run ID。内部 Trigger 在通用 list 默认和按 ID read_view 中同样隐藏，专用 Trigger 历史/详情保持授权读取。
 
 
-### 原 Trigger 聚合优化点与解决记录（D 复核中）
+### 原 Trigger 聚合优化点与解决记录
 
 原 Trigger 每次最多生成一条聚合问题，沿用原 summary、evidence 和 suggestedFix，包含实际测试版本的 description 和其他被测版本历史。dedupKey 为 trigger:<skillName>，generator 为 trigger-evaluator@1.0，runId 为原 Trigger 历史 ID；ruleId、dimension、reasoning 仍为 null。全通过且无竞争不创建新问题；全通过但仍有竞争 Skill 会生成 low 问题。
 
 机器完成、新问题和旧 typed trigger 问题的自动解决同事务提交。解决状态使用正式幂等回执与 014 注解，保留 resolvedAt、resolvedRunId 和 includeResolved 历史；失败/取消/迟到结果不清旧问题。派生列表、详情、当前 frontier 与手动解决均检查实际 sample Trace 的当前授权和来源。原优化点入口继续读取合法旧 static/feedback，旧动态 Trigger 历史需单独语义迁移，不作普通查询回退或读时补造。AI 起草及测试集删除清理见下方 E 复核切片；本片未切生产。
 
 
-### 原 Trigger AI 起草与测试集删除（E 复核中）
+### 原 Trigger AI 起草与测试集删除
 
 起草继续使用原 direct 模型调用和提示：要求18条，但原解析只要求合法非空，合法两条也可 ready；新版本不合并旧 user-edited 条目。稳定占位与独立 typed work 在确认前建立，固定 Skill 正文/版本及模型摘要。真实 direct JudgeTrace indexed 后才保存已观察响应/失败；未知提交和5分钟旧占位不触发盲目重投，恢复不会再次调用模型。原成功、冲突和版本 DTO 保留。
 
@@ -337,3 +337,14 @@ Set DELETE 保留原行为：只删测试集版本，已有 Run/Evaluation/Skill
 
 
 起草 ready 确认使用稳定的 Item 结构比较，避免 Python JSON 对象键排序导致同一结果误报409。对象键顺序和线上不存在的 optional undefined 不影响确认；数组顺序、真实字段值和 null 保留，用户编辑仍冲突。原 SQL CAS 条件及 JSON 存储格式不变。
+
+
+### 公共采集身份预检（接收链路尚未启用）
+
+`resolveCoreCollectorIdentity` 验证实际 API 凭证或 OpenCode 注册设备凭证，生成只在服务端有效的冻结身份。请求正文的 user、authenticatedUser 或 clientId 声明不授予权限。现有私有映射保留旧用户名与 IAM 主体名称的区别；设备归属须唯一映射到当前 principal/workspace，匹配归属的映射凭证全部核验，其他归属的撤销不影响本次身份。每归属至多16个不同映射凭证，超额明确失败。直接 core API 未提供可信旧别名时保留 IAM 用户名。
+
+`POST /v1/compat/collector-source?workspace_id=…` 当前只接受不超过4096字节的 `{action:"scope", operation:"snapshot"|"complete"}`。服务端校验 API 类型、当前凭证 capability 与 workspace 角色均允许 write，返回对应主体/空间/操作的授权声明；不写 source/Trace/receipt，也不接收工作或诊断上下文。仅查看 `/auth/me` 的角色不能证明 API 有写权限。
+
+API 与设备均有效时须指向同一主体/空间，旧别名允许不同，实际 token 仍由 API 提供，旧静态归属取已核验设备映射。无效 API 的401可由有效设备补足；已认证 API 的403不借其他凭证绕过。无效设备可由有效 API 补足，但不绑定其 clientId；已核验设备的旧别名映射缺失、歧义或不可用则拒绝。上游不可用不降格成无效凭证。proxy 调用方须显式使用 `authorizationKind:"provider"` 将供应商 Authorization 排除于用户鉴权之外，另以 x-witty-api-key 表达采集身份。
+
+身份通过品牌检查，复制对象不能充当可信身份；token 只保存在私有闭包，不出现在身份 JSON。`withCoreCollectorIdentity(identity, (actor, options) => …)` 的私有调用方须将第二参数的固定 origin `options.fetcher` 用于后续 RPC；接收端仍在真正写入事务内重新检查 IAM，预检不是持久授权。`revalidate()` 与私有回调入口在接受数据前重查原凭证、设备撤销、映射和当前 write 权限，主体/空间/别名/绑定变化拒绝，配置的 core origin 变化也在每次实际请求边界拒绝，避免跨实例发送旧凭证。本片未修改原 upload、completion、proxy 或 logs handler；快照幂等、indexed ACK、旧 spool 身份清点与迁移继续见[实施计划](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)。

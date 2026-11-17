@@ -535,3 +535,21 @@ apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多
 证据：`exclude/storage-core-trigger/20261116-lrv_m9yj/` 的 `final-code-verification.json`、`final-v3-restored-result.json`、`final-v3-python-report.json`、`final-v3-native/`、`acceptance-final-v3/native-http-final-v3/report.json`、`spec-e-v3-report.json`、`quality-e-v3-report.json`、`main-data-preservation.json`、`main-regression-readback.json`、`main-trigger-final-http-readback.json`和 `main-original-trigger-{zero,pass}.png`。原隔离验收页为 http://localhost:58488/skill-eval/trigger/storage-trigger-20261117-31b888?version=0 ，沿用原admin账号；本地模型服务保留供验收。
 
 下一片：先落地可信公共source/快照及completion的持久回执，再接原upload、proxy、logs/consumer；Infra需要原功能必要控制/采样模型，之后继续其他控制域及96模型旧数据语义导入。旧Trigger历史也仍在显式迁移清单；本片完成不代表全产品接管、千级容量或生产切换。
+
+
+## 2026-11-17 可信公共采集身份与写权限预检
+
+完成公共采集前置身份范围：实际API凭据、真实设备注册主体和私有旧用户名映射分别核验；双有效凭据必须同principal/workspace，坏一份时按原规则接受另一份，失效设备不绑定clientId；当前权限不足403不借另一凭据扩权，映射缺失/歧义/目标不可核验均拒绝。`/v1/compat/collector-source`首片只接受scope，不持久化数据；实际IAM API capability与workspace角色均检查write，不能把auth/me成员角色当写授权。品牌范围不能复制伪造，token不进入身份JSON，重核设备/映射/权限，私有后续RPC沿固定origin传输并在实际请求前后拒绝实例变化。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 应用完整 | 6097项：6075通过、22跳过、0失败/取消，341.09秒；原完整glob/collector预检、Node24、独立HOME/SQLite，3105个来源与当前代码一致 |
+| 后端完整 | 1146项：967通过、179可选引擎跳过、0失败，336.21秒，ResourceWarning作为error，161个来源文件稳定 |
+| PG / 原生openGauss | 真实新HTTP各5/5、无跳过，19.975/20.211秒；各5个自有schema清理后残留0，165个来源文件稳定。无CH调用，不能称新采集事实闭环 |
+| 原生身份链 | 实际Node helper、真实sidecar、实际Prisma注册/撤销设备及旧User映射，21次HTTP请求通过，无网络stub；只读Key即使personal角色仍403，双主体/空间冲突拒绝、两种坏一份回退正常、撤销后重核401。预检前后65表完整行哈希不变；明确撤销只在本片新建夹具内 |
+| 独立复核 | Spec独立29Node/5HTTP通过；Quality额外9Node/3HTTP通过，含真实重定向第二origin收到0请求、检查间角色降viewer返回403、复制/Proxy品牌、设备owner变化与错误ACK。7个交付文件复核前后hash一致，随后仅修正ZH/EN历史Trigger标题 |
+| 兼容与数据 | 原upload/completion/proxy/logs公共handler、schema及277个TSX/CSS未变；未刷新原58488验收环境，不改已验收Trigger或默认业务库/生产。无新增用户界面，本片不另称浏览器采集验收 |
+
+证据：`exclude/storage-core-collector/20261117-i_wpbhkw/` 的 `final-code-verification.json`、`candidate-v1-{result,python-report}.json`、`candidate-v1-native/`、`identity-real-http/report.json`、`identity-real-http/preflight-no-mutation.json`、`spec-identity-v1-report.json`和`quality-identity-v1-report.json`。初次原生PG启动因之前/tmp测试连接配置缺失而失败；从同一个已核验loopback PG15测试容器私下恢复配置，未改服务或重置数据，失败日志保留，后续各5项实测通过。初始临时bundle模块路径与stdin退出均为验收harness修正，不影响产品源或全量门禁。
+
+快照接收、completion、原upload/proxy/日志indexed确认尚未启用；下一片继续source幂等回执、completion先到及原快照合并/缩小语义。身份预检不是最终持久接收证明，实际接收事务仍需当前IAM复核；不切生产、不处理无映射旧spool，不将本片当公共采集全功能完成。

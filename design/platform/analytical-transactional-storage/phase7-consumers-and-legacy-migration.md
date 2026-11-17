@@ -284,3 +284,18 @@ E 起草 CAS 跨语言修正：Python canonical JSON 会改变 Item 对象键顺
 A–E 最终冻结源经 Spec→Quality 独立复核，完整应用6078项（6056通过、22跳过、0失败/取消），后端1141项（962通过、179可选引擎跳过、0失败）；PG与原生openGauss各27/27，关系库专项使用MemoryFacts，不等同完整CH组合矩阵。SQLite+真实CH+原生OpenCode的104次原HTTP请求及8次本地模型调用覆盖取消、丢ACK、ready回执恢复、原聚合文本与自动/手工解决，未调用外部LLM。原Next界面实际保留v0、手编0分、AI新建v2、复测100分及两条Run历史，应用console无error/warn。277个TSX/CSS与本批基线一致，无新增schema/parser/purpose。
 
 刷新前两库备份，65个core/96个旧表及15个CH表原行摘要子集保留；仅负例Outbox重试元数据正常推进，并明确向隔离admin既有模型列表追加一个本地验收配置，旧配置/active选择及账号密钥保留。原实验100分、Workbench0分、诊断done/report和4身份再次读回。证据位于exclude/storage-core-trigger/20261116-lrv_m9yj，完整边界见implementation-status.md。原Trigger历史与其他旧动态表尚未语义导入；后续按可信公共采集、Infra及其他控制消费者依赖继续，未切生产。
+
+
+### 可信公共采集第一片：身份与写能力预检（已隔离验收）
+
+公共快照与completion接入前，先实现仅服务端使用的可信采集身份范围。现compatibilityContext只证明当前身份/成员，/v1/auth/me不返回凭据capabilities，因此不能凭workspace角色认定API token可写。新增私有POST /v1/compat/collector-source，首片仅支持action=scope、operation=snapshot或complete：在实际sidecar以api_凭据检查workspace write，再返回authorized/principal_id/workspace_id/operation，不写locator/事实或回执、不接管原公共路由。不新增schema或controller purpose；后续实际接收仍须事务内重核，预检不是最终接收证明。
+
+Node helper保留原上传双凭据规则：API凭据与实际authenticateDevice独立核验，两者有效须同principal/workspace；一份失效另一份有效可接受，但失效device不得绑定clientId。设备主体使用注册库实际owner并按私有映射核验当前IAM，legacy用户名与principal登录名分别保留；同一owner多principal/workspace或匹配候选不可核验时拒绝，不猜选。只检查匹配owner的候选，其他owner旧凭据撤销不阻断本次；私有文件仍整体按原大小/格式/权限约束校验。报告clientId与有效device不符拒绝，payload.user、authenticatedUser或自报device布尔值不授权；侧车不可用503不伪装凭据失效。供应商Authorization与调用者身份头需由未来proxy调用显式分离，不能默认继承供应商Bearer。
+
+身份范围为私有品牌对象，凭据保存在服务端闭包，公开响应/日志不携带。重核须匹配原principal/workspace/operation及有效device注册状态；调用者伪造对象不能作为可信scope。首片不改upload/completion/logs/proxy旧行为，待source回执与indexed确认完成后整体激活，不把预检存在称原采集已接入。
+
+后续source片必须封存原输入、选择后的默认时间/身份、基准source revision、标准化快照及packet计划，恢复先命中同operation回执再读最新Skill/配置。completion先到持久保存空意图及原endTime，不制造交互/LLM；后到快照复用同locator/bucket并继承完成状态。上传2xx只在全部分包indexed后返回，pending/失联不推进客户端checkpoint。公共source不接受内部work/diagnosis context，保留原adapter merge与query/version规则，并完整支持既有snapshot-replace允许缩小框架；被移除实体以更高revision墓碑退出当前视图与汇总，旧制品/历史heads保留。原spool无可核验身份的旧记录仍blocked/mapping，不借新凭据追溯授权。
+
+首片验证至少包含：真实read-only API即使成员为writer仍403、撤权与viewer拒绝；别名/登录名不同、设备有效/撤销/clientId冲突；双有效同/异主体与workspace、双向坏一份、无映射及多映射；伪造body/品牌范围、重新核验后归属变化、sidecar503不降级401。默认数据不触碰，独立schema/临时注册库，后续再做真实公共API到原页面与CH全链验收。
+
+身份片最终验证：Node6097项（6075通过、22跳过、0失败/取消），后端1146项（967通过、179可选引擎跳过、0失败）；PG和原生openGauss真实HTTP各5/5，5个自有schema清理后回查0。实际Node helper→真实sidecar及真实注册/撤销设备的21次请求通过，65张事务表在预检前后完整行哈希不变。Spec与Quality独立通过；Quality另验证两次授权检查间角色降为viewer时403、真实HTTP重定向未向第二origin发送请求。3105个冻结来源与当前代码一致，原公共handler、277个TSX/CSS及DDL未变。证据为exclude/storage-core-collector/20261117-i_wpbhkw；本片不接管快照/completion，也不代表公共采集indexed ACK完成。

@@ -330,6 +330,19 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility import LegacyTraceReads
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
+            if compat_path==['collector-source']:
+                if self.command!='POST':self.reply(404,{'error':'Unknown collector route'});return
+                if not token.startswith('api_'):raise Forbidden('Collector API credential required')
+                value,error=self.body(max_bytes=4096)
+                if error:self.reply(error,{'error':'Bounded collector scope JSON required'});return
+                if set(value)!={'action','operation'} or value['action']!='scope' or value['operation'] not in ('snapshot','complete'):
+                    raise ValueError('Invalid collector scope request')
+                workspace=runtime.workspace(token,params.get('workspace_id'),'write')
+                with runtime.control.read_transaction() as con:
+                    scope=runtime.iam._scope(con,token)
+                    runtime.iam._workspace(scope,workspace,'write')
+                    response={'authorized':True,'operation':value['operation'],'principal_id':scope.principal_id,'workspace_id':workspace}
+                self.reply(200,{'value':response});return
             report_path=compat_path[:2]==['observe','reports']
             dataset_path=compat_path[:1] in (['datasets'],['experiments'],['evaluators'],['diagnosis-runs'],['benchmarks'],['analytics'])
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
