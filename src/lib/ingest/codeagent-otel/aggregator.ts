@@ -491,8 +491,8 @@ export function aggregateCodeAgentOtelEvents(
   };
 }
 
-export function aggregateCodeAgentOtelSession(sessionId: string): CodeAgentOtelAggregationResult {
-  const events = readCodeAgentOtelEventsForSession(sessionId);
+export function aggregateCodeAgentOtelSession(sessionId: string, suppliedEvents?: Parameters<typeof aggregateCodeAgentOtelEvents>[1]): CodeAgentOtelAggregationResult {
+  const events = suppliedEvents??readCodeAgentOtelEventsForSession(sessionId);
   const record = aggregateCodeAgentOtelEvents(sessionId, events);
   if (record) return { sessionId, eventCount: events.length, record, disposition: 'persisted' };
 

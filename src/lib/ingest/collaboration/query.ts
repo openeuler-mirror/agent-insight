@@ -1,3 +1,4 @@
+import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession,queryCoreTraceSources} from '@/lib/storage-core/collector-read-source';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -61,7 +62,9 @@ export async function goalPlusProjectedWorkerExecutionWhere(user?: string) {
       select: { activeSessionJson: true },
     });
     const activeIds = [...new Set(goals.flatMap(goal => [...goalPlusActiveMainSessionIds(goal.activeSessionJson)]))];
-    const roots = await tx.execution.findMany({
+    const coreMainLinks=hasCoreCollectorTraceSource()?await tx.goalPlusExecutionLink.findMany({where:{role:'main',linkState:'linked',...(user?{source:{user}}:{})},select:{executionId:true}}):[];
+    const coreRefs=[...new Set([...activeIds,...coreMainLinks.map(link=>link.executionId)])];
+    const roots = hasCoreCollectorTraceSource()?(coreRefs.length?await findCoreTraceExecutions(user,{references:coreRefs,limit:2000}):[]):await tx.execution.findMany({
       where: {
         ...(user ? { user } : {}),
         OR: [
@@ -74,8 +77,8 @@ export async function goalPlusProjectedWorkerExecutionWhere(user?: string) {
     const ids = new Set<string>();
     for (const root of roots) {
       if (!root.user || !root.taskId) continue;
-      const session = await tx.session.findUnique({ where: { taskId: root.taskId }, select: { query: true, user: true } });
-      if (session?.user !== root.user) continue;
+      const session = hasCoreCollectorTraceSource()?await findCoreTraceSession(root.user,root.taskId):await tx.session.findUnique({ where: { taskId: root.taskId }, select: { query: true, user: true } });
+      if (!session || session.user !== root.user) continue;
       const projection = await findProjectionMembers(tx, root.user, root.taskId, session.query);
       for (const member of projection.members) ids.add(member.executionId);
     }
@@ -167,7 +170,7 @@ async function resolvePiTaskAliasMain(
 ): Promise<GoalPlusProjectionMain | null> {
   const alias = parsePiTaskSessionId(rootTaskId);
   if (!alias) return null;
-  return resolveGoalPlusSessionAliasMain(tx, user, alias.baseSessionId, rootQuery, rootExecutions);
+  return resolveGoalPlusSessionAliasMain(tx, user, alias.baseSessionId, rootQuery, rootExecutions as {framework:string|null}[]);
 }
 
 export async function listCollaborations(user: string, options: { limit?: number; cursor?: string } = {}) {
@@ -203,7 +206,7 @@ export async function getCollaboration(user: string, collaborationId: string) {
         include: {
           endpointResolutions: {
             include: {
-              execution: {
+              execution: hasCoreCollectorTraceSource()?false:{
                 select: {
                   id: true,
                   taskId: true,
@@ -222,6 +225,7 @@ export async function getCollaboration(user: string, collaborationId: string) {
     },
   });
   if (!collaboration) return null;
+  if(hasCoreCollectorTraceSource()){const resolutions=collaboration.events.flatMap(event=>event.endpointResolutions);const executions=await findCoreTraceExecutions(user,{references:[...new Set(resolutions.flatMap(row=>row.executionId?[row.executionId]:[]))],limit:2000});for(const row of resolutions)(row as any).execution=executions.find(item=>item.id===row.executionId)??null;}
 
   const nodeMap = new Map<string, {
     sessionId: string;
@@ -314,7 +318,7 @@ async function findProjectionMembers(
   rootTaskId: string,
   rootQuery?: string | null,
 ): Promise<GoalPlusTraceProjectionMembers> {
-  const rootExecutions = await tx.execution.findMany({
+  const rootExecutions = hasCoreCollectorTraceSource()?(await findCoreTraceExecutions(user,{references:[rootTaskId],limit:2})).filter(row=>row.taskId===rootTaskId):await tx.execution.findMany({
     where: { user, taskId: rootTaskId },
     select: { id: true, framework: true, taskId: true, agentSessionId: true },
   });
@@ -372,10 +376,10 @@ async function findProjectionMembers(
       .map(link => [link.goalDbId as string, { ...link, goalDbId: link.goalDbId as string }]));
     rootResolution = 'exact-link';
   } else {
-    let aliasMain = await resolveGoalPlusSessionAliasMain(tx, user, rootTaskId, rootQuery, rootExecutions);
+    let aliasMain = await resolveGoalPlusSessionAliasMain(tx, user, rootTaskId, rootQuery, rootExecutions as {framework:string|null}[]);
     rootResolution = 'active-session-alias';
     if (!aliasMain) {
-      aliasMain = await resolvePiTaskAliasMain(tx, user, rootTaskId, rootQuery, rootExecutions);
+      aliasMain = await resolvePiTaskAliasMain(tx, user, rootTaskId, rootQuery, rootExecutions as {framework:string|null}[]);
       rootResolution = 'pi-task-alias';
     }
     if (!aliasMain) return { members: [], truncated: false };
@@ -401,7 +405,7 @@ async function findProjectionMembers(
       links: {
         where: { linkState: { in: ['linked', 'ambiguous'] } },
         include: {
-          execution: {
+          execution: hasCoreCollectorTraceSource()?false:{
             select: {
               id: true,
               taskId: true,
@@ -417,11 +421,12 @@ async function findProjectionMembers(
     },
   });
 
+  if(hasCoreCollectorTraceSource()){const links=sessions.flatMap(session=>session.links);const executions=await findCoreTraceExecutions(user,{references:[...new Set(links.map(link=>link.executionId))],limit:2000});for(const row of links)(row as any).execution=executions.find(item=>item.id===row.executionId)??null;}
   const members: GoalPlusTraceProjectionMemberRef[] = [];
-  const taskIds = [...new Set(sessions.flatMap(session => session.links.flatMap(link => link.execution.taskId ? [link.execution.taskId] : [])))];
+  const taskIds = [...new Set(sessions.flatMap(session => session.links.flatMap(link => link.execution?.taskId ? [link.execution.taskId] : [])))];
   const interactionCounts = new Map<string, number>();
   for (let offset = 0; offset < taskIds.length; offset += 500) {
-    const counts = await tx.$queryRaw<Array<{ taskId: string; interactionCount: number | bigint }>>(Prisma.sql`
+    const counts = hasCoreCollectorTraceSource()?(await queryCoreTraceSources(user,{references:taskIds.slice(offset,offset+500),limit:500})).flatMap(row=>row.session?[{taskId:row.session.taskId,interactionCount:JSON.parse(row.session.interactions||'[]').length}]:[]):await tx.$queryRaw<Array<{ taskId: string; interactionCount: number | bigint }>>(Prisma.sql`
       SELECT taskId, CASE WHEN json_valid(interactions) THEN json_array_length(interactions) ELSE 0 END AS interactionCount
       FROM Session WHERE user = ${user} AND taskId IN (${Prisma.join(taskIds.slice(offset, offset + 500))})
     `);

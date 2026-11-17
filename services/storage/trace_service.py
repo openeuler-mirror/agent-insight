@@ -377,7 +377,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                         runtime.iam._workspace(scope,workspace,'write')
                         response={'authorized':True,'operation':value['operation'],'principal_id':scope.principal_id,'workspace_id':workspace}
                     self.reply(200,{'value':response});return
-                preparation_actions=('begin_preparation','seal_capture','seal_plan','commit_prepared','preparation_status','capture_graph_context')
+                preparation_actions=('owned_session','mutate_session','collector_logs','collector_jobs','query_sessions','normalize_history','model_scope','begin_preparation','seal_capture','seal_plan','commit_prepared','preparation_status','capture_graph_context')
                 if action not in ('reserve','commit','complete','status','reject_preparation')+preparation_actions:raise ValueError('Invalid collector source action')
                 if action not in preparation_actions and int(self.headers['Content-Length'])>MAX_INPUT_BYTES:self.reply(413,{'error':'Bounded collector JSON required'});return
                 workspace=runtime.workspace(token,params.get('workspace_id'),'write')
@@ -385,6 +385,11 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 principal=runtime.iam.scope(token).principal_id
                 if not verify_controller_proof(runtime.controller_key_file,'collector-source/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private collector source attestation required')
                 payload={key:item for key,item in value.items() if key!='action'}
+                if action in ('owned_session','mutate_session','collector_logs','collector_jobs','query_sessions','normalize_history','model_scope'):
+                    from .collector_public import CollectorPublic
+                    public=CollectorPublic(runtime.control,runtime.ingest)
+                    response=public.owned_session(token,workspace,payload['task_id']) if action=='owned_session' else public.mutate_session(token,workspace,payload) if action=='mutate_session' else public.query_sessions(token,workspace,payload,owned=True) if action=='query_sessions' else public.normalize_history(token,workspace,payload) if action=='normalize_history' else public.model_scope(token,workspace,payload) if action=='model_scope' else public.logs(token,workspace,payload['log_action'],payload.get('value',{})) if action=='collector_logs' else public.jobs(token,workspace,payload['job_action'],payload.get('value',{}))
+                    self.reply(200,{'value':response},max_bytes=MAX_PLAN_BYTES*4);return
                 service=CollectorSources(runtime.control,runtime.ingest)
                 if action in preparation_actions:
                     from .collector_preparations import CollectorPreparations
@@ -405,6 +410,17 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return None
                 return value
+            if path==['observe','session-source'] and self.command=='GET':
+                from .collector_public import CollectorPublic
+                reference=params.get('taskId') or params.get('executionId')
+                if not reference:raise ValueError('Session identity required')
+                respond(CollectorPublic(runtime.control,runtime.ingest).session(token,workspace,reference),limit=128*1024*1024);return
+            if path==['observe','session-sources'] and self.command=='GET':
+                from .collector_public import CollectorPublic
+                respond(CollectorPublic(runtime.control,runtime.ingest).query_sessions(token,workspace,json.loads(params.get('query','{}'))),limit=128*1024*1024);return
+            if path==['observe','session-relations'] and self.command=='GET':
+                from .collector_public import CollectorPublic
+                respond(CollectorPublic(runtime.control,runtime.ingest).relations(token,workspace,json.loads(params.get('task_ids','[]'))));return
             if path==['analytics'] and self.command=='POST':
                 from .trace_analytics import TraceAnalytics
                 from .controller_protocol import verify_controller_proof

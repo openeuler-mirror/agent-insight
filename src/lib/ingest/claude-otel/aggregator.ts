@@ -1098,8 +1098,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   };
 }
 
-export function aggregateClaudeOtelSession(sessionId: string): ClaudeOtelAggregationResult {
-  const events = readClaudeOtelEventsForSession(sessionId);
+export function aggregateClaudeOtelSession(sessionId: string, suppliedEvents?: Parameters<typeof aggregateClaudeOtelEvents>[1]): ClaudeOtelAggregationResult {
+  const events = suppliedEvents??readClaudeOtelEventsForSession(sessionId);
   const record = aggregateClaudeOtelEvents(sessionId, events);
   if (record) return { sessionId, eventCount: events.length, record, disposition: 'persisted' };
   return {

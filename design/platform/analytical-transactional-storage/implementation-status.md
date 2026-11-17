@@ -624,3 +624,14 @@ C1b逻辑实现017三张Thread head/event/member控制表（代码目标69事务
 按最新执行节奏，只做开发快检：后端130项（102通过/28可选环境跳过），随后最终Graph10项通过（与前130有重叠，不相加）；根再次独立执行Graph10项、2.284秒通过。Node采集47项和直接相关旧Skill53项通过，最终tsc及diff-check为0，21交付文件hash一致，原TSX/CSS未改。证据在同collector目录source-c1b-development-checkpoint.json及/tmp/collector-c1b-handoff.json所列日志。**未对本片做完整应用/后端、真实PG/openGauss/CH、016→017演练、浏览器或独立Spec/Quality验收；这些统一留到剩余接入逻辑完成后。**
 
 公共入口仍未激活；C2/C3继续补read-capability的原Session/Thread/精确Skill来源读取、原Node DTO流水线、upload/completion/分析/hooks及proxy/logs消费者。公开pending:Codex必须在begin前拦截；root seal后commit前删除的派生成员协调需在公共接线时补齐。016已sealed但缺graph_context的旧私有图保持明确pending，不重封首输入；独立来源alias不隐式认领。当前为开发检查点，不作为全功能完成或生产切库依据。
+
+
+## 2026-11-17 公共采集整域：逻辑完成，待合并依赖及集中验收
+
+按连续编码节奏接完原Session Node四视图读取、headless/退休Session、Thread/关系、upload/complete、原分析与proxy end、持久模型意图/回执、源版本/手改/删除fence、proxy生命周期/CAS追加、logs/traces/Claude context可信packet journal、原多框架聚合与Jiuwen缝合/孤儿退休、OpenClaw/内部SkillGenerator旁路。公共OTLP恢复原解析/聚合后进入同collector canonical-by-task，专门native core端点保持独立，不隐式认领别的native源；只有全部对应graph向量indexed才确认新消费游标。旧无证明spool/cursor保留，core不再盲启旧consumer/uploader。无新增表，代码仍017。
+
+开发快检：准备golden+公共链路45项通过、最终公共HTTP/Session/auth3项通过（存在重叠，不累加）；后端新专项8项通过；根另跑整个public模块21项、4.294秒通过（包含导入Graph及继承重复，不等同21个新增用例）；tsc/py_compile/diff-check通过，59文件hash一致，原TSX/CSS未改。原验收58488与默认/生产数据未刷新。证据为同collector目录collector-public-development-checkpoint.json及/tmp/collector-public-domain-handoff.json列明日志。完整Node/后端/三库/CH/原UI/真客户端/迁移演练及独立审查仍集中后置。
+
+L6静态UserSettings/Skill/Config/设备凭据/会话由独立019分支合并，collector-preparation与真实owner后台模型执行边界已对齐；L7 GoalPlus/协作元数据及其旧Execution FK仍待相应域迁移，Trace端已换新源，不造旧Execution占位，失败hook保持pending。独立native alias冲突仍明确拒绝；真实双native/snapshot客户端待统一验证。这是接线开发检查点，不称全部原功能已验收。
+
+Infra也已在独立分支2800da7d完成整域逻辑（018两控制表+CH003，一共71事务表/16CH），源CRUD、push/pull、history/export/diagnose、Trace自动/人工关联、旧analytics v1 endpoint窄补读均接线；Node快速128项、后端8项和相邻50项通过，根模块51项通过（含43旧Source+8Infra），tsc通过。待集成后与其余域一起完整验收；未对018真实CH/native/升级/浏览器作通过声明。精确证据同目录infra-development-checkpoint.json及/tmp/storage-infra-implementation-handoff.json。

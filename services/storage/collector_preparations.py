@@ -82,6 +82,10 @@ class CollectorPreparations:
         with self.control.transaction() as con:
             self._require_schema(con)
             reservation=self.sources._reserve(con,token,workspace,body);trace=reservation['trace_id'];_,scope,state=self.sources._owned(con,token,workspace,trace);op=state['operations'][_hash(reservation['operation_key'])]
+            previous_request=self.sources._load(op['request_ref'])
+            if reservation.get('resume_pending') and op['stage']=='reserved' and previous_request.get('_collector_job') and previous_request.get('_collector_job')!=raw.get('_collector_job'):
+                op.update(stage='failed',error_code='SUPERSEDED_COLLECTOR_ANALYSIS');state['pending']=None;self.sources._write(con,workspace,trace,state)
+                reservation=self.sources._reserve(con,token,workspace,body);trace=reservation['trace_id'];_,scope,state=self.sources._owned(con,token,workspace,trace);op=state['operations'][_hash(reservation['operation_key'])]
             if op.get('graph_parent_receipt') and op['graph_parent_receipt'].get('scope_key')!=trace:raise CollectorSourcePending('Derived child is reserved by its root graph')
             identity={'scope_kind':'source','scope_key':trace,'operation_key':op['operation_key']}
             existing=con.execute('SELECT 1 FROM collector_preparation_receipts WHERE workspace_id=? AND scope_kind=? AND scope_key=? AND operation_key=?',(workspace,'source',trace,op['operation_key'])).fetchone()
@@ -177,6 +181,11 @@ class CollectorPreparations:
         workspace=row['workspace_id'];trace=route['trace_id'];slot=_hash(op['operation_key'])
         if op['stage']!='reserved' or state.get('pending')!=slot or state['source_revision']!=op['base_revision']:raise Conflict('Collector source revision changed')
         snapshot=plan.get('snapshot');session=plan.get('session') if snapshot is None else snapshot.get('session');framework=state['framework'];sources=[]
+        completed=plan.get('collector_entry',{}).get('cli_completed_at_ms')
+        if completed is not None:
+            request=self.sources._load(op['request_ref']);raw=request.get('data',request)
+            if raw.get('framework')!='opencode' or not raw.get('opencode_cli_completed') or completed!=op['received_at_ms']:raise Conflict('CLI completion differs from captured request')
+            state['completion_at_ms']=completed
         if op['operation']=='complete':
             previous=self.sources._load(state.get('snapshot_ref'))
             if (previous is None)!=(snapshot is None) or previous is not None and snapshot.get('execution')!=previous['execution']:raise Conflict('Completion cannot replace the execution')
@@ -202,19 +211,24 @@ class CollectorPreparations:
         if not op['batch_refs']:state['pending']=None
 
     def commit_prepared(self,token,workspace,value):
-        if not isinstance(value,dict) or set(value)!={'scope_kind','scope_key','operation_key','plan_hash'}:raise ValueError('Sealed collector plan required')
+        if not isinstance(value,dict) or set(value)-{'scope_kind','scope_key','operation_key','plan_hash','job_handle'} or not {'scope_kind','scope_key','operation_key','plan_hash'}<=set(value):raise ValueError('Sealed collector plan required')
         with self.control.transaction() as con:
             row=self._row(con,token,workspace,value)
             if row['plan_hash'] is None or row['plan_hash']!=value['plan_hash']:raise Conflict('Collector sealed plan differs')
             plan=json.loads(self._load_text(row['plan_ref'],row['plan_hash']))
             capture=json.loads(self._load_text(row['capture_ref'],row['capture_hash']))
+            from .collector_public import CollectorPublic
+            from .collector_jobs import CollectorJobs
+            jobs=CollectorJobs(CollectorPublic(self.control,self.ingest));job=jobs.before_commit(con,token,workspace,row,plan,value.get('job_handle'))
             if capture.get('graph_context') is not None:
                 from .collector_graphs import CollectorGraphs
                 CollectorGraphs(self).apply(con,token,row,plan,capture)
+                jobs.after_commit(con,workspace,row,job);jobs.schedule(con,row,plan)
                 return self._view(con,token,workspace,row)
             if plan.get('children') or plan.get('thread') or plan.get('retire_missing_children'):raise CollectorSourcePending('Collector graph preparation awaits atomic graph support')
             if row['scope_kind']=='thread':return self._view(con,token,workspace,row)
             trace=row['scope_key'];route,_,state=self.sources._owned(con,token,workspace,trace);op=state['operations'][_hash(row['operation_key'])]
             if op['stage']!='reserved':return self._view(con,token,workspace,row)
             self._apply_source(con,row,route,state,op,plan);self.sources._write(con,workspace,trace,state)
+            jobs.after_commit(con,workspace,row,job);jobs.schedule(con,row,plan)
             return self._view(con,token,workspace,row)

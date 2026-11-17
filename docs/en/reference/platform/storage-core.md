@@ -324,7 +324,7 @@ A transient Trigger history head-version change uses the narrowly whitelisted TR
 Draft ready confirmation compares Item structure, avoiding false 409 responses when Python sorts JSON object keys. Object key order and optional undefined fields absent from the wire do not affect confirmation; array order, actual values and null remain significant, and user edits still conflict. Existing SQL CAS conditions and JSON storage format are unchanged.
 
 
-### Public collector identity preflight (reception pipeline not enabled)
+### Public collector identity preflight
 
 `resolveCoreCollectorIdentity` verifies actual API credentials or registered OpenCode device credentials and returns a frozen server-only identity. Body user/authenticatedUser/clientId claims grant no permission. Private mappings distinguish the legacy owner from the IAM login. A verified device owner must map to exactly one current principal/workspace; all matching mapping credentials are authenticated, while revoked unrelated owners do not block this request. At most 16 distinct mapping credentials per owner are accepted. A direct core API without a verified legacy alias retains its IAM username.
 
@@ -337,7 +337,7 @@ The identity is branded: object copies are not trusted, and tokens remain in pri
 
 ### Public source snapshots (private foundation; original upload routes inactive)
 
-The private collector-source endpoint now supports `reserve`, `commit`, `complete`, `status`, and `reject_preparation`. These actions require the actual API write capability and a `collector-source/v1` controller proof bound to exact request bytes, principal and workspace. The existing scope action keeps its 4096-byte contract. Ordinary OTLP cannot claim the reserved `collector.source.v1` namespace. No table or general OTLP deletion flag was added; original upload/completion/proxy/log handlers and UI are unchanged.
+The private collector-source endpoint now supports `reserve`, `commit`, `complete`, `status`, and `reject_preparation`. These actions require the actual API write capability and a `collector-source/v1` controller proof bound to exact request bytes, principal and workspace. The existing scope action keeps its 4096-byte contract. Ordinary OTLP cannot claim the reserved `collector.source.v1` namespace. No table or general OTLP deletion flag was added; public route wiring is described below; the original UI remains unchanged.
 
 Reservations retain original input, selected timestamps, the source revision and separate task/canonical execution aliases. A new upload ID for an existing task does not replace its first execution identity. Changed input under one key conflicts; a new current device credential cannot replace the first sealed provenance. A trusted request for the same owner/source can resume a prior durable intent, without authorizing old unauthenticated spool bytes. Commit accepts the original portable `{execution, session}` with revision CAS, immutable source packets and outbox receipts. Raw commit replay is checked before current completion normalization; old retries do not overwrite newer data. Explicit zero values, nullable frameworks, full messages and extension fields are retained. First real framework binding is separate from the internal analytical fallback.
 
@@ -354,7 +354,7 @@ A published Source with a non-null head requires an actual matching CH summary. 
 Private Session reads currently include normalized Span transport fields and do not claim original public Session DTO equivalence. Portable export retains the complete original snapshot. Public activation must reuse the original Node payload-version and structure-interaction projection and verify original fields, caching and UI.
 
 
-### Shared public collector preparation (new-store entry points remain inactive)
+### Shared public collector preparation
 
 Original upload quick Skill/version selection and legacy save now share deterministic preparation: adapter normalization, monotonic merge/allowed shrink, query protection, explicit label/version rewrite, version zero, OpenCode metrics and the original Langfuse tree. Legacy entry points retain their original persistence and analysis side effects. This extraction adds no new-store route branch and changes no UI.
 
@@ -364,7 +364,7 @@ Original upload quick Skill/version selection and legacy save now share determin
 
 Thread-only input retains a real Thread plan without creating an Execution or fake Span. Rejected smaller snapshots still retain Thread writes that originally precede the shrink guard. Pure completion preparation preserves an existing Session or plans the original empty Session, label opencode and first default startTime; it invents no Execution. Uncorrelated Codex pending units remain pending rather than becoming root tasks.
 
-Migration016 now durably seals the first capture/plan and independent Session;017 adds private child graphs and Thread/event/member effects. The typed execution_match Flow producer, original public Session DTO/handlers and background analysis remain C2/C3 work and must not fall back to old dynamic tables. Public collection and the original UI are unchanged. New slices receive fast focused checks; complete acceptance is consolidated after remaining integration.
+Migration016 now durably seals the first capture/plan and independent Session;017 adds private child graphs and Thread/event/member effects. The public Session pipeline, durable analysis and typed Flow producer are connected as described below, with no fallback to old dynamic writes. The original UI is unchanged. New slices receive fast focused checks; complete acceptance is consolidated after remaining integration.
 
 Shared Session preparation keeps legacy storage and validated canonical representations distinct. Unrelated malformed interaction/graph JSON is not parsed, cleaned or overwritten during normal metadata/message updates. Only an actual incoming Langfuse nodes array enables the original guarded old-graph decoding/merge. Core supplies validated arrays directly; preparation is not an implicit legacy-data migration. Framework capability follows field-presence semantics: omitted inherits prior state, explicit null/empty uses Generic rather than a logical-or fallback.
 
@@ -375,7 +375,7 @@ Capture reads a lightweight owner name/id/activeVersion directory, preserves ori
 
 `collector_preparation_receipts` seals the first Node input string, source context, capture and complete plan. The existing Source ledger and ingest_batches remain the only ingest/indexing authority. Private `collector-source/v1` proofs bind the actual write-capable API actor, workspace and exact body; group administrators cannot collect on behalf of another owner. Retries return the first sealed choices. Original Session serialization is recovered only from the applied plan bound to the current source revision; older A/unprepared writes are explicitly `legacy_canonical`.
 
-Completion without an Execution stores Session metadata without a fake Execution or CH Span. Later snapshots receive trusted previous_session and retain the first clock. Manual annotations remain authoritative. C1a applies only root Sources and empty Sessions: child/Thread/retirement graphs stay pending, while ThreadOnly preparation creates no Trace locator. Public upload/completion handlers are not activated here and `public_ready` remains false. Migration016 is explicit and preserves historical A receipts; this is not a production cutover.
+Completion without an Execution stores Session metadata without a fake Execution or CH Span. Later snapshots receive trusted previous_session and retain the first clock. Manual annotations remain authoritative. C1a applies only root Sources and empty Sessions: child/Thread/retirement graphs stay pending, while ThreadOnly preparation creates no Trace locator. The private receipt keeps `public_ready:false` until consolidated acceptance; this does not authorize production cutover. Migration016 is explicit and preserves historical A receipts; this is not a production cutover.
 
 When begin adopts an older A reserved operation, including a resumed pending intent or an existing preparation receipt, the preparation guard is persisted in the same transaction. Legacy commit/complete cannot bypass the sealed plan; failure rolls back both the new receipt and guard. Already committed historical operations retain their source state and replay compatibility, with their representation still marked `legacy_canonical`.
 
@@ -388,4 +388,14 @@ The typed private `capture_graph_context` captures selected child state, origina
 
 Derived retirement is limited to that root's actual derived set and retains aliases, locators, Sessions, artifacts and history. Attested tombstones hide the Execution/list entry; ordinary missing facts still fail. Each child seals its own Session string, preserves its first Session start when no source clock exists and retains Execution fields the original upsert does not write. Original pure Skill/origin selection rules supply Source projections and bounded existing Span attributes without new Skill relationship tables.
 
-`public_ready` remains false. Public APIs, original screens and production data are unchanged. This slice is implemented pending consolidated full regression, real-engine/CH, migration and original-UI acceptance after remaining consumers are connected.
+The private receipt keeps `public_ready:false`. Public API core branches are wired; original screens and production data remain unchanged. This slice is implemented pending consolidated full regression, real-engine/CH, migration and original-UI acceptance after remaining consumers are connected.
+
+### Public collection wiring (implemented; consolidated acceptance pending)
+
+In core mode the existing upload, OpenCode completion, proxy start/chat/end, OTLP logs/traces and Claude context routes now share verified collector sources. Public OTLP preserves the original decoder, framework partitioning, normalization, aggregators and Jiuwen trace/session stitching, so a client's OTLP and snapshot feeds retain canonical task identity. The dedicated native core endpoint remains separate. Existing ACK flags, ThreadOnly, pending Codex and OpenCode progress/deletion guards remain in place; ordinary noncollector core Traces retain their established read compatibility.
+
+The Session route runs the original Node transformation/view pipeline against source Sessions and017 Threads. Read-capability `GET /v1/compat/observe/session-source`, `session-relations` and `session-sources` enforce current Trace IAM, including authorized group-admin visibility and Sessions without an Execution. Exact Skill/origin relations come from attested source state. Lazy query extraction requires the actual owner plus execute, and publication checks source/annotation/deletion fences.
+
+Analysis and proxy-end jobs reuse the existing Outbox, immutable first preparation and model intent/observed checkpoints. Model execution requires an explicitly configured branded owner background actor with current execute; write-only credentials can receive and prepare without exposing secrets in capture/ACK. Model authentication is sent only when configured. Local OpenClaw and skill-generation CLI capture require an explicit trusted default actor. SkillGenerator's OpenCode bridge retains same-owner authenticated uploads in a separate owner spool and cannot inherit another owner's global key.
+
+Authenticated log packets are durably retained before original aggregation. Consumption acknowledgement requires the actual indexed receipt vector for every output and retirement; explicit original discard reasons are recorded, while pending/retry remains unacknowledged. Core startup does not launch the old unproven spool consumer or global backlog uploader. Existing spools/cursors remain untouched pending explicit mapping/migration. Full-suite, native three-engine, original UI, real-client and preservation rehearsals remain part of consolidated acceptance; production is unchanged.

@@ -95,10 +95,12 @@ export class OpenClawLogWatcher {
       if (record && record.task_id) {
         if (!record.query || !record.final_result) return;
         
-        await saveExecutionRecord({
-            ...record,
-            ...options
-        } as any, { receivedAt });
+        const {isStorageCoreEnabled}=await import('@/lib/storage-core/mode');
+        if(isStorageCoreEnabled()){
+          const {getDefaultIngestUser}=await import('@/lib/storage/data-service');const username=getDefaultIngestUser();if(!username)throw Object.assign(new Error('OpenClaw local capture requires an explicit trusted default actor'),{status:403});
+          const {configuredCoreBackgroundActorForUser}=await import('@/lib/storage-core/compat');const actor=await configuredCoreBackgroundActorForUser(username);
+          const {writeCoreCollectorForActor}=await import('@/lib/storage-core/collector-entry');await writeCoreCollectorForActor(actor,{...record,...options,user:actor.username},{channel:'consumer',receivedAt});
+        }else await saveExecutionRecord({...record,...options} as any,{receivedAt});
         console.log(`[OpenClawWatcher] Upserted session ${record.task_id} (skip_eval: ${options.skip_evaluation})`);
       }
     } catch (err) {

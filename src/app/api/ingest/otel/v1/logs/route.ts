@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {handleCoreCollectorLogs} from '@/lib/storage-core/collector-logs';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -36,6 +38,7 @@ async function readOtlpJson(req: Request): Promise<any> {
 }
 
 export async function POST(req: Request) {
+  if(isStorageCoreEnabled())return handleCoreCollectorLogs(req);
   try {
     const apiKey = req.headers.get('x-witty-api-key');
     let authenticatedUser: string | undefined;

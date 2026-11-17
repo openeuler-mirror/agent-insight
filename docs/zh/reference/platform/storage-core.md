@@ -339,7 +339,7 @@ Set DELETE 保留原行为：只删测试集版本，已有 Run/Evaluation/Skill
 起草 ready 确认使用稳定的 Item 结构比较，避免 Python JSON 对象键排序导致同一结果误报409。对象键顺序和线上不存在的 optional undefined 不影响确认；数组顺序、真实字段值和 null 保留，用户编辑仍冲突。原 SQL CAS 条件及 JSON 存储格式不变。
 
 
-### 公共采集身份预检（接收链路尚未启用）
+### 公共采集身份预检
 
 `resolveCoreCollectorIdentity` 验证实际 API 凭证或 OpenCode 注册设备凭证，生成只在服务端有效的冻结身份。请求正文的 user、authenticatedUser 或 clientId 声明不授予权限。现有私有映射保留旧用户名与 IAM 主体名称的区别；设备归属须唯一映射到当前 principal/workspace，匹配归属的映射凭证全部核验，其他归属的撤销不影响本次身份。每归属至多16个不同映射凭证，超额明确失败。直接 core API 未提供可信旧别名时保留 IAM 用户名。
 
@@ -347,17 +347,17 @@ Set DELETE 保留原行为：只删测试集版本，已有 Run/Evaluation/Skill
 
 API 与设备均有效时须指向同一主体/空间，旧别名允许不同，实际 token 仍由 API 提供，旧静态归属取已核验设备映射。无效 API 的401可由有效设备补足；已认证 API 的403不借其他凭证绕过。无效设备可由有效 API 补足，但不绑定其 clientId；已核验设备的旧别名映射缺失、歧义或不可用则拒绝。上游不可用不降格成无效凭证。proxy 调用方须显式使用 `authorizationKind:"provider"` 将供应商 Authorization 排除于用户鉴权之外，另以 x-witty-api-key 表达采集身份。
 
-身份通过品牌检查，复制对象不能充当可信身份；token 只保存在私有闭包，不出现在身份 JSON。`withCoreCollectorIdentity(identity, (actor, options) => …)` 的私有调用方须将第二参数的固定 origin `options.fetcher` 用于后续 RPC；接收端仍在真正写入事务内重新检查 IAM，预检不是持久授权。`revalidate()` 与私有回调入口在接受数据前重查原凭证、设备撤销、映射和当前 write 权限，主体/空间/别名/绑定变化拒绝，配置的 core origin 变化也在每次实际请求边界拒绝，避免跨实例发送旧凭证。本片未修改原 upload、completion、proxy 或 logs handler；原上传入口的幂等/成功 ACK 闭环、旧 spool 身份清点与迁移继续见[实施计划](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)。
+身份通过品牌检查，复制对象不能充当可信身份；token 只保存在私有闭包，不出现在身份 JSON。`withCoreCollectorIdentity(identity, (actor, options) => …)` 的私有调用方须将第二参数的固定 origin `options.fetcher` 用于后续 RPC；接收端仍在真正写入事务内重新检查 IAM，预检不是持久授权。`revalidate()` 与私有回调入口在接受数据前重查原凭证、设备撤销、映射和当前 write 权限，主体/空间/别名/绑定变化拒绝，配置的 core origin 变化也在每次实际请求边界拒绝，避免跨实例发送旧凭证。原 upload、completion、proxy、logs 的开发接线见本页末节；幂等/成功 ACK 闭环、旧 spool 身份清点与迁移清单见[实施计划](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)。
 
 
-### 公共 Source 快照与完成意图（私有基础，尚未启用原上传入口）
+### 公共 Source 快照与完成意图
 
-同一私有端口新增 `reserve / commit / complete / status / reject_preparation`，均要求实际 API write 能力，以及绑定请求原始字节、实际 principal/workspace 的 `collector-source/v1` 控制器证明；普通 OTLP 不能声明保留的 `collector.source.v1` namespace。没有新增表或通用 OTLP 删除属性。原 upload、completion、proxy、logs handler 与前端保持原状，本片不代表这些用户入口已接管。
+同一私有端口新增 `reserve / commit / complete / status / reject_preparation`，均要求实际 API write 能力，以及绑定请求原始字节、实际 principal/workspace 的 `collector-source/v1` 控制器证明；普通 OTLP 不能声明保留的 `collector.source.v1` namespace。没有新增表或通用 OTLP 删除属性。公共入口复用此私有基础，接线与集中验收边界见本页末节；前端界面保持原状。
 
 - `reserve` 封存原请求、默认接收/完成时间、基准 Source revision 和独立 task/首个 canonical execution 别名；已有 task 的新 upload ID 不替换 canonical execution。相同 key 的原请求变化409；当前设备凭证变化不改变既有意图，私有响应返回第一次封存的设备/账号来源，当前 IAM 仍重查。较新请求可先恢复同 owner/source 的旧持久意图，不追溯授权旧 spool。
 - `commit` 接受原 portable `{execution, session}`，按准确 revision CAS 保存快照、实际分包及 Outbox；快照零值、nullable framework、完整原消息和扩展字段保留。先按原 commit 请求哈希识别重放，再读取当前完成状态，因此旧 ACK 重试不改写新快照。设备绑定只来自首次封存证明或先前可信绑定；已有设备保留原先优先规则。工作/诊断上下文和特权来源不能由公共快照声明。
-- 完成通知先到时仅持久化 locator/ACL/别名和固定时间，不创建伪 LLM、Tool 或 CH 交互。bucket 一次确定，后到跨日快照复用。已有 Session 的完成变化仍需实际分包 indexed；缺失 interactions 与已有 Execution 无 Session 时的原空 Session 创建/default clock 语义，仍由后续公共适配闭环补齐。
-- 私有回执会区分 reserved/accepted/prepared/indexed/failed。公共上传适配尚未启用，未来必须等所有分包 indexed 才返回原成功 ACK，不能把私有 RPC 200 或空 completion 意图的 durable 状态当作普通消息已入库。
+- 完成通知先到时仅持久化 locator/ACL/别名和固定时间，不创建伪 LLM、Tool 或 CH 交互。bucket 一次确定，后到跨日快照复用。已有 Session 的完成变化仍需实际分包 indexed；缺失 interactions 与已有 Execution 无 Session 时的原空 Session 创建/default clock 语义，由公共适配保留原语义。
+- 私有回执会区分 reserved/accepted/prepared/indexed/failed。公共上传必须等所有分包 indexed 才返回原成功 ACK，不能把私有 RPC 200 或空 completion 意图的 durable 状态当作普通消息已入库。
 - 允许缩小的快照使用更高 revision 的 source 专属墓碑，保留旧 head/工件。当前 Evidence、生成、RAS 和兼容读取只排除经过私有 ledger、head hash 及不可变 `is_deleted` 来源核验的退役实体；完整 head vector 继续作为来源变化 fence。稳定实体 ID 与当前消息顺序分开，原 index 校验后排序；缺失/重复顺序不回退猜测。原 Langfuse 次要交互、主节点及原 portable 导出保留，导出采用实际校验过的 capsule/原条目并尊重人工覆盖，不从 compact 摘要补造原值。
 - 完成消息不意味着会话结束：Source Session endTime 为空时保留 running 状态，完成通知索引后再变更。缩小后重新计算当前计数、边界和元数据 provider，移除旧模型/技能/错误来源；元数据与真实工具 carrier 不冒充额外主交互。多包未全量 indexed 的当前摘要/读取返回503，实际来源在读期间变化409；仅 reserved 的下一意图不遮蔽旧已索引视图。通用 OTLP 流式读取保持原规则。
 - `reject_preparation` 只终止尚无提交/分包的 reserved 意图，要求原封存 input hash 与 `INVALID_SOURCE_INPUT` 或 `SOURCE_BUDGET_EXCEEDED` 枚举，保留原文/失败回执并 fence 迟到提交。模型/配置暂不可用、网络/CH 故障及权限失败不能借此丢弃意图；旧失败重放不能清除新 pending。
@@ -366,12 +366,12 @@ API 与设备均有效时须指向同一主体/空间，旧别名允许不同，
 
 已发布且具有非空 head 的 Source 必须存在匹配的真实 CH 摘要。合法 status/agent/search 筛选可能排除该行：只对缺失的已知 Source ID 做一次有界、去掉这些筛选的存在性查询，校验空间、namespace、native ID、bucket 与 revision，并在查询后再次核对来源边界。真实摘要缺失返回503，不能伪装 accepted 或空列表；存在性查询的行不加入筛选结果。没有 head 的空 completion/未提交意图仍允许没有摘要。
 
-当前私有 Session 读取会带规范化 Span 传输字段，不能据此称原公共 Session DTO 等价。原 portable 导出保留完整原快照；公共适配仍须复用原 Node 的 payload version 与结构交互投影，在启用前逐字段验证原 DTO、缓存与原界面。
+原私有 Span Session 传输继续服务普通core Trace；collector公共Session另从source读取原Node表示并运行原payload version与结构交互投影。原portable导出保留完整原快照；原DTO、缓存和原界面的完整等价性仍待集中验收。
 
 
-### 公共采集的共享准备（尚未激活新存储入口）
+### 公共采集的共享准备
 
-原 upload 的 quick Skill/version 选择与 legacy save 现在共用确定性准备函数：保留原 adapter 归一化、单调合并/允许缩小、query 保护、显式 label 版本重写、版本0、OpenCode 指标与 Langfuse 原树。legacy 入口仍使用原持久化与分析副作用；本片仅提取共享逻辑，没有增加新库提前分支或修改前端。
+原 upload 的 quick Skill/version 选择与 legacy save 现在共用确定性准备函数：保留原 adapter 归一化、单调合并/允许缩小、query 保护、显式 label 版本重写、版本0、OpenCode 指标与 Langfuse 原树。legacy 入口仍使用原持久化与分析副作用；公共采集接线复用这些共享逻辑，前端不变。
 
 `captureCoreCollectorPreparation` 只接受服务端品牌采集身份，在当前权限复核下捕获本次相关 Skill/必要版本、实际命中的 routing/outcome 配置、这些配置真正需要的静态 ParsedFlow、相关注册 Agent、单个 Skill 分数及 autoEvaluation 开关。模型仅保留既有 `freezeModelSelection` 的非秘密连接摘要；API key、Authorization、自定义鉴权头及完整 UserSettings 不进入准备产物。没有遍历全部 Skill 版本读取 ParsedFlow。
 
@@ -390,7 +390,7 @@ threadOnly 保留真实线程计划且没有 Execution/伪 Span；更小快照�
 
 `collector_preparation_receipts` 仅封存首次原 Node 输入字符串、读取前态、capture 与完整 plan；实际接收/物化状态继续由原 Source ledger 和 ingest_batches 决定。私有 `collector-source/v1` proof 仍绑定实际 API 主体、空间与精确正文，管理员不能代采他人 Source。begin、capture、plan 的重试返回首次封存值，Session 的原序列化表示仅从当前 revision 对应的已提交计划恢复；旧 A 或未准备写入明确标记 `legacy_canonical`。
 
-空 completion 独立保存原 Session 元数据，不制造 Execution 或 CH Span；后到 snapshot 使用可信 previous_session 保留首次时钟。人工标注继续保留。C1a 只执行根 Source 与空 Session，非空 child/Thread/retirement 图明确 pending；ThreadOnly 可保留准备回执而无 Trace locator。原公共 upload/completion 仍未在本片激活，`public_ready` 始终为 false。016 必须显式升级，不重写旧 A 回执，不是生产切换。
+空 completion 独立保存原 Session 元数据，不制造 Execution 或 CH Span；后到 snapshot 使用可信 previous_session 保留首次时钟。人工标注继续保留。C1a 只执行根 Source 与空 Session，非空 child/Thread/retirement 图明确 pending；ThreadOnly 可保留准备回执而无 Trace locator。私有回执的 `public_ready` 保持 false，集中验收通过前不表示生产可切换。016 必须显式升级，不重写旧 A 回执，不是生产切换。
 
 接管旧 A 的未提交 reserved 操作时，包括恢复旧 pending 意图或已有准备回执，begin 在同事务持久化封存守卫，旧 commit/complete 不能绕过计划。失败时准备回执和守卫一起回滚；已经 committed 的旧历史保留原状态与回放兼容性，仍标记 `legacy_canonical`。
 
@@ -403,4 +403,14 @@ threadOnly 保留真实线程计划且没有 Execution/伪 Span；更小快照�
 
 派生退休只作用于同root的真实派生集合，保留locator/alias、Session、工件及回执；可信墓碑隐藏Execution/列表，普通缺事实仍失败。每个child独立封存Session字符串，缺显式start保留首次Session时间；子Execution未写的旧评分/label/cost/sourceKind保留。Skill/origin复用原版本/dedupe/locator规则纯准备，完整投影存Source工件，小范围检索字段沿现Span属性输出；不新建技能关联表。
 
-本片 `public_ready` 仍false；原公共API、原UI及生产数据未切换。当前为逻辑完成、待剩余链路接入后集中完整回归/三库/CH/迁移与原界面验收，不能将快速专项解释为全功能迁移完成。
+私有回执 `public_ready` 仍false；原公共API的core开发分支已接线，原UI与生产数据保持。当前为逻辑完成、待剩余链路接入后集中完整回归/三库/CH/迁移与原界面验收，不能将快速专项解释为全功能迁移完成。
+
+### 公共采集原功能接线（开发实现，集中验收待完成）
+
+core 模式下原 upload、OpenCode complete、proxy start/chat/end、OTLP logs/traces 和 Claude context 入口已接到同一可信 collector source。公共 OTLP traces 保留原解码、框架过滤、归一化、聚合与 Jiuwen 多桶缝合，避免同一客户端的 OTLP/snapshot 分别占用两种互不兼容的 task alias；专用 native core 入口不变。原 handler 的 ACK/flags、ThreadOnly、pending Codex、OpenCode 进行中及删除护栏继续保留。普通非collector core Trace仍走原已接读取兼容。
+
+Session 页面仍调用原 Node 的 Claude/subagent/OpenCode/Dify/Goal/collaboration/payloadVersion 与各view流水线；`GET /v1/compat/observe/session-source`、`session-relations`、`session-sources`仅按当前read与Trace IAM返回原Session/Thread来源，允许合法组管理员读取、保留无Execution的Session；不使用采集write RPC替代公开read。详情/Skill部署读取完整source Skill/origin关系。懒query模型需要实际owner与execute；发布时再次核source/annotation/delete fence。
+
+异步分析与proxy end复用既有Outbox和首次capture/plan，原Prompt/parser/模型算法保持，模型投递保存intent/observed checkpoint；只有显式配置的品牌owner后台主体具备当前execute时才能执行模型。上传者的write凭据足以接收/准备，ACK/capture不包含模型密钥。模型请求只发送显式认证配置。OpenClaw本地watcher/Skill-generation CLI需要显式可信default主体；SkillGenerator的OpenCode桥仍使用其同owner身份上报，独立owner spool，不能继承其他人的全局key。
+
+日志先保存当前owner/controller证明及原包，再用原聚合器消费；确认游标必须绑定所有输出和退休事实的真实indexed回执，明确discard保留原因，pending/retry不确认。core启动不自动运行旧无证明spool consumer或旧全局backlog uploader，旧spool/cursor保持原样等待映射迁移。上述为开发接线；完整套件、真实三库、原UI、真客户端和迁移保留演练仍由最终集中验收覆盖，未切生产。

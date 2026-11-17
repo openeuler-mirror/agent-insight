@@ -346,6 +346,14 @@ class TraceEvidence:
             started=summary.get('started_at_ms')
             timestamp=datetime.datetime.fromtimestamp(int(started)/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z') if started is not None else None
             execution={'framework':summary.get('framework'),'agentName':summary.get('agent_name'),'isSubagent':False,'timestamp':timestamp,**fields}
+        from .collector_sources import NAMESPACE
+        if route['source_namespace']==NAMESPACE and begin['annotation']:
+            collector=_parse(begin['annotation']['extra_json']).get('collector_source_v1')
+            if not isinstance(collector,dict) or collector.get('actor_id')!=begin['owner']['owner_principal_id']:raise EvidenceUnavailable('Collector source ownership differs')
+            skills=collector.get('execution_skills',[])
+            if not isinstance(skills,list):raise EvidenceUnavailable('Collector Skill source is invalid')
+            execution['executionSkills']=copy.deepcopy(skills)
+            execution['skillOrigins']=[dict(item['origin'],skillName=item.get('skillName'),skillVersion=item.get('skillVersion')) for item in skills if isinstance(item,dict) and isinstance(item.get('origin'),dict)]
         execution.update(id=begin['aliases']['execution_id'],taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
         if session is not None:session.update(taskId=begin['aliases']['task_id'],user=begin['owner']['normalized_login_name'])
         annotation=begin['annotation'];overrides=_parse(annotation['extra_json']).get('override_fields',[]) if annotation else []

@@ -112,6 +112,9 @@ class TraceMetadata:
         with self.control.transaction() as con:
             scope,locator=self._trace(con,token,ws,trace_id,'delete',allow_retired=True)
             if locator['state']!='active':return False
+            if locator['source_namespace']=='collector.source.v1':
+                from .collector_graphs import cancel_reserved_graph
+                cancel_reserved_graph(self.control,con,ws,trace_id)
             last=con.execute('SELECT MAX(revision) FROM obs_entity_heads WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone()[0] or 0
             barrier=revision(max(last,locator['route_epoch'])+1);now=self.control.clock()
             con.execute("UPDATE trace_locators SET state='deleting',route_epoch=?,updated_at_ms=? WHERE workspace_id=? AND trace_id=?",(revision(locator['route_epoch']+1),max(now,locator['updated_at_ms']),ws,trace_id))

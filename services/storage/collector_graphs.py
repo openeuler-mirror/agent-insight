@@ -214,10 +214,10 @@ class CollectorGraphs:
         text_hash=hashlib.sha256(text.encode('utf-8')).hexdigest();text_ref=self.preparations._persist_text(text)
         state['prepared_session']={'source_revision':state['source_revision'],'snapshot_ref':state.get('snapshot_ref'),'session_hash':_hash(session),'text_ref':text_ref,'text_hash':text_hash}
 
-    def _retire(self,con,row,route,state,op):
-        if state.get('derived_root_trace_id')!=row['scope_key']:raise Conflict('Only this root can retire its derived execution')
+    def _retire(self,con,row,route,state,op,*,derived_only=True):
+        if derived_only and state.get('derived_root_trace_id')!=row['scope_key']:raise Conflict('Only this root can retire its derived execution')
         snapshot=self.sources._load(state.get('snapshot_ref'))
-        if snapshot and (snapshot['execution'].get('isSubagent') is not True or snapshot['execution'].get('rootExecutionId')!=self.ingest._load(row['context_ref'])['reservation']['execution_id']):raise Conflict('Derived retirement execution boundary differs')
+        if derived_only and snapshot and (snapshot['execution'].get('isSubagent') is not True or snapshot['execution'].get('rootExecutionId')!=self.ingest._load(row['context_ref'])['reservation']['execution_id']):raise Conflict('Derived retirement execution boundary differs')
         prior_text,_=self.preparations._prior_session(state);sources=[]
         for key,entity in state['entities'].items():
             if not entity.get('active'):continue
@@ -276,3 +276,24 @@ class CollectorGraphs:
             self.sources._write(con,workspace,route['trace_id'],state)
         for identity in touched:self._reconcile(con,workspace,identity)
         self._record_applied(con,row)
+
+
+def cancel_reserved_graph(control,con,workspace,trace):
+    from .observations import ObservationIngest
+    from .collector_preparations import CollectorPreparations
+    service=CollectorPreparations(control,ObservationIngest(control,None));sources=service.sources
+    _,_,root=sources._state(con,workspace,trace)
+    if not root:return
+    pending=root.get('pending');op=root.get('operations',{}).get(pending)
+    if not op or op.get('stage')!='reserved':return
+    receipt=con.execute("SELECT capture_ref FROM collector_preparation_receipts WHERE workspace_id=? AND scope_kind='source' AND scope_key=? AND operation_key=?",(workspace,trace,op['operation_key'])).fetchone()
+    if receipt and receipt[0]:
+        capture=json.loads(service._load_text(receipt[0],con.execute("SELECT capture_hash FROM collector_preparation_receipts WHERE workspace_id=? AND scope_kind='source' AND scope_key=? AND operation_key=?",(workspace,trace,op['operation_key'])).fetchone()[0]));graph=capture.get('graph_context',{})
+        for member in graph.get('children',[])+graph.get('retire_candidates',[]):
+            alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='execution' AND alias_id=?",(workspace,member['execution_id'])).fetchone()
+            if not alias:continue
+            _,_,state=sources._state(con,workspace,alias[0]);slot=state.get('pending') if state else None;derived=state.get('operations',{}).get(slot) if state else None
+            parent=derived.get('graph_parent_receipt',{}) if derived else {}
+            if derived and derived['stage']=='reserved' and parent.get('scope_key')==trace and parent.get('operation_key')==op['operation_key']:
+                derived.update(stage='failed',error_code='ROOT_SOURCE_DELETED');state['pending']=None;sources._write(con,workspace,alias[0],state)
+    op.update(stage='failed',error_code='SOURCE_DELETED');root['pending']=None;sources._write(con,workspace,trace,root)

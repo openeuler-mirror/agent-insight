@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {handleCoreCollectorContext} from '@/lib/storage-core/collector-logs';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -34,6 +36,7 @@ import { NextResponse } from 'next/server';
  * 不新增 spool 源、不改消费者。
  */
 export async function POST(req: Request) {
+  if(isStorageCoreEnabled())return handleCoreCollectorContext(req);
   try {
     // 补传等于往别人的 trace 里塞内容,比 logs 端点更值得收紧:必须是有效 API key。
     const apiKey = req.headers.get('x-witty-api-key');

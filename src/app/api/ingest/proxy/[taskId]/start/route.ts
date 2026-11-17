@@ -15,6 +15,9 @@
  */
 
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {resolveCollectorRequest,collectorFailure} from '@/lib/storage-core/collector-entry';
+import {withCoreCollectorIdentity} from '@/lib/storage-core/collector-identity';
 import { db } from '@/lib/storage/prisma';
 import { startSession } from '@/lib/ingest/proxy-store';
 import { NextResponse } from 'next/server';
@@ -36,6 +39,7 @@ export async function POST(
 
   const apiKey = request.headers.get('x-api-key') || body.apiKey;
   const model: string | undefined = body.model || searchParams.get('model') || undefined;
+  if(isStorageCoreEnabled()){try{const headers=new Headers(request.headers);if(apiKey)headers.set('x-witty-api-key',apiKey);const identity=await resolveCollectorRequest(new Request(request.url,{headers}),'snapshot',body);let query=body.query||searchParams.get('query');if(typeof query==='string')query=query.trim().replace(/^['"]+|['"]+$/g,'').trim();await withCoreCollectorIdentity(identity,()=>startSession(taskId,body.label,query,identity.username,model));return NextResponse.json({status:'ok',task_id:taskId,label:body.label,query,user:identity.username,message:'Session started'});}catch(error){return collectorFailure(error);}}
 
   if (apiKey) {
       try {

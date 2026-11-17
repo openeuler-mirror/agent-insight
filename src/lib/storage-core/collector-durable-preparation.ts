@@ -46,8 +46,8 @@ export function sealCoreCollectorPlan(identity:CoreCollectorIdentity,receipt:Dur
  const session=plan.snapshot?.session??plan.session??null;
  return rpc(identity,'seal_plan',{...reference(receipt),capture_hash:receipt.capture_hash,plan_json:JSON.stringify({...plan,serialized_session_json:JSON.stringify(session)})});
 }
-export function commitCoreCollectorPreparation(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation):Promise<DurableCollectorPreparation>{
- return rpc(identity,'commit_prepared',{...reference(receipt),plan_hash:receipt.plan_hash});
+export function commitCoreCollectorPreparation(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation,jobHandle?:Row):Promise<DurableCollectorPreparation>{
+ return rpc(identity,'commit_prepared',{...reference(receipt),plan_hash:receipt.plan_hash,...(jobHandle?{job_handle:jobHandle}:{})});
 }
 export function coreCollectorPreparationStatus(identity:CoreCollectorIdentity,receipt:DurableCollectorPreparation):Promise<DurableCollectorPreparation>{
  return rpc(identity,'preparation_status',reference(receipt));

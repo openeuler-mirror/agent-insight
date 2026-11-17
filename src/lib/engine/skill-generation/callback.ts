@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getActiveCoreCollectorIdentity,isVerifiedCoreCollectorIdentity,withCoreCollectorIdentity,type CoreCollectorIdentity} from '@/lib/storage-core/collector-identity';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -64,11 +66,16 @@ export class Callback4AgentInsight extends BaseCallbackHandler {
   private langfuseHandler: CallbackHandler | null;
   private langfuseSessionId: string;
 
-  constructor(sessionId?: string) {
+  private collectorIdentity?:CoreCollectorIdentity;
+  constructor(sessionId?: string,collectorIdentity?:CoreCollectorIdentity) {
     super();
+    this.collectorIdentity=collectorIdentity||getActiveCoreCollectorIdentity();
+    if(isStorageCoreEnabled()&&!isVerifiedCoreCollectorIdentity(this.collectorIdentity))throw Object.assign(new Error('Skill generation capture requires a verified collector actor'),{status:403});
     this.langfuseSessionId = sessionId ?? `skill-gen-${Date.now()}`;
     this.langfuseHandler = createLangfuseHandler(this.langfuseSessionId);
   }
+
+  private async saveRecord(record:ExecutionRecord){if(!isStorageCoreEnabled())return saveExecutionRecord(record);const identity=this.collectorIdentity;if(!identity)throw Object.assign(new Error('Skill generation collector actor missing'),{status:403});return withCoreCollectorIdentity(identity,()=>saveExecutionRecord({...record,user:identity.username}));}
 
   getLangfuseHandler(): CallbackHandler | null {
     return this.langfuseHandler;
@@ -125,7 +132,7 @@ export class Callback4AgentInsight extends BaseCallbackHandler {
         timestamp: new Date(context.startTime),
       };
 
-      await saveExecutionRecord(record);
+      await this.saveRecord(record);
       logger.log("Saved root execution record", {
         taskId: this.rootRunId,
         interactionCount: this.interactions.length,
@@ -284,7 +291,7 @@ export class Callback4AgentInsight extends BaseCallbackHandler {
     if (runId === this.rootRunId) {
         const context = this.runMap.get(runId);
         if (context) {
-            await saveExecutionRecord({
+            await this.saveRecord({
                 task_id: this.rootRunId,
                 query: this.taskQuery,
                 latency: Date.now() - context.startTime,

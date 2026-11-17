@@ -1,4 +1,5 @@
-import {compatibilityContext,configuredCoreBackgroundActorForUser,isVerifiedCoreBackgroundActor,type CompatibilityOptions,type CoreBackgroundActor} from './compat';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {compatibilityContext,coreCollectorModelUsername,configuredCoreBackgroundActorForUser,revalidateConfiguredCoreBackgroundActor,isVerifiedCoreBackgroundActor,type CompatibilityOptions,type CoreBackgroundActor} from './compat';
 import {coreServiceOrigin,requestCore} from './server';
 
 type CollectorOperation='snapshot'|'complete';
@@ -15,6 +16,10 @@ export interface CoreCollectorIdentity {
 }
 interface Actor {token:string;principal:string;workspace:string;username:string;principalUsername:string}
 interface Resolution {actor:Actor;clientId?:string;authentication:CoreCollectorIdentity['authentication']}
+const activeCollectorKey=Symbol.for('agent-insight.storage-core.collector-identity-scope');
+const activeCollectorGlobals=globalThis as unknown as Record<symbol,AsyncLocalStorage<CoreCollectorIdentity>>;
+const activeCollectors=activeCollectorGlobals[activeCollectorKey] ||= new AsyncLocalStorage<CoreCollectorIdentity>();
+export const getActiveCoreCollectorIdentity=()=>activeCollectors.getStore();
 const identities=new WeakMap<CoreCollectorIdentity,{refresh:()=>Promise<Resolution>;current:Resolution;options:Readonly<CompatibilityOptions>}>();
 const failure=(status:number,message:string)=>Object.assign(new Error(message),{status});
 const apiToken=/^api_[A-Za-z0-9_-]{43}$/;
@@ -37,7 +42,8 @@ async function direct(request:Request,options:CompatibilityOptions):Promise<Acto
  const value=await compatibilityContext(request,options);
  if(!apiToken.test(value.token))throw failure(403,'Collector API credential required');
  if(!value.username||!value.principalUsername)throw failure(403,'Collector owner is unavailable');
- return {...value,username:value.username,principalUsername:value.principalUsername};
+ const username=await coreCollectorModelUsername(value);
+ return {...value,username:username||value.username,principalUsername:value.principalUsername};
 }
 async function resolve(request:Request,input:CollectorIdentityInput,options:CompatibilityOptions):Promise<Resolution>{
  const directActors:Actor[]=[];let invalid:unknown;const key=request.headers.get('x-witty-api-key');
@@ -88,5 +94,20 @@ export async function resolveCoreCollectorIdentity(request:Request,input:Collect
 }
 export async function withCoreCollectorIdentity<T>(identity:CoreCollectorIdentity,action:(actor:Readonly<Actor>,options:Readonly<CompatibilityOptions>)=>Promise<T>):Promise<T>{
  const state=identities.get(identity);if(!state)throw failure(403,'Verified collector identity required');
- await identity.revalidate();return action(Object.freeze({...state.current.actor}),state.options);
+ await identity.revalidate();return activeCollectors.run(identity,()=>action(Object.freeze({...state.current.actor}),state.options));
+}
+
+export function collectorIdentityForOperation(identity:CoreCollectorIdentity,operation:CollectorOperation):CoreCollectorIdentity{
+ const state=identities.get(identity);if(!state||!['snapshot','complete'].includes(operation))throw failure(403,'Verified collector identity required');
+ if(identity.operation===operation)return identity;
+ const selected=Object.freeze({...identity,operation});identities.set(selected,state);return selected;
+}
+export async function collectorIdentityForBackgroundActor(actor:CoreBackgroundActor,input:CollectorIdentityInput,options:CompatibilityOptions={}):Promise<CoreCollectorIdentity>{
+ if(!isVerifiedCoreBackgroundActor(actor))throw failure(403,'Verified collector background actor required');
+ const request=new Request('http://localhost/internal/collector?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}});
+ const original=await resolveCoreCollectorIdentity(request,input,options);const state=identities.get(original)!;
+ const selected=Object.freeze({...original,username:actor.username,revalidate:async()=>{
+  await original.revalidate();await revalidateConfiguredCoreBackgroundActor(actor,options);
+  state.current={...state.current,actor:{...state.current.actor,username:actor.username}};
+ }});identities.set(selected,state);await selected.revalidate();return selected;
 }

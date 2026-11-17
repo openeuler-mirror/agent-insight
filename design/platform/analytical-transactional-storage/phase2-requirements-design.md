@@ -483,3 +483,9 @@ Thread沿原Node prepareTraceThread的create/update/eventKey及日期/undefined�
 ExecutionSkill/origin沿原dedupe、版本、incoming/prior匹配、平台/locator校验规则抽为纯准备；封存在source投影及原capsule必要字段，不另加技能关系表或泛化ORM。候选别名被其他来源/root占用时显式冲突并保留输入，禁止暗中adopt或改sealed ID。
 
 实施顺序：补017字段字典→ThreadOnly/upsert/reconcile RED-GREEN→root/child同事务及完整vector屏障→退休保Session与首child表示→Node typed graph-context及纯原算法前态→必要相邻测试与中英reference；稳定后冻结交接供Spec→Quality及根代理集中真实CH/016→017/native验证。原v10基线22组/24次真实旧handler写请求为行为对照，不重复扩未来能力。
+
+### 公共采集消费者与原 Session 投影接线
+
+在017之上复用现有source、准备回执、outbox和worker，不新增同义Session或图表。只读`observe/session-source`按实时read权限返回source的原Session JSON表示、可空Execution、原Thread字段及关系引用；空completion/派生退休可以保留Session而无Execution，普通非collector仍走既有兼容读取。Node保留原规范化、Dify/协作组合、payload版本和各视图算法。写入统一使用可信采集身份及首次封存计划；代理Session的创建/追加/结束使用相同source与CAS，供应商Authorization不作为采集授权。异步分析保存可恢复意图，结果发布核对source revision、用户标注及删除屏障，原算法与响应字段不改。新日志接收保存私有可验证来源，所有图批次indexed后确认消费者游标；缺证明的旧积压保留待映射。root在capture封存后、整图commit前删除时，同事务终止其尚reserved派生预留，避免阻塞独立child或迟到复活。
+
+公共采集连续实现补充：OTLP traces与logs/context统一经过已认证receiver原包记录及原框架聚合器，公共双OTLP/snapshot使用同collector canonical identity，专用native入口保持独立。`collector.logs.packet.v1`在原Outbox中保存owner/channel/session递增版本、Jiuwen原bucket/session marker关系、首次输出清单及完整indexed回执向量；`collector.logs.raw.v1`确认接收与消费确认分离。proxy end首次Session/时钟、模型选择摘要、投递checkpoint及响应也复用Outbox；无新DDL。GET懒query使用原source/annotation CAS和owner+execute，write不隐含模型执行权。core不读取/确认旧无证明spool；SkillGenerator bridge采用同owner独立spool，保留原客户端上报而不借tag切换主体。完整验收、UI与迁移仍集中执行。

@@ -1,3 +1,4 @@
+import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession,queryCoreTraceSources} from '@/lib/storage-core/collector-read-source';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -223,7 +224,7 @@ async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkRe
   let unresolved = 0;
   for (const intent of intents) {
     const exactMatches = intent.exactIds.length
-      ? await tx.execution.findMany({
+      ? hasCoreCollectorTraceSource()?await findCoreTraceExecutions(source.user,{agent_session_ids:intent.exactIds,framework:intent.expectedFramework,limit:2000}):await tx.execution.findMany({
         where: {
           user: source.user,
           ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
@@ -245,7 +246,7 @@ async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkRe
       };
     });
     if (candidates.length === 0 && intent.taskName && !duplicateTaskNames.has(intent.taskName)) {
-      const matches = await tx.execution.findMany({
+      const matches = hasCoreCollectorTraceSource()?(await findCoreTraceExecutions(source.user,{framework:intent.expectedFramework,limit:2000})).filter(item=>[item.taskId,item.agentSessionId,item.agentName,item.subagentName].includes(intent.taskName)):await tx.execution.findMany({
         where: {
           user: source.user,
           ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),

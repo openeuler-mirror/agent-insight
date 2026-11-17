@@ -965,6 +965,14 @@ async function buildPluginUploadEnvOverride(user: string): Promise<Record<string
   // host: 优先环境变量 (部署侧 PORT), 缺省 3000
   const localPort = process.env.PORT || process.env.NEXT_PORT || '3000'
   overrides.AGENT_INSIGHT_HOST = `http://127.0.0.1:${localPort}`
+  const {isStorageCoreEnabled}=await import('@/lib/storage-core/mode');
+  if(isStorageCoreEnabled()){
+    const {configuredCoreBackgroundActorForUser}=await import('@/lib/storage-core/compat');const actor=await configuredCoreBackgroundActorForUser(user);
+    const {collectorIdentityForBackgroundActor}=await import('@/lib/storage-core/collector-identity');await collectorIdentityForBackgroundActor(actor,{operation:'snapshot',framework:'opencode'});
+    overrides.AGENT_INSIGHT_API_KEY=actor.token;
+    overrides.AGENT_INSIGHT_OPENCODE_SPOOL_DIR=path.join(getAgentInsightHome(),'otel_data','opencode','core-owner',createHash('sha256').update(actor.workspace+'\0'+actor.principal).digest('hex'));
+    return overrides;
+  }
   // api key: 查触发 user 在 DB 里登记的 apiKey, 让 plugin 上报数据时归这个 user
   try {
     const u = (await db.findUserByUsername(user)) as { apiKey?: string } | null

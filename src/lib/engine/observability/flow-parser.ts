@@ -1,3 +1,4 @@
+import {configuredModelFetch} from '@/lib/server/configured-model-fetch';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -70,7 +71,7 @@ async function getLlmClient(user?: string | null,purpose={agentName:'trace-step-
   const trusted = getTrustedCoreAgentContext();
   if (trusted) {
     const client = new OpenAI({apiKey: trusted.trustedModel.apiKey || 'no-api-key-required', baseURL: trusted.trustedModel.baseURL,
-      defaultHeaders: trusted.trustedModel.headers, fetch: getModelFetch(),...(getCoreFlowModelDeliveryContext()?{maxRetries:0}:{})});
+      defaultHeaders: trusted.trustedModel.headers, fetch: configuredModelFetch(trusted.trustedModel),...(getCoreFlowModelDeliveryContext()?{maxRetries:0}:{})});
     const recorded: FlowLlmClient = {apiKey: client.apiKey, chat: {completions: {create: async (body, options) => {
       return executeCoreFlowModelCall(body,async()=>{
       trusted.cancelSignal?.throwIfAborted();
@@ -107,7 +108,7 @@ async function getLlmClient(user?: string | null,purpose={agentName:'trace-step-
       apiKey, 
       baseURL,
       defaultHeaders: config.headers,
-      fetch: getModelFetch(),
+      fetch: configuredModelFetch(config),
     }),
     model: config.model || "deepseek-chat"
   };

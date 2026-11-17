@@ -1,3 +1,4 @@
+import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession,queryCoreTraceSources} from '@/lib/storage-core/collector-read-source';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -103,7 +104,7 @@ export class CollaborationStore {
     async bind(user: string, binding: Binding) {
         return this.sql.transaction(async tx => {
             await this.ensure(tx, user, binding.collaborationId);
-            const existing = await tx.rows<{ user: string }>('SELECT "user" FROM "Session" WHERE "taskId"=?', [binding.traceSessionId]);
+            const existing = hasCoreCollectorTraceSource()?((await findCoreTraceSession(user,binding.traceSessionId))?[{user}]:[]):await tx.rows<{ user: string }>('SELECT "user" FROM "Session" WHERE "taskId"=?', [binding.traceSessionId]);
             if (existing.length && existing[0].user !== user) throw new CollaborationError(403, 'FORBIDDEN', '无权绑定该 Trace');
             const id = randomUUID();
             await tx.execute('INSERT INTO "CollaborationSessionBinding" ("id","user","collaborationId","sessionId","traceSessionId","eventClock","createdAt") VALUES (?,?,?,?,?,?,?) ON CONFLICT ("user","collaborationId","sessionId") DO NOTHING', [id, user, binding.collaborationId, binding.sessionId, binding.traceSessionId, binding.eventClock, new Date().toISOString()]);
@@ -130,6 +131,7 @@ export class CollaborationStore {
         return this.sql.rows<SavedResolution>(`SELECT "eventDbId","side","executionId","linkState","linkMethod","evidenceJson","anchorState","anchorJson" FROM "CollaborationEndpointResolution" WHERE "eventDbId" IN (${placeholders})`, eventIds);
     }
     async identify(user: string, collaborationId: string, sessionId: string): Promise<{ binding?: Binding; message?: string }> {
+        if(hasCoreCollectorTraceSource()){const rows=await queryCoreTraceSources(user,{agent_session_ids:[sessionId],limit:2});const ids=[...new Set(rows.flatMap(row=>row.session?[row.session.taskId]:row.execution?.taskId?[row.execution.taskId]:[]))];return ids.length===1?{binding:{collaborationId,sessionId,traceSessionId:ids[0],eventClock:'unknown'}}:{message:ids.length?'会话编号对应多个 Trace，无法唯一关联':'对应 Trace 尚未到达'};}
         const rows = await this.sql.rows<{ taskId: string }>(
             'SELECT "taskId" FROM "Session" WHERE "user"=? AND "taskId"=? UNION SELECT "taskId" FROM "Execution" WHERE "user"=? AND ("taskId"=? OR "agentSessionId"=?) AND "taskId" IS NOT NULL LIMIT 2',
             [user, sessionId, user, sessionId, sessionId]);
@@ -137,6 +139,12 @@ export class CollaborationStore {
         return { binding: { collaborationId, sessionId, traceSessionId: rows[0].taskId, eventClock: 'unknown' } };
     }
     async trace(user: string, binding: Binding) {
+        if(hasCoreCollectorTraceSource()){
+            const rows=await queryCoreTraceSources(user,{references:[binding.traceSessionId],limit:2});const source=rows.find(row=>row.session?.taskId===binding.traceSessionId);const session=source?.session;if(!session)return null;
+            if(!session.interactions||Buffer.byteLength(session.interactions)>8388608)return {state:'pending' as const,message:'Trace 无正文或超过 8 MiB 解析限制'};
+            const interactions=JSON.parse(session.interactions);if(!Array.isArray(interactions)||!interactions.length||interactions.length>20000)return {state:'pending' as const,message:'Trace 正文为空、结构无效或超过 20000 条交互限制'};
+            return {state:'resolved' as const,interactions,byteCount:Buffer.byteLength(session.interactions),execution:source.execution??undefined};
+        }
         const [session] = await this.sql.rows<{ taskId: string; interactions: string | null; byteSize: number | bigint; user: string }>('SELECT "taskId","user", CASE WHEN LENGTH("interactions") <= 8388608 THEN "interactions" ELSE NULL END AS "interactions", LENGTH("interactions") AS "byteSize" FROM "Session" WHERE "taskId"=? AND "user"=?', [binding.traceSessionId, user]);
         if (!session) return null;
         if (!session.interactions || Buffer.byteLength(session.interactions) > 8388608) return { state: 'pending' as const, message: 'Trace 无正文或超过 8 MiB 解析限制' };

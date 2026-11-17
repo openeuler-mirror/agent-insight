@@ -39,6 +39,8 @@ export async function setupNodeRuntime(): Promise<void> {
     startCoreExperimentBackground();
     const {startCoreAnalyticsBackground}=await import('@/lib/storage-core/analytics');
     startCoreAnalyticsBackground();
+    const {startCoreCollectorWorker}=await import('@/lib/storage-core/collector-worker');startCoreCollectorWorker();
+    const {startCoreCollectorLogs}=await import('@/lib/storage-core/collector-logs');startCoreCollectorLogs();
   }else{
     const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
     startExperimentCancellationWatchdog();
@@ -190,6 +192,7 @@ export async function setupNodeRuntime(): Promise<void> {
 
   }
 
+  if(!coreStorage){
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。
@@ -236,6 +239,7 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
+  }
   try {
     const { startInfraPoller } = await import('@/lib/infra/poller');
     startInfraPoller();

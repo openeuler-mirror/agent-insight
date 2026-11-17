@@ -1,3 +1,4 @@
+import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession,queryCoreTraceSources} from '@/lib/storage-core/collector-read-source';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -173,7 +174,7 @@ async function resolveReportedEndpoint(event: StoredEvent, side: CollaborationEn
     select: { traceSessionId: true },
   });
   const traceSessionId = binding?.traceSessionId ?? sessionId;
-  const matches = await prismaRaw.execution.findMany({
+  const matches = hasCoreCollectorTraceSource()?await findCoreTraceExecutions(event.collaboration.user,{agent_session_ids:[traceSessionId],limit:2000}):await prismaRaw.execution.findMany({
     where: {
       user: event.collaboration.user,
       OR: [{ taskId: traceSessionId }, { agentSessionId: traceSessionId }],
@@ -227,14 +228,14 @@ function locatedAnchor(match: LocatorMatch, candidateCount: number): Record<stri
 
 async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
   if (event.sourceType !== 'reported') return;
-  const resolutions = await prismaRaw.collaborationEndpointResolution.findMany({
+  const resolutions:any[] = await prismaRaw.collaborationEndpointResolution.findMany({
     where: { eventDbId: event.id },
-    include: {
-      execution: {
-        select: { id: true, taskId: true, parentExecutionId: true },
-      },
-    },
+    ...(!hasCoreCollectorTraceSource()?{include:{execution:{select:{id:true,taskId:true,parentExecutionId:true}}}}:{}),
   });
+  if(hasCoreCollectorTraceSource()){
+    const executions=await findCoreTraceExecutions(event.collaboration.user,{references:resolutions.flatMap(item=>item.executionId?[item.executionId]:[]),limit:2000});
+    for(const row of resolutions)row.execution=executions.find(execution=>execution.id===row.executionId)??null;
+  }
   const from = resolutions.find(item => item.side === 'from');
   const to = resolutions.find(item => item.side === 'to');
   if (from?.linkState !== 'linked' || !from.execution) {
@@ -253,7 +254,7 @@ async function resolveReportedAnchor(event: StoredEvent): Promise<void> {
     return;
   }
   const session = from.execution.taskId
-    ? await prismaRaw.session.findUnique({
+    ? hasCoreCollectorTraceSource()?await findCoreTraceSession(event.collaboration.user,from.execution.taskId):await prismaRaw.session.findUnique({
       where: { taskId: from.execution.taskId },
       select: { interactions: true },
     })

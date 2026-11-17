@@ -2921,3 +2921,15 @@ erDiagram
 ```
 
 图descriptor为现私有artifact，不是SQL表。ThreadOnly的effect inbox是现inbox_receipts，source_id固定collector-preparation-effects/v1，event_id为workspace内scope/op稳定hash、content_hash为首次plan_hash；它只去重同事务控制效果，不镜像indexed。原A source operation仍保留自身batch refs，descriptor额外绑定同一sealed计划全部member refs；不得把其他Trace batch refs塞入自身packet验证结构。
+
+### 公共采集消费者复用载体（无新增表）
+
+公共 Session 读取以 `collector_source_v1` 当前 revision、首次 Node Session 字符串和017 Thread表为源；read 权限与当前 Trace IAM、完整图 indexed 屏障同时成立。空 Session/已退休 Execution 可保留独立 Session，不能伪造 Execution。精准 `ExecutionSkill/origin` 从当前 source 状态读取，不能以 Span 属性截断投影替代完整关系。
+
+| 既有载体 | 固定域类型及内容 | 一致性规则 |
+| --- | --- | --- |
+| outbox_events | `collector.source.effects.v1`：实际owner、receipt、首次plan/capture引用、source revision、非producer annotation hash、模型checkpoint、已发布operation/hash；proxy end附首次Session/结束时钟/原请求和响应 | 当前owner write；模型另需当前execute及已配置品牌后台主体；lease/attempt/CAS；迟到结果不得覆盖新source、手改或删除屏障 |
+| outbox_events + immutable artifact | `collector.logs.raw.v1`：首次已解码原包、当前API owner和controller用途；`collector.logs.packet.v1`：channel/session、事件引用、单调aggregate revision、lease、covered watermark、output/retirement receipt向量 | 同owner/channel/session隔离；Jiuwen按原trace bucket与session marker规则缝合；重试保留首次归属/时钟/原数据；旧spool没有receiver证明不能倒推授权 |
+| inbox_receipts | `collector.logs.raw.v1`确认持久接收原包；`collector.logs.packet.v1`确认已消费watermark及输出向量hash | 接收ACK不代表indexed；消费ACK验证每个source proof和全部根/子图/退休事实实际indexed；原算法明确discard另记原因；pending Codex/retry-later不推进确认 |
+
+这些域记录使用001已有PK、aggregate revision唯一约束和lease索引；SQLite/PG/openGauss共用事务规则。它们不增加通用ORM、跨库FK或容量承诺。proxy append使用source revision CAS和稳定operation回执；模型发布还核annotation revision。默认/旧数据库、原spool与旧cursor不在此开发接入中自动迁移。

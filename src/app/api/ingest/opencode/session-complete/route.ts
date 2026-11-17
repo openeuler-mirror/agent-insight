@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {handleCoreCollectorComplete} from '@/lib/storage-core/collector-entry';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -18,6 +20,7 @@ import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
+    if(isStorageCoreEnabled())return handleCoreCollectorComplete(request);
     try {
         const apiKey = request.headers.get('x-witty-api-key');
         let username: string | undefined;

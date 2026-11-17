@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {
-  prepareExecutionRecordState, prepareExecutionSession, prepareExecutionWrite, prepareExecutionRouting,
+  NO_OUTCOME_MATCH_REASON,getEvaluationContextLabel,prepareExecutionRecordState, prepareExecutionSession, prepareExecutionWrite, prepareExecutionRouting,
   prepareTraceThread, prepareSubagentExecutions, prepareUploadQuickData, computeOwnSkills,
   readConfig, readEvaluationResults, fillConfigKeyActionsFromParsedFlows, findBestRoutingConfig,
   findBestOutcomeConfig, buildRecordEvaluationSnapshots, allowsSnapshotShrinkForFramework,
@@ -87,12 +87,18 @@ function portableSession(value:Row|null):Row|null{
 
 export async function captureCoreCollectorPreparation(identity:CoreCollectorIdentity,reservation:CollectorReservation,projection:{previousSession?:Row|null;executionMatch?:Row|null;threadId?:string|null;graphContext?:(input:{children:Row[];thread:Row|null;sweep:boolean})=>Promise<Row>}={}):Promise<FrozenCollectorPreparation>{
  if(!isVerifiedCoreCollectorIdentity(identity))throw failure(403,'Verified collector identity required');
- return withCoreCollectorIdentity(identity,async actor=>{
+ return withCoreCollectorIdentity(identity,async (actor,options)=>{
   if(actor.username!==reservation.provenance.legacy_username||identity.operation!==(reservation.operation==='thread_only'?'snapshot':reservation.operation))throw failure(403,'Collector preparation owner differs');
   const username=actor.username;
   const frozen:FrozenCollectorPreparation={version:1,actor:{principal:actor.principal,workspace:actor.workspace,username},binding:binding(reservation),configs:[],skills:[],active_skill_versions:{},evaluation_results:{},settings:{autoEvaluationEnabled:false},allow_snapshot_shrink:false,execution_match:jsonClone(projection.executionMatch??null),thread_id:projection.threadId??null,previous_session:jsonClone(projection.previousSession??null)};
   check(reservation,frozen,reservation.operation);
   if(reservation.operation==='complete'){await identity.revalidate();return frozen;}
+  if(reservation.snapshot&&projection.executionMatch===undefined){
+   try{const {withCoreExperiments,requireCoreExperimentContext}=await import('./experiments');const selected=await withCoreExperiments(new Request('http://localhost/internal/collector-flow-read?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}}),()=>requireCoreExperimentContext().rpc('flow_lookup',{trace_ref:reservation.trace_id}),options) as Row;frozen.execution_match=selected.match?.value?jsonClone(selected.match.value):null;}catch(error){if(![401,403,404].includes(Number((error as Row)?.status)))throw error;}
+  }
+  const ownerSettings=await getUserSettings(username);frozen.settings={autoEvaluationEnabled:ownerSettings.autoEvaluationEnabled??true};
+  const incoming=reservation.operation_request.data??reservation.operation_request;
+  frozen.model_selection=!isInProgressOpencodeSnapshot(incoming)?freezeModelSelection(await getActiveConfig(username)):null;
   if(reservation.operation==='thread_only'){
    const raw=reservation.operation_request.data??reservation.operation_request;
    if(!raw.threadOnly||!raw.framework||!raw.traceThread?.sourceThreadId)throw failure(400,'Thread-only collector input required');
@@ -153,8 +159,6 @@ export async function captureCoreCollectorPreparation(identity:CoreCollectorIden
    const rows=await prismaRaw.skill.findMany({where:{name:{in:needVersions},OR:[{user:username},{user:null}]},select:{name:true,activeVersion:true}});
    frozen.active_skill_versions=Object.fromEntries(rows.filter(skill=>typeof skill.activeVersion==='number').map(skill=>[skill.name,skill.activeVersion as number]));
   }
-  const settings=await getUserSettings(username);frozen.settings={autoEvaluationEnabled:settings.autoEvaluationEnabled??true};
-  frozen.model_selection=frozen.settings.autoEvaluationEnabled&&!isInProgressOpencodeSnapshot(data)?freezeModelSelection(await getActiveConfig(username)):null;
   const scoreName=state.targetRecord.skills?.[0];const scores=scoreName?readEvaluationResults():{};frozen.evaluation_results=scoreName&&scores[scoreName]!==undefined?{[scoreName]:scores[scoreName]}:{};
   const agentName=state.targetRecord.agentName||getFrameworkPrimaryAgentName(state.targetRecord.framework);
   const names=extractObservedAgentRegistrations(state.mergedInteractionsForSession,agentName).map(agent=>agent.name);
@@ -183,7 +187,8 @@ export async function prepareCoreCollectorSnapshot(reservation:CollectorReservat
  }
 
  const findSkill=async(name:string)=>frozen.skills.find(skill=>skill.name.toLowerCase()===name.toLowerCase()) as any;
- const {quickData,normalized}=await prepareUploadQuickData(data,frozen.actor.username,findSkill);
+ const quick=await prepareUploadQuickData(data,frozen.actor.username,findSkill);const normalized=quick.normalized;
+ const quickData=reservation.operation_request._collector_save_mode==='original'?data:quick.quickData;
  const canonicalSession=reservation.snapshot?.session??frozen.previous_session;
  const old=previousExecution(reservation.snapshot?.execution),oldSession=previousSession(canonicalSession);
  const state=prepareExecutionRecordState({data:quickData,recordId:reservation.execution_id,existingExecution:old,existingSession:oldSession,defaultTimestamp:timestamp,allowSnapshotShrink:frozen.allow_snapshot_shrink});
@@ -200,7 +205,13 @@ export async function prepareCoreCollectorSnapshot(reservation:CollectorReservat
   if(JSON.stringify(outcome.key_actions)!==before)configUpdates.push({id:outcome.id,expected_config:expectedConfig,keyActions:JSON.stringify(outcome.key_actions),extractedKeyActions:JSON.stringify(outcome.extractedKeyActions)});
  }
  record=prepareExecutionRouting(record,routing,frozen.routing_skills??frozen.skills);
- record.answer_score=null;record.is_answer_correct=false;record.judgment_reason='结果评估中...';
+ let needsJudgment=false;
+ record.is_answer_correct=record.is_answer_correct||false;record.judgment_reason=record.judgment_reason||NO_OUTCOME_MATCH_REASON;
+ if(outcome&&record.final_result!==undefined){
+  needsJudgment=(!state.existingRecord||data.force_judgment||state.existingRecord.query!==record.query||state.existingRecord.final_result!==record.final_result)&&!data.skip_internal_judgment&&!record.skip_evaluation;
+ }else if(configs.length&&(!state.existingRecord||data.force_judgment)){record.answer_score=null;record.is_answer_correct=false;record.judgment_reason=NO_OUTCOME_MATCH_REASON;}
+ if(quickData.skip_evaluation){record.answer_score=null;record.is_answer_correct=false;record.judgment_reason='结果评估中...';}
+
  record=await buildRecordEvaluationSnapshots(record,configs,frozen.actor.username,frozen.routing_skills??frozen.skills);
  record.execution_match=structuredClone(frozen.execution_match);
  const score=Array.isArray(record.skills)&&record.skills.length?frozen.evaluation_results[record.skills[0]]:undefined;
@@ -210,7 +221,7 @@ export async function prepareCoreCollectorSnapshot(reservation:CollectorReservat
  if(thread)record.traceThreadId=frozen.thread_id??undefined;
  const frameworkAgent=getFrameworkPrimaryAgentName(record.framework),agentName=record.agentName||frameworkAgent;
  const registered=frozen.registered_agents?.find(agent=>agent.platform===record.framework&&agent.name===agentName);
- const fields:Row=prepareExecutionWrite({record,recordId:reservation.execution_id,existingExecution:old,agentId:registered?.id,receivedAt:new Date(reservation.received_at_ms),interactions:state.mergedInteractionsForSession,defaultTimestamp:timestamp});
+ const fields:Row=prepareExecutionWrite({record,recordId:reservation.execution_id,existingExecution:old,agentId:registered?.id,receivedAt:reservation.operation_request._collector_received_at===null?null:reservation.operation_request._collector_received_at?new Date(reservation.operation_request._collector_received_at):new Date(reservation.received_at_ms),interactions:state.mergedInteractionsForSession,defaultTimestamp:timestamp});
  const own=state.explicitSkillVersionRewrite?record.invokedSkills??[]:Array.isArray(state.mergedInteractionsForSession)&&state.mergedInteractionsForSession.length?computeOwnSkills(record.framework,state.mergedInteractionsForSession):record.invokedSkills??[];
  const rootSkills=pinnedSkills(own.map(skill=>skill.name===record.skill&&skill.version==null&&typeof record.skill_version==='number'?{...skill,version:record.skill_version}:skill),frozen);
  fields.skills=rootSkills.length?JSON.stringify(rootSkills.map(skill=>skill.name)):null;
@@ -238,7 +249,7 @@ export async function prepareCoreCollectorSnapshot(reservation:CollectorReservat
  const background=!isInProgressOpencodeSnapshot(data)&&frozen.settings.autoEvaluationEnabled;
  return jsonClone({binding:binding(reservation),skipped:false,snapshot:{execution:portableExecution(fields,reservation.snapshot?.execution),session:portableSession(session.session)},record:session.record,normalized,
   root_skills:rootSkills,skill_origins:record.skill_origins??[],execution_skills:prepareExecutionSkills(rootSkills,{user:frozen.actor.username,primaryName:record.skill,origins:record.skill_origins},frozen.graph_context?.root_execution_skills??[]),children,retire_missing_children:childPlan.sweep,thread,post_hooks:postHooks,background_analysis:background,
-  analysis:{kind:'upload_analysis',enabled:background,model_selection:frozen.model_selection??null,expected_base_revision:reservation.base_revision,query:record.query??null,skill:record.skill??null,configs,execution_match:frozen.execution_match}});
+  analysis:{kind:'upload_analysis',enabled:background,needs_internal_judgment:needsJudgment,outcome_config:outcome??null,context_label:outcome?getEvaluationContextLabel(record,outcome):null,model_selection:frozen.model_selection??null,expected_base_revision:reservation.base_revision,query:record.query??null,skill:record.skill??null,configs,execution_match:frozen.execution_match}});
 }
 
 export function prepareCoreCollectorCompletion(reservation:CollectorReservation,frozen:FrozenCollectorPreparation){

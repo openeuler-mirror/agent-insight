@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -933,6 +934,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
 }
 
 export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): void {
+  if(isStorageCoreEnabled())throw Object.assign(new Error('Legacy spool has no verified collector provenance; use the authenticated core receiver'),{status:409});
   stopOtelSpoolConsumer();
   const sources = options.sources || listSources();
   const processLocks = acquireConsumerProcessLocks(sources.map(source => source.spoolDir()));

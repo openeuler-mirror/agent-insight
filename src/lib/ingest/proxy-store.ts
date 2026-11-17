@@ -15,6 +15,10 @@
  */
 
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getActiveCoreCollectorIdentity} from '@/lib/storage-core/collector-identity';
+import {getCollectorEffect} from '@/lib/storage-core/collector-effect';
+import {collectorPrivate,mutateCoreCollectorSession} from '@/lib/storage-core/collector-entry';
 import { db } from '@/lib/storage/prisma';
 
 export interface SessionData {
@@ -39,6 +43,7 @@ export interface SessionData {
 }
 
 export async function startSession(taskId: string, label?: string, query?: string, user?: string, model?: string) {
+    if(isStorageCoreEnabled()){const identity=requireIdentity();return sessionData(await mutateCoreCollectorSession(identity,taskId,{label:label??null,query:query??null,model:model??null,startTime:'server',interactions:[]},'create','proxy-start:'+taskId));}
     const data: SessionData = {
         taskId,
         label,
@@ -63,6 +68,7 @@ export async function startSession(taskId: string, label?: string, query?: strin
 }
 
 export async function addToSession(taskId: string, interaction: SessionData['interactions'][0]) {
+    if(isStorageCoreEnabled()){const identity=requireIdentity();return sessionData(await mutateCoreCollectorSession(identity,taskId,{interaction},'append'));}
     const session = await db.findSessionByTaskId(taskId);
     let interactions: any[] = [];
     let startTime = Date.now();
@@ -107,6 +113,8 @@ export async function addToSession(taskId: string, interaction: SessionData['int
 }
 
 export async function endSession(taskId: string): Promise<SessionData | null> {
+    if(isStorageCoreEnabled()){const effect=getCollectorEffect();if(effect?.session){await effect.check();return sessionData(effect.session);}
+        const identity=requireIdentity();const row=await collectorPrivate(identity,'owned_session',{task_id:taskId});if(!row)return null;return sessionData(await mutateCoreCollectorSession(identity,taskId,{endTime:'server'},'patch','proxy-end:'+taskId));}
     const session = await db.findSessionByTaskId(taskId);
     if (!session) return null;
 
@@ -128,6 +136,7 @@ export async function endSession(taskId: string): Promise<SessionData | null> {
 }
 
 export async function getSession(taskId: string): Promise<SessionData | null> {
+    if(isStorageCoreEnabled()){const identity=requireIdentity();const row=await collectorPrivate(identity,'owned_session',{task_id:taskId});return row?.session_json?sessionData(JSON.parse(row.session_json)):null;}
     const session = await db.findSessionByTaskId(taskId);
     if (!session) return null;
     
@@ -141,3 +150,7 @@ export async function getSession(taskId: string): Promise<SessionData | null> {
         interactions: session.interactions ? JSON.parse(session.interactions) : []
     };
 }
+
+function requireIdentity(){const identity=getActiveCoreCollectorIdentity();if(!identity)throw Object.assign(new Error('Verified proxy collector required'),{status:403});return identity;}
+function sessionData(row:Record<string,any>):SessionData{return {...row,startTime:new Date(row.startTime).getTime(),interactions:Array.isArray(row.interactions)?row.interactions:JSON.parse(row.interactions||'[]') } as SessionData;}
+export async function patchProxySession(taskId:string,changes:Record<string,any>){if(isStorageCoreEnabled())return mutateCoreCollectorSession(requireIdentity(),taskId,changes);return db.updateSession(taskId,changes);}

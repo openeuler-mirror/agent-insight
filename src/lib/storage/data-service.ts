@@ -567,7 +567,7 @@ export interface ConfigItem {
 
 type ConfigMatchMode = 'any' | 'routing' | 'outcome';
 
-const NO_OUTCOME_MATCH_REASON = '未找到匹配的效果评测配置';
+export const NO_OUTCOME_MATCH_REASON = '未找到匹配的效果评测配置';
 
 function normalizeQueryForMatch(input: string): string {
     let s = input.trim();
@@ -3026,6 +3026,14 @@ export function prepareExecutionWrite(input:{record:ExecutionRecord;existingExec
 }
 
 export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    const {isStorageCoreEnabled}=await import('@/lib/storage-core/mode');
+    if(isStorageCoreEnabled()){
+        const {getCollectorEffect}=await import('@/lib/storage-core/collector-effect');const effect=getCollectorEffect();if(effect)return effect.save(data);
+        const {getActiveCoreCollectorIdentity}=await import('@/lib/storage-core/collector-identity');const identity=getActiveCoreCollectorIdentity();
+        if(!identity)throw Object.assign(new Error('Verified collector context required for Trace writes'),{status:403});
+        if(data.user&&data.user!==identity.username)throw Object.assign(new Error('Collector owner differs'),{status:403});
+        const {writeCoreCollectorRecord}=await import('@/lib/storage-core/collector-entry');return writeCoreCollectorRecord(identity,{...data,user:identity.username},{channel:'consumer',receivedAt:options?.receivedAt});
+    }
     return withTraceTiming({ scope: 'save', traceId: data.task_id, uploadId: data.upload_id, framework: data.framework },
         () => saveExecutionRecordInternal(data, options));
 }

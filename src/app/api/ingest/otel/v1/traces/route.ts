@@ -1,5 +1,5 @@
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
-import { handleCompatibleIngest } from '@/lib/storage-core/compat';
+import {handleCoreCollectorTraces} from '@/lib/storage-core/collector-traces';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -85,7 +85,7 @@ function ignoredCodeAgentSpans(resourceSpans: number): Record<string, any> {
 }
 
 export async function POST(req: Request) {
-  if (isStorageCoreEnabled()) return handleCompatibleIngest(req);
+  if (isStorageCoreEnabled()) return handleCoreCollectorTraces(req);
   const diagnostic = beginOtelTraceRequest(req);
   const respond = (body: unknown, status: number, result: Parameters<typeof diagnostic.finish>[1]) => {
     const response = NextResponse.json(body, { status });

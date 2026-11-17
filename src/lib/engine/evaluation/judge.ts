@@ -1,3 +1,4 @@
+import {configuredModelFetch} from '@/lib/server/configured-model-fetch';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -85,7 +86,7 @@ function rethrowCoreJudgmentFailure(error: unknown) {
 async function getLlmClient(user?: string | null):Promise<{client:JudgeLlmClient;model:string}|{client:null;model:null}> {
     const trusted=getTrustedCoreAgentContext();
     if (trusted) {
-        const client=new OpenAI({apiKey:trusted.trustedModel.apiKey||'no-api-key-required',baseURL:trusted.trustedModel.baseURL,defaultHeaders:trusted.trustedModel.headers,fetch:getModelFetch(),maxRetries:0});
+        const client=new OpenAI({apiKey:trusted.trustedModel.apiKey||'no-api-key-required',baseURL:trusted.trustedModel.baseURL,defaultHeaders:trusted.trustedModel.headers,fetch:configuredModelFetch(trusted.trustedModel),maxRetries:0});
         const recorded:JudgeLlmClient={apiKey:client.apiKey,chat:{completions:{create:async(body,options)=>executeCoreFlowModelCall(body,async()=>{
             trusted.cancelSignal?.throwIfAborted();
             const startedAt=new Date().toISOString();let response:OpenAI.Chat.Completions.ChatCompletion|undefined;let failure:unknown;let failed=false;
@@ -118,7 +119,7 @@ async function getLlmClient(user?: string | null):Promise<{client:JudgeLlmClient
             apiKey, 
             baseURL,
             defaultHeaders: config.headers,
-            fetch: getModelFetch(),
+            fetch: configuredModelFetch(config),
         }),
         model: config.model || "deepseek-chat"
     };
