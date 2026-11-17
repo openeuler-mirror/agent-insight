@@ -21,3 +21,15 @@ test('static control context is bound to actual requests and remains isolated ac
   await assert.rejects(api.withVerifiedCoreControlActor({principal:'alice',workspace:'w',username:'alice',principalUsername:'alice',token:token('a')} as any,async()=>{}),(e:any)=>e.status===403);
  }finally{if(before===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=before;}
 });
+
+test('nested typed contexts retain execution restrictions only for the same verified actor',async()=>{
+ const api=await import('../src/lib/storage-core/control-context');
+ const actor={token:token('a'),username:'alice',principal:'alice',workspace:'w'};
+ const before=process.env.AGENT_INSIGHT_STORAGE_CORE_URL;process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:32109';
+ try{await api.runWithCoreControlActor(actor,{},async()=>{
+  api.requireCoreControlContext().capabilities=['execute'];
+  await api.runWithCoreControlActor(actor,{},async()=>assert.deepEqual(api.requireCoreControlContext().capabilities,['execute']));
+  await api.runWithCoreControlActor({...actor,token:token('b')},{},async()=>assert.equal(api.requireCoreControlContext().capabilities,undefined));
+  await api.runWithCoreControlActor(actor,{},async()=>assert.equal(api.requireCoreControlContext().capabilities,undefined),'collector-preparation');
+ });}finally{if(before===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=before;}
+});

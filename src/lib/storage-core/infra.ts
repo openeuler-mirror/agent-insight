@@ -64,7 +64,8 @@ function source(value:InfraSource|null):InfraSource|null{return value?{...value,
 export const coreInfraOwnerKey=()=>{const current=context();return current.actor.workspace+'\0'+current.actor.principal+'\0';};
 export const authorizeCoreInfra=(capability='read')=>rpc('scope',{capability});
 export const getCoreInfraIngestSource=(endpoint:string|null,model:string|null)=>rpc<InfraSource>('ingest_source',{endpoint,model});
-export async function listCoreInfraSources(ownOnly=false){return (await rpc<InfraSource[]>('list',{own_only:ownOnly})).map(row=>source(row)!);}
+export async function listCoreInfraSources(ownOnly=false,liveOnly=false){return (await rpc<InfraSource[]>('list',{own_only:ownOnly,live_only:liveOnly})).map(row=>source(row)!);}
+export const assertCoreInfraPollable=(sourceId:string)=>rpc('pollable',{source_id:sourceId});
 export async function getCoreInfraSource(where:{id?:string;endpoint?:string;ownerExecution?:string}){return source(await rpc<InfraSource|null>('get',{...(where.id?{source_id:where.id}:{endpoint:where.endpoint}),...(where.ownerExecution?{owner_execution:where.ownerExecution}:{})}));}
 export async function ensureCoreInfraSource(input:Record<string,unknown>){return source(await rpc<InfraSource>('ensure',input))!;}
 export async function patchCoreInfraSource(id:string,data:Record<string,unknown>){return source(await rpc<InfraSource>('patch',{id,data}))!;}

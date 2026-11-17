@@ -382,6 +382,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                     result={'authorized':True}
                 elif action=='ingest_source':result=store.ingest_source(token,workspace,payload.get('endpoint'),payload.get('model'))
                 elif action=='list':result=store.list_sources(token,workspace,**payload)
+                elif action=='pollable':result=store.assert_pollable(token,workspace,payload['source_id'])
                 elif action=='get':result=store.get_source(token,workspace,**payload)
                 elif action=='ensure':result=store.ensure_source(token,workspace,payload)
                 elif action=='patch':result=store.patch_source(token,workspace,payload['id'],payload['data'])

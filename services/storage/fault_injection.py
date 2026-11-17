@@ -5,6 +5,7 @@ import math
 import uuid
 from .contracts import identifier
 from .control import Conflict
+from .legacy_history import assert_control_live, is_historical_control
 from .iam import Forbidden, ROLE_CAPABILITIES
 from .platform_controls import PlatformControls, _iso, _ms
 
@@ -92,6 +93,7 @@ class FaultInjection:
         if len(rows)>20000:raise Conflict('FI completion selector exceeds budget')
         selected=[row for row in rows if json.loads(row['metadata_json']).get('runId')==run_id]
         if len(selected)!=1:raise Conflict('FI completion source is unavailable')
+        assert_control_live(con,ws,RUN,selected[0]['record_id'])
         run=self.records._data(dict(selected[0]))
         if run['status'] not in {'completed','judge_skipped'} or run['stopRequested'] or run.get('sessionTaskId')!=session_id or task_id and run.get('fiTaskId')!=task_id:raise Conflict('FI completion source was stopped, replaced or differs')
         return run
@@ -120,6 +122,7 @@ class FaultInjection:
         transaction=self.control.read_transaction if action in READS or action=='identity' else self.control.transaction
         with transaction() as con:
             scope,grant,username=self._scope(con,token,workspace,action,username,capability);touched=set()
+            self.records.live_only=action not in READS
             result=self._dispatch(con,scope,grant,workspace,username,action,payload,capability,touched)
             for kind in touched:self.records._bump_scope(con,workspace,scope.principal_id,username,kind)
             if touched:self.records._bump_scope(con,workspace,scope.principal_id,username)

@@ -8,6 +8,7 @@ from .control import Conflict,StorageError
 from .iam import IAMStore,Forbidden
 from .observations import ObservationIngest
 from .trace_metadata import TraceMetadata
+from .legacy_history import assert_control_live, is_historical_control
 
 MAX_SAMPLE_BYTES=4*1024*1024
 EVENT='infra.sample/v1'
@@ -43,9 +44,15 @@ class InfraStore:
     def _iso(stamp):
         import datetime
         return datetime.datetime.fromtimestamp(stamp/1000,datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
-    def list_sources(self,token,ws,*,own_only=False):
+    def list_sources(self,token,ws,*,own_only=False,live_only=False):
         with self.control.read_transaction() as con:
-            scope,grant=self._scope(con,token,ws);owner=own_only or grant.role not in ('owner','admin','personal');rows=con.execute("SELECT * FROM infra_sources WHERE workspace_id=? AND state='active'"+(' AND owner_principal_id=?' if owner else '')+' ORDER BY created_at_ms DESC,source_id',((ws,scope.principal_id) if owner else (ws,))).fetchall();return [self._view(dict(row)) for row in rows]
+            scope,grant=self._scope(con,token,ws);owner=own_only or grant.role not in ('owner','admin','personal');rows=con.execute("SELECT * FROM infra_sources WHERE workspace_id=? AND state='active'"+(' AND owner_principal_id=?' if owner else '')+' ORDER BY created_at_ms DESC,source_id',((ws,scope.principal_id) if owner else (ws,))).fetchall();return [self._view(dict(row)) for row in rows if not live_only or not is_historical_control(con,ws,'infraSource',row['source_id'])]
+    def assert_pollable(self,token,ws,source_id):
+        with self.control.read_transaction() as con:
+            source=self._source(con,token,ws,source_id,'write');assert_control_live(con,ws,'infraSource',source_id)
+            if not source['enabled'] or source['kind']!='pull':raise Conflict('Infra source is not enabled for pulling')
+            return {'authorized':True}
+
     def _trace(self,con,token,ws,execution,capability='read'):
         alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='execution' AND alias_id=?",(ws,_text(execution))).fetchone();trace=alias[0] if alias else execution;scope,route=self.metadata._trace(con,token,ws,trace,capability)
         owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(ws,trace)).fetchone()[0]

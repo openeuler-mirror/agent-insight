@@ -169,8 +169,8 @@ export async function listSourceModels(sourceId: string, lookback = 200): Promis
   return [...seen];
 }
 
-export async function listInfraSources(options:{ownOnly?:boolean;enabled?:boolean;kind?:'pull'|'push';endpoints?:string[];ids?:string[]}={}){
- if(isStorageCoreEnabled())return (await listCoreInfraSources(options.ownOnly)).filter(row=>(options.enabled===undefined||row.enabled===options.enabled)&&(!options.kind||row.kind===options.kind)&&(!options.endpoints||options.endpoints.includes(row.endpoint))&&(!options.ids||options.ids.includes(row.id)));
+export async function listInfraSources(options:{ownOnly?:boolean;enabled?:boolean;kind?:'pull'|'push';endpoints?:string[];ids?:string[];liveOnly?:boolean}={}){
+ if(isStorageCoreEnabled())return (await listCoreInfraSources(options.ownOnly,options.liveOnly)).filter(row=>(options.enabled===undefined||row.enabled===options.enabled)&&(!options.kind||row.kind===options.kind)&&(!options.endpoints||options.endpoints.includes(row.endpoint))&&(!options.ids||options.ids.includes(row.id)));
  return prismaRaw.infraSource.findMany({where:{...(options.enabled===undefined?{}:{enabled:options.enabled}),...(options.kind?{kind:options.kind}:{}),...(options.endpoints?{endpoint:{in:options.endpoints}}:{}),...(options.ids?{id:{in:options.ids}}:{})},orderBy:{createdAt:'desc'}});
 }
 export async function findInfraSource(where:{id?:string;endpoint?:string;ownerExecution?:string}){

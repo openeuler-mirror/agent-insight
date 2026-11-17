@@ -71,6 +71,9 @@ class ExperimentStore:
 
     def _head(self,con,token,ws,identity,capability='read',deleted=False):
         self.iam._workspace(self.iam._scope(con,token),ws,capability)
+        if capability=='execute':
+            from .legacy_history import assert_control_live
+            assert_control_live(con,ws,'experiment',identity)
         row=con.execute('SELECT * FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,identity)).fetchone()
         if row is None:raise ExperimentNotFound('Experiment not found')
         self.iam._authorize(con,token,ws,capability,'run',identity)
@@ -646,6 +649,8 @@ class ExperimentStore:
         return {'attempt_no':row['attempt_no'],'phase':row['phase'],'experiment_id':row['experiment_id'],'work_item_id':row['work_item_id'],'attempt_id':attempt_id,'run_id':row['run_id'],'case_id':row['case_id'],'case_key':row['case_id'],'result_id':row['result_id'],'evaluator_id':row['evaluator_slot'],'evaluator_slot':row['evaluator_slot'],'fence':str(row['fence']),'lease_owner':row['lease_owner'],'lease_until_ms':row['lease_until_ms'],'checkpoint_revision':str(row['revision']),'plan_hash':plan[0]}
 
     def _active(self,con,token,ws,body):
+        from .legacy_history import assert_control_live
+        assert_control_live(con,ws,'experiment',body['experiment_id'])
         head=self._head(con,token,ws,body['experiment_id'],'write');scope=self.iam._authorize(con,token,ws,'execute','run',body['experiment_id'])
         cp=con.execute('SELECT * FROM experiment_attempt_checkpoints WHERE workspace_id=? AND experiment_id=? AND attempt_id=?',(ws,body['experiment_id'],body['attempt_id'])).fetchone()
         if cp is None or cp['actor_principal_id']!=scope.principal_id or cp['lease_owner']!=body.get('lease_owner') or str(cp['fence'])!=str(body.get('fence')):raise Conflict('Attempt actor, owner or fence differs')
@@ -932,6 +937,9 @@ class ExperimentStore:
         ws=identifier(workspace_id);body=copy.deepcopy(body or {})
         if not isinstance(body,dict):raise ValueError('Experiment RPC body must be an object')
         if len(_json(body).encode())>MAX_BYTES:raise ExperimentTooLarge('Experiment request exceeds budget')
+        if action in {'start','execute_start','claim','renew','reconcile','checkpoint','complete','fail','execute_complete','execute_fail','execute_reconcile','retry'} and body.get('experiment_id'):
+            from .legacy_history import assert_control_live
+            with self.control.read_transaction() as con:assert_control_live(con,ws,'experiment',body['experiment_id'])
         reads={'list','read','get','runplan','load_work','check_work','comments'};ephemeral={'claim','renew','reconcile'}
         allowed=reads|ephemeral|{'create','ensure','update','case_upsert','case_upsert_many','case_remove','bind_trace','start','checkpoint','complete','fail','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','retry','cancel','remove','review','comment','comment_remove','outcome_begin','outcome_cancel','outcome_query'}
         allowed.add('trigger_begin')

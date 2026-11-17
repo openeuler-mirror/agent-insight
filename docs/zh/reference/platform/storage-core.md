@@ -440,4 +440,4 @@ Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型
 
 原工作台、优化/生成会话、消息/blocks/VFS、候选、评测任务壳和调试结果使用固定控制记录，动态Experiment/评测/诊断继续用既有typed库。Agent删除提交既有Trace删除屏障及Agent软删除，工件保留；新用户原示例使用typed Dataset和既有Trace bundle导入。公开URL/DTO和界面保持，4个TSX仅加入请求封装导入，其中runtime provider另接动态header回调；不改JSX/CSS/文案/布局。SSE、AbortSignal和FormData沿原请求处理。
 
-单次固定kind读最多20000记录、载荷128MiB、写批次2000操作；超限明确失败，不截断结果。这些是当前有界正确性保护，不是容量认证。019仅做必要隔离快速验证；全量、真实PG/openGauss/CH、原UI和历史迁移统一验收，尚不切生产。历史活动任务/有效安装或设备凭据不能作为active静默导入；当前没有inert运行守卫，应报告并阻断这些记录，保留旧库和后续显式迁移决策。
+单次固定kind读最多20000记录、载荷128MiB、写批次2000操作；超限明确失败，不截断结果。这些是当前有界正确性保护，不是容量认证。019仅做必要隔离快速验证；全量、真实PG/openGauss/CH、原UI和历史迁移统一验收，尚不切生产。历史任务的状态/时间由迁移保留；已有历史marker的控制记录不会进入自动执行选择、设备/install鉴权或Infra抓取，Experiment/Benchmark/FI同样核验运行保护。诊断/report与完整历史转换仍待接入，当前history fence version仍0，未满足完整保护的历史记录继续阻断，不能据此切库。

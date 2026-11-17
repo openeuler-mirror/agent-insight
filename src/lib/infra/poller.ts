@@ -21,7 +21,7 @@ import { parseAuthHeaders } from '@/lib/infra/auth-headers';
 import { saveSample, listInfraSources } from '@/lib/infra/store';
 import { scrapeVllmTargetModels } from '@/lib/ingest/vllm/scrape';
 import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
-import {hasCoreInfraContext,pollCoreInfraOwners,authorizeCoreInfra,coreInfraOwnerKey} from '@/lib/storage-core/infra';
+import {hasCoreInfraContext,pollCoreInfraOwners,authorizeCoreInfra,coreInfraOwnerKey,assertCoreInfraPollable} from '@/lib/storage-core/infra';
 
 export interface PollResult {
   polled: number;
@@ -79,7 +79,7 @@ export async function pollOnce(
   const { fetchImpl, tsMs = Date.now(), endpoints } = opts;
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return pollCoreInfraOwners(()=>pollOnce(opts));
   if(isStorageCoreEnabled())await authorizeCoreInfra('write');
-  const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints});
+  const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints,liveOnly:true});
 
   let polled = 0;
   let failed = 0;
@@ -87,6 +87,7 @@ export async function pollOnce(
 
   for (const src of sources) {
     try {
+      if(isStorageCoreEnabled())await assertCoreInfraPollable(src.id);
       const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
         fetchImpl,
         tsMs,
@@ -116,7 +117,7 @@ async function runPollDue(
   const { nowMs = Date.now(), fetchImpl, endpoints } = opts;
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return pollCoreInfraOwners(()=>runPollDue(opts,failureLogs));
   if(isStorageCoreEnabled())await authorizeCoreInfra('write');
-  const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints});
+  const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints,liveOnly:true});
   const ownerPrefix=isStorageCoreEnabled()?coreInfraOwnerKey():'';
   if (failureLogs) {
     const activeIds = new Set(sources.map(source => ownerPrefix+source.id));
@@ -137,6 +138,7 @@ async function runPollDue(
     }
     lastPollAt.set(src.id, nowMs);
     try {
+      if(isStorageCoreEnabled())await assertCoreInfraPollable(src.id);
       const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
         fetchImpl,
         tsMs: nowMs,

@@ -14,6 +14,7 @@ from dataclasses import replace
 from .control import Conflict, StorageError
 from .contracts import identifier
 from .iam import IAMStore, Forbidden
+from .legacy_history import assert_control_live, is_historical_control
 
 MODELS=json.loads((Path(__file__).parent/'schema/platform-control-models.json').read_text())['models']
 MAX_RECORDS=20000
@@ -188,7 +189,7 @@ class PlatformControls:
         if len(rows)>MAX_RECORDS:raise StorageError('Control relation scope too large')
         return next((dict(row) for row in rows if all(json.loads(row['metadata_json']).get(field)==value for field,value in zip(fields,values))),None)
 
-    def _parent(self,con,scope,grant,workspace,kind,data):
+    def _parent(self,con,scope,grant,workspace,kind,data,*,historical=False):
         chosen=None
         for relation in MODELS[kind]['relations'].values():
             if not relation.get('fields'):continue
@@ -196,6 +197,7 @@ class PlatformControls:
             if any(value is None for value in values):continue
             target=self._find_reference(con,workspace,relation['model'],relation['references'],values)
             if target is None:raise Conflict('Control parent is unavailable')
+            if not historical:assert_control_live(con,workspace,relation['model'],target['record_id'])
             if target['owner_principal_id']!=scope.principal_id:
                 if relation['model']!='skill' or not self._can_read(con,scope,grant,target):raise Forbidden('Control parent belongs to another owner')
             if PARENT_PRIORITY.get(kind)==relation['model'] or chosen is None:chosen=(relation['model'],target['record_id'])
@@ -242,6 +244,7 @@ class PlatformControls:
             candidate=self._row(con,self.capability['peer']['workspace'],kind,operation.get('record_id'))
             if candidate and self._peer_record(candidate):oldrow=candidate;workspace=candidate['workspace_id']
         if method!='create' and oldrow is None:raise Conflict('Control record unavailable')
+        if oldrow and method!='delete':assert_control_live(con,workspace,kind,oldrow['record_id'])
         if oldrow and oldrow['owner_principal_id']!=scope.principal_id:
             if not self._peer_record(oldrow):raise Forbidden('Control write requires actual owner')
             scope=replace(scope,principal_id=oldrow['owner_principal_id']);username=oldrow['legacy_username']
@@ -257,7 +260,7 @@ class PlatformControls:
         if kind=='reliabilityCommand' and method=='create' and data.get('action') in {'RUN_EXPERIMENT_CASE','RUN_BENCHMARK_CASE','START_FI_RUN'}:self.iam._workspace(scope,workspace,'execute')
         if kind=='skillWorkbenchTask' and data.get('status') in {'pending','running'}:
             active=con.execute("SELECT record_id,metadata_json FROM platform_control_records WHERE workspace_id=? AND owner_principal_id=? AND kind='skillWorkbenchTask' AND parent_id=? AND state='active' AND status IN ('pending','running')",(workspace,scope.principal_id,data['sessionId'])).fetchall()
-            if any(item['record_id']!=identity and json.loads(item['metadata_json']).get('type')==data['type'] for item in active):raise Conflict('Workbench task type is already active')
+            if any(item['record_id']!=identity and not is_historical_control(con,workspace,kind,item['record_id']) and json.loads(item['metadata_json']).get('type')==data['type'] for item in active):raise Conflict('Workbench task type is already active')
         for fields in MODELS[kind]['unique']:
             if fields==['id'] or any(data.get(field) is None for field in fields):continue
             candidates=con.execute("SELECT * FROM platform_control_records WHERE kind=? AND state='active'"+(" AND workspace_id=? AND owner_principal_id=?" if kind!='user' else ''),(kind,workspace,scope.principal_id) if kind!='user' else (kind,)).fetchall()
@@ -298,7 +301,7 @@ class PlatformControls:
                         self._delete(con,workspace,childkind,dict(child),touched)
         con.execute("UPDATE platform_control_records SET state='deleted',revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND kind=? AND record_id=?",(self.control.clock(),workspace,kind,row['record_id']))
 
-    def _read(self,con,scope,grant,workspace,body,private,owner_only=False,preparation=False):
+    def _read(self,con,scope,grant,workspace,body,private,owner_only=False,preparation=False,live_only=False):
         allowed={'kind','ids','parents','metadata','fields','body','owner_username'}
         if set(body)-allowed:raise ValueError('Fixed control selector required')
         kind=body.get('kind');model=self._model(kind);fields=body.get('fields',[])
@@ -331,6 +334,7 @@ class PlatformControls:
         result=[];found_denied=False
         for raw in rows:
             row=dict(raw)
+            if (live_only or self.capability or getattr(self,'live_only',False)) and is_historical_control(con,workspace,kind,row['record_id']):continue
             if not self._can_read(con,scope,grant,row,private=kind in SECRET_KINDS,preparation=preparation):found_denied=True;continue
             data=json.loads(row['metadata_json'])
             if any(data.get(field) not in value if isinstance(value,list) else data.get(field)!=value for field,value in metadata.items()):continue
@@ -340,7 +344,7 @@ class PlatformControls:
                 for field in fields:
                     if field in full:data[field]=full[field]
             result.append({'record_id':row['record_id'],'revision':str(row['revision']),'owner_principal_id':row['owner_principal_id'],'data':data,**({'file_bundle':self._file_bundle(row)} if kind=='skillVersion' and (body.get('body') or any(field in {'files','assetPath'} for field in fields)) else {})})
-        if body.get('ids') and not result and (found_denied or any(self._row(con,workspace,kind,identity) for identity in body['ids'])):raise Forbidden('Control record belongs to another actor')
+        if body.get('ids') and not result and (found_denied or any(self._row(con,workspace,kind,identity) and not ((live_only or self.capability or getattr(self,'live_only',False)) and is_historical_control(con,workspace,kind,identity)) for identity in body['ids'])):raise Forbidden('Control record belongs to another actor')
         if len(_json(result).encode())>MAX_BYTES:raise StorageError('Control response exceeds byte budget')
         return {'rows':result,'scope_revision':str(self._scope_revision(con,workspace,scope.principal_id,kind))}
 
@@ -373,19 +377,14 @@ class PlatformControls:
                     access=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(workspace,trace)).fetchone()
                     if not access or access[0]!=scope.principal_id:raise Forbidden('Agent Trace owner differs')
                     if locator['state']!='active':continue
-                    last=con.execute('SELECT MAX(revision) FROM obs_entity_heads WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()[0] or 0
-                    barrier=max(last,locator['route_epoch'])+1
-                    con.execute("UPDATE trace_locators SET state='deleting',route_epoch=?,updated_at_ms=? WHERE workspace_id=? AND trace_id=?",(locator['route_epoch']+1,max(now,locator['updated_at_ms']),workspace,trace))
-                    if not con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=?",(workspace,trace,locator['incarnation'])).fetchone():
-                        con.execute("INSERT INTO deletion_requests VALUES(?,?,?,?,?,?,'requested',?,?,?)",(workspace,str(uuid.uuid4()),'trace',trace,locator['incarnation'],barrier,scope.principal_id,now,now))
-                    count+=1
+                    if metadata._delete(con,token,workspace,trace):count+=1
                 self._delete(con,workspace,'registeredAgent',agent);self._bump_scope(con,workspace,scope.principal_id,agent['legacy_username'],'registeredAgent')
                 return {'deletedTraces':count}
         if action=='records_read':
             with self.control.read_transaction() as con:
                 capability='write' if preparation or write_prior else 'read';scope,grant=self._scope(con,token,workspace,capability)
                 if preparation and (not trusted or body.get('kind') not in PREPARATION_KINDS):raise Forbidden('Collector preparation read is restricted')
-                return self._read(con,scope,grant,workspace,body,trusted,owner_only=write_prior or preparation,preparation=preparation)
+                return self._read(con,scope,grant,workspace,body,trusted,owner_only=write_prior or preparation,preparation=preparation,live_only='execute' in required)
         if action!='records_batch' or not trusted:raise Forbidden('Private control mutation required')
         if set(body)-{'legacy_username','operation_key','operations','expected_scope_revision','expected_kind_revisions'}:raise ValueError('Fixed control batch required')
         username=identifier(body.get('legacy_username'));key=identifier(body.get('operation_key'));operations=body.get('operations')
@@ -431,6 +430,14 @@ class PlatformControls:
         try:login=_login_name(username)
         except ValueError:login='legacy_'+hashlib.sha256(username.encode()).hexdigest()
         with self.control.transaction() as con:
+            aliases=con.execute("SELECT * FROM platform_control_records WHERE kind='user' AND unique_key=? AND state='active'",(_hash([username]),)).fetchall()
+            if len(aliases)>1:raise Conflict('Ambiguous legacy login')
+            if aliases:
+                record=dict(aliases[0]);data=self._data(record)
+                if data['username']!=username or not data['apiKey'].startswith('api_'):raise Forbidden('Verified legacy login binding required')
+                current=self.iam._scope(con,data['apiKey']);self.iam._workspace(current,record['workspace_id'],'read')
+                if current.principal_id!=record['owner_principal_id']:raise Forbidden('Legacy login owner differs')
+                return {**data,'_created':False}
             principal=con.execute('SELECT principal_id,status,auth_version FROM iam_principals WHERE normalized_login_name=?',(login,)).fetchone()
             if principal and principal['status']!='active':raise Forbidden('Principal is not active')
             owner=principal['principal_id'] if principal else str(uuid.uuid5(uuid.NAMESPACE_URL,'platform-user:'+login))
@@ -468,11 +475,14 @@ class PlatformControls:
         kind='reliabilityClientCredential' if typ=='device' else 'reliabilityInstallToken'
         row=con.execute("SELECT * FROM platform_control_records WHERE kind=? AND lookup_hash=? AND state='active'",(kind,value)).fetchone()
         if not row:raise Forbidden('Capability unavailable')
-        row=dict(row);data=self._data(row)
+        row=dict(row)
+        if is_historical_control(con,row['workspace_id'],kind,row['record_id']):raise Forbidden('Historical capability is inactive')
+        data=self._data(row)
         if typ=='device':
             if data.get('revokedAt') is not None:raise Forbidden('Device credential revoked')
             client=self._find_reference(con,row['workspace_id'],'reliabilityClient',['clientId'],[data['clientId']])
             if not client or client['owner_principal_id']!=row['owner_principal_id']:raise Forbidden('Device owner differs')
+            if is_historical_control(con,row['workspace_id'],'reliabilityClient',client['record_id']):raise Forbidden('Historical device is inactive')
             clientdata=json.loads(client['metadata_json'])
             if clientdata.get('unboundAt') or clientdata.get('status') in {'unbound','disabled'}:raise Forbidden('Device unavailable')
             if cap.get('client_id') and cap['client_id']!=data['clientId']:raise Forbidden('Device client differs')

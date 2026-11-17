@@ -11,7 +11,9 @@ export const getCoreControlContext=()=>contexts.getStore();
 export function requireCoreControlContext():CoreControlContext {const context=contexts.getStore();if(!context)throw failure(503,'Trusted control repository scope required');if(context.origin!==coreServiceOrigin())throw failure(503,'Control storage origin changed');return context;}
 export function runWithCoreControlActor<T>(actor:CoreControlActor,options:CompatibilityOptions,action:()=>T,access:CoreControlContext['access']='request'):T {
  if(!actor?.token||!actor.username||!actor.principal||!actor.workspace)throw failure(403,'Verified control actor required');
- return contexts.run({actor:Object.freeze({...actor}),options:Object.freeze({...options}),origin:coreServiceOrigin(),access},action);
+ const prior=contexts.getStore(),origin=coreServiceOrigin();
+ const capabilities=access==='request'&&prior?.access==='request'&&prior.origin===origin&&prior.actor.token===actor.token&&prior.actor.principal===actor.principal&&prior.actor.workspace===actor.workspace?prior.capabilities:undefined;
+ return contexts.run({actor:Object.freeze({...actor}),options:Object.freeze({...options}),origin,access,...(capabilities?{capabilities}:{})},action);
 }
 export async function withCoreControlRequest<T>(request:Request,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
  const origin=coreServiceOrigin(),transport=options.fetcher||fetch;

@@ -52,6 +52,9 @@ class BenchmarkStore:
     def _scope(self,con,token,ws,cap='read'):
         scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,cap);return scope
     def _head_scope(self,con,scope,ws,exp,cap='read',deleted=False):
+        if cap=='execute':
+            from .legacy_history import assert_control_live
+            assert_control_live(con,ws,'experiment',exp)
         self.iam._authorize_scope(con,scope,ws,cap,'run',exp)
         row=con.execute('SELECT * FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,exp)).fetchone()
         if not row or row['scope']!='benchmark' or row['state']!='active' and not deleted:raise BenchmarkNotFound('Benchmark experiment unavailable')
@@ -209,6 +212,9 @@ class BenchmarkStore:
         return plan
 
     def _job_scope(self,con,scope,ws,identity,cap='read'):
+        if cap=='execute':
+            from .legacy_history import assert_control_live
+            assert_control_live(con,ws,'benchmarkJob',identity)
         row=con.execute('SELECT * FROM benchmark_jobs WHERE workspace_id=? AND job_id=?',(ws,identity)).fetchone()
         if row is None:raise BenchmarkNotFound('Benchmark job unavailable')
         head=self._head_scope(con,scope,ws,row['experiment_id'],cap)
@@ -456,6 +462,8 @@ class BenchmarkStore:
     @staticmethod
     def _job_dto(row):return {key:row[key] for key in ('job_id','experiment_id','case_id','run_id','kind','parent_job_id','adapter_key','evaluator_key','attempt_no','retry_of_job_id','protocol_state','revision','created_at_ms','updated_at_ms')}
     def _active(self,con,row,body,scope,terminal=False):
+        from .legacy_history import assert_control_live
+        assert_control_live(con,row['workspace_id'],'benchmarkJob',row['job_id']);assert_control_live(con,row['workspace_id'],'experiment',row['experiment_id'])
         if scope.principal_id!=row['actor_principal_id']:raise Forbidden('Benchmark work belongs to another owner')
         origin=self.iam._scope_registered_credential(con,row['origin_credential_id'],row['origin_credential_kind'])
         if origin.principal_id!=row['actor_principal_id']:raise Forbidden('Benchmark origin principal changed')
