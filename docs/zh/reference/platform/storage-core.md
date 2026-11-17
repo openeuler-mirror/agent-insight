@@ -414,3 +414,13 @@ Session 页面仍调用原 Node 的 Claude/subagent/OpenCode/Dify/Goal/collabora
 异步分析与proxy end复用既有Outbox和首次capture/plan，原Prompt/parser/模型算法保持，模型投递保存intent/observed checkpoint；只有显式配置的品牌owner后台主体具备当前execute时才能执行模型。上传者的write凭据足以接收/准备，ACK/capture不包含模型密钥。模型请求只发送显式认证配置。OpenClaw本地watcher/Skill-generation CLI需要显式可信default主体；SkillGenerator的OpenCode桥仍使用其同owner身份上报，独立owner spool，不能继承其他人的全局key。
 
 日志先保存当前owner/controller证明及原包，再用原聚合器消费；确认游标必须绑定所有输出和退休事实的真实indexed回执，明确discard保留原因，pending/retry不确认。core启动不自动运行旧无证明spool consumer或旧全局backlog uploader，旧spool/cursor保持原样等待映射迁移。上述为开发接线；完整套件、真实三库、原UI、真客户端和迁移保留演练仍由最终集中验收覆盖，未切生产。
+
+## Infra 原功能适配（018，逻辑完成待集中验收）
+
+018增加infra_sources/session_infra_links两张事务表，CH另显式应用schema/clickhouse/003_infra.sql（或ClickHouseStore.initialize_infra_schema），总计71事务表+16CH；服务启动不会隐式改已有CH目标。升级沿既有显式备份/迁移流程，当前不迁默认库。原source CRUD、pull/push、概览、历史、导出、检测及Trace树自动/人工关联保持API/DTO和界面。原prom/OTLP规范化、直方图Infinity往返、counter窗口/重置、诊断和导出计算继续复用。
+
+源按workspace/owner授权，组管理员可读组内源，写入要求实际owner和当前凭据能力。authHeaders只保存在私有artifact，Node侧经infra/v1证明读取，浏览器仅headernames/hasAuth；省略凭据不清除，null/空串显式清除。删除保留源/样本及人工关联物理历史，但已删源不可读；重新登记产生新sourceID，旧样本不复活。
+
+core后台poller只使用私有身份映射中显式配置的各owner，并检查read/write；不会以管理员身份为他人拉取入库。无凭据metrics只有明确DEFAULT_INGEST_USER及其唯一私有映射可写；未配置或无法授权时仍保持原best-effort accepted/attachedTo:null且不写。该ACK不是durable/indexed证明；实际accept先同事务记录inbox/outbox和私有样本，worker完成CH发布后才是indexed，同次重试不重复样本，不同接收不按时间/内容合并。
+
+Infra关联补读当前授权Trace boundary内的真实endpoint元数据，兼容旧已发布但无endpoint字段的v1统计投影，不改旧publication/parser版本，不将root endpoint猜给虚拟子Agent。SQL018与CH003及本批逻辑尚待最终集中三库/真实CH/全量/原界面及迁移演练；已做的快速专项不代表生产可切换。

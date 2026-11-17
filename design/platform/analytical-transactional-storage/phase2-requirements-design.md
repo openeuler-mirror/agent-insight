@@ -489,3 +489,14 @@ ExecutionSkill/origin沿原dedupe、版本、incoming/prior匹配、平台/locat
 在017之上复用现有source、准备回执、outbox和worker，不新增同义Session或图表。只读`observe/session-source`按实时read权限返回source的原Session JSON表示、可空Execution、原Thread字段及关系引用；空completion/派生退休可以保留Session而无Execution，普通非collector仍走既有兼容读取。Node保留原规范化、Dify/协作组合、payload版本和各视图算法。写入统一使用可信采集身份及首次封存计划；代理Session的创建/追加/结束使用相同source与CAS，供应商Authorization不作为采集授权。异步分析保存可恢复意图，结果发布核对source revision、用户标注及删除屏障，原算法与响应字段不改。新日志接收保存私有可验证来源，所有图批次indexed后确认消费者游标；缺证明的旧积压保留待映射。root在capture封存后、整图commit前删除时，同事务终止其尚reserved派生预留，避免阻塞独立child或迟到复活。
 
 公共采集连续实现补充：OTLP traces与logs/context统一经过已认证receiver原包记录及原框架聚合器，公共双OTLP/snapshot使用同collector canonical identity，专用native入口保持独立。`collector.logs.packet.v1`在原Outbox中保存owner/channel/session递增版本、Jiuwen原bucket/session marker关系、首次输出清单及完整indexed回执向量；`collector.logs.raw.v1`确认接收与消费确认分离。proxy end首次Session/时钟、模型选择摘要、投递checkpoint及响应也复用Outbox；无新DDL。GET懒query使用原source/annotation CAS和owner+execute，write不隐含模型执行权。core不读取/确认旧无证明spool；SkillGenerator bridge采用同owner独立spool，保留原客户端上报而不借tag切换主体。完整验收、UI与迁移仍集中执行。
+
+
+### 第一版 Infra 数据适配（018）
+
+按原 API/DTO 和纯计算函数实施：只新增 infra_sources、session_infra_links 两张事务表及 CH infra_metric_samples 一张采样事实表，目标71事务表+16CH。source 私有权限随 workspace/owner，普通成员只访问本人源，组管理员可读取组内源；写入始终实际 owner。旧无 owner 源必须显式映射后迁移，不能凭 endpoint/model/body.user 认领。
+
+source 按 workspace+owner+active endpoint 唯一，保存原 endpoint/scrapeUrl/kind/model/硬件/间隔/enabled/创建更新时间；authHeaders 仅 private artifact 引用，所有私有 RPC 用 infra/v1 controller proof，浏览器沿原 redactSource 只返回 header 名和 hasAuth。省略 auth 保留，null/空串清除。删除逻辑隐藏 source 和旧 samples，保留物理历史与人工关联；重新注册产生新 source ID，不复活旧采样。
+
+人工 links 使用准确 root Trace、source ID、nullable model 和创建顺序；同事务整体替换，包含 null 的重复项应用层去重，空集合恢复自动推断。读取 source 前及 CH 返回前复核当前 IAM。后台 poller 逐明确映射 owner 执行，keyless metrics 只有显式 DEFAULT_INGEST_USER 私有映射才可写，无配置保持原 accepted/attachedTo:null 且不写。
+
+采样 ts_ms 为 Float64，保存0及小数；四个原 JSON分区以原字符串保存，Infinity 桶界继续由现 serialize/deserialize 以null往返。每次独立接收新 sampleID，同次 operation 重试复用；inbox 唯一接收摘要，outbox/lease 负责发布和重试，CH ReplacingMergeTree 以 sampleID 去重重投。不得以时间/model或内容hash去重独立样本。原 push 单合并样本、pull 按model分样本、best-effort ACK 及查询/诊断/导出算法不变；accepted 不是 indexed 证明。完整三库/CH/UI验收按用户新节奏在全部逻辑接完后集中进行。

@@ -76,6 +76,35 @@ class ClickHouseStore:
         for statement in sql.split(';'):
             if statement.strip():self._request(statement)
 
+    def initialize_infra_schema(self):
+        sql=(Path(__file__).parent/'schema'/'clickhouse'/'003_infra.sql').read_text()
+        for statement in sql.split(';'):
+            if statement.strip():self._request(statement)
+
+    def write_infra_sample(self,row):
+        required={'workspace_id','source_id','sample_id','owner_principal_id','content_hash','ts_ms','received_at_ms','sample_json','retry_version'}
+        if set(row)!=required:raise ValueError('Unknown Infra sample fields')
+        for key in ('workspace_id','source_id','sample_id','owner_principal_id'):identifier(row[key])
+        self._write_analytics_fact('infra_metric_samples',row)
+
+    def read_infra_samples(self,workspace,source,*,limit=512,order='asc',model=None,via=None,from_ms=None,to_ms=None,after=None):
+        identifier(workspace);identifier(source)
+        if type(limit) is not int or not 1<=limit<=5000 or order not in ('asc','desc'):raise ValueError('Invalid Infra sample query')
+        parameters={'workspace':workspace,'source':source};clauses=['workspace_id={workspace:String}','source_id={source:String}']
+        for key,operator,stamp in [('from','>=',from_ms),('to','<=',to_ms)]:
+            if stamp is not None:parameters[key]=stamp;clauses.append('ts_ms'+operator+'{'+key+':Float64}')
+        for key,value in [('model',model),('via',via)]:
+            if value:parameters[key]=value;clauses.append("JSONExtractString(sample_json,'"+key+"')={"+key+':String}')
+        if after:
+            parameters.update(after_ts=after['ts_ms'],after_id=after['sample_id']);operator='>' if order=='asc' else '<';clauses.append('(ts_ms,sample_id)'+operator+'({after_ts:Float64},{after_id:String})')
+        count=limit
+        while True:
+            sql='SELECT * FROM infra_metric_samples FINAL WHERE '+' AND '.join(clauses)+' ORDER BY ts_ms '+order+',sample_id '+order+' LIMIT '+str(count)+' FORMAT JSONEachRow'
+            try:return [json.loads(line) for line in self._request(sql,parameters=parameters).splitlines() if line]
+            except ClickHouseError as exc:
+                if count==1 or str(exc)!='response exceeds bounded adapter size; paginate':raise
+                count=max(1,count//2)
+
     def write_analytics(self,row):
         self._scope(row['workspace_id'],row['trace_bucket'],row['trace_id'])
         if set(row)!={'workspace_id','trace_bucket','trace_id','boundary','parser_version','projection_hash','projection_json','retry_version'}:raise ValueError('Unknown analytics fact fields')

@@ -219,7 +219,8 @@ class TraceEvidence:
                 value,_=_section_text(sections.get('output'),'assistant')
                 if value is not None:fields['finalResult']=value
         if analytics_fields:
-            aliases={'model':('legacy.model','model','gen_ai.response.model','gen_ai.request.model','llm.model_name'),
+            aliases={'endpoint':('legacy.endpoint','endpoint','gen_ai.request.endpoint'),
+                     'model':('legacy.model','model','gen_ai.response.model','gen_ai.request.model','llm.model_name'),
                 'observedAgents':('legacy.agents','agents','observed_agents','observedAgents'),
                 'invokedSkills':('legacy.invoked_skills','invoked_skills','invokedSkills'),
                 'parentExecutionId':('legacy.parent_execution_id','parent_execution_id','parentExecutionId'),

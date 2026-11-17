@@ -254,6 +254,10 @@ class TraceRuntime:
             from .experiments import ExperimentStore
             experiments=ExperimentStore(self.control,facts=self.facts)
             stages.append(lambda worker:experiments.project_once(self.facts,worker))
+        if version>=18:
+            from .infra import InfraStore
+            infra=InfraStore(self.control,self.facts)
+            stages.append(infra.project_once)
         worker_id='trace-http-'+uuid.uuid4().hex
         def work():
             while not self.stop.is_set():
@@ -361,6 +365,35 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility import LegacyTraceReads
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
+            if compat_path==['infra']:
+                if self.command!='POST':self.reply(404,{'error':'Unknown Infra route'});return
+                value,error=self.body(max_bytes=8*1024*1024+65536)
+                if error:self.reply(error,{'error':'Bounded Infra JSON required'});return
+                workspace=runtime.workspace(token,params.get('workspace_id'),None)
+                from .controller_protocol import verify_controller_proof
+                principal=runtime.iam.scope(token).principal_id
+                if not verify_controller_proof(runtime.controller_key_file,'infra/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private Infra attestation required')
+                from .infra import InfraStore
+                store=InfraStore(runtime.control,runtime.facts,queries=runtime.queries,authorized=runtime.authorized);action=value.get('action');payload=value.get('payload',{})
+                if not isinstance(payload,dict) or set(value)!={'action','payload'}:raise ValueError('Infra action required')
+                if action=='scope':
+                    with runtime.control.read_transaction() as con:store._scope(con,token,workspace,payload.get('capability','read'))
+                    result={'authorized':True}
+                elif action=='ingest_source':result=store.ingest_source(token,workspace,payload.get('endpoint'),payload.get('model'))
+                elif action=='list':result=store.list_sources(token,workspace,**payload)
+                elif action=='get':result=store.get_source(token,workspace,**payload)
+                elif action=='ensure':result=store.ensure_source(token,workspace,payload)
+                elif action=='patch':result=store.patch_source(token,workspace,payload['id'],payload['data'])
+                elif action=='delete':result=store.delete_source(token,workspace,**payload)
+                elif action=='accept':
+                    result=store.accept_sample(token,workspace,payload['source_id'],payload['operation'],payload['sample_json']);store.project_once('infra-inline-'+__import__('uuid').uuid4().hex)
+                elif action=='status':result=store.sample_status(token,workspace,payload['source_id'],payload['operation'])
+                elif action=='samples':result=store.query_samples(token,workspace,payload.pop('source_id'),**payload)
+                elif action=='endpoints':result=store.endpoints(token,workspace,payload['items'])
+                elif action=='get_links':result=store.get_links(token,workspace,payload['execution_id'])
+                elif action=='set_links':store.set_links(token,workspace,payload['execution_id'],payload['links']);result={'ok':True}
+                else:raise ValueError('Unknown Infra action')
+                self.reply(200,{'value':result},max_bytes=16*1024*1024);return
             if compat_path==['collector-source']:
                 if self.command!='POST':self.reply(404,{'error':'Unknown collector route'});return
                 if not token.startswith('api_'):raise Forbidden('Collector API credential required')

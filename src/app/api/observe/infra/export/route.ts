@@ -21,21 +21,23 @@
 // 与画图路径的关键差别：不降采样，一行一个原始采样点。画图那条路的降采样对不同列
 // 用了不同聚合（峰值 max、吞吐 avg），混进一张表会把跨列相关性分析带偏。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { exportFileName, parseGroups, parseSample, toCsv, toMarkdown, type ExportContext } from '@/lib/infra/export';
 import { buildExportRows, DEFAULT_RATE_WINDOW_MS } from '@/lib/infra/history';
-import { querySamples } from '@/lib/infra/store';
-import { prismaRaw } from '@/lib/storage/prisma';
+import { querySamples,findInfraSource } from '@/lib/infra/store';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>GET(req));
   const { searchParams } = new URL(req.url);
   const sourceId = searchParams.get('sourceId');
   if (!sourceId) return NextResponse.json({ error: 'Missing sourceId' }, { status: 400 });
 
-  const source = await prismaRaw.infraSource.findUnique({ where: { id: sourceId } });
+  const source = await findInfraSource({id:sourceId});
   if (!source) return NextResponse.json({ error: 'Source not found' }, { status: 404 });
 
   const model = searchParams.get('model') || undefined;

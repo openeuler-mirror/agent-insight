@@ -42,6 +42,8 @@ function fixture() {
     setInterval: (cb: () => void) => { callback = cb; return { unref() {} }; },
     clearInterval: () => { callback = undefined; },
     require: (name: string) => {
+      if(name==='@/lib/storage-core/mode')return {isStorageCoreEnabled:()=>false};
+      if(name==='@/lib/storage-core/infra')return {};
       if (name === '@/lib/infra/auth-headers') return { parseAuthHeaders: () => ({}) };
       if (name === '@/lib/storage/prisma') return { prismaRaw: { infraSource: { findMany: async () => {
         state.queries++;
@@ -53,7 +55,7 @@ function fixture() {
         if (state.errors.has(endpoint)) throw state.errors.get(endpoint);
         return [{}];
       } };
-      if (name === '@/lib/infra/store') return { saveSample: async () => {
+      if (name === '@/lib/infra/store') return {listInfraSources:async()=>{state.queries++;if(state.queryError)throw state.queryError;return state.sources;}, saveSample: async () => {
         if (state.saveError) throw state.saveError;
         state.saves++;
       } };

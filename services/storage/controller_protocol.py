@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import stat
 
-PURPOSES=frozenset({'experiment-cancellation/v1','experiment-frozen-assets/v1','experiment-background/v1','workbench-handoff/v1','experiment-execution/v1','benchmark-device/v1','trace-analytics/v1','collector-source/v1'})
+PURPOSES=frozenset({'experiment-cancellation/v1','experiment-frozen-assets/v1','experiment-background/v1','workbench-handoff/v1','experiment-execution/v1','benchmark-device/v1','trace-analytics/v1','collector-source/v1','infra/v1'})
 
 def read_controller_key(file):
     path=Path(file)

@@ -2933,3 +2933,25 @@ erDiagram
 | inbox_receipts | `collector.logs.raw.v1`确认持久接收原包；`collector.logs.packet.v1`确认已消费watermark及输出向量hash | 接收ACK不代表indexed；消费ACK验证每个source proof和全部根/子图/退休事实实际indexed；原算法明确discard另记原因；pending Codex/retry-later不推进确认 |
 
 这些域记录使用001已有PK、aggregate revision唯一约束和lease索引；SQLite/PG/openGauss共用事务规则。它们不增加通用ORM、跨库FK或容量承诺。proxy append使用source revision CAS和稳定operation回执；模型发布还核annotation revision。默认/旧数据库、原spool与旧cursor不在此开发接入中自动迁移。
+
+
+### 018 Infra（第一版原功能适配）
+
+新增两张事务表，017历史字节不改；总计71事务表+16CH。所有workspace/source/root关联均使用复合范围键，当前IAM在业务事务内复核。
+
+| 表 | 完整字段与类型 | 主键、约束与索引 |
+|---|---|---|
+| infra_sources | workspace_id TEXT NOT NULL；source_id TEXT NOT NULL；owner_principal_id TEXT NOT NULL；endpoint/scrape_url/kind TEXT NOT NULL；auth_ref/model/hardware_name TEXT NULL；mem_bandwidth_gbs DOUBLE NULL；scrape_interval_ms BIGINT NOT NULL；enabled BIGINT NOT NULL；state TEXT NOT NULL；revision/created_at_ms/updated_at_ms BIGINT NOT NULL | PK(workspace_id,source_id)；workspace/owner FK；active时 UNIQUE(workspace,owner,endpoint)；kind pull/push、state active/deleted、enabled0/1、间隔保留原有符号32bit范围（<=0由poller回退1000）、revision>=1、时钟>=0且updated>=created；索引(workspace,owner,state,created,source_id)；身份/owner/endpoint/创建时间不可变，更新revision递增，禁止物理删除 |
+| session_infra_links | workspace_id/root_trace_id/link_id/source_id TEXT NOT NULL；model TEXT NULL；position/created_at_ms BIGINT NOT NULL；retired_at_ms BIGINT NULL | PK(workspace,root_trace,link_id)；root FK trace_locators、source FK infra_sources；position与创建时间>=0；active时UNIQUE(workspace,root_trace,position)，按position读，替换只标retired并保留历史；(source,model??空)去重在同一替换事务中处理，避免NULL唯一语义差异 |
+| CH infra_metric_samples | workspace_id/source_id/sample_id/owner_principal_id/content_hash/sample_json String；ts_ms Float64；received_at_ms Int64；retry_version UInt64 | ReplacingMergeTree(retry_version)，ORDER BY(workspace,source,ts_ms,sample_id)；原source/model/via及fourJSON由sample_json保存；sampleID稳定重试且不同接收不合并；ts有限并保留有符号Float64，hash64，revision>0；控制source删除屏障优先于事实读 |
+
+source auth_ref指既有私有artifact，样本原串也先artifact持久化。现inbox_receipts(source_id=infra-accept/v1:<owner>,event_id=operationID)记录首次接收摘要；现outbox_events以sampleID为aggregate、infra.sample/v1为event_type，原子accept/发布lease/故障重试，无伪Span、无新增独立采样状态表。跨库成功顺序为授权source→事务内inbox+outbox→worker CH写→有fence的outbox sent；丢ACK重投相同sampleID。source逻辑删除后样本永久保留但不可见，新sourceID隔离旧事实。
+
+```mermaid
+erDiagram
+    workspaces ||--o{ infra_sources : contains
+    iam_principals ||--o{ infra_sources : owns
+    trace_locators ||--o{ session_infra_links : root
+    infra_sources ||--o{ session_infra_links : source
+    infra_sources ||--o{ infra_metric_samples_CH : scoped_samples
+```

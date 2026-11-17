@@ -6,9 +6,9 @@ import { buildFaultPathSteps } from '../engine/observability/fault-path';
 import { clusterErrorSteps, type StructuredTraceErrors } from '../engine/quality-monitoring/problem-summary';
 
 type Row = Record<string, unknown>;
-const STRINGS = ['id','taskId','user','timestamp','query','agentName','framework','model','parentExecutionId','rootExecutionId','skill','observedAgents','failures','invokedSkills','skillIssues','clientId','hostIp','hostName','observedIp','sessionEndTime','sessionLabel'] as const;
+const STRINGS = ['id','taskId','user','timestamp','query','agentName','framework','model','parentExecutionId','rootExecutionId','skill','observedAgents','failures','invokedSkills','skillIssues','clientId','hostIp','hostName','observedIp','sessionEndTime','sessionLabel','endpoint'] as const;
 const NUMBERS = ['skillVersion','latency','tokens','inputTokens','outputTokens','cacheReadInputTokens','cacheCreationInputTokens','reasoningTokens','maxSingleCallTokens','cost','toolCallCount','toolCallErrorCount','llmCallCount','skillTriggerRate'] as const;
-export type AnalyticsExecution = { [K in typeof STRINGS[number]]: string | null } & { [K in typeof NUMBERS[number]]: number | null } & {
+export type AnalyticsExecution = { [K in Exclude<typeof STRINGS[number],'endpoint'>]: string | null } & {endpoint?:string|null} & { [K in typeof NUMBERS[number]]: number | null } & {
   id: string; taskId: string; timestamp: string; isSubagent: boolean; isAnswerCorrect: boolean | null;
   latencyMs: number | null; callStats: string | null; executionSkills: {skillName: string; version: number | null}[];
 };
@@ -100,7 +100,7 @@ export function buildAnalyticsProjection(input: {evidence: {snapshot_hash: strin
         const turns=[...indices].sort((a,b)=>a-b).map(index=>interactions[index]).filter(Boolean);
         const skills=extractExplicitSkillsFromNode(node);
         const agentName=node.agentName||getFrameworkPrimaryAgentName(row.framework)||null;
-        const child:AnalyticsExecution={...row,...own,id,taskId:node.sessionId,parentExecutionId:parent,rootExecutionId:row.id,isSubagent:true,agentName,query:(findSubagentSpawnDescription(interactions,node.sessionId)||own.query).slice(0,500),timestamp:node.startedAt?new Date(node.startedAt).toISOString():row.timestamp,latencyMs:own.latency,callStats:null,failures:null,isAnswerCorrect:null,cost:null,maxSingleCallTokens:null,skill:null,skillVersion:null,skillTriggerRate:null,skillIssues:null,observedAgents:JSON.stringify(extractObservedAgentNames(turns,agentName)),invokedSkills:skills.length?JSON.stringify(skills):null,executionSkills:skills.map(skill=>({skillName:skill.name,version:skill.version}))};
+        const child:AnalyticsExecution={...row,...own,endpoint:null,id,taskId:node.sessionId,parentExecutionId:parent,rootExecutionId:row.id,isSubagent:true,agentName,query:(findSubagentSpawnDescription(interactions,node.sessionId)||own.query).slice(0,500),timestamp:node.startedAt?new Date(node.startedAt).toISOString():row.timestamp,latencyMs:own.latency,callStats:null,failures:null,isAnswerCorrect:null,cost:null,maxSingleCallTokens:null,skill:null,skillVersion:null,skillTriggerRate:null,skillIssues:null,observedAgents:JSON.stringify(extractObservedAgentNames(turns,agentName)),invokedSkills:skills.length?JSON.stringify(skills):null,executionSkills:skills.map(skill=>({skillName:skill.name,version:skill.version}))};
         // Only compact fields are published; the pure legacy projection also returns the final body.
         delete (child as unknown as Row).finalResult;
         executions.push(child);

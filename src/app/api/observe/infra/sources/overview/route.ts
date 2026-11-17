@@ -16,18 +16,21 @@
 
 // 所有源的概览：每源取最近若干采样 → 聚合诊断 → verdict + 关键 SLI（用已落库的数据，不发网络）。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { redactSource } from '@/lib/infra/auth-headers';
 import { aggregate, diagnose } from '@/lib/infra/diagnose';
 import { latestSamples, listSourceModels } from '@/lib/infra/store';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {listInfraSources} from '@/lib/infra/store';
 import type { HardwareProfile } from '@/lib/infra/types';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const sources = await prismaRaw.infraSource.findMany({ orderBy: { createdAt: 'desc' } });
+export async function GET(req?:Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>GET(req));
+  const sources = await listInfraSources();
 
   const overview = await Promise.all(
     sources.map(async (s) => {

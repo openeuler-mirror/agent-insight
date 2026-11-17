@@ -16,6 +16,8 @@
 
 // 单个源的历史趋势：取最近 limit 条采样 → 压成时序点序列，供前端画 Recharts 折线。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { buildHistorySeries, DEFAULT_RATE_WINDOW_MS } from '@/lib/infra/history';
@@ -23,7 +25,8 @@ import { latestSamples, querySamples } from '@/lib/infra/store';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>GET(req));
   const { searchParams } = new URL(req.url);
   const sourceId = searchParams.get('sourceId');
   if (!sourceId) {

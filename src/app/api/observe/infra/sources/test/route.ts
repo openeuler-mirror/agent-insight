@@ -20,12 +20,14 @@
 //  - push：查该源最近是否有新样本（push 模式下 poller 不再拉，新样本只能来自 collector 推送）。
 //    push 不涉及凭证，保留 GET。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest,authorizeCoreInfra} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { parseAuthHeaders, toAuthHeadersJson } from '@/lib/infra/auth-headers';
 import { probeEndpoint } from '@/lib/infra/registry';
 import { lastPushAtMs } from '@/lib/infra/store';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {findInfraSource} from '@/lib/infra/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,14 +51,16 @@ function pullResult(probe: { reachable: boolean; metricCount: number; model: str
  *   { sourceId, authHeaders? }  —— 编辑已有源；没传 authHeaders 就用库里已存的
  *                                  （GET 不回显真值，前端手上没有它）
  */
-export async function POST(req: Request) {
+export async function POST(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>POST(req));
   try {
+    if(isStorageCoreEnabled())await authorizeCoreInfra();
     const body = await req.json().catch(() => ({}));
     let endpoint: string | null = body?.endpoint ? String(body.endpoint) : null;
     let authJson = toAuthHeadersJson(body?.authHeaders);
 
     if (body?.sourceId) {
-      const src = await prismaRaw.infraSource.findUnique({ where: { id: String(body.sourceId) } });
+      const src = await findInfraSource({id:String(body.sourceId)});
       if (!src) return NextResponse.json({ mode: 'pull', ok: false, message: '源不存在' }, { status: 404 });
       endpoint = endpoint || src.scrapeUrl || src.endpoint;
       if (authJson === undefined) authJson = src.authHeaders; // 沿用已存凭证
@@ -66,12 +70,15 @@ export async function POST(req: Request) {
     const probe = await probeEndpoint(endpoint, { timeoutMs: 6000, headers: parseAuthHeaders(authJson) });
     return pullResult(probe);
   } catch (err) {
+    if(isStorageCoreEnabled()&&err&&typeof err==='object'&&'status' in err&&[401,403,409,503].includes(Number(err.status)))throw err;
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ mode: 'pull', ok: false, message }, { status: 400 });
   }
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>GET(req));
+  if(isStorageCoreEnabled())await authorizeCoreInfra();
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get('mode') === 'push' ? 'push' : 'pull';
 
@@ -85,7 +92,7 @@ export async function GET(req: Request) {
   // push：查该源最近一条「推送」样本（与是否已保存为 push 无关 → 支持"先配 collector、检测到再保存"）
   const sourceId = searchParams.get('sourceId');
   if (!sourceId) return NextResponse.json({ error: 'Missing sourceId' }, { status: 400 });
-  const src = await prismaRaw.infraSource.findUnique({ where: { id: sourceId } });
+  const src = await findInfraSource({id:sourceId});
   if (!src) return NextResponse.json({ mode: 'push', ok: false, message: '源不存在' }, { status: 404 });
 
   const lastMs = await lastPushAtMs(sourceId);

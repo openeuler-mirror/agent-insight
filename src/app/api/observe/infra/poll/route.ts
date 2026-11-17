@@ -16,13 +16,16 @@
 
 // 手动触发一轮 Path A 拉取（也可由定时器调用 pollOnce）。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { pollOnce } from '@/lib/infra/poller';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
+export async function POST(req?:Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>POST(req));
   const result = await pollOnce();
   return NextResponse.json(result);
 }

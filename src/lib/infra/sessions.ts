@@ -18,6 +18,8 @@
 // 与 correlate.ts（单条 execution → infra）方向相反：这里是「某段时间这个源上有哪些 session 在干活」。
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {readCoreInfraExecutions,getCoreInfraLinks,setCoreInfraLinks} from '@/lib/storage-core/infra';
 
 export interface SessionForEndpoint {
   id: string;
@@ -32,12 +34,14 @@ export interface SessionForEndpoint {
 /** 该 endpoint 在 [fromMs, toMs] 内命中的 execution 总数（分页用）。 */
 export async function countSessionsForEndpoint(endpoint: string, fromMs: number, toMs: number): Promise<number> {
   if (!endpoint) return 0;
+  if(isStorageCoreEnabled())return (await readCoreInfraExecutions()).filter(row=>row.endpoint===endpoint&&row.timestamp.getTime()>=fromMs&&row.timestamp.getTime()<=toMs).length;
   return prismaRaw.execution.count({ where: { endpoint, timestamp: { gte: new Date(fromMs), lte: new Date(toMs) } } });
 }
 
 /** 列出 [fromMs, toMs] 内、endpoint 命中该源的 execution（按时间降序=最近优先，支持 offset/limit 分页）。 */
 export async function listSessionsForEndpoint(endpoint: string, fromMs: number, toMs: number, opts: { limit?: number; offset?: number } = {}): Promise<SessionForEndpoint[]> {
   if (!endpoint) return [];
+  if(isStorageCoreEnabled()){const rows=(await readCoreInfraExecutions()).filter(row=>row.endpoint===endpoint&&row.timestamp.getTime()>=fromMs&&row.timestamp.getTime()<=toMs).sort((a,b)=>b.timestamp.getTime()-a.timestamp.getTime()),offset=Math.max(0,opts.offset??0);return rows.slice(offset,offset+Math.min(200,Math.max(1,opts.limit??20))).map(row=>({id:row.id,taskId:row.taskId,tsMs:row.timestamp.getTime(),latencyMs:row.latency,model:row.model,outputTokens:row.outputTokens,agentName:row.agentName}));}
   const rows = await prismaRaw.execution.findMany({
     where: { endpoint, timestamp: { gte: new Date(fromMs), lte: new Date(toMs) } },
     orderBy: { timestamp: 'desc' },
@@ -87,6 +91,7 @@ export interface SessionLink { sourceId: string; model: string | null }
 
 /** 读某棵树的人工覆盖关联集合（无 = 空数组 = 走自动推断）。 */
 export async function getSessionLinks(rootExecutionId: string): Promise<SessionLink[]> {
+  if(isStorageCoreEnabled())return getCoreInfraLinks(rootExecutionId);
   const rows = await prismaRaw.sessionInfraLink.findMany({
     where: { rootExecutionId },
     select: { sourceId: true, model: true },
@@ -97,6 +102,7 @@ export async function getSessionLinks(rootExecutionId: string): Promise<SessionL
 
 /** 覆盖式保存某棵树的人工关联集合（整体替换；空数组 = 清空，回落到自动推断）。 */
 export async function setSessionLinks(rootExecutionId: string, links: SessionLink[]): Promise<void> {
+  if(isStorageCoreEnabled()){await setCoreInfraLinks(rootExecutionId,links);return;}
   // 去重（含 model=null）
   const seen = new Set<string>();
   const uniq = links.filter((l) => {
