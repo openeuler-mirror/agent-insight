@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；016补齐私有采集准备与中断恢复，公共采集尚未激活；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -593,3 +593,23 @@ v1完整测试因已知Spec回归主动停止，取消项不当功能结论；�
 证据：`exclude/storage-core-collector/20261117-i_wpbhkw/` 的 `source-b-v3-final-code-verification.json`、`source-b-v3-final-result.json`、`source-b-v3-backend-fingerprint-reuse.json`、`source-b-v3-legacy-golden/{report,legacy-equivalence}.json`、`spec-source-b-v3-report.json`、`quality-source-b-v3-report.json`、`source-B-v3/`和`source-b-v3-full-runtime.jsonl`；旧失败/反例与v1/v2完整输出分别保留。
 
 下一片C：首次capture/完整计划持久CAS、可信typed flow前态、空Session/Thread控制与child图持久化、原Node Session投影、公共upload/completion全部indexed ACK，以及原异步分析/Flow/Outcome及内部采集身份闭环。pure skipped并不等公共handler停止分析，需按原route完整对照；仍未完成public采集整体、proxy/logs/consumer、Infra/其他控制域或完整96模型历史语义导入，未切生产。
+
+
+## 2026-11-17 私有采集准备持久化与旧未完成请求恢复
+
+C1a完成016单表 `collector_preparation_receipts`，现为66事务表+15CH。首次原Node JSON表示、封存前态/捕获及纯准备计划只追加封存；begin与A预留在同一事务内，commit只应用已封存计划，accepted/indexed仍以A和实际worker为准。保留旧A回执/工件，无法恢复的旧键序明确标为legacy_canonical；当前已应用source revision才允许复用原Session字符串。完成先到保存真实空Session及首次时间，不生成虚假事实；已有Execution缺Session时补齐原空会话，后到快照保持首次时钟。当前手工标注不被旧采集输入清除。
+
+独立Quality发现并修复一个P1：旧A尚reserved的请求接入C1a后，旧commit/complete可绕过首次封存计划。现在所有仍reserved的接管及已有receipt恢复均在同事务内补齐守卫，旧入口拒绝绕过；已经committed的旧历史及ACK不改。两条反例在冻结v1实际复现，在v2实际返回409且封存正文/空Session真正保存。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 应用完整与类型 | v1完整6141项：6119通过、22跳过、0失败/取消，696.58秒。最终v2的3119代码文件仅2个Python文件变化，全部Node/TS/DDL/JSON逐文件相同，复用该完整应用门禁，另做v2实际Node私有HTTP/CH；不称v2重新完整执行。tsc首轮180秒无输出超时，保留记录；同源降低并行后33.39秒exit0，未改测试超时或产品。原因未单独证明 |
+| 最终后端完整 | v2：1213项，1034通过、179可选引擎跳过、0失败，364.59秒；ResourceWarning为error，169个来源稳定。v1因已确认P1主动停止，旧日志不是通过证明 |
+| PG / 原生openGauss | 最终各62/62、无跳过；250.724/265.644秒，各62个自有schema回查残留0，173个来源稳定。事实sink为MemoryFacts，不称三库×CH完整矩阵 |
+| 真实升级与CH | 独立015副本先保留两条未完成A请求，再备份升016；实际Node、sidecar和CH共193次HTTP、外部/模型调用0。封存后重启恢复首次字符串/捕获，300消息多包半索引503，全索引后完整读回；旧ACK不重复写，旧两条绕过409，空completion后上报保留首次时间 |
+| 独立复审 | Spec32项、Quality27项通过；包括first seal、resume_pending、已有receipt缺守卫恢复、事务失败回滚、committed旧ACK/annotation不变；16交付文件hash一致 |
+| 数据与界面 | 原65事务表/15CH原行及357工件保留，隔离旧静态库96表43行未改；所有277个TSX/CSS与Trigger验收时相同。未刷新58488原验收服务，默认库/spool及生产未操作，无新浏览器验收声明 |
+
+证据：`exclude/storage-core-collector/20261117-i_wpbhkw/` 的 `source-c1a-v2-final-code-verification.json`、`source-c1a-v2-node-fingerprint-reuse.json`、`source-c1a-v2-final-python-report.json`、`source-c1a-v2-native/`、`source-c1a-v2-upgrade-fixture/real-node-ch-v2-report.json`、`after-upgrade-preservation.json`及 `spec/quality-source-c1a-v2-report.json`。
+
+公共upload/completion/proxy/logs仍未接线，public_ready恒false；非空子Agent/Thread/退休计划在root副作用前返回pending，ThreadOnly只有不造Trace的准备回执，实际图写入/原DTO/原异步分析留待C1b/C2/C3。继续第一版原功能等价，不增加万级Span或容量增强；随后仍需Infra、其他控制域及完整旧库语义迁移，不代表全产品接管。

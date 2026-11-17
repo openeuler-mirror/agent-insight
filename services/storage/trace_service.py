@@ -359,8 +359,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             if compat_path==['collector-source']:
                 if self.command!='POST':self.reply(404,{'error':'Unknown collector route'});return
                 if not token.startswith('api_'):raise Forbidden('Collector API credential required')
-                from .collector_sources import CollectorSources, MAX_INPUT_BYTES
-                value,error=self.body(max_bytes=MAX_INPUT_BYTES)
+                from .collector_sources import CollectorSources, MAX_INPUT_BYTES, MAX_PLAN_BYTES
+                value,error=self.body(max_bytes=MAX_PLAN_BYTES*2+65536)
                 if error:self.reply(error,{'error':'Bounded collector JSON required'});return
                 action=value.get('action')
                 if action=='scope':
@@ -372,14 +372,20 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                         runtime.iam._workspace(scope,workspace,'write')
                         response={'authorized':True,'operation':value['operation'],'principal_id':scope.principal_id,'workspace_id':workspace}
                     self.reply(200,{'value':response});return
-                if action not in ('reserve','commit','complete','status','reject_preparation'):raise ValueError('Invalid collector source action')
+                preparation_actions=('begin_preparation','seal_capture','seal_plan','commit_prepared','preparation_status')
+                if action not in ('reserve','commit','complete','status','reject_preparation')+preparation_actions:raise ValueError('Invalid collector source action')
+                if action not in preparation_actions and int(self.headers['Content-Length'])>MAX_INPUT_BYTES:self.reply(413,{'error':'Bounded collector JSON required'});return
                 workspace=runtime.workspace(token,params.get('workspace_id'),'write')
                 from .controller_protocol import verify_controller_proof
                 principal=runtime.iam.scope(token).principal_id
                 if not verify_controller_proof(runtime.controller_key_file,'collector-source/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private collector source attestation required')
                 payload={key:item for key,item in value.items() if key!='action'}
-                response=getattr(CollectorSources(runtime.control,runtime.ingest),action)(token,workspace,payload)
-                self.reply(200,{'value':response},max_bytes=MAX_INPUT_BYTES*3+4096);return
+                service=CollectorSources(runtime.control,runtime.ingest)
+                if action in preparation_actions:
+                    from .collector_preparations import CollectorPreparations
+                    service=CollectorPreparations(runtime.control,runtime.ingest)
+                response=getattr(service,action)(token,workspace,payload)
+                self.reply(200,{'value':response},max_bytes=MAX_PLAN_BYTES*4 if action in preparation_actions else MAX_INPUT_BYTES*3+4096);return
             report_path=compat_path[:2]==['observe','reports']
             dataset_path=compat_path[:1] in (['datasets'],['experiments'],['evaluators'],['diagnosis-runs'],['benchmarks'],['analytics'])
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))

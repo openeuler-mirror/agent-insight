@@ -1,23 +1,23 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-15。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，当前 **65 张事务表 + 15 张 ClickHouse 表，共80张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-17。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，016新增1张首次采集准备封存表，当前 **66 张事务表 + 15 张 ClickHouse 表，共81张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
 本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这80张表对应**65张事务控制表 + 15张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这81张表对应**66张事务控制表 + 15张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共65表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共66表]
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
     ASSET[资产与版本 6表]
     RUN[运行、任务、结果控制 6表]
     SUPPORT[投递、路由、制品、维护 7表]
-    INGEST[可靠采集与实体版本 2表]
+    INGEST[可靠采集、实体版本及首次准备封存 3表]
     META[Trace旧ID、标注与标签 4表]
     DIAG[诊断会话、消息、报告及当前指针和结果诊断绑定 6表]
     DATASET[Dataset兼容head、回执及生成任务 3表]
@@ -2844,3 +2844,53 @@ CREATE TABLE obs_ras_events (
 PARTITION BY toYYYYMM(event_bucket)
 ORDER BY (workspace_id,event_bucket,owner_principal_id,task_id,event_key,content_hash);
 ```
+
+
+## 016：采集准备首次封存（C1a）
+
+本迁移新增 `collector_preparation_receipts` 一表，目标为66张事务表与15张CH表。它只保存首次输入表示、Source前态和确定性capture/plan；原A operation、ingest_batches及实际head仍是提交/索引状态唯一权威。本片不启用公共upload/completion，不建Thread表，不为ThreadOnly创建locator或Execution。
+
+### collector_preparation_receipts
+
+主键 `(workspace_id,scope_kind,scope_key,operation_key)`；同key允许在不同Source/Thread复用。Source scope_key为实际trace_id，Thread为当前owner范围稳定逻辑key。
+
+| 字段 | 逻辑类型 | 可空 | 规则 |
+|---|---|---|---|
+| workspace_id | TEXT | 否 | FK workspaces |
+| scope_kind | TEXT | 否 | source/thread |
+| scope_key | TEXT | 否 | 1..512字符 |
+| operation_key | TEXT | 否 | 1..512字符 |
+| owner_principal_id | TEXT | 否 | FK iam_principals，实际API主体 |
+| trace_id | TEXT | 是 | 同workspace FK trace_locators；source必填且等scope_key，thread必空 |
+| operation_kind | TEXT | 否 | snapshot/complete/thread_only；thread仅thread_only |
+| input_hash | TEXT | 否 | 64位小写SHA256，Source沿A原意图语义hash |
+| input_text_hash | TEXT | 否 | 首次Node输入字符串UTF8 SHA256 |
+| input_text_ref | TEXT | 否 | 私有持久工件 |
+| context_hash | TEXT | 否 | 首次服务端前态逻辑hash |
+| context_ref | TEXT | 否 | 原reservation、独立Session、annotation及来源表示前态工件 |
+| capture_hash | TEXT | 是 | 首次Node capture JSON字符串UTF8 SHA256 |
+| capture_ref | TEXT | 是 | 与hash同时为空或同时存在 |
+| plan_hash | TEXT | 是 | 首次Node plan JSON字符串UTF8 SHA256 |
+| plan_ref | TEXT | 是 | 与hash同时为空或同时存在；须已有capture |
+| seal_revision | BIGINT | 否 | 默认1，范围1..2^63-1，写入槽位精确加1 |
+| created_at_ms | BIGINT | 否 | 非负，immutable |
+| updated_at_ms | BIGINT | 否 | 非负且不倒退 |
+
+索引 `(workspace_id,owner_principal_id,created_at_ms,scope_kind,scope_key)`。identity/input/context不可改；capture及plan只能由NULL封存一次；禁止删除。SQLite整数类型和GLOB/PG及OG BIGINT与正则采用现有方言约束。工件均经现有私有artifact持久化与hash验证，不将header凭据入库，不执行隐式升级。
+
+```mermaid
+erDiagram
+  workspaces ||--o{ collector_preparation_receipts : contains
+  iam_principals ||--o{ collector_preparation_receipts : owns
+  trace_locators o|--o{ collector_preparation_receipts : source_only
+  collector_preparation_receipts ||--o| private_capture_artifact : seals_once
+  collector_preparation_receipts ||--o| private_plan_artifact : seals_once
+```
+
+private_*_artifact为既有私有文件工件，非新增SQL表。Source实际状态继续关联原A ledger/ingest_batches，不在本表镜像accepted/indexed。
+
+协议增加begin_preparation、seal_capture、seal_plan、commit_prepared、preparation_status，沿collector-source/v1精确正文proof、实际API write和strictowner。begin在返回前原子保存首次Node字符串/context与A reserve；capture竞争只认首次输入；plan不可覆盖。根快照/完成只消费sealed plan；非空child/thread计划明确pending，不半提交。ThreadOnly仅可封存，尚不执行Thread控制效果。
+
+C1a不增加reject_changed_context，不因annotation变化释放或终止合法采集意图，也不清/覆盖人工annotation；异步结果fence留C3。Root Source/IAM/deletion guard沿A。Session元数据独立保存为state.session_ref及op.prior_session_ref：无Execution完成只有控制数据，重复完成保留首次start；已有Execution无Session的完成则索引真实原空Session投影。
+
+输入的semantic hash与原JSON表示hash分开。字符串解析值必须与canonical结构逐值一致，数组顺序、0/null/扩展保留；新输入在首次reserve返回前保存。后续prior Session必须取最新已applied、source revision及snapshot hash匹配的计划serialized表示；旧A/unprepared写入没有对应表示时标legacy_canonical，禁止套用更早计划的字符串。旧A receipts/heads不重写，不编造不可恢复的旧key order或payload hash。

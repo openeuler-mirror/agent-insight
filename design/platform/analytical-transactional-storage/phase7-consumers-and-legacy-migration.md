@@ -344,3 +344,14 @@ B已完成最终隔离验收（2026-11-17）：原quick/save共享准备、冻�
 独立复核修正了原falsy timestamp/default clock、无关旧坏JSON不解析、headless首次Session时钟、framework缺省与显式清空的缩小保护、实际静态正文查询范围，以及Thread自然身份/原前置时序。legacy存储字符串保持原表示，不借此清洗/迁移旧数据；canonical core读取须由可信producer提供已校验数组。static capture用轻量目录保留JS折叠匹配，正文只取选中ID/必要版本；routing精确case版本与业务definition折叠case不能混用。
 
 C额外边界：纯存储plan的skipped/background字段不代表原public handler全部行为。原handler并不检查save.skipped，autoEvaluation开启仍可进入异步分支；激活前需按原整体逻辑覆盖护栏跳过、threadOnly、pending-parent、in-progress/setting及响应flags，不能因plan早退静默关闭原分析。Thread前置可在snapshot缩小保护前生效，pending-parent原在Thread之前，均须按原时序保留。首次durable capture/wholeplan CAS、typed flow前态、无Trace空Session/Thread、图ACK及source-fenced异步结果仍属C未完成内容。
+
+
+### C1a：首次准备持久化与旧未完成请求接管（已隔离验收）
+
+016只新增collector_preparation_receipts（66事务表+15CH），与source预留同事务封存首次Node输入字符串、可信前态、capture及纯计划。首次封存赢得竞争/丢ACK，重试不重选静态依赖；A仍唯一决定accepted/indexed。旧A历史保留且无法恢复的原键序诚实标为legacy_canonical；仅当前applied revision的原Session表示可以作为后续合并前态。完成先到持久空Session/首次时钟，无伪Execution/Span；Execution-only后completion及稍后upload保留原行为。
+
+旧reserved快照/完成意图转入准备协议时必须与receipt同事务设置preparation_required，含resume_pending及已有receipt缺守卫恢复；否则旧commit/complete可绕过sealed计划。最终v2修复并在真实015→016副本及两条privateHTTP反例验证409；alreadycommitted旧回放、手工annotation及原历史不改。
+
+最终后端1213项（1034通过、179跳过、零失败），PG/nativeOG各62/62（MemoryFacts、schema残留0），Node→真实CH193次HTTP及数据保留通过，Spec32/Quality27通过。完整Node6141项（6119通过、22跳过）在v1完成，v2只2个Python文件变化、Node/TS/DDL/JSON逐文件相同，严格指纹复用并另外验证v2真实Node私有HTTP/CH；不称v2重新完整跑应用。完整证据和首次失败/超时边界见implementation-status.md与同collector目录source-c1a-v2-*。
+
+此片public_ready仍false，未启公共采集，277个TSX/CSS不变，原验收服务未刷新。非空图效果提前pending，不以半份root成功冒充整个原行为；下一片按原功能接子Agent/Thread，再接原Session DTO与upload/completion/异步分析，随后proxy/logs/consumer及其余清单。第二版容量工作继续延期。

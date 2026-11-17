@@ -455,3 +455,14 @@ Evaluator 支持声明式 Judge、代码/容器、Skill-based 等实现；统一
 - [openGauss 7.0 INSERT](https://docs.opengauss.org/en/docs/7.0.0/sql_reference/insert.html)：能力随发行版本变化，应以选定部署版验证，不据文档推断旧版兼容。
 
 待 PoC 冻结：三库/驱动最低版本、openGauss 兼容模式、CH 复制与一致性配置、日志实现、索引/分区/正文阈值、硬件和全部容量指标。它们是工程门禁，不影响上述领域所有权、不可变版本和一致性契约。
+
+
+## C1a：公共采集准备的最小持久契约（016）
+
+新增一张collector_preparation_receipts，字段、约束、索引及关系见core-table-dictionary的016节。优先完成真实Node→sidecar→根Source/empty completion准备、提交、索引及恢复；不启用public入口，不提前做Thread/child半图或异步模型。A仍唯一决定ingest状态，准备表仅封存首次输入/context/capture/plan。
+
+原Node序列化字符串在begin返回前存储，恢复使用当前source revision及snapshot hash绑定的最新applied字符串。canonical对象用于结构校验，字符串用于保留原merge/payload-version输入顺序；旧A缺失原表示则明确legacy_canonical。header credential不进入工件，rawbody.user不授权。annotation当前值可记录前态，但C1a不清除人工覆盖、不因其变化终止采集；异步fence与原handler编排留C3。
+
+016显式升级保留原65表数据与A历史operation；无事实的独立Session不制造Execution/CH Span。实际Node wire、SQLite/CH索引/丢ACK/重启恢复及三库DDL专项作为本片门禁，后续C候选集中完整回归。
+
+旧A的reserved操作被begin接管时（包含resume_pending返回的旧意图、已有准备回执恢复），同事务写入preparation_required守卫，不能再通过旧commit/complete绕过首次计划；准备回执与守卫一起回滚。已committed的旧A历史只兼容回放，不补写守卫或改写原source状态，原表示仍诚实标记legacy_canonical。

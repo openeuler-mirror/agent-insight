@@ -271,49 +271,51 @@ class CollectorSources:
             'duplicate':duplicate,'resume_pending':resume}
 
     def reserve(self,token,workspace,value):
+        with self.control.transaction() as con:return self._reserve(con,token,workspace,value)
+
+    def _reserve(self,con,token,workspace,value):
         identifier(workspace);body,task,execution,framework,started,completed=self._input(value);digest=_hash({key:item for key,item in body.items() if key!='verified_client_id'});slot=_hash(body['operation_key'])
-        with self.control.transaction() as con:
-            scope=self._scope(con,token,workspace);task=task or execution or str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,scope.principal_id,slot,'missing-task'])))
-            alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(workspace,task)).fetchone()
-            if alias:trace=alias[0];route,scope,state=self._owned(con,token,workspace,trace)
+        scope=self._scope(con,token,workspace);task=task or execution or str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,scope.principal_id,slot,'missing-task'])))
+        alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(workspace,task)).fetchone()
+        if alias:trace=alias[0];route,scope,state=self._owned(con,token,workspace,trace)
+        else:
+            execution=execution or task
+            prior=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='execution' AND alias_id=?",(workspace,execution)).fetchone()
+            if prior:
+                route,scope,state=self._owned(con,token,workspace,prior[0])
+                if state['task_id']!=task:raise Conflict('Collector task and execution aliases differ')
+                trace=route['trace_id']
             else:
-                execution=execution or task
-                prior=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='execution' AND alias_id=?",(workspace,execution)).fetchone()
-                if prior:
-                    route,scope,state=self._owned(con,token,workspace,prior[0])
-                    if state['task_id']!=task:raise Conflict('Collector task and execution aliases differ')
-                    trace=route['trace_id']
-                else:
-                    native=_hash(['collector-source',scope.principal_id,task])[:32];trace=str(uuid.uuid5(uuid.NAMESPACE_URL,canonical_json([workspace,NAMESPACE,native,1])))
-                    if con.execute('SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone():raise Conflict('Collector native route has no attested alias')
-                    for identity in (task,execution):
-                        collision=con.execute('SELECT trace_id FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,identity)).fetchone()
-                        if collision and collision[0]!=trace:raise Conflict('Collector alias collides with an internal Trace identity')
-                    now=self.control.clock();stamp=started if started is not None else completed if completed is not None else now;bucket=_bucket(stamp)
-                    con.execute('INSERT INTO trace_locators(workspace_id,trace_id,source_namespace,native_trace_id,trace_bucket,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)',(workspace,trace,NAMESPACE,native,bucket,now,now))
-                    self.iam._record_resource(con,workspace,'trace',trace,scope.principal_id,'private',invalidate_policy=False)
-                    for kind,identity in [('task',task),('execution',execution)]:con.execute('INSERT INTO trace_legacy_ids VALUES(?,?,?,?,?)',(workspace,kind,identity,trace,now))
-                    route={'trace_id':trace,'native_trace_id':native,'trace_bucket':bucket,'source_namespace':NAMESPACE}
-                    state={'version':1,'actor_id':scope.principal_id,'legacy_username':body['legacy_username'],'trace_id':trace,'native_trace_id':native,'trace_bucket':bucket,
-                        'task_id':task,'execution_id':execution,'framework':None,'source_revision':0,'snapshot_ref':None,'completion_at_ms':None,'pending':None,'operations':{},'entities':{},'next_id':1}
-            op=state['operations'].get(slot)
-            if op:
-                if op['input_hash']!=digest:raise Conflict('Collector operation key has different content')
-                return self._view(con,workspace,trace,state,op,duplicate=True)
-            if state['framework'] and framework and state['framework']!=framework:raise Conflict('Collector source framework differs')
-            if state['legacy_username']!=body['legacy_username']:raise Conflict('Collector source legacy owner differs')
-            pending=state.get('pending')
-            if pending:
-                previous=state['operations'][pending]
-                if self._op_state(con,workspace,trace,previous)!='indexed':return self._view(con,workspace,trace,state,previous,resume=True)
-                state['pending']=None
-            if len(state['operations'])>=MAX_OPERATIONS:raise CollectorSourceLimit('Collector source receipt budget reached')
-            _,request_ref=self.ingest._persist(body['operation_request']);now=self.control.clock()
-            op={'operation_key':body['operation_key'],'input_hash':digest,'request_ref':request_ref,'actor_id':scope.principal_id,'operation':body['operation'],
-                'received_at_ms':now,'started_at_ms':started,'completed_at_ms':completed if completed is not None else now if body['operation']=='complete' else state.get('completion_at_ms'),
-                'framework':framework,'verified_client_id':body.get('verified_client_id'),'base_revision':state['source_revision'],'prior_snapshot_ref':state['snapshot_ref'],'stage':'reserved','batch_refs':[]}
-            state['operations'][slot]=op;state['pending']=slot;self._write(con,workspace,trace,state)
-            return self._view(con,workspace,trace,state,op)
+                native=_hash(['collector-source',scope.principal_id,task])[:32];trace=str(uuid.uuid5(uuid.NAMESPACE_URL,canonical_json([workspace,NAMESPACE,native,1])))
+                if con.execute('SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone():raise Conflict('Collector native route has no attested alias')
+                for identity in (task,execution):
+                    collision=con.execute('SELECT trace_id FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,identity)).fetchone()
+                    if collision and collision[0]!=trace:raise Conflict('Collector alias collides with an internal Trace identity')
+                now=self.control.clock();stamp=started if started is not None else completed if completed is not None else now;bucket=_bucket(stamp)
+                con.execute('INSERT INTO trace_locators(workspace_id,trace_id,source_namespace,native_trace_id,trace_bucket,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)',(workspace,trace,NAMESPACE,native,bucket,now,now))
+                self.iam._record_resource(con,workspace,'trace',trace,scope.principal_id,'private',invalidate_policy=False)
+                for kind,identity in [('task',task),('execution',execution)]:con.execute('INSERT INTO trace_legacy_ids VALUES(?,?,?,?,?)',(workspace,kind,identity,trace,now))
+                route={'trace_id':trace,'native_trace_id':native,'trace_bucket':bucket,'source_namespace':NAMESPACE}
+                state={'version':1,'actor_id':scope.principal_id,'legacy_username':body['legacy_username'],'trace_id':trace,'native_trace_id':native,'trace_bucket':bucket,
+                    'task_id':task,'execution_id':execution,'framework':None,'source_revision':0,'snapshot_ref':None,'completion_at_ms':None,'pending':None,'operations':{},'entities':{},'next_id':1}
+        op=state['operations'].get(slot)
+        if op:
+            if op['input_hash']!=digest:raise Conflict('Collector operation key has different content')
+            return self._view(con,workspace,trace,state,op,duplicate=True)
+        if state['framework'] and framework and state['framework']!=framework:raise Conflict('Collector source framework differs')
+        if state['legacy_username']!=body['legacy_username']:raise Conflict('Collector source legacy owner differs')
+        pending=state.get('pending')
+        if pending:
+            previous=state['operations'][pending]
+            if self._op_state(con,workspace,trace,previous)!='indexed':return self._view(con,workspace,trace,state,previous,resume=True)
+            state['pending']=None
+        if len(state['operations'])>=MAX_OPERATIONS:raise CollectorSourceLimit('Collector source receipt budget reached')
+        _,request_ref=self.ingest._persist(body['operation_request']);now=self.control.clock()
+        op={'operation_key':body['operation_key'],'input_hash':digest,'request_ref':request_ref,'actor_id':scope.principal_id,'operation':body['operation'],
+            'received_at_ms':now,'started_at_ms':started,'completed_at_ms':completed if completed is not None else now if body['operation']=='complete' else state.get('completion_at_ms'),
+            'framework':framework,'verified_client_id':body.get('verified_client_id'),'base_revision':state['source_revision'],'prior_snapshot_ref':state['snapshot_ref'],'prior_session_ref':state.get('session_ref'),'stage':'reserved','batch_refs':[]}
+        state['operations'][slot]=op;state['pending']=slot;self._write(con,workspace,trace,state)
+        return self._view(con,workspace,trace,state,op)
 
     def _snapshot(self,state,op,value):
         if not isinstance(value,dict) or set(value)!={'execution','session'} or not isinstance(value['execution'],dict):raise ValueError('Collector execution and Session snapshot required')
@@ -426,6 +428,7 @@ class CollectorSources:
         with self.control.transaction() as con:
             trace=self._find(con,workspace,value['task_id']);route,scope,state=self._owned(con,token,workspace,trace);slot=_hash(value['operation_key']);op=state['operations'].get(slot)
             if op is None or op['operation']!='snapshot' or op['stage']=='failed':raise Conflict('Collector snapshot reservation unavailable')
+            if op.get('preparation_required'):raise Conflict('Collector operation requires its sealed preparation')
             if op['stage']!='reserved':
                 if op.get('commit_request_hash')!=commit_hash:raise Conflict('Collector committed snapshot differs')
                 return self._view(con,workspace,trace,state,op,duplicate=True)
@@ -446,6 +449,7 @@ class CollectorSources:
         with self.control.transaction() as con:
             trace=self._find(con,workspace,reservation['task_id']);route,scope,state=self._owned(con,token,workspace,trace);slot=_hash(reservation['operation_key']);op=state['operations'][slot]
             if op['stage']!='reserved':return self._view(con,workspace,trace,state,op,duplicate=True)
+            if op.get('preparation_required'):raise Conflict('Collector operation requires its sealed preparation')
             snapshot=self._load(state['snapshot_ref']);sources=[];state['completion_at_ms']=op['completed_at_ms'];state['source_revision']+=1
             if snapshot is not None:
                 if snapshot.get('session') is not None:snapshot['session']['endTime']=_iso(op['completed_at_ms'])

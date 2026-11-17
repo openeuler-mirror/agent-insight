@@ -358,7 +358,7 @@ class AnalyticsMigrationTests(unittest.TestCase):
                 return {name:sorted(json.dumps(list(row),ensure_ascii=False,sort_keys=True,default=str) for row in con.execute('SELECT * FROM '+name+(' WHERE version<=14' if name=='schema_meta' else '')).fetchall()) for name in names}
         before=snapshot();files={path.name:__import__('hashlib').sha256(path.read_bytes()).hexdigest() for path in self.control.artifact_directory.iterdir()};backend=getattr(self.control,'backend','sqlite')
         if backend=='sqlite':
-            result=self.control.migrate(backup_path=Path(self.tmp.name)/'before015.db');self.assertEqual(result['current_version'],15)
+            result=self.control.migrate(backup_path=Path(self.tmp.name)/'before015.db');self.assertEqual(result['current_version'],len(migrations.load_migrations(backend)))
         else:
             with self.control.transaction() as con:migrations.apply(con,backend,clock=self.control.clock,applied=14)
         self.assertEqual(snapshot(),before)

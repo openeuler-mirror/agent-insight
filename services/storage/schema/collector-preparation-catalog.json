@@ -1,0 +1,213 @@
+{
+  "version": 16,
+  "name": "collector_preparations",
+  "tables": [
+    {
+      "name": "collector_preparation_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "scope_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "scope_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "operation_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "input_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "input_text_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "input_text_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "context_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "context_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "capture_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "capture_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "plan_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "plan_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "seal_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "scope_kind",
+        "scope_key",
+        "operation_key"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id"
+          ],
+          "workspaces",
+          [
+            "workspace_id"
+          ]
+        ],
+        [
+          [
+            "owner_principal_id"
+          ],
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "trace_id"
+          ],
+          "trace_locators",
+          [
+            "workspace_id",
+            "trace_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "owner_principal_id",
+          "created_at_ms",
+          "scope_kind",
+          "scope_key"
+        ]
+      ],
+      "checks": [
+        "scope_kind IN ('source','thread')",
+        "length(scope_key) BETWEEN 1 AND 512",
+        "length(operation_key) BETWEEN 1 AND 512",
+        "operation_kind IN ('snapshot','complete','thread_only')",
+        "(scope_kind='source' AND trace_id IS NOT NULL AND scope_key=trace_id AND operation_kind IN ('snapshot','complete')) OR (scope_kind='thread' AND trace_id IS NULL AND operation_kind='thread_only')",
+        "(capture_hash IS NULL)=(capture_ref IS NULL)",
+        "(plan_hash IS NULL)=(plan_ref IS NULL)",
+        "plan_hash IS NULL OR capture_hash IS NOT NULL",
+        "length(input_hash)=64 AND input_hash ~ '^[0-9a-f]{64}$'",
+        "length(input_text_hash)=64 AND input_text_hash ~ '^[0-9a-f]{64}$'",
+        "length(context_hash)=64 AND context_hash ~ '^[0-9a-f]{64}$'",
+        "capture_hash IS NULL OR (length(capture_hash)=64 AND capture_hash ~ '^[0-9a-f]{64}$')",
+        "plan_hash IS NULL OR (length(plan_hash)=64 AND plan_hash ~ '^[0-9a-f]{64}$')",
+        "input_text_ref IS NULL OR length(input_text_ref) BETWEEN 1 AND 4096",
+        "context_ref IS NULL OR length(context_ref) BETWEEN 1 AND 4096",
+        "capture_ref IS NULL OR length(capture_ref) BETWEEN 1 AND 4096",
+        "plan_ref IS NULL OR length(plan_ref) BETWEEN 1 AND 4096",
+        "seal_revision>=1 AND seal_revision<=9223372036854775807",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807",
+        "updated_at_ms>=0 AND updated_at_ms<=9223372036854775807",
+        "updated_at_ms>=created_at_ms",
+        "seal_revision=1+(CASE WHEN capture_hash IS NULL THEN 0 ELSE 1 END)+(CASE WHEN plan_hash IS NULL THEN 0 ELSE 1 END)"
+      ],
+      "immutable": false,
+      "identity": [
+        "workspace_id",
+        "scope_kind",
+        "scope_key",
+        "operation_key",
+        "owner_principal_id",
+        "trace_id",
+        "operation_kind",
+        "input_hash",
+        "input_text_hash",
+        "input_text_ref",
+        "context_hash",
+        "context_ref",
+        "created_at_ms"
+      ],
+      "revision_guard": true
+    }
+  ]
+}
