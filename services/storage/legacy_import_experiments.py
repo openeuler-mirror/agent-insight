@@ -631,6 +631,12 @@ class ExperimentHistory:
         for artifact in proof.get('artifacts', []): self.control._verify_artifact(artifact['hash'], artifact['ref'])
         facts = self.importer.facts
         for table, values in proof.get('facts', {}).items():
+            if table not in {'eval_result_facts', 'eval_metric_facts', 'eval_result_selection_current'} or not isinstance(values, list):
+                raise LegacyValidationError('Unknown historical fact verification target')
+            if not values:
+                continue
+            if any(not isinstance(value, dict) or value.get('workspace_id') != workspace or value.get('result_id') != values[0].get('result_id') for value in values):
+                raise LegacyValidationError('Historical fact verification scope differs')
             if hasattr(facts, '_request'):
                 identity = values[0]
                 query = 'SELECT * FROM ' + table + ' FINAL WHERE workspace_id={w:String} AND result_id={r:String} FORMAT JSONEachRow'

@@ -105,6 +105,15 @@ class LegacyExperimentTests(unittest.TestCase):
         with self.control.read_transaction() as con:
             with self.assertRaises(Conflict): service.verify(con, head, 'w', proof)
 
+    def test_fact_proof_only_reads_fixed_tables_in_its_workspace(self):
+        from services.storage.legacy import LegacyValidationError
+        head = self.head(); service = self.service([head]); proof = self.write(service, head)
+        for table, value in [('not_a_fact_table', {'workspace_id': 'w', 'result_id': 'r'}),
+                             ('eval_result_facts', {'workspace_id': 'foreign', 'result_id': 'r'})]:
+            changed = copy.deepcopy(proof); changed['facts'] = {table: [value]}
+            with self.control.read_transaction() as con, self.assertRaises(LegacyValidationError):
+                service.verify(con, head, 'w', changed)
+
     def test_trajectory_and_metric_rows_become_real_private_typed_results(self):
         from services.storage.tests.test_collector_sources import CurrentFacts
         from services.storage.tests.test_trace_transfer import node
