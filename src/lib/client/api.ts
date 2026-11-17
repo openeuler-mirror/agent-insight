@@ -51,6 +51,11 @@ function validTriggerStartAck(value:unknown,kind:string,skillName:string,body:Bo
 }
 
 
+export function browserApiIdentityHeaders(url:string):Record<string,string>{
+  if(typeof window==='undefined'||!url.startsWith('/api/')||URL_PREFIX&&(!URL_PREFIX.startsWith('/')||URL_PREFIX.startsWith('//')))return {};
+  const key=localStorage.getItem('api_key');return key?{'x-witty-api-key':key}:{};
+}
+
 export async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
   const fullUrl = URL_PREFIX + url;
   const headers = new Headers(options?.headers);
@@ -62,9 +67,10 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
   const triggerAuth=!!triggerMatch&&['GET','POST','DELETE'].includes(method);
   const fiAuth=/^\/api\/fault-injection\/(tasks(?:\/(?:stop|delete))?|task\/[^/]+(?:\/rerun)?|platforms(?:\/[^/]+\/(?:agents|models))?|health)$/.test(pathname)&&['GET','POST'].includes(method);
   const rasAuth=pathname==='/api/ingest/ras-events'&&['GET','DELETE'].includes(method);
-  const consumerAuth=batchAuth||triggerAuth||fiAuth||rasAuth||method==='GET'&&(pathname==='/api/modelconfig/pricing'||pathname==='/api/skills'||pathname==='/api/skills/logs'||pathname==='/api/agents'||pathname==='/api/ingest/ras-events'||/^\/api\/fault-injection\/runs\/[^/]+\/trace$/.test(pathname)||/^\/api\/skills\/[^/]+\/(runs|versions)$/.test(pathname)||/^\/api\/skills\/by-name\/[^/]+\/optimization-points$/.test(pathname))||method==='PATCH'&&/^\/api\/skills\/by-name\/[^/]+\/optimization-points\/resolve$/.test(pathname);
-  if (typeof window !== 'undefined' && (consumerAuth || url.startsWith('/api/observe/') || url.startsWith('/api/fault/diagnosis/') || url.startsWith('/api/fleet/') || url.startsWith('/api/quality/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/user-evaluators') || url.startsWith('/api/skill-workbench/') || url.startsWith('/api/eval/settings') || url.startsWith('/api/evaluation/') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/rejudge') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key')) {
-    const key = localStorage.getItem('api_key');
+  const controlAuth=/^\/api\/(?:skills(?:\/|$)|skill-management(?:\/|$)|skill-workbench(?:\/|$)|skill-opt(?:\/|$)|skill-generator(?:\/|$)|agents(?:\/|$)|agent(?:\/|$)|agent-runtimes(?:\/|$)|eval\/(?:config|settings)(?:\/|$)|guide(?:\/|$)|reliability\/(?!client\/v1\/)|debug\/(?:execute|history)(?:\/|$))/.test(pathname);
+  const consumerAuth=batchAuth||triggerAuth||fiAuth||rasAuth||controlAuth||method==='GET'&&(pathname==='/api/modelconfig/pricing'||pathname==='/api/skills'||pathname==='/api/skills/logs'||pathname==='/api/agents'||pathname==='/api/ingest/ras-events'||/^\/api\/fault-injection\/runs\/[^/]+\/trace$/.test(pathname)||/^\/api\/skills\/[^/]+\/(runs|versions)$/.test(pathname)||/^\/api\/skills\/by-name\/[^/]+\/optimization-points$/.test(pathname))||method==='PATCH'&&/^\/api\/skills\/by-name\/[^/]+\/optimization-points\/resolve$/.test(pathname);
+  if (typeof window !== 'undefined' && url.startsWith('/api/') && (consumerAuth || url.startsWith('/api/observe/') || url.startsWith('/api/fault/diagnosis/') || url.startsWith('/api/fleet/') || url.startsWith('/api/quality/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/user-evaluators') || url.startsWith('/api/skill-workbench/') || url.startsWith('/api/eval/settings') || url.startsWith('/api/evaluation/') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/rejudge') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key') && !headers.has('authorization')) {
+    const key = browserApiIdentityHeaders(url)['x-witty-api-key'];
     if (key) {headers.set('x-witty-api-key', key);transportedKey=key;}
   }
   let batchOperation:BatchOperation|undefined;let batchAction:unknown;let batchScope:string|undefined;

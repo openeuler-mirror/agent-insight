@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -20,6 +21,7 @@ import { previewSkillFiles } from '@/lib/evaluators/evaluator-skill-store';
 
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request, { params }: { params: Promise<{ name: string }> }) {
+  return withCoreControlRoute(request,async()=>{
   return evaluatorSkillApi(async () => {
     const user = await evaluatorSkillUser(request);
     const { name } = await params;
@@ -32,4 +34,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ name
       ...(version !== null ? previewSkillFiles(await readLibrarySkill(user, name, owner, Number(version))) : {}),
     };
   });
+
+  },["read"]);
 }

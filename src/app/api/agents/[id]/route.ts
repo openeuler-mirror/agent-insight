@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {deleteCoreControlAgent} from '@/lib/storage-core/control-agent';
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,12 +27,20 @@ import { isUsageEnabled } from '@/lib/usage-analytics/config';
 export const dynamic = 'force-dynamic';
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  return withCoreControlRoute(request,async()=>{
   let agentIdForLog = 'unknown';
   try {
     const { id } = await params;
     agentIdForLog = id;
     if (!id) {
       return NextResponse.json({ error: 'Missing agent ID' }, { status: 400 });
+    }
+
+    if(isStorageCoreEnabled()){
+      const deleted=await deleteCoreControlAgent(request,id);
+      if(!deleted)return NextResponse.json({error:'Agent not found'},{status:404});
+      const tombstoned=addDeletedOpencodeSessionIds(deleted.opencodeSessions);
+      return NextResponse.json({success:true,deletedTraces:deleted.deletedTraces,tombstonedSessions:tombstoned});
     }
 
     // 0. 查找对应的 Agent 以获取其 name 和 platform
@@ -124,4 +135,6 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     console.error(`[agents][DELETE] error for id ${agentIdForLog}:`, msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+
+  },["write","delete"]);
 }

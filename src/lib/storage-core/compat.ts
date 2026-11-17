@@ -17,11 +17,11 @@ function failure(error:unknown) {
 async function mappedIdentity(request:Request,resolver?:CompatibilityOptions['resolveIdentity']):Promise<Binding> {
  const key=request.headers.get('x-witty-api-key');
  if(!key || key.length>1024)throw new CompatibilityError(401,'API credential required');
- const authenticated=await (resolver || (async (input:Request)=>(await import('@/lib/auth/auth')).resolveUser(input)))(request);
- if(!authenticated.username || authenticated.apiKey!==key)throw new CompatibilityError(401,'Invalid existing credential');
  const config=await identityMapping();
  const digest=createHash('sha256').update(key).digest('hex');
- const matches=config.bindings.filter(row=>row.legacy_username===authenticated.username && row.legacy_api_key_sha256===digest);
+ const authenticated=resolver?await resolver(request):null;
+ if(resolver&&(!authenticated?.username||authenticated.apiKey!==key))throw new CompatibilityError(401,'Invalid existing credential');
+ const matches=config.bindings.filter(row=>(!authenticated||row.legacy_username===authenticated.username)&&row.legacy_api_key_sha256===digest);
  if(matches.length!==1)throw new CompatibilityError(403,'Identity has not been mapped');
  const binding=matches[0];
  if(!/^api_[A-Za-z0-9_-]{43}$/.test(binding.credential) || !binding.workspace_id || !binding.principal_id)throw new CompatibilityError(503,'Invalid mapping');
@@ -78,7 +78,8 @@ async function context(request:Request,options:CompatibilityOptions={}) {
  if(workspace && requested && requested!==workspace)throw new CompatibilityError(403,'Mapped workspace mismatch');
  workspace=workspace || requested || (typeof profile.workspace_id==='string'?profile.workspace_id:undefined);
  if(!workspace || !profile.workspaces.some((row:unknown)=>!!row && typeof row==='object' && 'workspace_id' in row && row.workspace_id===workspace))throw new CompatibilityError(403,'Workspace not granted');
- return {token,workspace,principal:profile.principal_id,username:modelUsername || (typeof profile.username==='string'?profile.username:null),principalUsername:typeof profile.username==='string'?profile.username:null};
+ if(!modelUsername&&typeof profile.legacy_username!=='string'&&process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE){const aliases=new Set((await identityMapping()).bindings.filter(row=>row.principal_id===profile.principal_id&&row.workspace_id===workspace).map(row=>row.legacy_username));if(aliases.size>1)throw new CompatibilityError(503,'Ambiguous control owner alias');modelUsername=[...aliases][0];}
+ return {token,workspace,principal:profile.principal_id,username:modelUsername || (typeof profile.legacy_username==='string'?profile.legacy_username:typeof profile.username==='string'?profile.username:null),principalUsername:typeof profile.username==='string'?profile.username:null};
 }
 export async function compatibleRequest(request:Request,target:string,fields:string[],options:CompatibilityOptions={}) {
  try {
@@ -188,4 +189,12 @@ export async function revalidateConfiguredCoreBackgroundActor(actor:CoreBackgrou
  if(!rows.some(row=>row.principal_id===actor.principal&&row.workspace_id===actor.workspace&&row.credential===actor.token)||rows.some(row=>row.principal_id!==actor.principal||row.workspace_id!==actor.workspace))throw new CompatibilityError(403,'Background actor mapping changed');
  const current=await context(new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}}),options);
  if(current.principal!==actor.principal||current.workspace!==actor.workspace)throw new CompatibilityError(403,'Background actor scope changed');
+}
+
+export async function verifiedCoreLoginBinding(username:string){
+ if(!process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE)return null;
+ const config=await identityMapping();const rows=config.bindings.filter(row=>row.legacy_username===username);if(!rows.length)return null;
+ const scopes=new Set(rows.map(row=>row.principal_id+'\0'+row.workspace_id+'\0'+row.credential));if(scopes.size!==1)throw new CompatibilityError(503,'Ambiguous legacy login binding');
+ const row=rows[0];const actor=await context(new Request('http://localhost/internal/control-login?'+new URLSearchParams({workspace_id:row.workspace_id}),{headers:{authorization:'Bearer '+row.credential}}));
+ if(actor.principal!==row.principal_id||actor.workspace!==row.workspace_id||actor.username!==username)throw new CompatibilityError(403,'Legacy login owner differs');return actor;
 }

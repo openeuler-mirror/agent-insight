@@ -141,6 +141,7 @@ async function main() {
     if (previous && previous !== conn) previous.close(1012, 'replaced')
     sockets.set(clientId, conn)
     await callInternal('/api/reliability/client/v1/control-presence', {
+      authorization: auth,
       clientId,
       connected: true,
     }).catch(() => null)
@@ -170,6 +171,7 @@ async function main() {
       if (frame?.type !== 'COMMAND_STATUS' || !frame.commandId) return
       // 回执统一交给 Next 侧处理，保证 WSS 与长轮询语义一致。
       await callInternal('/api/reliability/client/v1/control-receipt', {
+        authorization: auth,
         clientId,
         commandId: frame.commandId,
         status: frame.status,
@@ -183,6 +185,7 @@ async function main() {
       clearInterval(timer)
       if (sockets.get(clientId) === conn) sockets.delete(clientId)
       await callInternal('/api/reliability/client/v1/control-presence', {
+        authorization: auth,
         clientId,
         connected: false,
       }).catch(() => null)

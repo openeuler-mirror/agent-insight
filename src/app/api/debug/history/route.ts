@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -18,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 
 export async function GET(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
     const { searchParams } = new URL(req.url);
     const user = searchParams.get('user');
 
@@ -42,9 +44,12 @@ export async function GET(req: NextRequest) {
         console.error('Failed to fetch history:', err);
         return NextResponse.json({ error: 'Failed to fetch history' }, { status: 500 });
     }
+
+  },["read"]);
 }
 
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
     try {
         const body = await req.json();
         const { user, skillId, skillName, versionA, versionB, query, temperature, results } = body;
@@ -78,13 +83,18 @@ export async function POST(req: NextRequest) {
         console.error('Failed to save history:', err);
         return NextResponse.json({ error: 'Failed to save history' }, { status: 500 });
     }
+
+  },["write"]);
 }
 
 export async function DELETE(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
     // Note: Next.js 13+ dynamic routes handle params differently. 
     // But since this is a simple implementation, I'll extract it from the URL if needed 
     // or use a segment if I name it [id]/route.ts.
     // I'll use the URL path for simplicity here if I name it differently, 
     // but the standard is [id]/route.ts.
     return NextResponse.json({ error: 'Not implemented' }, { status: 501 });
+
+  },["write","delete"]);
 }

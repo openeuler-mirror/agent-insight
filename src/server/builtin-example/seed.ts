@@ -1,3 +1,7 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreControlContext} from '@/lib/storage-core/control-context';
+import {getCoreDatasetContext,runWithCoreDatasetActor} from '@/lib/storage-core/datasets';
+import {requestCore} from '@/lib/storage-core/server';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -148,6 +152,7 @@ async function seedDemoSkill(p: any, user: string): Promise<string> {
 export async function seedBuiltinExampleForUser(user: string): Promise<void> {
   const u = (user || '').trim();
   if (!u) return;
+  if(isStorageCoreEnabled()&&!getCoreDatasetContext()){const context=requireCoreControlContext();const request=new Request('http://localhost/internal/builtin-seed?'+new URLSearchParams({workspace_id:context.actor.workspace}),{headers:{authorization:'Bearer '+context.actor.token}});return runWithCoreDatasetActor(context.actor,request,()=>seedBuiltinExampleForUser(u),context.options);}
   const p = prisma as any;
 
   try {
@@ -216,8 +221,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
       const e = t.execution as Record<string, any>;
       const taskId = `builtin_msg_${randomUUID().slice(0, 12)}`;
 
-      await p.session.create({
-        data: {
+      const sessionData = {
           taskId,
           label: s.label ?? null,
           query: s.query ?? null,
@@ -226,14 +230,13 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
           model: s.model ?? null,
           startTime: toDate(s.startTime) ?? new Date(),
           endTime: toDate(s.endTime) ?? null,
-        },
-      });
+      };
+      if(!isStorageCoreEnabled())await p.session.create({data:sessionData});
 
       const metrics: Record<string, unknown> = {};
       for (const f of EXEC_METRIC_FIELDS) if (e[f] != null) metrics[f] = e[f];
 
-      await p.execution.create({
-        data: {
+      const executionData = {
           taskId,
           user: u,
           framework: PLATFORM,
@@ -252,8 +255,15 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
           isSubagent: false,
           timestamp: toDate(e.timestamp) ?? new Date(),
           ...metrics,
-        },
-      });
+      };
+      if(isStorageCoreEnabled()){
+        const context=requireCoreControlContext(),id='builtin-execution-'+randomUUID();
+        const array=(value:unknown):unknown[]=>Array.isArray(value)?value:typeof value==='string'?JSON.parse(value)||[]:[];
+        const execution={...Object.fromEntries(['endpoint','skillVersion','parentExecutionId','agentSessionId','subagentType','subagentName'].map(field=>[field,null])),...executionData,id,rootExecutionId:id,skills:array(executionData.skills),invokedSkills:array(executionData.invokedSkills),observedAgents:[]};
+        const session={...sessionData,interactions:array(sessionData.interactions)};
+        const bundle={format:'agent-insight.trace-bundle',version:1,exportedAt:new Date().toISOString(),rootExecutionId:id,executions:[{execution,session}]};
+        await requestCore('/v1/compat/observe/traces/import?'+new URLSearchParams({workspace_id:context.actor.workspace}),{token:context.actor.token,method:'POST',body:JSON.stringify({bundle}),headers:{'idempotency-key':'builtin-example:'+id},timeoutMs:300000},context.options.fetcher||fetch);
+      }else await p.execution.create({data:executionData});
     }
   } catch (err) {
     console.warn(`[builtin-example] seed failed for user ${u}:`, (err as Error)?.message || err);

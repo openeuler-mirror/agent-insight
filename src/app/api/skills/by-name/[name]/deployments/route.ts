@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,11 +25,14 @@ function sourceFromBody(body: any): DeploymentSource {
   throw new ReliabilityError('DEPLOYMENT_SOURCE_INVALID', '下发来源必须是已发布优化记录或正式版本', 400)
 }
 export async function POST(request: NextRequest, context: { params: Promise<{ name: string }> }) {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()){
     try{return await withCoreExperiments(request,()=>createRequest(request,context))}
     catch(error){const status=Number((error as {status?:number})?.status);return reliabilityErrorResponse(error instanceof ReliabilityError?error:new ReliabilityError('SOURCE_UNAVAILABLE','身份或存储来源不可用',[400,401,403,404,409,413,422,503].includes(status)?status:503),'skill-deployment/create')}
   }
   return createRequest(request,context)
+
+  },["write"]);
 }
 async function createRequest(request: NextRequest, context: { params: Promise<{ name: string }> }) {
   try {

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -51,6 +52,7 @@ function blockText(blocks: any[]) {
 }
 
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
     try {
         const body = await req.json();
         const { message, user, threadId, files, modelId, webSearchEnabled, mock = true, runId } = body;
@@ -343,4 +345,6 @@ export async function POST(req: NextRequest) {
     } catch (error: any) {
         return new Response(JSON.stringify({ error: error.message }), { status: 500 });
     }
+
+  },["write","execute"]);
 }

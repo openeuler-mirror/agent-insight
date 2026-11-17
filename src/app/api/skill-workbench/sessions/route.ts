@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,6 +29,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized));
   try {
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
@@ -39,9 +41,12 @@ export async function GET(request: NextRequest) :Promise<Response> {
     console.error('[skill-workbench sessions GET] failed:', error);
     return NextResponse.json({ error: 'Failed to load workbench sessions' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(request: NextRequest) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized));
   try {
     const body = await request.json().catch(() => ({}));
@@ -58,4 +63,6 @@ export async function POST(request: NextRequest) :Promise<Response> {
     console.error('[skill-workbench sessions POST] failed:', error);
     return NextResponse.json({ error: 'Failed to create workbench session' }, { status: 500 });
   }
+
+  },["write"]);
 }

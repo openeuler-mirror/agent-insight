@@ -1,3 +1,4 @@
+import {withCoreControlInternalRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ export const dynamic = 'force-dynamic'
  * 与 IF-N08 走同一处理函数，保证两条通道语义一致。
  */
 export async function POST(req: Request) {
+  return withCoreControlInternalRoute(req,async()=>{
   try {
     assertInternalCaller(req)
     const body = await req.json().catch(() => ({}))
@@ -50,4 +52,8 @@ export async function POST(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/control-receipt')
   }
+
+  });
+
+
 }

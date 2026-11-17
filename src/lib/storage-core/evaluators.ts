@@ -1,3 +1,4 @@
+import {runWithCoreControlActor} from './control-context';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {randomUUID} from 'node:crypto';
 import {compatibilityContext,type CompatibilityOptions} from './compat';
@@ -27,7 +28,7 @@ export async function withCoreEvaluators<T>(request:Request,action:()=>Promise<T
  let body:Record<string,unknown>={};
  if(request.body){const raw=await readCoreBytes(request.clone().body,LIMIT);if(raw.length){try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));if(!value||typeof value!=='object'||Array.isArray(value))throw Error();body=value;}catch{throw failure(400,'Invalid evaluator JSON');}}}
  const operationKey=request.headers.get('idempotency-key')||randomUUID();if(!/^[\x21-\x7e]{1,512}$/.test(operationKey))throw failure(400,'Invalid evaluator operation key');
- return contexts.run({actor:{...actor,username:actor.username},options,request,body,operationKey},action);
+ return contexts.run({actor:{...actor,username:actor.username},options,request,body,operationKey},()=>runWithCoreControlActor({...actor,username:actor.username!},options,action));
 }
 export async function runWithCoreEvaluatorActor<T>(actor:CoreEvaluatorActor,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
  const request=new Request('http://localhost/internal/evaluators?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}});

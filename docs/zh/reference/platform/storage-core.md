@@ -429,3 +429,15 @@ Infra关联补读当前授权Trace boundary内的真实endpoint元数据，兼�
 RAS 删除保留历史事实并以 owner/task 删除屏障阻止迟到复活；关联 Trace 按当前 delete 权限退休。FI 使用019三个固定控制kind及私有领域动作，claim、停止和collect绑定实际owner、worker与当前lease，业务Session始终来自独立采集器。独立rejudge接口继续返回410，评测使用原实验评估器。
 
 FI claim响应附加claimToken，新业务客户端将其透传collect；既有字段和UI不变。旧客户端首次当前lease可继续无token回调，重领后的不明旧回执返回409。独立Session即使无Execution也按原表示计数并随Trace删除屏障隐藏，RAS-only任务删除后首次迟到采集也被拒绝。所有逻辑接入后的三库、ClickHouse、完整测试、浏览器与迁移演练仍统一执行。
+
+### 019 原控制数据与统一仓储
+
+019新增`platform_control_records`，当前目标72张事务表、16张CH表。40种固定原领域DTO的488个字段、nullable/default、原唯一组和父子关系见[核心字段字典](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#019固定payload完整字段)。Skill版本复用既有不可变release及稳定external-version alias；外部版本0和修改旧版本的原流程保持。二进制文件与mode存私有工件，授权后按core origin/workspace/principal物化真实目录。列表/计数先读轻量目录，仅选中的版本下载正文/文件，不回落旧Prisma库。
+
+`db`及固定控制kind的`prismaRaw`方法每次读取AsyncLocal实际请求作用域；全局实例只缓存仓储。user参数只过滤/核验，不能换取映射token；兼容username与IAM principalUsername分别保存。记录CAS加实际读取kind的集合revision保留原事务，心跳不会使设置/Skill事务失效。仅固定kind/id/parent/元数据选择和受限批次经过controller协议，不提供任意Prisma where或SQL。正常读/write-prior/collector-preparation使用不同私有目的，服务端逐次核验实际权限；collector准备可在write-only上传身份下冻结相关静态依赖和非秘密模型摘要，不能替代execute。
+
+Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型或凭据读取。普通User读取只能回显当前提供的凭据。local用户名登录沿原standalone可信入口；organization/IDaaS仍先验证真实身份。新主体只有personal workspace，既有主体/key/权限不重置，不推断首用户为管理员。原客户端安装token一次消费，dc实际hash/owner/撤销/client绑定逐次验证。跨owner重绑须证明旧dc并原子撤销；无旧证明仍可独立注册新client，旧owner记录不变。设备不会收到owner SDK/API key。
+
+原工作台、优化/生成会话、消息/blocks/VFS、候选、评测任务壳和调试结果使用固定控制记录，动态Experiment/评测/诊断继续用既有typed库。Agent删除提交既有Trace删除屏障及Agent软删除，工件保留；新用户原示例使用typed Dataset和既有Trace bundle导入。公开URL/DTO和界面保持，4个TSX仅加入请求封装导入，其中runtime provider另接动态header回调；不改JSX/CSS/文案/布局。SSE、AbortSignal和FormData沿原请求处理。
+
+单次固定kind读最多20000记录、载荷128MiB、写批次2000操作；超限明确失败，不截断结果。这些是当前有界正确性保护，不是容量认证。019仅做必要隔离快速验证；全量、真实PG/openGauss/CH、原UI和历史迁移统一验收，尚不切生产。历史活动任务/有效安装或设备凭据不能作为active静默导入；当前没有inert运行守卫，应报告并阻断这些记录，保留旧库和后续显式迁移决策。

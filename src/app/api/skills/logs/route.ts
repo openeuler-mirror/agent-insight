@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,6 +23,7 @@ import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytic
 import { readCoreSkillRecords } from '@/lib/storage-core/skill-records';
 
 export async function GET(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { searchParams } = new URL(request.url);
     const skillName = searchParams.get('skill');
@@ -125,4 +127,6 @@ export async function GET(request: Request) {
     console.error('Skill logs fetch error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
+
+  },["read"]);
 }

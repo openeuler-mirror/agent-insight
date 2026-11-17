@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -35,6 +36,7 @@ export const dynamic = 'force-dynamic';
 
 /** POST: 上传一批文件 */
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   let form: FormData;
   try {
     form = await req.formData();
@@ -68,10 +70,13 @@ export async function POST(req: NextRequest) {
     })),
     errors,
   });
+
+  },["write"]);
 }
 
 /** GET: 列出当前 thread 已上传的附件 */
 export async function GET(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   const url = new URL(req.url);
   const user = url.searchParams.get('user') || '';
   const threadId = url.searchParams.get('threadId') || '';
@@ -79,10 +84,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'user / threadId required' }, { status: 400 });
   }
   return NextResponse.json({ items: listAttachments(user, threadId) });
+
+  },["read"]);
 }
 
 /** DELETE: 删除指定附件（连带 .txt 副本） */
 export async function DELETE(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   const url = new URL(req.url);
   const user = url.searchParams.get('user') || '';
   const threadId = url.searchParams.get('threadId') || '';
@@ -93,4 +101,6 @@ export async function DELETE(req: NextRequest) {
   const ok = deleteAttachment(user, threadId, name);
   if (!ok) return NextResponse.json({ error: 'not found or invalid name' }, { status: 404 });
   return NextResponse.json({ ok: true, items: listAttachments(user, threadId) });
+
+  },["write","delete"]);
 }

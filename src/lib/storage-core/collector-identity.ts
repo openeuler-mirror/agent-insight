@@ -1,5 +1,6 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {compatibilityContext,coreCollectorModelUsername,configuredCoreBackgroundActorForUser,revalidateConfiguredCoreBackgroundActor,isVerifiedCoreBackgroundActor,type CompatibilityOptions,type CoreBackgroundActor} from './compat';
+import {runWithCoreControlActor} from './control-context';
 import {coreServiceOrigin,requestCore} from './server';
 
 type CollectorOperation='snapshot'|'complete';
@@ -94,7 +95,7 @@ export async function resolveCoreCollectorIdentity(request:Request,input:Collect
 }
 export async function withCoreCollectorIdentity<T>(identity:CoreCollectorIdentity,action:(actor:Readonly<Actor>,options:Readonly<CompatibilityOptions>)=>Promise<T>):Promise<T>{
  const state=identities.get(identity);if(!state)throw failure(403,'Verified collector identity required');
- await identity.revalidate();return activeCollectors.run(identity,()=>action(Object.freeze({...state.current.actor}),state.options));
+ await identity.revalidate();return activeCollectors.run(identity,()=>runWithCoreControlActor(state.current.actor,state.options,()=>action(Object.freeze({...state.current.actor}),state.options),'collector-preparation'));
 }
 
 export function collectorIdentityForOperation(identity:CoreCollectorIdentity,operation:CollectorOperation):CoreCollectorIdentity{

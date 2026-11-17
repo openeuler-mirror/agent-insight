@@ -1,3 +1,6 @@
+import {withCoreControlRequest} from '@/lib/storage-core/control-context';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {bootstrapCoreControlUser} from '@/lib/storage-core/control-auth';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -51,6 +54,7 @@ export async function syncLocalUserExternalAccount(
 }
 
 export async function findOrCreateLocalUser(username: string, rawExternalAccount?: string) {
+  if(isStorageCoreEnabled()){const user=await bootstrapCoreControlUser(username,rawExternalAccount);if(user._created)await withCoreControlRequest(new Request('http://localhost/internal/builtin-seed',{headers:{authorization:'Bearer '+user.apiKey}}),()=>seedBuiltinExampleForUser(user.username));return user;}
   const externalAccount = String(rawExternalAccount || '').trim();
   let user = await db.findUserByUsername(username);
   let isNewUser = false;

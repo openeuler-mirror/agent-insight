@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,6 +25,7 @@ import { getSkillWorkbenchSession } from '@/lib/skill-workbench/session-service'
 import { publishWorkbenchSnapshot, WorkbenchPublishError } from '@/lib/skill-workbench/publish-service';
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json();
@@ -37,4 +39,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     console.error('[skill-workbench publish POST] failed:', error);
     return NextResponse.json({ error: '发布工作快照失败' }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

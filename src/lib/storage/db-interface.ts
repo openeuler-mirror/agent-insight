@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withControlDelegates} from '@/lib/storage-core/control-repository';
+import {lookupCoreControlUserByKey,currentCoreControlUser} from '@/lib/storage-core/control-auth';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -127,10 +130,12 @@ class PrismaAdapter implements DatabaseAdapter {
     }
 
     async findUserByApiKey(apiKey: string) {
+        if(isStorageCoreEnabled())return lookupCoreControlUserByKey(apiKey);
         return this.client.user.findUnique({ where: { apiKey } });
     }
     
     async findUserByUsername(username: string) {
+        if(isStorageCoreEnabled())return currentCoreControlUser(username);
         return this.client.user.findUnique({ where: { username } });
     }
 
@@ -150,6 +155,7 @@ class PrismaAdapter implements DatabaseAdapter {
     }
 
     async findSkill(name: string, user: string | null) {
+        if(isStorageCoreEnabled())return this.client.skill.findFirst({where:{user,name:{equals:name,mode:"insensitive"}} as any,include:{versions:{orderBy:{version:"desc"}}}});
         const skills = await this.client.skill.findMany({
             where: { user },
             include: {
@@ -1101,6 +1107,7 @@ class OpenGaussAdapter implements DatabaseAdapter {
 }
 
 export function getDatabaseAdapter(): DatabaseAdapter {
+    if(isStorageCoreEnabled()){const globals=global as unknown as {prisma:ExtendedPrismaClient};const client=globals.prisma||createPrismaClient();return new PrismaAdapter(withControlDelegates(client));}
     const shouldLog = process.env.DEBUG_DB_ADAPTER === '1';
     if (shouldLog) console.log('[DatabaseAdapter] DB_HOST:', Boolean(process.env.DB_HOST));
     if (process.env.DB_HOST) {

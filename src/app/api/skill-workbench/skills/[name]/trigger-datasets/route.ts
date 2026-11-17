@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -23,6 +24,7 @@ import { resolveUser } from '@/lib/auth/auth';
 import { generateWorkbenchTriggerDataset } from '@/lib/skill-workbench/experiment-service';
 
 export async function POST(request: NextRequest, context: { params: Promise<{ name: string }> }) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json().catch(() => ({}));
@@ -40,4 +42,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     console.error('[skill-workbench trigger dataset POST] failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : '生成触发数据集失败' }, { status: 500 });
   }
+
+  },["write"]);
 }

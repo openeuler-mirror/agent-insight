@@ -250,11 +250,11 @@ function normalizeInsightBaseUrl(value) {
   }
 }
 
-async function register({ host, token, name, previousClientId, supervisor }) {
+async function register({ host, token, name, previousClientId, previousDeviceCredential, supervisor }) {
   const base = String(host || '').replace(/\/+$/, '')
   const res = await fetch(`${base}/api/reliability/client/v1/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(previousDeviceCredential ? { authorization: `Bearer ${previousDeviceCredential}` } : {}) },
     body: JSON.stringify({
       installToken: token,
       client: {
@@ -810,6 +810,7 @@ async function main() {
       name: args.name,
       // clientId 只在签发它的完整服务基址内有意义；来源缺失或跨路径时都不能带旧 ID。
       previousClientId: sameService ? existing.clientId : null,
+      previousDeviceCredential: sameService ? existing.deviceCredential : undefined,
       supervisor,
     })
   } else if (!existing.clientId) {

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -44,6 +45,7 @@ export async function GET(
     _req: NextRequest,
     { params }: { params: Promise<{ sessionId: string }> }
 ) {
+  return withCoreControlRoute(_req,async()=>{
     const { sessionId } = await params;
     if (!sessionId) {
         return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
@@ -112,4 +114,6 @@ export async function GET(
             'Cache-Control': 'no-store',
         },
     });
+
+  },["read"]);
 }

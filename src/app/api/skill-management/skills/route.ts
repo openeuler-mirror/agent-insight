@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -26,6 +27,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
@@ -49,4 +51,6 @@ export async function GET(request: NextRequest) {
     console.error('[skill-management skills GET] failed:', error);
     return NextResponse.json({ error: '加载 Skill 管理列表失败' }, { status: 500 });
   }
+
+  },["read"]);
 }

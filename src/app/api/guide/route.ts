@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -36,6 +37,7 @@ interface GuideUpdateData {
 }
 
 export async function GET(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
     const user = request.headers.get('x-user-id');
     
     if (!user) {
@@ -60,9 +62,12 @@ export async function GET(request: NextRequest) {
         console.error('Error fetching guide state:', error);
         return NextResponse.json({ error: 'Failed to fetch guide state' }, { status: 500 });
     }
+
+  },["read"]);
 }
 
 export async function POST(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
     const user = request.headers.get('x-user-id');
     
     if (!user) {
@@ -101,4 +106,6 @@ export async function POST(request: NextRequest) {
         console.error('Error updating guide state:', error);
         return NextResponse.json({ error: 'Failed to update guide state' }, { status: 500 });
     }
+
+  },["write"]);
 }

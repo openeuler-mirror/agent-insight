@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -91,6 +92,7 @@ function createOptimizationTaskProgress(taskId?: string) {
  * 不在这里搞——保持单一职责，chat 路由只管对话，iteration 路由管草稿快照。
  */
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   let body: any;
   try {
     body = await req.json();
@@ -640,6 +642,8 @@ export async function POST(req: NextRequest) {
   });
 
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+
+  },["write","execute"]);
 }
 
 /**

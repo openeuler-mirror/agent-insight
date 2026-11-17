@@ -16,6 +16,8 @@
 
 'use client';
 
+import { apiFetch as fetch } from '@/lib/client/api';
+
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Editor } from '@monaco-editor/react';

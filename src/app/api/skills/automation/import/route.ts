@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -49,6 +50,7 @@ function copyFolderSync(from: string, to: string, filesList: string[], rootTo: s
 }
 
 export async function POST(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const body = await request.json();
         const { path: localPath, user: explicitUser } = body;
@@ -142,4 +144,6 @@ export async function POST(request: NextRequest) {
         console.error('Auto Import Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write"]);
 }

@@ -1,3 +1,5 @@
+import {canWriteCoreControl} from '@/lib/storage-core/control-repository';
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -116,17 +118,19 @@ async function backfillObservedAgentsFromSessions(user?: string, metadata?: Core
  *   - todayCalls / lastExecutedAt 来自 Execution 表的聚合（按 agentId）
  */
 export async function GET(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
     const metadata = analytics ? await readCoreAgentMetadata(analytics) : undefined;
     // 每次列表请求都确保系统 Agent 已注册/更新（已发现的同名 Agent 会被 promote 成 system），
     // 同时把历史遗留的 'unregistered' 记录一次性迁移成 'user'。
-    await ensureAllSystemAgents();
+    const mayMaintain=!isStorageCoreEnabled()||await canWriteCoreControl();
+    if(mayMaintain)await ensureAllSystemAgents();
 
     const { searchParams } = new URL(request.url);
     const user = analytics?.username ?? ((searchParams.get('user') || '').trim() || undefined);
 
-    await backfillObservedAgentsFromSessions(user, analytics ? metadata!.filter(row=>row.user===analytics.actor.principalUsername).map(row=>({...row,user:analytics.username})) : undefined);
+    if(mayMaintain)await backfillObservedAgentsFromSessions(user, analytics ? metadata!.filter(row=>row.user===analytics.actor.principalUsername).map(row=>({...row,user:analytics.username})) : undefined);
 
     const where = user
       ? { OR: [{ user }, { user: null }] }
@@ -203,4 +207,6 @@ export async function GET(request: Request) {
     console.error('[agents] GET error:', msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+
+  },["read"]);
 }

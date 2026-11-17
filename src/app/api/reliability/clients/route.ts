@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ export const dynamic = 'force-dynamic'
 
 /** IF-N09 */
 export async function GET(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const url = new URL(req.url)
     const { username } = await resolveUser(req, url.searchParams.get('user'))
@@ -69,4 +71,6 @@ export async function GET(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/clients GET')
   }
+
+  },["read"]);
 }

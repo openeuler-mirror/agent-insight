@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,6 +25,7 @@ import {
 } from '@/lib/skill-workbench/upload-service';
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const formData = await request.formData();
     const { username } = await resolveUser(request, formData.get('user')?.toString());
@@ -48,4 +50,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     console.error('[skill-workbench upload POST] failed:', error);
     return NextResponse.json({ error: '解析上传内容失败' }, { status: 500 });
   }
+
+  },["write"]);
 }

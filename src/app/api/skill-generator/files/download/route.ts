@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -23,6 +24,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const threadId = ensureThreadId(req.nextUrl);
     const rawPath = getQueryParam(req.nextUrl, "path");
@@ -66,5 +68,7 @@ export async function GET(req: NextRequest) {
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
+
+  },["read"]);
 }
 

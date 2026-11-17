@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id } = await params;
         const body = await request.json();
@@ -93,12 +95,15 @@ export async function POST(
         console.error('Create Version Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write"]);
 }
 
 export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id } = await params;
         const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
@@ -219,4 +224,6 @@ export async function GET(
         if (isStorageCoreEnabled()) return analyticsFailure(e);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
+
+  },["read"]);
 }

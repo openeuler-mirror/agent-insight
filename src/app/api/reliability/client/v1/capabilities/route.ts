@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,6 +25,7 @@ export const dynamic = 'force-dynamic'
 
 /** IF-N15：刷新 IP、Agent 平台与模型能力。同一 revision 重复上报幂等。 */
 export async function PUT(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { clientId } = await authenticateDevice(req)
     const body = await req.json().catch(() => ({}))
@@ -53,4 +55,6 @@ export async function PUT(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/capabilities')
   }
+
+  },["write"]);
 }

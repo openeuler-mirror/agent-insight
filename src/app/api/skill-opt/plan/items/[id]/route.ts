@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -39,6 +40,7 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   const { id } = await ctx.params;
   let body: any;
   try {
@@ -96,4 +98,6 @@ export async function PATCH(
       conflictNote: updated.conflictNote,
     },
   });
+
+  },["write"]);
 }

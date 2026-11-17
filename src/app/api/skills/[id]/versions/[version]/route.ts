@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,6 +25,7 @@ export async function DELETE(
     request: NextRequest,
     { params }: { params: Promise<{ id: string; version: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id, version: versionStr } = await params;
         const version = parseInt(versionStr, 10);
@@ -118,12 +120,15 @@ export async function DELETE(
         console.error('Delete Version Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write","delete"]);
 }
 
 export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ id: string; version: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id, version: versionStr } = await params;
         const version = parseInt(versionStr, 10);
@@ -143,4 +148,6 @@ export async function GET(
         console.error('Get Version Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["read"]);
 }

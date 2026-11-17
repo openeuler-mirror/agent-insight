@@ -52,6 +52,7 @@ export async function POST(req: Request) {
     >
     const result = await registerClient({
       installToken,
+      previousDeviceCredential: /^Bearer (dc_[A-Za-z0-9_-]+)$/.exec(req.headers.get('authorization')||'')?.[1],
       name: client.name ? String(client.name) : null,
       hostname: client.hostname ? String(client.hostname) : null,
       reportedIp: client.ip ? String(client.ip) : null,

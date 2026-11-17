@@ -16,6 +16,8 @@
 
 'use client';
 
+import { apiFetch as fetch } from '@/lib/client/api';
+
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';

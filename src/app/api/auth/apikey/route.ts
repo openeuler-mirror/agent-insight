@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreControlRequest} from '@/lib/storage-core/control-context';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -69,10 +71,8 @@ export async function POST(request: Request) {
         );
       }
 
-      const refreshedUser = await syncLocalUserExternalAccount(
-        user,
-        externalAccount || undefined,
-      );
+      const refresh=()=>syncLocalUserExternalAccount(user,externalAccount||undefined);
+      const refreshedUser = isStorageCoreEnabled()?await withCoreControlRequest(request,refresh):await refresh();
       return NextResponse.json({
         username: refreshedUser.username,
         apiKey: refreshedUser.apiKey,
@@ -80,6 +80,7 @@ export async function POST(request: Request) {
       });
     }
 
+    if(isStorageCoreEnabled()&&loginMode!=='standalone')return NextResponse.json({error:'Verified organization login required'},{status:403});
     const user = await findOrCreateLocalUser(username);
 
     return NextResponse.json({

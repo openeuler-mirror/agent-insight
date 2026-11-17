@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,6 +29,7 @@ import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const searchParams = request.nextUrl.searchParams;
     const query = searchParams.get('query');
@@ -193,9 +195,12 @@ export async function GET(request: NextRequest) {
     console.error('Fetch Skills Error:', error);
     return NextResponse.json({ error: 'Failed to fetch skills' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function DELETE(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   const searchParams = request.nextUrl.searchParams;
   const id = searchParams.get('id');
   const userParam = searchParams.get('user');
@@ -264,4 +269,6 @@ export async function DELETE(request: NextRequest) {
     console.error('Delete Skill Error:', e);
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
+
+  },["write","delete"]);
 }

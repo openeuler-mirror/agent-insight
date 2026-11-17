@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,6 +25,7 @@ export const dynamic = 'force-dynamic'
 
 /** IF-N06：心跳。只更新在线度与进程健康度，不承载指令。 */
 export async function POST(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { clientId } = await authenticateDevice(req)
     const body = await req.json().catch(() => ({}))
@@ -42,4 +44,6 @@ export async function POST(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/heartbeat')
   }
+
+  },["write"]);
 }

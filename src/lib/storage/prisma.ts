@@ -18,18 +18,21 @@ import { loadAgentInsightEnv } from '@/lib/env';
 loadAgentInsightEnv();
 
 import { PrismaClient } from '@prisma/client';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withControlDelegates} from '@/lib/storage-core/control-repository';
 import { getDatabaseAdapter, DatabaseAdapter } from '@/lib/storage/db-interface';
 import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
 
 const globalForPrisma = global as unknown as { prisma: ExtendedPrismaClient };
 
-export const prismaRaw = globalForPrisma.prisma || createPrismaClient();
+const legacyPrisma = globalForPrisma.prisma || createPrismaClient();
+export const prismaRaw = isStorageCoreEnabled() ? withControlDelegates(legacyPrisma) : legacyPrisma;
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prismaRaw;
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = legacyPrisma;
 
 export const db: DatabaseAdapter = getDatabaseAdapter();
 
-export const prisma = process.env.DB_HOST ? createPrismaCompatibleWrapper(db) : prismaRaw;
+export const prisma = isStorageCoreEnabled() ? prismaRaw : process.env.DB_HOST ? createPrismaCompatibleWrapper(db) : prismaRaw;
 
 function createPrismaCompatibleWrapper(adapter: DatabaseAdapter): any {
     const client = adapter.getClient();

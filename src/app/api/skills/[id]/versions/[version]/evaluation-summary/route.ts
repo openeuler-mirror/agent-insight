@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -30,6 +31,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; version: string }> },
 ) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { id, version: versionStr } = await params;
     const version = parseInt(versionStr, 10);
@@ -102,6 +104,8 @@ export async function GET(
     console.error('[Static Eval] Summary fetch error:', e);
     return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 function safeParse(json: string): any {

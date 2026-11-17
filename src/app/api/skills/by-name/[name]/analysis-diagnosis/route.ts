@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -41,6 +42,7 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ name: string }> },
 ) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { name } = await params;
     const body = await request.json().catch(() => ({}));
@@ -114,4 +116,6 @@ export async function POST(
     console.error('analysis-diagnosis POST error:', error);
     return NextResponse.json({ error: 'failed to generate diagnosis' }, { status: 500 });
   }
+
+  },["write"]);
 }

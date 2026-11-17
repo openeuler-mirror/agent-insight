@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -25,11 +26,15 @@ const syncStatus = {
 };
 
 export async function GET(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   console.log('[Enterprise-Sync-API] GET请求 - 获取同步状态');
   return NextResponse.json(syncStatus);
+
+  },["read"]);
 }
 
 export async function POST(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   console.log('[Enterprise-Sync-API] POST请求 - 开始同步');
   
   if (process.env.ORGANIZATION_MODE !== 'true') {
@@ -71,4 +76,6 @@ export async function POST(request: NextRequest) {
     console.error('[Enterprise-Sync-API] 错误堆栈:', error.stack);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["write"]);
 }

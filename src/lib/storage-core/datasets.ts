@@ -1,3 +1,4 @@
+import {runWithCoreControlActor} from './control-context';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {randomUUID,createHash} from 'node:crypto';
 import {compatibilityContext,type CompatibilityOptions} from './compat';
@@ -57,7 +58,7 @@ export async function withCoreDatasets<T>(request:Request,action:()=>Promise<T>,
  if(!/^[\x21-\x7e]{1,512}$/.test(operationKey))throw new DatasetStorageError(400,'Invalid operation key');
  const pathname=new URL(request.url).pathname;
  const operationKind=pathname.endsWith('/backflow')?'backflow':request.method==='POST'?'create':request.method==='DELETE'?'delete':'save';
- return contexts.run({actor:{...actor,username:actor.username},request,options,body,operationKey,operationKind,snapshots:new Map(),virtual:new Map()},action);
+ return contexts.run({actor:{...actor,username:actor.username},request,options,body,operationKey,operationKind,snapshots:new Map(),virtual:new Map()},()=>runWithCoreControlActor({...actor,username:actor.username!},options,action));
 }
 export async function runWithCoreDatasetActor<T>(actor:{token:string;workspace:string;principal:string;username:string},request:Request,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
  const identityUrl=new URL(request.url);identityUrl.search='';identityUrl.searchParams.set('workspace_id',actor.workspace);

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +13,7 @@ import { claimSkillArtifact } from '@/lib/skill-deployment/service'
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request, context: { params: Promise<{ artifactRef: string }> }) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { clientId } = await authenticateDevice(request)
     const { artifactRef } = await context.params
@@ -21,4 +23,6 @@ export async function GET(request: Request, context: { params: Promise<{ artifac
   } catch (error) {
     return reliabilityErrorResponse(error, 'skill-deployment/artifact')
   }
+
+  },["read"]);
 }

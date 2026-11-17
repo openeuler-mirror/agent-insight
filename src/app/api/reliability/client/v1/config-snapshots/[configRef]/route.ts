@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -30,6 +31,7 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ configRef: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { configRef } = await ctx.params
     const { clientId } = await authenticateDevice(req)
@@ -57,4 +59,6 @@ export async function GET(
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/config-snapshots')
   }
+
+  },["read"]);
 }

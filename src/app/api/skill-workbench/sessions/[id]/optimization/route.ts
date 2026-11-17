@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,6 +29,7 @@ import {
 } from '@/lib/skill-workbench/optimization-adapter';
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized,context));
   try {
     const { id } = await context.params;
@@ -40,9 +42,12 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     console.error('[skill-workbench optimization GET] failed:', error);
     return NextResponse.json({ error: '加载优化会话失败' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json().catch(() => ({}));
@@ -82,4 +87,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     console.error('[skill-workbench optimization POST] failed:', error);
     return NextResponse.json({ error: '更新优化会话失败' }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

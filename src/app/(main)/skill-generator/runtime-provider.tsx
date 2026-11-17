@@ -16,6 +16,8 @@
 
 "use client";
 
+import { apiFetch as fetch, browserApiIdentityHeaders } from '@/lib/client/api';
+
 import { AssistantRuntimeProvider, useThread, type ThreadMessageLike } from '@assistant-ui/react';
 import { useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
@@ -200,6 +202,7 @@ export function AgentRuntimeProvider({
 
     const runtime = useChatRuntime({
         api: '/api/skill-generator/chat',
+        headers: async () => browserApiIdentityHeaders('/api/skill-generator/chat'),
         body: {
             user,
             threadId,

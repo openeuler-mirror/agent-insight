@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -35,6 +36,7 @@ function readUser(value: unknown): string | null {
  * `refresh=1` 跳过 30 秒缓存，对应页面上的「重新检测」。
  */
 export async function GET(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   const { searchParams } = new URL(request.url);
   const user = readUser(searchParams.get('user'));
   if (!user) return NextResponse.json({ error: 'User is required', code: 'USER_REQUIRED' }, { status: 400 });
@@ -47,6 +49,8 @@ export async function GET(request: Request) {
     console.error('[agent-runtimes] GET error:', message);
     return NextResponse.json({ error: message, code: 'DETECTION_FAILED' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 /**
@@ -56,6 +60,7 @@ export async function GET(request: Request) {
  * runtimeId=null 表示清除个人偏好。不可用的运行时不会被保存，避免静默回退。
  */
 export async function PUT(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   let body: Record<string, unknown>;
   try {
     body = await request.json();
@@ -86,4 +91,6 @@ export async function PUT(request: Request) {
     console.error('[agent-runtimes] PUT error:', message);
     return NextResponse.json({ error: message, code: 'SAVE_FAILED' }, { status: 500 });
   }
+
+  },["write"]);
 }

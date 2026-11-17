@@ -1,3 +1,4 @@
+import {getCoreControlContext,withCoreControlRequest} from './control-context';
 import {createHash,randomUUID} from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,6 +67,7 @@ export function handleCoreDiagnosisSession(request:Request,options:Compatibility
 }
 
 export async function handleCoreDiagnosisStream(request:Request,options:DiagnosisOptions):Promise<Response> {
+ if(!getCoreControlContext())return withCoreControlRequest(request,()=>handleCoreDiagnosisStream(request,options),options);
  let active:{actor:Actor;reply:DiagnosisReply}|undefined;
  try {
   const actor=await compatibilityContext(request,options);if(!actor.username)throw error(403,'Verified model identity required');

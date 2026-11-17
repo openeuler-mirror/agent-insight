@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -32,6 +33,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; version: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { id, version } = await params;
     const body = await request.json().catch(() => ({}));
@@ -71,12 +73,15 @@ export async function POST(
     console.error('Parse flow error:', error);
     return NextResponse.json({ error: message }, { status: 500 });
   }
+
+  },["write","execute"]);
 }
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; version: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { id, version } = await params;
     const searchParams = request.nextUrl.searchParams;
@@ -104,4 +109,6 @@ export async function GET(
     console.error('Get parsed flow error:', error);
     return NextResponse.json({ error: message }, { status: 500 });
   }
+
+  },["read"]);
 }

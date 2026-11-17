@@ -1,3 +1,4 @@
+import {runWithCoreControlActor} from './control-context';
 import {matchesFrozenModelSelection} from './frozen-model';
 import {runWithCoreDatasetActor} from './datasets';
 import {runWithCoreEvaluatorActor} from './evaluators';
@@ -25,7 +26,7 @@ export const getCoreExperimentContext=()=>contexts.getStore();
 export function requireCoreExperimentContext():CoreExperimentContext {
  const context=contexts.getStore();if(!context)throw Object.assign(new Error('Trusted Experiment repository scope required'),{status:503});return context;
 }
-export function runWithCoreExperimentContext<T>(context:CoreExperimentContext,action:()=>Promise<T>):Promise<T>{return contexts.run(context,action);}
+export function runWithCoreExperimentContext<T>(context:CoreExperimentContext,action:()=>Promise<T>):Promise<T>{return contexts.run(context,()=>runWithCoreControlActor(context.actor,context.options,action));}
 export function coreExperimentFailure(cause:unknown):Response {
  const status=cause&&typeof cause==='object'&&'status'in cause&&typeof cause.status==='number'&&[400,401,403,404,409,410,413,422,428,429,503].includes(cause.status)?cause.status:502;
  const messages:Record<number,string>={400:'实验请求参数无效',401:'请重新登录后操作',403:'无权访问该实验',404:'未找到实验或评测结果',409:'实验数据或运行状态已更新，请刷新后重试',410:'实验请求已过期',413:'实验数据超过当前请求预算',422:'实验输入或来源尚不可用',428:'缺少数据版本，请重新加载后再试',429:'实验任务已满，请稍后重试',503:'实验存储服务暂时不可用'};
@@ -62,7 +63,7 @@ export async function withCoreExperiments<T>(request:Request,action:()=>Promise<
   }
   throw Object.assign(new Error('Experiment storage unavailable'),{status:503});
  };
- return contexts.run({actor,request,options,operationKey,body,rpc},action);
+ return contexts.run({actor,request,options,operationKey,body,rpc},()=>runWithCoreControlActor(actor,options,action));
 }
 
 export async function withCoreConfiguredExperiments<T>(actor:CoreBackgroundActor,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{

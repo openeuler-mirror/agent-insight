@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -30,6 +31,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; version: string }> },
 ) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { id, version: versionStr } = await params;
     const version = parseInt(versionStr, 10);
@@ -80,4 +82,6 @@ export async function POST(
     console.error('[Static Eval] Manual trigger error:', e);
     return NextResponse.json({ error: e?.message || 'evaluation failed' }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

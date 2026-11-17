@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,6 +23,7 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { searchParams } = new URL(request.url);
         
@@ -74,4 +76,6 @@ export async function GET(request: Request) {
         console.error('Config Status Error:', error);
         return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
     }
+
+  },["read"]);
 }

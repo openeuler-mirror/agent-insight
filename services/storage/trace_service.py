@@ -216,7 +216,8 @@ class TraceRuntime:
                 name=con.execute('SELECT name FROM workspaces WHERE workspace_id=?',(grant.workspace_id,)).fetchone()[0]
                 workspaces.append({'workspace_id':grant.workspace_id,'name':name,'role':grant.role})
             selected=self.default_workspace if self.default_workspace in scope.allowed_workspace_ids else (scope.allowed_workspace_ids[0] if scope.allowed_workspace_ids else '')
-            return {'username':row['normalized_login_name'],'principal_id':scope.principal_id,'display_name':row['display_name'],'project_id':scope.project_id,'workspace_id':selected,'workspaces':workspaces}
+            legacy=con.execute("SELECT legacy_username FROM platform_control_records WHERE kind='user' AND owner_principal_id=? AND state='active' ORDER BY record_id",(scope.principal_id,)).fetchall() if con.execute('SELECT 1 FROM schema_meta WHERE version=19').fetchone() else []
+            return {**({'legacy_username':legacy[0][0]} if len(legacy)==1 else {}),'username':row['normalized_login_name'],'principal_id':scope.principal_id,'display_name':row['display_name'],'project_id':scope.project_id,'workspace_id':selected,'workspaces':workspaces}
 
     def workspace(self, token, explicit, capability):
         scope=self.iam.scope(token)
@@ -394,6 +395,20 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 elif action=='set_links':store.set_links(token,workspace,payload['execution_id'],payload['links']);result={'ok':True}
                 else:raise ValueError('Unknown Infra action')
                 self.reply(200,{'value':result},max_bytes=16*1024*1024);return
+            if compat_path==['platform-control']:
+                if self.command!='POST':raise ValueError('Control POST required')
+                value,error=self.body(max_bytes=128*1024*1024)
+                if error:self.reply(error,{'error':'Bounded control JSON required'});return
+                from .controller_protocol import verify_controller_proof
+                from .platform_controls import PlatformControls
+                action=value.pop('action',None);mode=value.pop('access','request');capability='write' if action=='records_batch' or mode in ('collector-preparation','write-prior') else 'read'
+                workspace=runtime.workspace(token,params.get('workspace_id'),None if action=='scope' else capability);principal=runtime.iam.scope(token).principal_id
+                purpose='platform-control-prepare/v1' if mode=='collector-preparation' else 'platform-control-write/v1' if mode=='write-prior' else 'platform-control/v1'
+                if mode not in ('request','collector-preparation','write-prior'):raise ValueError('Invalid control access mode')
+                verified=verify_controller_proof(runtime.controller_key_file,purpose,principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof'))
+                if not verified:raise Forbidden('Private control producer required')
+                result=PlatformControls(runtime.control).dispatch(token,workspace,action,value,trusted=True,preparation=mode=='collector-preparation',write_prior=mode=='write-prior')
+                self.reply(200,{'value':result},max_bytes=128*1024*1024);return
             if compat_path==['collector-source']:
                 if self.command!='POST':self.reply(404,{'error':'Unknown collector route'});return
                 if not token.startswith('api_'):raise Forbidden('Collector API credential required')
@@ -736,6 +751,20 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             if self.command=='GET' and pieces==['v1','health']:
                 plan=runtime.control.migration_plan()
                 self.reply(200,{'status':'ready','schema_version':plan['current_version'],'worker_enabled':runtime.worker is not None,'worker_error':runtime.last_worker_error});return
+            if self.command=='POST' and pieces==['v1','compat','platform-control-capability']:
+                from .controller_protocol import verify_controller_proof
+                from .platform_controls import PlatformControls
+                value,error=self.body(max_bytes=128*1024*1024)
+                if error:self.reply(error,{'error':'Bounded control capability JSON required'});return
+                if not verify_controller_proof(runtime.controller_key_file,'platform-control-bootstrap/v1','platform-capability','platform-capability',self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Verified control capability producer required')
+                self.reply(200,{'value':PlatformControls(runtime.control).capability_dispatch(value)},max_bytes=128*1024*1024);return
+            if self.command=='POST' and pieces==['v1','compat','platform-control-bootstrap']:
+                from .controller_protocol import verify_controller_proof
+                from .platform_controls import PlatformControls
+                value,error=self.body(max_bytes=16384)
+                if error:self.reply(error,{'error':'Bounded login assertion required'});return
+                if not verify_controller_proof(runtime.controller_key_file,'platform-control-bootstrap/v1','platform-login','platform-login',self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Verified legacy login producer required')
+                self.reply(200,{'value':PlatformControls(runtime.control).bootstrap_login(value)});return
             if self.command=='POST' and pieces==['v1','auth','login']:
                 body,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return

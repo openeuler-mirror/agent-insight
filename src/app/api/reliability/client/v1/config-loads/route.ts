@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -24,6 +25,7 @@ export const dynamic = 'force-dynamic'
 
 /** IF-N12：RAS 加载回报。设备凭证鉴权。 */
 export async function POST(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { clientId, user } = await authenticateDevice(req)
     const body = await req.json().catch(() => ({}))
@@ -72,4 +74,6 @@ export async function POST(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/config-loads')
   }
+
+  },["write"]);
 }

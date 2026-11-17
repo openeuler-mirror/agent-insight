@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -32,6 +33,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized,{ params }));
   try {
     const { id } = await params;
@@ -48,12 +50,15 @@ export async function GET(
     console.error('[skill-workbench tasks GET] failed:', error);
     return NextResponse.json({ error: 'Failed to load workbench tasks' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,{ params }));
   try {
     const { id } = await params;
@@ -85,4 +90,6 @@ export async function POST(
     console.error('[skill-workbench tasks POST] failed:', error);
     return NextResponse.json({ error: 'Failed to create workbench task' }, { status: 500 });
   }
+
+  },["write"]);
 }

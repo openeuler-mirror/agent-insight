@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -25,6 +26,7 @@ export async function POST(
   req: Request,
   ctx: { params: Promise<{ clientId: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const url = new URL(req.url)
     const body = await req.json().catch(() => ({}))
@@ -56,4 +58,6 @@ export async function POST(
     console.error('[reliability/config/sync]', error)
     return NextResponse.json({ error: 'internal error' }, { status: 500 })
   }
+
+  },["write"]);
 }

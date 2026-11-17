@@ -1,3 +1,4 @@
+import {runWithCoreControlActor} from './control-context';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { compatibilityContext, type CompatibilityOptions } from './compat';
@@ -24,7 +25,7 @@ export async function withCoreReports<T>(request:Request,action:()=>Promise<T>,o
  if(typeof window!=='undefined')unavailable();
  const actor=await compatibilityContext(request,options);
  if(!actor.username)unavailable();
- return reports.run({request,options,actor:{...actor,username:actor.username},evidence:new Map()},action);
+ return reports.run({request,options,actor:{...actor,username:actor.username},evidence:new Map()},()=>runWithCoreControlActor({...actor,username:actor.username!},options,action));
 }
 export async function resolveCoreReportEvidence(ref:string){
  const context=requireCoreReportContext();

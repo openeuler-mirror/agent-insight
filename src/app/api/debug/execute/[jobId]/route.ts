@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreControlCacheKey} from '@/lib/storage-core/control-repository';
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -37,10 +40,11 @@ declare global {
  * client poll loop terminates cleanly instead of looping forever.
  */
 export async function GET(_request: Request, { params }: { params: Promise<{ jobId: string }> }) {
+  return withCoreControlRoute(_request,async()=>{
   const { jobId } = await params;
 
   // 1. Check in-memory store first (fast path)
-  const memJob = globalThis.__debugJobStore?.get(jobId);
+  const memJob = globalThis.__debugJobStore?.get(isStorageCoreEnabled()?coreControlCacheKey(jobId):jobId);
   if (memJob) {
     if (memJob.status === 'running') return NextResponse.json({ status: 'running' });
     if (memJob.status === 'completed') {
@@ -65,4 +69,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ job
   // 3. Job unknown: server restarted before job completed and result was never persisted.
   //    Return failed (not 404) so poll loop terminates cleanly.
   return NextResponse.json({ status: 'failed', error: 'Job not found — server may have restarted during execution' });
+
+  },["read"]);
 }

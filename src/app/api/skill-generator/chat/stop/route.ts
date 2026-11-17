@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -18,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cancelSkillGeneratorRun } from '@/lib/skill-generator-task-manager';
 
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const body = await req.json();
     const { user, threadId } = body ?? {};
@@ -45,4 +47,6 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
+
+  },["write","execute"]);
 }

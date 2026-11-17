@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -35,6 +36,7 @@ import {
 } from '@/lib/skill-workbench/experiment-service';
 
 export async function GET(request: NextRequest, context: { params: Promise<{ name: string }> }):Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,next=>GET(next,context));
   try {
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
@@ -53,9 +55,12 @@ export async function GET(request: NextRequest, context: { params: Promise<{ nam
     console.error('[skill-workbench experiments GET] failed:', error);
     return NextResponse.json({ error: '加载 Skill 实验失败' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(request: NextRequest, context: { params: Promise<{ name: string }> }):Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,next=>POST(next,context));
   try {
     const body = await request.json();
@@ -132,4 +137,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     if(isStorageCoreEnabled())return coreExperimentFailure(error);
     return NextResponse.json({ error: '创建 Skill 实验失败' }, { status: 500 });
   }
+
+  },["write"]);
 }

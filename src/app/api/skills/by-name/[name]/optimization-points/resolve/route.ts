@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -37,6 +38,7 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ name: string }> },
 ): Promise<Response> {
+  return withCoreControlRoute(req,async()=>{
   if(isStorageCoreEnabled())return handleCoreIssueResolution(req,(await ctx.params).name);
   const { name } = await ctx.params;
   const skillName = decodeURIComponent(String(name || '').trim());
@@ -77,4 +79,6 @@ export async function PATCH(
   });
 
   return NextResponse.json({ resolvedCount: result.count });
+
+  },["write"]);
 }

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,6 +23,7 @@ export const dynamic = 'force-dynamic'
 
 /** IF-N16：内置故障模式注册表（只读）。 */
 export async function GET(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     await resolveUser(req)
     const platform = new URL(req.url).searchParams.get('platform')
@@ -31,4 +33,6 @@ export async function GET(req: Request) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
+
+  },["read"]);
 }

@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–015，当前schema_version=15。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–019，当前schema_version=19。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -201,3 +201,12 @@ core模式下，原优化点GET和完成优化后的resolve PATCH携带当前登
 
 
 Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认列表统计、版本趋势和完整执行输出，包含空结果、0值和无Session历史执行。原静态配置与注册记录继续保留；仅调用统计来自授权新存储。旧登录名映射到不同IAM规范用户名时，也应只发现本人的Agent。此片不迁移Skill runs/logs、Agent删除或资产配置写操作，不能据此移除旧控制数据库。
+
+
+## 019 控制数据接入后的验收边界
+
+隔离目标显式升级到019后，使用原登录和原页面。浏览器继续使用当前已有API key；请求封装为原控制API补实际凭据，不能仅靠body/query user访问。SDK、采集和设备继续使用各自已有凭据；新存储配置缺失或授权失败明确返回错误，不读取旧事务库兜底。原standalone登录、组织登录、IDaaS及设置掩码恢复规则分别保留，不增加登录UI。
+
+原Skill版本/文件、配置、客户端、Workbench/优化/生成会话及调试结果走新控制仓储。需要沿原流程集中验收列表→详情→文件→保存、安装→心跳→命令ACK→配置/部署回执、会话SSE→候选/复测/发布，以及Agent删除与Trace/诊断来源生命周期。4个TSX只接请求传输导入及runtime动态header；页面布局、文案、交互和原功能不改。本批快速专项/类型结果不等于这些完整验收已完成。
+
+保留旧库及文件，历史终态/静态数据由显式迁移器按owner导入。活动任务、未消费安装token和有效设备凭据不能直接激活到新库；当前应报告并阻断，不能用删除状态或伪造终态掩盖。暂不切生产。

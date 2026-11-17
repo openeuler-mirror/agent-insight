@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {getCoreControlContext} from '@/lib/storage-core/control-context'
+import {withCoreControlInstall,authenticateCoreControlDevice} from '@/lib/storage-core/control-auth'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -168,6 +171,7 @@ export async function registerClient(input: {
    * 旧凭证立即撤销，否则原账号仍能向这台机器下发配置。
    */
   previousClientId?: string | null
+  previousDeviceCredential?: string
 }): Promise<{
   clientId: string
   user: string
@@ -175,6 +179,7 @@ export async function registerClient(input: {
   unboundPrevious: { clientId: string; user: string } | null
   reused: boolean
 }> {
+  if(isStorageCoreEnabled()&&!getCoreControlContext()?.install)return withCoreControlInstall(input.installToken,input.previousDeviceCredential,()=>registerClient(input))
   const tokenHash = sha256(String(input.installToken || ''))
   const record = await prisma.reliabilityInstallToken.findUnique({ where: { tokenHash } })
   if (!record) {
@@ -210,7 +215,7 @@ export async function registerClient(input: {
   // 解绑旧绑定必须和新注册在同一个事务里：否则中途失败会留下
   //「旧凭证已撤销、新客户端没建成」的半态，本机彻底失联且无法自愈。
   const previous = input.previousClientId
-    ? await prisma.reliabilityClient.findUnique({ where: { clientId: input.previousClientId } })
+    ? await prisma.reliabilityClient.findFirst({ where: { clientId: input.previousClientId } })
     : null
   const shouldUnbind = Boolean(previous && !previous.unboundAt && previous.clientId !== clientId)
 
@@ -287,6 +292,7 @@ export async function authenticateDevice(req: Request): Promise<{
   clientId: string
   user: string
 }> {
+  if(isStorageCoreEnabled())return authenticateCoreControlDevice(req)
   const auth = req.headers.get('authorization') || ''
   const match = /^Bearer\s+(.+)$/i.exec(auth.trim())
   if (!match) {

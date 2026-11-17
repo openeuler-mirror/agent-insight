@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -66,6 +67,7 @@ export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id } = await params;
         const { searchParams } = new URL(request.url);
@@ -140,4 +142,6 @@ export async function GET(
         console.error('Skill runs fetch error:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
+
+  },["read"]);
 }

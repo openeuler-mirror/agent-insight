@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -41,6 +42,7 @@ export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ id: string; version: string; path: string[] }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id, version: versionStr, path: pathParts } = await params;
         const version = parseInt(versionStr, 10);
@@ -105,4 +107,6 @@ export async function GET(
         console.error('[Skill file] error:', error);
         return NextResponse.json({ error: error?.message || 'Internal error' }, { status: 500 });
     }
+
+  },["read"]);
 }

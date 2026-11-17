@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -42,6 +43,7 @@ export async function GET(
   request: NextRequest,
   props: { params: Promise<{ name: string }> },
 ):Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext())return withCoreWorkbenchRoute(request,input=>GET(input,props));
   try {
     const { name: rawName } = await props.params;
@@ -107,6 +109,8 @@ export async function GET(
       { status: 500 },
     );
   }
+
+  },["read"]);
 }
 
 interface OptIssue {

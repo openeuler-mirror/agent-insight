@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -48,6 +49,7 @@ export const maxDuration = 300;
  * 流式版本另开 /api/agent/stream（暂未实现，可按需补）。
  */
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const body = await request.json().catch(() => ({}));
     const user = String(body.user || '').trim();
@@ -126,4 +128,6 @@ export async function POST(request: Request) {
       { status: isUserError ? 400 : 500 },
     );
   }
+
+  },["write","execute"]);
 }

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -41,6 +42,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { id } = await params;
     if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -121,4 +123,6 @@ export async function POST(
     console.error('[skill-opt iterations POST] failed:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["write"]);
 }

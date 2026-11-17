@@ -19,7 +19,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–015, currently schema_version14. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–019, currently schema_version19. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -137,3 +137,12 @@ Version one is limited to preserving existing features, UI, workflows, statistic
 
 
 Validate Skill and Agent dynamic reads through the original `/skills` and `/agents` pages: list statistics, version trends and full execution output, including empty results, zero values and historical executions without Sessions. Keep existing static configuration and registrations; dynamic statistics use authorized core storage. A legacy login mapped to a different canonical IAM username must still discover only its own Agents. Skill runs/logs, Agent deletion and asset/configuration writes are outside this slice, so the legacy control database remains required.
+
+
+## Acceptance after019 control integration
+
+Explicitly upgrade the isolated target to019, then use the original login and screens. The request wrapper transports the current existing API key for control APIs; a body/query username alone is not authentication. SDK, collector and device credentials keep their respective protocols. Missing configuration or authorization fails explicitly without reading the old transactional database as a fallback. Standalone, organization and IDaaS login and masked-settings restoration retain their original rules without new login UI.
+
+Skill versions/files, configuration, clients, Workbench/optimization/generator sessions and debug results now use the control repository. Consolidated acceptance must cover list/detail/file/save, installation/heartbeat/command ACK/configuration and deployment receipts, session SSE/candidate/retest/publish, and Agent deletion with Trace/diagnosis source lifecycle. Four TSX files only add transport imports, with dynamic runtime headers; visible layout, wording, interactions and existing features remain unchanged. Focused checks and types are not full acceptance.
+
+Keep the original database and files. Import historical terminal/static records explicitly under their real owner. Active tasks, unconsumed installation tokens and usable device credentials cannot be activated silently; report and block them until an explicit inert-migration contract exists. Do not disguise them as deleted or completed. Production remains unchanged.

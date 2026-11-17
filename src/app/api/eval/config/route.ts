@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -55,6 +56,7 @@ function normalizeOutcomeKeyActions(configs: any[]) {
 }
 
 export async function GET(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { searchParams } = new URL(request.url);
     const user = searchParams.get('user');
@@ -64,9 +66,12 @@ export async function GET(request: Request) {
     console.error('Config Load Error:', error);
     return NextResponse.json({ error: 'Failed to load config' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const { configs: incomingConfig, user } = await request.json();
     const referer = request.headers.get('referer') || 'unknown';
@@ -178,4 +183,6 @@ export async function POST(request: Request) {
     console.error('Config Save Error:', error);
     return NextResponse.json({ error: 'Failed to save config' }, { status: 500 });
   }
+
+  },["write"]);
 }

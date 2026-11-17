@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -35,6 +36,7 @@ export const dynamic = 'force-dynamic';
  *   403 { error: 'user mismatch' }                user 不是该请求归属者
  */
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   let body: any;
   try {
     body = await request.json();
@@ -88,4 +90,6 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

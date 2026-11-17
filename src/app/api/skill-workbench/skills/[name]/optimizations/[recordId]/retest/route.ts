@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,6 +23,7 @@ import { resolveUser } from '@/lib/auth/auth';
 import { retestOptimizationCandidate, RetestError } from '@/lib/skill-workbench/retest-service';
 
 export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }): Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if (isStorageCoreEnabled() && !getCoreExperimentContext()) {
     try { return await withCoreExperiments(request, () => POST(request, context)); } catch (error) { return coreExperimentFailure(error); }
   }
@@ -38,4 +40,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     console.error('[skill-workbench retest POST] failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : '候选复测失败' }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

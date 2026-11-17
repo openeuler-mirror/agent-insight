@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -23,6 +24,7 @@ import { resolveUser } from '@/lib/auth/auth';
 import { bindSkillWorkbenchContext } from '@/lib/skill-workbench/session-service';
 
 export async function PUT(request: NextRequest, context: { params: Promise<{ id: string }> }) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>PUT(normalized,context));
   try {
     const body = await request.json();
@@ -43,4 +45,6 @@ export async function PUT(request: NextRequest, context: { params: Promise<{ id:
     console.error('[skill-workbench context PUT] failed:', error);
     return NextResponse.json({ error: '绑定工作 Skill 失败' }, { status: 500 });
   }
+
+  },["write"]);
 }

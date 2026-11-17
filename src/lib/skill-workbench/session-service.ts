@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {resolveVersionStorageRoot} from '@/lib/engine/skill-opt/version-snapshot';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -165,7 +167,7 @@ export function resolveSkillVersionFiles(skillId: string, version: number, files
         if (entries.length > 0) return Object.fromEntries(entries);
       }
       if (Array.isArray(parsed)) {
-        const storageRoot = getSkillVersionStorageDir(skillId, version);
+        const storageRoot = resolveVersionStorageRoot(skillId, version,null);
         const entries = parsed
           .filter((filePath): filePath is string => typeof filePath === 'string')
           .map((filePath) => filePath.replaceAll('\\', '/'))
@@ -180,7 +182,8 @@ export function resolveSkillVersionFiles(skillId: string, version: number, files
           .filter((entry): entry is readonly [string, string] => Boolean(entry));
         if (entries.length > 0) return Object.fromEntries(entries);
       }
-    } catch {
+    } catch(error) {
+      if(isStorageCoreEnabled())throw error;
       // Legacy versions may only have content; fall through to a canonical SKILL.md snapshot.
     }
   }

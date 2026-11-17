@@ -1,0 +1,233 @@
+{
+  "version": 19,
+  "name": "platform_controls",
+  "tables": [
+    {
+      "name": "platform_control_records",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "record_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "legacy_username",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "parent_kind",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "parent_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "unique_key",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "lookup_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "expires_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "sort_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "metadata_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "kind",
+        "record_id"
+      ],
+      "unique": [
+        [
+          "kind",
+          "lookup_hash"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id"
+          ],
+          "workspaces",
+          [
+            "workspace_id"
+          ]
+        ],
+        [
+          [
+            "owner_principal_id"
+          ],
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "parent_kind",
+            "parent_id"
+          ],
+          "platform_control_records",
+          [
+            "workspace_id",
+            "kind",
+            "record_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "asset_id"
+          ],
+          "asset_identities",
+          [
+            "workspace_id",
+            "asset_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "kind",
+          "owner_principal_id",
+          "sort_ms",
+          "record_id"
+        ],
+        [
+          "workspace_id",
+          "kind",
+          "parent_kind",
+          "parent_id",
+          "status",
+          "sort_ms"
+        ],
+        [
+          "workspace_id",
+          "kind",
+          "status",
+          "expires_at_ms"
+        ]
+      ],
+      "checks": [
+        "kind IN ('user','skill','skillVersion','config','userSettings','parsedFlow','userGuideState','registeredAgent','evaluation','skillIssue','skillTriggerEvalSet','batchEvalTask','skillGeneratorSession','skillGeneratorMessage','skillOptSession','skillOptPlan','skillOptPlanItem','skillOptMessage','skillOptIteration','skillWorkbenchSession','skillWorkbenchMessage','skillWorkbenchTask','skillOptimizationRecord','skillSnapshotEvaluation','reliabilityInstallToken','reliabilityClient','reliabilityClientCredential','reliabilityCommand','reliabilityClientConfig','reliabilityConfigSnapshot','reliabilityConfigDelivery','reliabilityConfigLoad','skillDeployment','skillDeploymentEvent','faultInjectionTask','faultInjectionRun','faultInjectionWorker','grayscaleTask','debugHistory','debugJobResult','_scope','_receipt')",
+        "length(record_id) BETWEEN 1 AND 1024",
+        "length(legacy_username) BETWEEN 1 AND 512",
+        "(parent_kind IS NULL)=(parent_id IS NULL)",
+        "state IN ('active','deleted')",
+        "revision>=1 AND revision<=9223372036854775807",
+        "created_at_ms>=0 AND updated_at_ms>=created_at_ms",
+        "length(payload_hash)=64",
+        "length(payload_ref) BETWEEN 1 AND 4096",
+        "lookup_hash IS NULL OR length(lookup_hash)=64"
+      ],
+      "identity": [
+        "workspace_id",
+        "kind",
+        "record_id",
+        "owner_principal_id",
+        "legacy_username",
+        "parent_kind",
+        "parent_id",
+        "created_at_ms"
+      ],
+      "revision_guard": true,
+      "immutable": false
+    }
+  ]
+}

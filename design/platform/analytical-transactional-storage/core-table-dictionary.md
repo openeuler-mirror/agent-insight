@@ -1,16 +1,21 @@
 # 核心表字段字典与首批建表契约
 
-日期：2026-11-17。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，016新增1张首次采集准备封存表，017新增3张采集Thread控制表，当前 **69 张事务表 + 15 张 ClickHouse 表，共84张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+日期：2026-11-17。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，016新增1张首次采集准备封存表，017新增3张采集Thread控制表，018新增2张Infra控制表及CH003样本事实1表，019新增1张固定领域控制表，当前结构目标 **72 张事务表 + 16 张 ClickHouse 表，共88张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
 
-本字典来自同目录实现的机器目录，描述字段和 DDL 契约。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
+本字典来自同目录实现的机器目录，描述字段和 DDL 契约。新增018/019的完整回归、三库与原界面验收统一后置；下述已有引擎证据不外推为018/019已认证。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
 
 ## 表关系总览与阅读顺序
 
-这84张表对应**69张事务控制表 + 15张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+这88张表对应**72张事务控制表 + 16张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共69表]
+  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共72表]
+    CONTROL[原静态资产、设置、客户端与会话控制 1表 / 40固定kind]
+    INFRA[Infra源与Trace关联 2表]
+    CONTROL -->|owner与实时capability| IAM
+    CONTROL -->|版本与私有文件| ASSET
+    INFRA -->|实际owner与Trace生命周期| SUPPORT
     BASE[空间与迁移版本 2表]
     PROJECT[项目目录与归属 2表]
     IAM[账号、组与授权 10表]
@@ -45,10 +50,12 @@ flowchart TB
     RUN -->|同事务登记待投递事件| SUPPORT
     INGEST -->|同事务接收、路由、ACL及Outbox| SUPPORT
   end
-  subgraph CH[ClickHouse，共15表]
+  subgraph CH[ClickHouse，共16表]
     TRACE[Trace / Span / 正文 / 事件与关系 6表]
     DATA[固定快照 / 数据集 3表]
     EVAL[评测结果 / 指标 / 发布 4表]
+    INFRA_FACTS[Infra样本事实 1表]
+    INFRA -.->|哈希回执与来源约束| INFRA_FACTS
     STATS[统计摘要与RAS事件事实 2表]
     ANALYTICS -.->|哈希回执控制可见性| STATS
     TRACE -.->|版本化输入| DATA
@@ -2962,3 +2969,840 @@ erDiagram
 不新增物理表。RAS删除沿用deletion_requests(resource_kind=ras_task, resource_id=SHA256([owner_principal_id,task_id]), incarnation=1)持久屏障，保留ras_event_receipts及CH原事实；关联Trace仍使用原trace删除屏障。FI的三个固定kind由019 platform_control_records保存原scalar/parent/unique，领域动作在同事务执行状态与owner/lease约束，注册workerId不作为授权凭证。
 
 FI首个claim摘要保存于inbox_receipts(workspace_id, source_id=fi-first-lease:<owner>, event_id=FI内部record_id, content_hash=首claim摘要)。claim摘要绑定record_id/workerId/claimedAt，不以hostname授权；后续无token回执只接受仍为首lease的原客户端，已重领返回409。Session-only删除依据collector_source_v1的原session表示计1，不伪造Execution。
+
+## 019：固定L6领域记录与原接口契约
+
+platform_control_records只承载固定的原资产/设置/客户端/会话控制kind；不是任意表/SQL服务。019依赖018，代码目标72事务表+16CH，当前开发树只借入018 schema，未作完整引擎或升级验收。
+
+| 字段 | 类型 | 约束/用途 |
+|---|---|---|
+| workspace_id | TEXT NOT NULL | workspace FK；复合PK |
+| kind | TEXT NOT NULL | 固定枚举；复合PK |
+| record_id | TEXT NOT NULL | 原稳定业务ID；复合PK |
+| owner_principal_id | TEXT NOT NULL | IAM principal FK，写入后不改 |
+| legacy_username | TEXT NOT NULL | 已核验原接口标签，不作为授权依据 |
+| parent_kind | TEXT NULL | 与parent_id同空或同非空，复合自FK |
+| parent_id | TEXT NULL | 服务端按原关系求值并校验同owner或合法公共资产 |
+| unique_key | TEXT NULL | 服务端按kind原复合唯一约束生成；NULL保持原nullable unique语义 |
+| lookup_hash | TEXT NULL | 安装token/device credential原哈希；kind内全局唯一 |
+| status | TEXT NULL | 原状态/排序/时间元数据；服务端固定字段维护 |
+| expires_at_ms | BIGINT NULL | 原状态/排序/时间元数据；服务端固定字段维护 |
+| sort_ms | BIGINT NOT NULL | 原状态/排序/时间元数据；服务端固定字段维护 |
+| metadata_json | TEXT NOT NULL | 无秘密轻量字段，固定kind查询/本地纯投影使用 |
+| payload_hash | TEXT NOT NULL | 完整原JSON SHA256，读取验证 |
+| payload_ref | TEXT NOT NULL | 私有工件保存完整原JSON，秘密仅owner/controller按需读取 |
+| asset_id | TEXT NULL | 可空asset FK，Skill正文与版本复用已有release/alias |
+| state | TEXT NOT NULL | active/deleted，软删除保留历史 |
+| revision | BIGINT NOT NULL | 正BIGINT，更新严格+1/CAS |
+| created_at_ms | BIGINT NOT NULL | 原状态/排序/时间元数据；服务端固定字段维护 |
+| updated_at_ms | BIGINT NOT NULL | 原状态/排序/时间元数据；服务端固定字段维护 |
+
+主键(workspace_id,kind,record_id)；唯一(kind,lookup_hash)、active(workspace,owner,kind,unique_key)；owner列表、parent/status排序、expiry扫描索引。identity/owner/parent/created不可改，revision严格递增，禁止物理删除。SQLite BIGINT列逐项typeof integer；PG/openGauss为BIGINT，三个后端用相同事务和逻辑约束。
+
+每kind完整原字段/nullable/default/unique/关系列在机器契约platform-control-models.json固定列出，运行时不接受新kind或未知字段。kind包括：user, skill, skillVersion, config, userSettings, parsedFlow, userGuideState, registeredAgent, evaluation, skillIssue, skillTriggerEvalSet, batchEvalTask, skillGeneratorSession, skillGeneratorMessage, skillOptSession, skillOptPlan, skillOptPlanItem, skillOptMessage, skillOptIteration, skillWorkbenchSession, skillWorkbenchMessage, skillWorkbenchTask, skillOptimizationRecord, skillSnapshotEvaluation, reliabilityInstallToken, reliabilityClient, reliabilityClientCredential, reliabilityCommand, reliabilityClientConfig, reliabilityConfigSnapshot, reliabilityConfigDelivery, reliabilityConfigLoad, skillDeployment, skillDeploymentEvent, faultInjectionTask, faultInjectionRun, faultInjectionWorker, grayscaleTask, debugHistory, debugJobResult。复合唯一、parent归属、设备绑定/撤销、command终态、static-only Evaluation/Issue与原业务CAS在服务端验证；payload不代替这些规则。Skill内部资产名按owner限定，外部name不变，外部version0与可编辑旧版本通过新的内部不可变release和稳定alias保存。文件完整私有字节可物化到原同步目录接口，工件ref不能冒充本地路径。
+
+### 019 固定payload完整字段
+
+下表是原DTO逻辑字段。未声明默认且不可空的字段必须提供；Int按原32位范围、BigInt按有符号64位范围验证；DateTime在传输中为ISO时间，Node还原Date。所有原唯一组由服务端验证；nullable唯一组任一值为NULL时保持原SQL语义。parent关联逐次验证相同owner，只有已有共享Skill读取例外，写入仍要求实际owner。完整机器契约为[`platform-control-models.json`](../../../services/storage/schema/platform-control-models.json)。
+
+#### User (`user`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| username | String NOT NULL | 无, 唯一 |
+| externalAccount | String NULL | 无, 唯一 |
+| apiKey | String NOT NULL | 无, 唯一 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(username)；(externalAccount)；(apiKey)。
+
+#### Skill (`skill`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| name | String NOT NULL | 无 |
+| category | String NOT NULL | "Other" |
+| description | String NULL | 无 |
+| tags | String NULL | 无 |
+| visibility | String NOT NULL | "private" |
+| author | String NULL | 无 |
+| user | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+| activeVersion | Int NULL | 0 |
+| isUploaded | Boolean NOT NULL | false |
+
+唯一组：(id)；(name, user)。
+关系：versions→skillVersion[]；evaluations→evaluation[]；issues→skillIssue[]。
+
+#### SkillVersion (`skillVersion`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| skillId | String NOT NULL | 无 |
+| version | Int NOT NULL | 无 |
+| semanticVersion | String NULL | 无 |
+| enterpriseSkillId | Int NULL | 无 |
+| content | String NOT NULL | 无 |
+| assetPath | String NULL | 无 |
+| files | String NULL | 无 |
+| changeLog | String NULL | 无 |
+| verificationStatus | String NOT NULL | "not_required" |
+| verificationMode | String NULL | 无 |
+| verifiedAt | DateTime NULL | 无 |
+| verifiedBy | String NULL | 无 |
+| verificationNote | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(skillId, version)。
+关系：Skill→skill skillId→id，级联软删除。
+
+#### Config (`config`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| query | String NULL | 无 |
+| skill | String NOT NULL | "" |
+| skillVersion | Int NULL | 无 |
+| datasetType | String NOT NULL | "combined" |
+| routingIntent | String NULL | 无 |
+| routingAnchors | String NULL | 无 |
+| expectedSkills | String NULL | 无 |
+| standardAnswer | String NOT NULL | 无 |
+| rootCauses | String NULL | 无 |
+| keyActions | String NULL | 无 |
+| extractedKeyActions | String NULL | 无 |
+| user | String NULL | 无 |
+| parseStatus | String NOT NULL | "completed" |
+
+唯一组：(id)；(query, user, datasetType)。
+
+#### UserSettings (`userSettings`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无, 唯一 |
+| settingsJson | String NOT NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(user)。
+
+#### ParsedFlow (`parsedFlow`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| skillId | String NOT NULL | 无 |
+| version | Int NOT NULL | 无 |
+| user | String NULL | 无 |
+| flowJson | String NULL | 无 |
+| mermaidCode | String NULL | 无 |
+| parsedAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(skillId, version, user)。
+
+#### UserGuideState (`userGuideState`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无, 唯一 |
+| guideDisabled | Boolean NOT NULL | false |
+| currentStep | Int NOT NULL | 0 |
+| completedSteps | String NOT NULL | "[]" |
+| skippedSteps | String NOT NULL | "[]" |
+| lastShownAt | DateTime NULL | 无 |
+| dismissedAt | DateTime NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(user)。
+
+#### RegisteredAgent (`registeredAgent`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| platform | String NOT NULL | 无 |
+| name | String NOT NULL | 无 |
+| description | String NULL | 无 |
+| user | String NULL | 无 |
+| agentType | String NOT NULL | "main" |
+| agentOwnership | String NOT NULL | "user" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(platform, name, user)。
+
+#### Evaluation (`evaluation`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| type | String NOT NULL | 无 |
+| skillId | String NOT NULL | 无 |
+| version | Int NOT NULL | 无 |
+| user | String NULL | 无 |
+| executionId | String NULL | 无 |
+| contentHash | String NULL | 无 |
+| l2ScoresJson | String NULL | 无 |
+| ranAt | DateTime NOT NULL | 当前时间 |
+| status | String NOT NULL | "ok" |
+| errorMessage | String NULL | 无 |
+| durationMs | Int NULL | 无 |
+| generator | String NULL | 无 |
+| runId | String NULL | 无 |
+
+唯一组：(id)。
+关系：Skill→skill skillId→id，级联软删除；issues→skillIssue[]。
+
+#### SkillIssue (`skillIssue`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| evaluationId | String NOT NULL | 无 |
+| source | String NOT NULL | 无 |
+| skillId | String NOT NULL | 无 |
+| version | Int NOT NULL | 无 |
+| user | String NULL | 无 |
+| dedupKey | String NOT NULL | 无 |
+| severity | String NOT NULL | 无 |
+| summary | String NOT NULL | 无 |
+| evidence | String NULL | 无 |
+| reasoning | String NULL | 无 |
+| suggestedFix | String NULL | 无 |
+| ruleId | String NULL | 无 |
+| dimension | String NULL | 无 |
+| category | String NULL | 无 |
+| resolvedAt | DateTime NULL | 无 |
+| resolvedRunId | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+关系：Evaluation→evaluation evaluationId→id，级联软删除；Skill→skill skillId→id，级联软删除。
+
+#### SkillTriggerEvalSet (`skillTriggerEvalSet`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| version | Int NOT NULL | 1 |
+| versionSource | String NOT NULL | "manual" |
+| versionNote | String NULL | 无 |
+| description | String NOT NULL | "" |
+| itemsJson | String NOT NULL | "[]" |
+| draftedFromSkillHash | String NULL | 无 |
+| status | String NOT NULL | "ready" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(user, skillName, version)。
+
+#### BatchEvalTask (`batchEvalTask`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无 |
+| taskName | String NOT NULL | 无 |
+| configJson | String NOT NULL | "{}" |
+| caseStatesJson | String NOT NULL | "{}" |
+| traceEvalStatesJson | String NOT NULL | "{}" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+
+#### SkillGeneratorSession (`skillGeneratorSession`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| title | String NOT NULL | "New Chat" |
+| user | String NULL | 无 |
+| files | String NOT NULL | "{}" |
+| opencodeSessionId | String NULL | 无 |
+| agentName | String NULL | 无 |
+| agentTraceSkill | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)。
+关系：messages→skillGeneratorMessage[]。
+
+#### SkillGeneratorMessage (`skillGeneratorMessage`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| role | String NOT NULL | 无 |
+| content | String NOT NULL | 无 |
+| blocks | String NOT NULL | "[]" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+关系：session→skillGeneratorSession sessionId→id，级联软删除。
+
+#### SkillOptSession (`skillOptSession`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| baseVersion | Int NOT NULL | 无 |
+| title | String NOT NULL | "新对话" |
+| files | String NOT NULL | "{}" |
+| opencodeSessionId | String NULL | 无 |
+| agentName | String NULL | 无 |
+| agentTraceSkill | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)。
+关系：messages→skillOptMessage[]；iterations→skillOptIteration[]；plan→skillOptPlan。
+
+#### SkillOptPlan (`skillOptPlan`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无, 唯一 |
+| skillId | String NOT NULL | 无 |
+| baseVersion | Int NOT NULL | 无 |
+| status | String NOT NULL | "draft" |
+| operatorMeta | String NOT NULL | "{}" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(sessionId)。
+关系：session→skillOptSession sessionId→id，级联软删除；items→skillOptPlanItem[]。
+
+#### SkillOptPlanItem (`skillOptPlanItem`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| planId | String NOT NULL | 无 |
+| rank | Int NOT NULL | 无 |
+| route | String NOT NULL | 无 |
+| status | String NOT NULL | "pending" |
+| title | String NOT NULL | 无 |
+| rationale | String NOT NULL | 无 |
+| severity | String NOT NULL | "medium" |
+| targetFile | String NULL | 无 |
+| anchorText | String NULL | 无 |
+| proposedEdit | String NULL | 无 |
+| conflictNote | String NULL | 无 |
+| sourceIssueIds | String NOT NULL | "[]" |
+| sourceRefsJson | String NOT NULL | "[]" |
+| sourcesBreakdown | String NOT NULL | "{}" |
+| prevalence | Int NOT NULL | 1 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+关系：plan→skillOptPlan planId→id，级联软删除。
+
+#### SkillOptMessage (`skillOptMessage`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| role | String NOT NULL | 无 |
+| content | String NOT NULL | 无 |
+| blocks | String NOT NULL | "[]" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+关系：session→skillOptSession sessionId→id，级联软删除。
+
+#### SkillOptIteration (`skillOptIteration`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| draftNumber | Int NOT NULL | 无 |
+| summary | String NOT NULL | 无 |
+| files | String NOT NULL | 无 |
+| resolvedIssueIds | String NOT NULL | "[]" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(sessionId, draftNumber)。
+关系：session→skillOptSession sessionId→id，级联软删除。
+
+#### SkillWorkbenchSession (`skillWorkbenchSession`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无 |
+| title | String NOT NULL | "新对话" |
+| skillName | String NULL | 无 |
+| workVersion | Int NULL | 无 |
+| source | String NULL | 无 |
+| activeView | String NOT NULL | "detail" |
+| stage | String NOT NULL | "empty" |
+| filesJson | String NOT NULL | "{}" |
+| generatorSessionId | String NULL | 无 |
+| optSessionId | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)。
+关系：messages→skillWorkbenchMessage[]；tasks→skillWorkbenchTask[]；optimizations→skillOptimizationRecord[]；snapshotEvaluations→skillSnapshotEvaluation[]。
+
+#### SkillWorkbenchMessage (`skillWorkbenchMessage`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| role | String NOT NULL | 无 |
+| content | String NOT NULL | "" |
+| blocksJson | String NOT NULL | "[]" |
+| taskId | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+关系：session→skillWorkbenchSession sessionId→id，级联软删除。
+
+#### SkillWorkbenchTask (`skillWorkbenchTask`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| type | String NOT NULL | 无 |
+| status | String NOT NULL | "pending" |
+| idempotencyKey | String NOT NULL | 无 |
+| progressJson | String NOT NULL | "{}" |
+| resultType | String NULL | 无 |
+| resultId | String NULL | 无 |
+| errorMessage | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(sessionId, idempotencyKey)。
+关系：session→skillWorkbenchSession sessionId→id，级联软删除。
+
+#### SkillOptimizationRecord (`skillOptimizationRecord`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| baseVersion | Int NOT NULL | 无 |
+| candidateVersionLabel | String NOT NULL | 无 |
+| candidateFilesJson | String NOT NULL | "{}" |
+| candidateContentHash | String NULL | 无 |
+| summary | String NOT NULL | "" |
+| diffJson | String NOT NULL | "[]" |
+| sourceKind | String NOT NULL | "user" |
+| sourceRefsJson | String NOT NULL | "[]" |
+| staticEvaluationId | String NULL | 无 |
+| sourceExperimentId | String NULL | 无 |
+| retestExperimentId | String NULL | 无 |
+| status | String NOT NULL | "optimizing" |
+| publishedVersion | Int NULL | 无 |
+| errorMessage | String NULL | 无 |
+| completedAt | DateTime NULL | 无 |
+| publishedAt | DateTime NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)。
+关系：session→skillWorkbenchSession sessionId→id，级联软删除。
+
+#### SkillSnapshotEvaluation (`skillSnapshotEvaluation`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| sessionId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| proposedVersion | Int NOT NULL | 无 |
+| contentHash | String NOT NULL | 无 |
+| generator | String NOT NULL | 无 |
+| status | String NOT NULL | "pending" |
+| scoresJson | String NULL | 无 |
+| issuesJson | String NOT NULL | "[]" |
+| errorMessage | String NULL | 无 |
+| durationMs | Int NULL | 无 |
+| trigger | String NOT NULL | "manual" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)。
+关系：session→skillWorkbenchSession sessionId→id，级联软删除。
+
+#### ReliabilityInstallToken (`reliabilityInstallToken`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| tokenHash | String NOT NULL | 无, 唯一 |
+| user | String NOT NULL | 无 |
+| name | String NULL | 无 |
+| platform | String NULL | 无 |
+| expiresAt | DateTime NOT NULL | 无 |
+| consumedAt | DateTime NULL | 无 |
+| clientId | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(tokenHash)。
+
+#### ReliabilityClient (`reliabilityClient`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| clientId | String NOT NULL | 无, 唯一 |
+| user | String NOT NULL | 无 |
+| name | String NOT NULL | 无 |
+| hostname | String NULL | 无 |
+| reportedIp | String NULL | 无 |
+| observedIp | String NULL | 无 |
+| os | String NULL | 无 |
+| arch | String NULL | 无 |
+| status | String NOT NULL | "offline" |
+| serviceHealth | String NOT NULL | "unknown" |
+| supervisor | String NULL | 无 |
+| processStartedAt | DateTime NULL | 无 |
+| restartCount | Int NOT NULL | 0 |
+| lastSeenAt | DateTime NOT NULL | 无 |
+| agentVersion | String NULL | 无 |
+| capabilitiesJson | String NOT NULL | "{}" |
+| capabilitiesRevision | String NULL | 无 |
+| unboundAt | DateTime NULL | 无 |
+| unboundToClientId | String NULL | 无 |
+| machineId | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(clientId)；(user, machineId)。
+关系：credentials→reliabilityClientCredential[]；commands→reliabilityCommand[]；configs→reliabilityClientConfig[]；deliveries→reliabilityConfigDelivery[]；skillDeployments→skillDeployment[]。
+
+#### ReliabilityClientCredential (`reliabilityClientCredential`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| clientId | String NOT NULL | 无 |
+| credentialHash | String NOT NULL | 无, 唯一 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| lastUsedAt | DateTime NULL | 无 |
+| revokedAt | DateTime NULL | 无 |
+
+唯一组：(id)；(credentialHash)。
+关系：client→reliabilityClient clientId→clientId，级联软删除。
+
+#### ReliabilityCommand (`reliabilityCommand`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| commandId | String NOT NULL | 无, 唯一 |
+| clientId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| action | String NOT NULL | 无 |
+| payloadJson | String NOT NULL | "{}" |
+| status | String NOT NULL | "CREATED" |
+| channel | String NULL | 无 |
+| expiresAt | DateTime NOT NULL | 无 |
+| sentAt | DateTime NULL | 无 |
+| receivedAt | DateTime NULL | 无 |
+| startedAt | DateTime NULL | 无 |
+| completedAt | DateTime NULL | 无 |
+| errorCode | String NULL | 无 |
+| errorMessage | String NULL | 无 |
+| resultJson | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(commandId)。
+关系：client→reliabilityClient clientId→clientId，级联软删除。
+
+#### ReliabilityClientConfig (`reliabilityClientConfig`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| clientId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| platform | String NOT NULL | 无 |
+| schemaVersion | String NOT NULL | "1.0" |
+| revision | Int NOT NULL | 0 |
+| overrideJson | String NOT NULL | "{}" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(clientId, platform)。
+关系：client→reliabilityClient clientId→clientId，级联软删除。
+
+#### ReliabilityConfigSnapshot (`reliabilityConfigSnapshot`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| configRef | String NOT NULL | 无, 唯一 |
+| clientId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| platform | String NOT NULL | 无 |
+| scope | String NOT NULL | "client" |
+| schemaVersion | String NOT NULL | "1.0" |
+| configVersion | String NOT NULL | 无 |
+| checksum | String NOT NULL | 无 |
+| configJson | String NOT NULL | 无 |
+| correlationJson | String NULL | 无 |
+| expiresAt | DateTime NOT NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(configRef)。
+
+#### ReliabilityConfigDelivery (`reliabilityConfigDelivery`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| deliveryId | String NOT NULL | 无, 唯一 |
+| clientId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| platform | String NOT NULL | 无 |
+| configRef | String NOT NULL | 无 |
+| configVersion | String NOT NULL | 无 |
+| checksum | String NOT NULL | 无 |
+| commandId | String NULL | 无 |
+| status | String NOT NULL | "saved" |
+| pulledAt | DateTime NULL | 无 |
+| writtenAt | DateTime NULL | 无 |
+| loadedAt | DateTime NULL | 无 |
+| errorCode | String NULL | 无 |
+| errorMessage | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(deliveryId)。
+关系：client→reliabilityClient clientId→clientId，级联软删除。
+
+#### ReliabilityConfigLoad (`reliabilityConfigLoad`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| clientId | String NOT NULL | 无 |
+| user | String NOT NULL | 无 |
+| platform | String NOT NULL | 无 |
+| scope | String NOT NULL | "client" |
+| configVersion | String NOT NULL | 无 |
+| checksum | String NULL | 无 |
+| rasProcessId | String NULL | 无 |
+| status | String NOT NULL | 无 |
+| errorCode | String NULL | 无 |
+| errorMessage | String NULL | 无 |
+| loadedAt | DateTime NOT NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+
+#### SkillDeployment (`skillDeployment`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| deploymentId | String NOT NULL | 无, 唯一 |
+| user | String NOT NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| targetSkillVersion | Int NOT NULL | 无 |
+| semanticVersion | String NULL | 无 |
+| artifactHash | String NOT NULL | 无 |
+| artifactRef | String NOT NULL | 无, 唯一 |
+| artifactExpiresAt | DateTime NOT NULL | 无 |
+| artifactClaimedAt | DateTime NULL | 无 |
+| optimizationRecordId | String NULL | 无 |
+| sourceExecutionId | String NOT NULL | 无 |
+| clientId | String NOT NULL | 无 |
+| platform | String NOT NULL | 无 |
+| targetMode | String NOT NULL | 无 |
+| originRef | String NULL | 无 |
+| previousSkillVersion | Int NULL | 无 |
+| previousContentHash | String NULL | 无 |
+| backupRef | String NULL | 无 |
+| direction | String NOT NULL | 无 |
+| status | String NOT NULL | "CREATED" |
+| commandId | String NULL | 无 |
+| errorCode | String NULL | 无 |
+| errorMessage | String NULL | 无 |
+| resultJson | String NULL | 无 |
+| idempotencyKey | String NOT NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| startedAt | DateTime NULL | 无 |
+| completedAt | DateTime NULL | 无 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(deploymentId)；(artifactRef)；(user, idempotencyKey)。
+关系：client→reliabilityClient clientId→clientId，保留依赖限制；events→skillDeploymentEvent[]。
+
+#### SkillDeploymentEvent (`skillDeploymentEvent`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| deploymentId | String NOT NULL | 无 |
+| phase | String NOT NULL | 无 |
+| status | String NOT NULL | 无 |
+| detailJson | String NOT NULL | "{}" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+关系：deployment→skillDeployment deploymentId→deploymentId，级联软删除。
+
+#### FaultInjectionTask (`faultInjectionTask`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| taskKey | String NOT NULL | 无, 唯一 |
+| name | String NOT NULL | 无 |
+| status | String NOT NULL | 无 |
+| platform | String NOT NULL | 无 |
+| agent | String NOT NULL | 无 |
+| prompt | String NOT NULL | 无 |
+| workspace | String NOT NULL | 无 |
+| model | String NULL | 无 |
+| requestJson | String NULL | 无 |
+| itemsJson | String NOT NULL | 无 |
+| progressJson | String NULL | 无 |
+| error | String NULL | 无 |
+| user | String NULL | 无 |
+| startedAt | DateTime NULL | 无 |
+| finishedAt | DateTime NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(taskKey)。
+关系：runs→faultInjectionRun[]。
+
+#### FaultInjectionRun (`faultInjectionRun`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| runId | String NOT NULL | 无, 唯一 |
+| fiTaskId | String NULL | 无 |
+| itemId | String NULL | 无 |
+| user | String NULL | 无 |
+| platform | String NOT NULL | 无 |
+| agent | String NOT NULL | 无 |
+| fault | String NOT NULL | 无 |
+| submode | String NULL | 无 |
+| injectionMethod | String NULL | 无 |
+| status | String NOT NULL | 无 |
+| workerId | String NULL | 无 |
+| stopRequested | Boolean NOT NULL | false |
+| queuedAt | DateTime NOT NULL | 当前时间 |
+| claimedAt | DateTime NULL | 无 |
+| sessionTaskId | String NULL | 无 |
+| faultActivated | Boolean NOT NULL | false |
+| faultActivatedAt | DateTime NULL | 无 |
+| requestJson | String NULL | 无 |
+| markersJson | String NULL | 无 |
+| outcome | String NULL | 无 |
+| faultContainmentStatus | String NULL | 无 |
+| judgeReason | String NULL | 无 |
+| judgeRawJson | String NULL | 无 |
+| judgedAt | DateTime NULL | 无 |
+| error | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(runId)。
+关系：fiTask→faultInjectionTask fiTaskId→id，保留依赖限制。
+
+#### FaultInjectionWorker (`faultInjectionWorker`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| workerId | String NOT NULL | 无, 唯一 |
+| user | String NOT NULL | 无 |
+| hostname | String NULL | 无 |
+| version | String NULL | 无 |
+| lastSeenAt | DateTime NOT NULL | 无 |
+| inventoryJson | String NOT NULL | "{}" |
+| busySlots | Int NOT NULL | 0 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+| updatedAt | DateTime NOT NULL | 无, 每次更新当前时间 |
+
+唯一组：(id)；(workerId)。
+
+#### GrayscaleTask (`grayscaleTask`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无 |
+| skillId | String NOT NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| skillVersion | Int NOT NULL | 无 |
+| skillVersionId | String NOT NULL | 无 |
+| taskName | String NOT NULL | 无 |
+| configJson | String NOT NULL | "{}" |
+| caseStatesJson | String NOT NULL | "{}" |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)；(user, skillName, skillVersion)；(user, skillName, skillVersion, taskName)。
+
+#### DebugHistory (`debugHistory`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 服务端生成ID, ID |
+| user | String NOT NULL | 无 |
+| skillId | String NOT NULL | 无 |
+| skillName | String NOT NULL | 无 |
+| versionA | String NOT NULL | 无 |
+| versionB | String NOT NULL | 无 |
+| query | String NOT NULL | 无 |
+| temperature | String NOT NULL | 无 |
+| resultsJson | String NOT NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+
+#### DebugJobResult (`debugJobResult`)
+
+| 字段 | 类型 | 默认 / 约束 |
+| --- | --- | --- |
+| id | String NOT NULL | 无, ID |
+| user | String NOT NULL | 无 |
+| status | String NOT NULL | 无 |
+| output | String NULL | 无 |
+| timeCost | String NULL | 无 |
+| tokenUsage | Int NULL | 无 |
+| sessionId | String NULL | 无 |
+| error | String NULL | 无 |
+| createdAt | DateTime NOT NULL | 当前时间 |
+
+唯一组：(id)。
+
+
+### 019 一致性与授权补充
+
+每个owner按实际读取kind校验集合revision，单记录再校验record revision；客户端心跳不推进Settings/Skill/会话的kind revision。关键批次原子提交并保存首个结果回执，重放先检查原请求hash，不能拿后续状态冒充旧ACK。删除只软标记；Agent删除同时提交既有Trace删除屏障，诊断/报告按来源生命周期不可见，工件保留供既有清理流程处理。
+
+设备控制从真实dc哈希、owner/client、当前撤销和IAM绑定建立私有受限scope，不返回owner SDK key。安装令牌一次消费；同owner复用保持原规则，跨owner交接必须证明旧dc，且旧client标记与全部凭据撤销在同事务完成；无旧证明的新安装独立注册，不触旧记录。普通User读取只可回显当前提供的凭据，持read-only key不会取得数据库保存的更高权限key。
+
+Skill文件包完整保存base64字节与mode，正文/文件引用封存于内部不可变release，external version alias稳定。读取仅对已授权、选中的版本下载正文和文件，物化目录按core origin/workspace/principal隔离，保留同步路径接口，不向调用者把工件ref当文件路径。目录与计数不预载全部正文/模型秘密；超出固定kind有界预算明确失败，禁止静默截断。旧local模式和组织/IDaaS的现有可信登录入口不同：后两者仍先验证真实身份；新主体仅personal workspace，不推断管理员。新用户原示例按既有typed Dataset和Trace bundle导入，不写旧Session/Execution库，也不触发额外模型执行。

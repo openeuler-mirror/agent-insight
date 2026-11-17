@@ -509,3 +509,11 @@ RAS 保留015事件接收和摘要投影，DELETE按当前owner+delete权限协�
 FI复用019的faultInjectionTask/Run/Worker原字段，新增私有领域RPC fault-injection/v1，限定任务创建/进度/停止/删除、worker注册/claim/心跳/commands、collect动作。领域事务校验当前IAM、actual owner、execute或delete、worker/client绑定、queued CAS和claim lease；collect绑定当前claim，停止或已删除/换代的run不得被迟到结果覆盖。原prompt/marker/业务Trace readiness与实验typed桥接沿用，独立rejudge仍返回410，不新增模型调用。设备只可处理本client的worker动作，不能成为通用execute主体。原UI和响应字段保留，legacy分支保留。
 
 FI claim保持原响应并附加claimToken；新旧业务客户端最小回传该token与workerId。旧客户端首次当前lease无token仍可回调；同worker重领后不能证明当前lease的旧回执返回409，不猜成功。首次lease摘要复用inbox_receipts，未新增字段或新状态表。关联Experiment在派发、收集、结果发布时复核当前attempt/slot/lease/lifecycle、owner及真实FI run/session，stop、supersede、delete不允许迟到完成覆盖。
+
+## L6：原资产与事务控制域接入（019）
+
+019新增一张固定kind的platform_control_records领域表，不提供任意Prisma where、模型名或SQL。字段见核心字典和platform-control-models.json；按client→资产/配置→工作台控制连续实施，只做必要快速专项/类型，完整审查、全量、三库和原界面验证后置集中执行。现有资产正文/版本复用不可变release、private artifact和稳定external-version alias，版本0与同owner重名语义不变；原Node业务算法在有界控制投影上执行，写入为固定记录批次/CAS，关键注册/改绑、command状态、任务抢占和发布约束仍在服务端事务重核。
+
+作用域来自真实request或已品牌后台actor，不能用user参数换映射token。全局仓储不缓存actor；每次调用读AsyncLocal当前scope，服务端复核原token实际capability。collector-preparation仅在已品牌collector边界使用独立controller目的、同owner write读取相关静态依赖和可信Node临时模型材料，输出仍仅原冻结摘要，不替采集者取得execute。普通设置/凭据读取保持owner与私有controller限制。原local用户名登录bootstrap仅限原已选择模式的可信入口；组织/IDaaS仍先验证真实身份，不增加新登录UI。
+
+设备token/credential查真实hash、owner、撤销和client绑定；安装token消费/注册/改绑/撤销为同事务，命令TTL/状态/CAS和配置快照/投递/加载回执沿原算法。工作台消息/blocks/VFS、会话关联、任务幂等/单active、候选/复测/发布CAS由同一领域事务保留，已typed动态评测/实验/诊断不复制到本表。删除软标记并保留工件/历史，查询保持原删除后的不可见语义，旧数据导入不得自动重启外部任务。

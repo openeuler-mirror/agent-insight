@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -110,6 +111,7 @@ async function executeMergeOperator(args: {
 }
 
 export async function POST(req: NextRequest):Promise<Response> {
+  return withCoreControlRoute(req,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext())return withCoreWorkbenchRoute(req,POST);
   let body: any;
   try {
@@ -285,9 +287,12 @@ export async function POST(req: NextRequest):Promise<Response> {
     if(isStorageCoreEnabled())return coreExperimentFailure(err);
     return NextResponse.json({ error: err?.message || 'merge operator failed' }, { status: 500 });
   }
+
+  },["write"]);
 }
 
 export async function GET(req: NextRequest):Promise<Response> {
+  return withCoreControlRoute(req,async()=>{
   if(isStorageCoreEnabled()&&!getCoreExperimentContext())return withCoreWorkbenchRoute(req,GET);
   const url = new URL(req.url);
   const sessionId = String(url.searchParams.get('sessionId') || '').trim();
@@ -308,6 +313,8 @@ export async function GET(req: NextRequest):Promise<Response> {
     console.error('[skill-opt plan GET] failed:', err?.message || err);
     return NextResponse.json({ error: err?.message || 'failed' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 function serializePlan(plan: any) {
