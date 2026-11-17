@@ -311,7 +311,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 code=getattr(exc,'code',None)
                 if code is None and str(exc) in ('IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED'):code=str(exc)
                 status=410 if code=='REQUEST_EXPIRED' else 429 if code=='QUEUE_LIMIT' else 409
-                self.reply(status,{'error':'State conflict; refresh or inspect batch status',**({'code':code} if code in ('REQUEST_EXPIRED','QUEUE_LIMIT','IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED') else {})})
+                self.reply(status,{'error':'State conflict; refresh or inspect batch status',**({'code':code} if code in ('REQUEST_EXPIRED','QUEUE_LIMIT','IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED') or code=='TRIGGER_READ_CHANGED' and self.path.split('?',1)[0]=='/v1/compat/experiments' else {})})
             except (ValueError,KeyError,TypeError,UnicodeError,RecursionError) as exc:
                 code=getattr(exc,'code',None);status=413 if getattr(exc,'status',None)==413 else 422 if code=='SOURCE_NOT_AVAILABLE' else 400
                 self.reply(status,{'error':'Request exceeds budget' if status==413 else 'Invalid bounded request',**({'code':code} if code=='SOURCE_NOT_AVAILABLE' else {})})
@@ -378,7 +378,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                     config=value.get('config',{})
                     if action=='cancellation_update':purpose='experiment-cancellation/v1'
                     elif action in {'execute_start','execute_complete','execute_fail'} or action=='start' and value.get('source_execution_run_id') is not None or action=='checkpoint' and isinstance(value.get('checkpoint'),dict) and (value['checkpoint'].get('cleanup_confirmed') is True or any(name in value['checkpoint'] for name in ('runtime_started_at_ms','runtime_finished_at_ms'))):purpose='experiment-execution/v1'
-                    elif action in {'outcome_begin','outcome_query'} or action=='complete' and isinstance(value.get('result'),dict) and isinstance(value['result'].get('evidence'),dict) and isinstance(value['result']['evidence'].get('json'),dict) and 'coreOutcome' in value['result']['evidence']['json'] or action=='derived_issue_resolve' or action=='start' and isinstance(config,dict) and (config.get('derived_skill_ids') or 'core_flow_analysis' in config):purpose='experiment-frozen-assets/v1'
+                    elif action in {'outcome_begin','outcome_query','trigger_begin','trigger_cleanup','trigger_delete_draft_cleanup'} or action=='checkpoint' and isinstance(value.get('checkpoint'),dict) and (any(name in value['checkpoint'] for name in ('trigger_samples','trigger_started_at_ms','trigger_finished_at_ms','trigger_runtime_closed')) or value.get('trigger_draft') is True and '_flow_model_calls' in value['checkpoint']) or action=='complete' and isinstance(value.get('result'),dict) and isinstance(value['result'].get('evidence'),dict) and isinstance(value['result']['evidence'].get('json'),dict) and any(name in value['result']['evidence']['json'] for name in ('coreOutcome','coreTriggerResult','coreTriggerDraft')) or action=='derived_issue_resolve' or action=='start' and isinstance(config,dict) and (config.get('derived_skill_ids') or 'core_flow_analysis' in config):purpose='experiment-frozen-assets/v1'
                     if purpose:
                         from .controller_protocol import verify_controller_proof
                         principal=runtime.iam.scope(token).principal_id

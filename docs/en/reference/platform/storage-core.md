@@ -287,3 +287,38 @@ The private `source_execution_run_id` selection is validated against the current
 Cancellation fences work before verifying process exit. Same-instance observed Trace completions replay the exact waiting_trace checkpoint with its original runtime timestamps before recovering the completion receipt, without another Agent call. The bounded local recovery registry evicts settled entries only; unresolved receipts remain and a full registry rejects new work before claiming or model execution. After a hard restart, unknown old-process cleanup stays pending/503; lease expiry is not exit proof. An exact operation POST may resume queued, unstarted work. Client start/retry-execute intents use bounded hashes/UUIDs; only a strict `ok:true` abort acknowledgement retires pending intents for that authenticated Task, leaving other Tasks/accounts intact.
 
 The implementation-status page records final real HTTP/runtime/UI, full-suite and engine evidence. This adds no schema, migration, analytics parser or UI layout; static control migration and complete legacy semantic import remain separate work.
+
+
+### V1 original Trigger evaluation runtime (under review)
+
+Original Trigger endpoints check actual IAM capabilities before reading static configuration. The trusted legacy account identifies static ownership and the original DTO owner; request user fields never authorize access. Each Run creates a private Experiment with one aggregate evaluate work item before acknowledging success. Exact operation receipts recover lost responses. An active run for the same actor, Skill and version returns the original 409 with its Run; different versions remain independent. Internal heads are excluded from ordinary Experiment list/statistics reads. latestOnly selects completed runs only.
+
+The RunPlan freezes the test-set version/items, target Skill version and full bytes, competitors at start, tested history, model descriptor and parameters. Execution preserves the original multi-query sampling, timeout retries, routing rules, zero semantics and description-only Skill materialization. Each physical sample persists intent first. Actual Session messages must be recorded and fully indexed before Session deletion and the observed checkpoint. Runtime closure requires confirmed physical exit. Decision latency excludes recording/deletion waits; recovery preserves completion order without resampling. Unknown delivery or a hard restart without exit proof remains pending/503; an explicitly unsent failure becomes failed only after confirmed cleanup. Reads recheck current sample Trace authorization and provenance. GET never starts model work.
+
+Cancellation persists its fence before exact-attempt cleanup. Original success=true acknowledgements, DTOs and UI remain. The client clears only the pending start identified by the trusted operation digest, preserving other versions. Missing model credentials do not become empty or placeholder authentication.
+
+A–C and D have passed independent review. E drafting/deletion is the current review slice; final acceptance and explicit legacy history migration remain separate, with no production switch. Static Skills/versions, UserSettings and TriggerSets retain their existing authority. Final isolated HTTP, native local-Mock, original UI and three-database acceptance belong to the implementation status record.
+
+The private Trigger start RPC serializes the original HTTP idempotency key/request unchanged across transport retries. The client clears a pending operation only after success=true with a complete Run matching the requested Skill/version/test set, or a valid versioned Set. An ID alone, incomplete DTO, malformed JSON or lost response retains the intent. Cancellation also matches the exact Run ID. Default generic list and ID-selected read_view hide internal Trigger heads; authorized dedicated Trigger history/detail reads remain available.
+
+
+### Original Trigger aggregate issues and resolution (D under review)
+
+Each original Trigger Run produces at most one aggregate issue using the original summary, evidence and suggestedFix builder, including the tested version description and frozen other-version history. The dedupKey remains trigger:<skillName>, generator remains trigger-evaluator@1.0, and runId is the public Trigger history ID. ruleId, dimension and reasoning remain null. All-pass without competition creates no issue; all-pass with a competing Skill still creates one low-severity issue.
+
+Machine completion, the new issue and automatic resolution of previous typed trigger issues commit in one transaction. Formal idempotency receipts and migration-014 annotations preserve resolvedAt, resolvedRunId and includeResolved history. Failed, cancelled or late results cannot clear old issues. Derived list/detail/frontier and manual resolution recheck current authorization and provenance of actual sample Traces. Original optimization endpoints retain legitimate legacy static/feedback reads. Legacy dynamic Trigger history requires explicit semantic migration, with no ordinary fallback or read-time fabrication. AI drafting and deletion are described in the E review slice below; production has not switched.
+
+
+### Original Trigger AI drafting and set deletion (E under review)
+
+Drafting retains the original direct model call and prompt: it requests 18 examples, while the original parser accepts any valid nonempty output, including two items. A new version never merges existing user-edited items. A stable placeholder and independent typed work exist before acknowledgement, with frozen Skill bytes/version and model descriptor. Actual direct JudgeTrace indexing precedes the observed response/failure checkpoint. Unknown submission or a five-minute-old placeholder never causes blind resubmission; replay does not call the model again. Original success/conflict/version DTOs remain.
+
+Completion uses exact owner/version/status/time/original-byte CAS. Repeated completion confirms the same ready/failed value; conflicting user edits survive. Typed results and static projection are separately idempotent, with no cross-store atomicity claim. Authorized POST can recover confirmation; GET is read-only.
+
+Set DELETE preserves original behavior: it deletes set versions while retaining existing Run/Evaluation/SkillIssue history. In-flight Runs continue using their sealed set. Only draft work whose placeholder is missing is precisely fenced and confirmed stopped. Late activation checks the placeholder again, and completion only updates an existing row, preventing deleted-placeholder resurrection. New drafts retain earlier ready set versions; explicit DELETE removes all set versions. The original UI remains, with no schema/purpose/parser changes or production switch.
+
+
+A transient Trigger history head-version change uses the narrowly whitelisted TRIGGER_READ_CHANGED code and an exact retry marker. Only the corresponding GET /trigger/:name/runs 409 is retried, at most three times within the existing 15-second budget, with current credential/account checks and Abort support. Exhaustion or other read errors enter the original UI error handler and retain displayed history rather than interpreting an error DTO as an empty list. Ordinary conflicts, authorization/deletion/provenance errors are not retried. Mutation conflicts and other routes remain unchanged.
+
+
+Draft ready confirmation compares Item structure, avoiding false 409 responses when Python sorts JSON object keys. Object key order and optional undefined fields absent from the wire do not affect confirmation; array order, actual values and null remain significant, and user edits still conflict. Existing SQL CAS conditions and JSON storage format are unchanged.

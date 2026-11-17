@@ -29,6 +29,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import {isDeepStrictEqual} from 'node:util';
 import { PrismaClient } from '@prisma/client';
 import { db } from '@/lib/storage/prisma';
 
@@ -337,6 +338,7 @@ export async function listTriggerEvalSetVersions(
  * **不**就地覆盖现有行；要原地改 items 见 replaceTriggerEvalItemsById。
  */
 export async function createTriggerEvalSetVersion(args: {
+  id?:string;
   user: string;
   skillName: string;
   items: TriggerItem[];
@@ -357,6 +359,7 @@ export async function createTriggerEvalSetVersion(args: {
     data: {
       user: args.user,
       skillName: args.skillName,
+      ...(args.id?{id:args.id}:{}),
       version: nextVersion,
       versionSource: args.versionSource,
       versionNote: args.versionNote ?? null,
@@ -715,4 +718,24 @@ export async function markRunCancelled(
   if (res.count === 0) return null;
   const row = await prisma.skillTriggerEvalRun.findFirst({ where: { id, user } });
   return row ? runRecordFromRow(row) : null;
+}
+
+
+export function sameTriggerItems(left:unknown,right:unknown):boolean{
+  if(!Array.isArray(left)||!Array.isArray(right)||left.length!==right.length)return false;
+  const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
+  // Optional undefined fields are absent on the JSON wire; null remains a real value.
+  const present=(value:Record<string,unknown>)=>Object.fromEntries(Object.entries(value).filter(([,item])=>item!==undefined));
+  return left.every((value,index)=>object(value)&&object(right[index])&&isDeepStrictEqual(present(value),present(right[index])));
+}
+
+export async function compareAndSetCoreTriggerDraft(expected:SkillTriggerEvalSetRecord,output:{status:'ready'|'failed';items?:TriggerItem[];draftedFromSkillHash?:string;versionNote:string|null}):Promise<SkillTriggerEvalSetRecord|null>{
+  const prisma=requirePrisma();
+  const data=output.status==='ready'?{status:'ready',itemsJson:JSON.stringify(output.items),draftedFromSkillHash:output.draftedFromSkillHash,versionNote:output.versionNote}:{status:'failed',versionNote:output.versionNote};
+  await prisma.skillTriggerEvalSet.updateMany({where:{id:expected.id,user:expected.user,skillName:expected.skillName,version:expected.version,status:'drafting',updatedAt:new Date(expected.updatedAt),itemsJson:JSON.stringify(expected.items),versionSource:expected.versionSource,versionNote:expected.versionNote,description:expected.description,draftedFromSkillHash:expected.draftedFromSkillHash},data});
+  const row=await prisma.skillTriggerEvalSet.findUnique({where:{id:expected.id}});if(!row)return null;
+  const current=setRecordFromRow(row);
+  const matches=current.user===expected.user&&current.skillName===expected.skillName&&current.version===expected.version&&current.status===output.status&&current.versionNote===output.versionNote&&(output.status!=='ready'||sameTriggerItems(JSON.parse(row.itemsJson),output.items)&&current.draftedFromSkillHash===output.draftedFromSkillHash);
+  if(!matches)throw Object.assign(new Error('Draft placeholder changed before its exact completion'),{status:409});
+  return current;
 }

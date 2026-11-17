@@ -304,7 +304,7 @@ class ExperimentStore:
     def _create(self,con,token,ws,body,scope,private=False):
         source=copy.deepcopy(body.get('experiment'))
         if not isinstance(source,dict):raise ValueError('Experiment must be an object')
-        if source.get('scope')=='trace-outcome' and not private:raise Forbidden('Outcome head requires the private atomic handoff')
+        if source.get('scope') in {'trace-outcome','skill-trigger-analysis'} and not private:raise Forbidden('Internal head requires its private atomic handoff')
         identity=identifier(source.get('id') or _id());name=identifier(source.get('name',''))
         if con.execute('SELECT 1 FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,identity)).fetchone():raise Conflict('Experiment ID already exists')
         cases=source.pop('cases',[])
@@ -320,6 +320,7 @@ class ExperimentStore:
     def _update(self,con,token,ws,body,scope):
         head=self._head(con,token,ws,body['experiment_id'],'write');self._check_revision(head,body.get('expected_revision'))
         value=self._load(head['metadata_hash'],head['metadata_ref']);changes=body.get('changes',{})
+        if isinstance(changes,dict) and changes.get('scope')=='skill-trigger-analysis':raise Forbidden('Trigger scope requires its private atomic handoff')
         allowed={'name','type','agentName','evaluatorIdsJson','evaluatorConfigsJson','scope','skillName','skillVersion','preset','skillContextJson','configSnapshotJson','sourceExperimentId','optimizationRecordId','watchMode'}
         if not isinstance(changes,dict) or set(changes)-allowed:raise ValueError('Unsupported Experiment fields')
         value.update(changes);digest,ref=self._put(value)
@@ -661,6 +662,11 @@ class ExperimentStore:
         if body.get('case_id'):sql+=' AND w.case_key=?';params.append(body['case_id'])
         sql+=' ORDER BY w.priority DESC,w.created_at_ms,w.work_item_id LIMIT 1';row=con.execute(sql,tuple(params)).fetchone()
         if row is None:return None
+        trigger_checkpoint=None
+        if phase=='evaluate' and head['scope']=='skill-trigger-analysis':
+            from .trigger import recovery_checkpoint
+            trigger_checkpoint=recovery_checkpoint(self,con,ws,row)
+            if trigger_checkpoint is None:return None
         if phase=='evaluate' and head['scope'] in {'trace-flow-analysis','trace-outcome'}:
             prior=con.execute('SELECT c.payload_hash,c.payload_ref FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id WHERE c.workspace_id=? AND c.work_item_id=? AND c.run_id=? ORDER BY a.attempt_no DESC LIMIT 1',(ws,row['work_item_id'],row['run_id'])).fetchone()
             if prior:
@@ -676,7 +682,7 @@ class ExperimentStore:
         count=con.execute('SELECT COALESCE(MAX(a.attempt_no),0)+1 FROM work_attempts a JOIN work_items w ON w.workspace_id=a.workspace_id AND w.work_item_id=a.work_item_id WHERE w.workspace_id=? AND w.case_key=? AND w.evaluator_slot=? AND w.phase=?',(ws,row['case_key'],row['evaluator_slot'],row['phase'])).fetchone()[0];fence=revision(row['etag']+1);attempt=_id()
         con.execute("UPDATE work_items SET status='running',etag=?,updated_at_ms=? WHERE workspace_id=? AND work_item_id=?",(fence,now,ws,item));con.execute("INSERT INTO work_attempts(workspace_id,attempt_id,work_item_id,attempt_no,fence,worker_id,status,lease_until_ms,started_at_ms) VALUES(?,?,?,?,?,?,'running',?,?)",(ws,attempt,item,count,fence,worker,now+lease,now))
         previous=con.execute("SELECT c.payload_hash,c.payload_ref,c.run_id,c.attempt_id,c.work_item_id,a.status AS attempt_status FROM experiment_attempt_checkpoints c JOIN work_attempts a ON a.workspace_id=c.workspace_id AND a.attempt_id=c.attempt_id JOIN work_items w ON w.workspace_id=c.workspace_id AND w.work_item_id=c.work_item_id WHERE c.workspace_id=? AND c.case_id=? AND w.phase='execute' ORDER BY a.attempt_no DESC LIMIT 1",(ws,row['case_key'])).fetchone() if row['phase']=='execute' else None
-        checkpoint={}
+        checkpoint=trigger_checkpoint or {}
         if row['phase']=='execute' and previous:
             previous_payload=self._load(previous['payload_hash'],previous['payload_ref']);checkpoint=previous_payload['checkpoint']
             previous_request=previous_payload.get('execution_request')
@@ -729,6 +735,9 @@ class ExperimentStore:
         value=body.get('checkpoint')
         if not isinstance(value,dict):raise ValueError('Checkpoint must be an object')
         old=self._load(cp['payload_hash'],cp['payload_ref']);prior=old['checkpoint'];provided=set(value);value={**prior,**value}
+        if head['scope']=='skill-trigger-analysis':
+            from .trigger import validate_checkpoint
+            validate_checkpoint(self,con,token,ws,body,cp,prior,{key:value[key] for key in provided})
         for name in ('runtime_started_at_ms','runtime_finished_at_ms'):
             if name in provided:
                 if old.get('phase')!='execute' or type(value[name]) is not int or value[name]<0:raise ValueError('Invalid execution runtime timestamp')
@@ -762,6 +771,10 @@ class ExperimentStore:
     def _complete(self,con,token,ws,body,scope,failed=False):
         head,cp,attempt,slot=self._active(con,token,ws,body);result=copy.deepcopy(body.get('result',{}))
         if not isinstance(result,dict):raise ValueError('Machine result must be an object')
+        if head['scope']=='skill-trigger-analysis' and not failed:
+            from .trigger import validate_result,validate_draft_result
+            validator=validate_draft_result if self._plan(con,ws,head['experiment_id'],cp['run_id'])[1]['config']['core_trigger']['kind']=='draft' else validate_result
+            validator(self,con,token,ws,body,cp,result)
         result.pop('cleanupUnconfirmed',None);failure_code='EVALUATION_FAILED' if failed else None
         if failed:
             error=body.get('error','Evaluation failed');result.update(errorMessage=error if isinstance(error,str) else str(error.get('message','Evaluation failed')),status='failed')
@@ -910,6 +923,10 @@ class ExperimentStore:
         if len(_json(body).encode())>MAX_BYTES:raise ExperimentTooLarge('Experiment request exceeds budget')
         reads={'list','read','get','runplan','load_work','check_work','comments'};ephemeral={'claim','renew','reconcile'}
         allowed=reads|ephemeral|{'create','ensure','update','case_upsert','case_upsert_many','case_remove','bind_trace','start','checkpoint','complete','fail','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','retry','cancel','remove','review','comment','comment_remove','outcome_begin','outcome_cancel','outcome_query'}
+        allowed.add('trigger_begin')
+        if action in {'trigger_scope','trigger_begin','trigger_read','trigger_list','trigger_cancel','trigger_cleanup','trigger_draft_read','trigger_draft_refs','trigger_delete_draft','trigger_delete_draft_cleanup'}:
+            from .trigger import dispatch_trigger
+            return dispatch_trigger(self,action,token,ws,body)
         if action in {'outcome_begin','outcome_lookup','outcome_cancel','outcome_query'}:
             from .trace_outcome import dispatch_outcome
             return dispatch_outcome(self,action,token,ws,body)
@@ -973,6 +990,9 @@ class ExperimentStore:
                 return {key:slot[key] for key in ('experiment_id','case_id','result_id','evaluator_id','status')}
         if action=='read_view':
             if body.get('experiment_id'):
+                with self.control.read_transaction() as con:
+                    head=self._head(con,token,ws,body['experiment_id'])
+                    if head['scope']=='skill-trigger-analysis':return {'snapshots':[],'coverage':'complete'}
                 return {'snapshots':[self.dispatch('read',token,ws,{'experiment_id':body['experiment_id']})],'coverage':'complete'}
             values=self.dispatch('list',token,ws,{k:v for k,v in body.items() if k in {'scope','skill_name'}}|{'limit':MAX_ITEMS,'_all':True,'_full':True,'_hide_internal':True})
             return {'snapshots':values,'coverage':'complete'}
@@ -984,8 +1004,8 @@ class ExperimentStore:
                 if action=='list':
                     limit=body.get('limit',100)
                     if type(limit) is not int or not 1<=limit<=MAX_ITEMS:raise ValueError('Invalid list limit')
-                    grant=self.iam._workspace(scope,ws,'read');where="e.workspace_id=? AND e.state='active' AND e.experiment_id>?";params=[ws,body.get('after_id','')]
-                    if body.get('_hide_internal') is True:where+=" AND e.scope NOT IN ('trace-flow-analysis','trace-outcome')"
+                    grant=self.iam._workspace(scope,ws,'read');where="e.workspace_id=? AND e.state='active' AND e.scope<>'skill-trigger-analysis' AND e.experiment_id>?";params=[ws,body.get('after_id','')]
+                    if body.get('_hide_internal') is True:where+=" AND e.scope NOT IN ('trace-flow-analysis','trace-outcome','skill-trigger-analysis')"
                     for key,col in [('scope','scope'),('skill_name','skill_name')]:
                         if key in body:where+=' AND e.'+col+'=?';params.append(body[key])
                     if grant.role not in {'owner','admin','personal'}:where+=" AND (a.owner_principal_id=? OR a.visibility='group' OR EXISTS(SELECT 1 FROM iam_resource_grants g WHERE g.workspace_id=a.workspace_id AND g.resource_kind=a.resource_kind AND g.resource_id=a.resource_id AND g.grantee_principal_id=?))";params.extend([scope.principal_id,scope.principal_id])
@@ -1029,6 +1049,7 @@ class ExperimentStore:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,capability);self.iam._workspace(scope,ws,'read')
             if action not in {'create','ensure'}:self._head(con,token,ws,body['experiment_id'],capability,deleted=action in {'remove','case_remove','cancellation_update'})
             if action in {'update','case_upsert','case_upsert_many','case_remove','bind_trace','start','execute_start','retry','remove','review','comment','comment_remove'} and self._head(con,token,ws,body['experiment_id'],capability)['scope']=='trace-outcome':raise Forbidden('Outcome mutations require the atomic Trace handoff')
+            if action in {'update','case_upsert','case_upsert_many','case_remove','bind_trace','start','execute_start','retry','remove','review','comment','comment_remove','cancel'} and self._head(con,token,ws,body['experiment_id'],capability)['scope']=='skill-trigger-analysis':raise Forbidden('Trigger mutations require its typed domain entry point')
             if action not in ephemeral:
                 _,_,receipt=self._receipt(con,scope,ws,action,body)
                 if receipt:
@@ -1361,7 +1382,7 @@ class ExperimentStore:
                 for result in case['results']:result.update(score=None,humanScore=None,errorMessage=None)
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);grant=self.iam._workspace(scope,ws,'read')
-            where="e.workspace_id=? AND e.state='active' AND e.scope NOT IN ('trace-flow-analysis','trace-outcome')";params=[ws]
+            where="e.workspace_id=? AND e.state='active' AND e.scope NOT IN ('trace-flow-analysis','trace-outcome','skill-trigger-analysis')";params=[ws]
             if body.get('experiment_id'):where+=' AND e.experiment_id=?';params.append(identifier(body['experiment_id']))
             if body.get('task_id'):
                 task=identifier(body['task_id']);alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(ws,task)).fetchone()
@@ -1721,6 +1742,9 @@ class ExperimentStore:
             try:evidence=json.loads(result['evidenceJson'])
             except ValueError:raise ValueError('Machine evidence JSON is invalid') from None
         container=evidence.get('json',{}) if isinstance(evidence,dict) else {}
+        if head['scope']=='skill-trigger-analysis' or isinstance(container,dict) and 'coreTriggerDerived' in container:
+            from .trigger import record_derived
+            return record_derived(self,con,token,ws,scope,head,cp,slot,machine,result,validate_only=validate_only)
         derived=container.get('directTrajectoryDerived') if isinstance(container,dict) else None
         business=container.get('experimentSkillDerived') if isinstance(container,dict) else None
         if derived is not None and business is not None:raise Conflict('Derived machine envelopes are mutually exclusive')
@@ -1811,6 +1835,11 @@ class ExperimentStore:
                 continue
             con.execute('INSERT INTO experiment_annotations(workspace_id,experiment_id,annotation_id,kind,case_id,result_id,machine_result_id,subject_id,actor_principal_id,payload_hash,payload_ref,created_at_ms,lookup_key) VALUES(?,?,?,?,?,?,?,NULL,?,?,?,?,?)',(ws,head['experiment_id'],identity,kind,cp['case_id'],slot['result_id'],machine,scope.principal_id,digest,ref,self.control.clock(),skill))
 
+    def _derived_source_guard(self,con,token,ws,scope,head,run):
+        if head['scope']=='skill-trigger-analysis':
+            from .trigger import guard_derived_sources
+            guard_derived_sources(self,con,token,ws,scope,head,run)
+
     def _derived_trigger_frontier(self,token,ws,body):
         skill=identifier(body.get('skill_id'));requested=body.get('version')
         if requested is not None and (type(requested) is not int or requested<0):raise ValueError('Explicit Skill version required')
@@ -1831,7 +1860,7 @@ class ExperimentStore:
                     expected={'skill_id':skill,'skill_name':head['skill_name'],'version':metadata.get('skillVersion'),'source':'trigger','preset':'trigger','scope':head['scope']}
                     if binding!=expected or frozen.get('preset')!='trigger' or frozen.get('scope','')!=head['scope'] or frozen.get('skillName')!=head['skill_name'] or frozen.get('skillVersion')!=metadata.get('skillVersion') or config.get('_derived_scope_attested') is not True or binding['version'] not in config.get('derived_skill_versions',{}).get(skill,[]):raise Conflict('Trigger frontier source scope differs')
                     if receipt['state']=='quarantined':raise ExperimentUnavailable('Trigger frontier machine receipt is quarantined')
-                    self._head(con,token,ws,head['experiment_id']);self._source_assets(con,scope,ws,head['experiment_id'],receipt['run_id'])
+                    self._head(con,token,ws,head['experiment_id']);self._source_assets(con,scope,ws,head['experiment_id'],receipt['run_id']);self._derived_source_guard(con,token,ws,scope,head,receipt['run_id'])
                     for manifest in self._source_routes(plan,receipt['case_key']):self._source_route(con,scope,ws,manifest);sources.append(manifest)
                     version=binding['version'];accepted.append(dict(receipt))
                     evaluations.extend(row[0] for row in con.execute("SELECT annotation_id FROM experiment_annotations WHERE workspace_id=? AND machine_result_id=? AND kind='derived-evaluation' AND lookup_key=? ORDER BY annotation_id",(ws,receipt['result_id'],skill)).fetchall())
@@ -1852,7 +1881,8 @@ class ExperimentStore:
                 if fresh['created_by']!=current.principal_id or fresh['status']!=head['status'] or fresh['current_run_id']!=head['current_run_id'] or fresh['revision']!=head['revision'] or fresh['lifecycle_revision']!=head['lifecycle_revision']:raise Conflict('Trigger frontier lifecycle changed')
                 selected=con.execute("SELECT r.result_id,r.state FROM experiment_result_slots s JOIN experiment_cases c ON c.workspace_id=s.workspace_id AND c.case_id=s.case_id JOIN result_receipts r ON r.workspace_id=s.workspace_id AND r.result_id=s.selected_result_id WHERE s.workspace_id=? AND s.experiment_id=? AND c.state='active' AND s.status='done' ORDER BY r.result_id LIMIT ?",(ws,head['experiment_id'],MAX_ITEMS+1)).fetchall()
                 if [(row[0],row[1]) for row in selected]!=[(row['result_id'],row['state']) for row in receipts]:raise Conflict('Trigger frontier selection changed')
-                for receipt in accepted:self._source_assets(con,current,ws,head['experiment_id'],receipt['run_id'])
+                for receipt in accepted:
+                    self._source_assets(con,current,ws,head['experiment_id'],receipt['run_id']);self._derived_source_guard(con,token,ws,current,fresh,receipt['run_id'])
                 for manifest in sources:self._source_route(con,current,ws,manifest)
         return {'versions':values}
 
@@ -1894,7 +1924,7 @@ class ExperimentStore:
             for row in rows:
                 self._head(con,token,ws,row['experiment_id']);roots.add(row['experiment_id'])
                 receipt=con.execute('SELECT run_id FROM result_receipts WHERE workspace_id=? AND result_id=?',(ws,row['machine_result_id'])).fetchone()
-                self._source_assets(con,scope,ws,row['experiment_id'],receipt['run_id']);source_assets.add((row['experiment_id'],receipt['run_id']))
+                self._source_assets(con,scope,ws,row['experiment_id'],receipt['run_id']);self._derived_source_guard(con,token,ws,scope,self._head(con,token,ws,row['experiment_id']),receipt['run_id']);source_assets.add((row['experiment_id'],receipt['run_id']))
                 _,plan=self._plan(con,ws,row['experiment_id'],receipt['run_id'])
                 for manifest in self._source_routes(plan,row['case_id']):self._source_route(con,scope,ws,manifest);source_routes.append(manifest)
                 dto=self._derived_dto(row,con)
@@ -1910,7 +1940,8 @@ class ExperimentStore:
             current=self.iam._scope(con,token);self.iam._workspace(current,ws,'read')
             if current.fingerprint!=fingerprint:raise Forbidden('Derived authorization changed while reading')
             for exp in roots:self._head(con,token,ws,exp)
-            for exp,run in source_assets:self._source_assets(con,current,ws,exp,run)
+            for exp,run in source_assets:
+                self._source_assets(con,current,ws,exp,run);self._derived_source_guard(con,token,ws,current,self._head(con,token,ws,exp),run)
             for manifest in source_routes:self._source_route(con,current,ws,manifest)
         if action=='derived_lookup' and body.get('allow_missing') is True:return {'found':bool(result),'value':result[0] if result else None}
         return result[0] if action=='derived_lookup' else result
@@ -1944,12 +1975,12 @@ class ExperimentStore:
             if row is None:raise ExperimentNotFound('Derived Evaluation not found')
             head=self._head(con,token,ws,row['experiment_id']);receipt=con.execute('SELECT * FROM result_receipts WHERE workspace_id=? AND result_id=? AND case_key=?',(ws,row['machine_result_id'],row['case_id'])).fetchone()
             if receipt is None or receipt['state']=='quarantined':raise ExperimentUnavailable('Derived source receipt is unavailable')
-            self._source_assets(con,scope,ws,row['experiment_id'],receipt['run_id'])
+            self._source_assets(con,scope,ws,row['experiment_id'],receipt['run_id']);self._derived_source_guard(con,token,ws,scope,head,receipt['run_id'])
             run,plan=self._plan(con,ws,row['experiment_id'],receipt['run_id']);source=plan.get('frozen_trace_evidence',{}).get(row['case_id'])
             if source is None:
                 packet=self._load(receipt['content_hash'],receipt['artifact_ref']);result=packet.get('result',{});proof=result.get('evidence')
                 if proof is None and isinstance(result.get('evidenceJson'),str):proof=json.loads(result['evidenceJson'])
-                envelope=proof.get('json',{}).get('experimentSkillDerived') if isinstance(proof,dict) and isinstance(proof.get('json'),dict) else None
+                envelope=proof.get('json',{}).get('coreTriggerDerived' if head['scope']=='skill-trigger-analysis' else 'experimentSkillDerived') if isinstance(proof,dict) and isinstance(proof.get('json'),dict) else None
                 if not isinstance(envelope,dict) or not any(value.get('id')==identity and value.get('executionId') is None for value in envelope.get('evaluations',[]) if isinstance(value,dict)):raise ExperimentUnavailable('Derived source has no frozen Trace evidence')
                 cp=con.execute('SELECT * FROM experiment_attempt_checkpoints WHERE workspace_id=? AND attempt_id=?',(ws,receipt['attempt_id'])).fetchone()
                 if cp is None:raise ExperimentUnavailable('Derived source attempt is unavailable')
@@ -1972,6 +2003,10 @@ class ExperimentStore:
             frozen=next((skill for skill in skills if isinstance(skill,dict) and skill.get('id')==evaluation.get('skillId')),None)
             business_scope=plan.get('config',{}).get('experiment_skill_scope',{})
             skill={'id':evaluation.get('skillId'),'name':frozen.get('name') if frozen else business_scope.get('skill_name') if business_scope.get('skill_id')==evaluation.get('skillId') else None,'user':frozen.get('user') if frozen else evaluation.get('user'),'version':evaluation.get('version')}
+            if head['scope']=='skill-trigger-analysis':
+                tested=plan.get('config',{}).get('core_trigger',{}).get('skill',{})
+                if tested.get('id')!=evaluation.get('skillId') or tested.get('version')!=evaluation.get('version'):raise Conflict('Trigger detail tested Skill binding differs')
+                skill.update(content=tested.get('content'),selectedVersion={'version':tested['version'],'content':tested['content']})
             if frozen:
                 versions=frozen.get('versions',[]);selected=next((value for value in versions if isinstance(value,dict) and value.get('version')==evaluation.get('version')),None)
                 flows=[value for value in frozen.get('parsedFlows',[]) if isinstance(value,dict) and value.get('version')==evaluation.get('version')]
@@ -1988,7 +2023,7 @@ class ExperimentStore:
             latest=con.execute('SELECT state,content_hash FROM result_receipts WHERE workspace_id=? AND result_id=?',(ws,machine)).fetchone()
             if current.fingerprint!=fingerprint:raise Forbidden('Derived detail authorization changed during read')
             if latest is None or latest['state']=='quarantined' or latest['content_hash']!=digest:raise ExperimentUnavailable('Derived detail source changed during read')
-            self._source_assets(con,current,ws,row['experiment_id'],receipt['run_id'])
+            self._source_assets(con,current,ws,row['experiment_id'],receipt['run_id']);self._derived_source_guard(con,token,ws,current,self._head(con,token,ws,row['experiment_id']),receipt['run_id'])
             if source:self._source_route(con,current,ws,source['manifest'])
         return result
 
@@ -2042,7 +2077,7 @@ class ExperimentStore:
             self._case(con,ws,row['experiment_id'],row['case_id'])
             machine=con.execute('SELECT * FROM result_receipts WHERE workspace_id=? AND result_id=? AND case_key=?',(ws,row['machine_result_id'],row['case_id'])).fetchone()
             if machine is None or machine['state']=='quarantined':raise Conflict('Derived Issue source receipt is unavailable')
-            self._source_assets(con,scope,ws,row['experiment_id'],machine['run_id'])
+            self._source_assets(con,scope,ws,row['experiment_id'],machine['run_id']);self._derived_source_guard(con,token,ws,scope,head,machine['run_id'])
             slot=self._slot(con,ws,row['experiment_id'],row['result_id'])
             if current and slot['selected_result_id']!=row['machine_result_id']:raise Conflict('Derived Issue selection has changed')
             _,plan=self._plan(con,ws,row['experiment_id'],machine['run_id'])

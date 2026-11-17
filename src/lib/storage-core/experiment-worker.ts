@@ -42,22 +42,28 @@ export async function stopCoreEvaluationAttempt(context:CoreExperimentContext,ta
 }
 
 export async function runCoreExperimentWork(handle:ExperimentWorkHandle,context:CoreExperimentContext):Promise<'done'|'failed'> {
- const controller=new AbortController();const observed=registerEvaluation(context,handle,controller);let submitting=false;
+ const controller=new AbortController();const observed=registerEvaluation(context,handle,controller);let submitting=false;let draft=false;
  let checking:Promise<void>|undefined;
  const check=()=>checking ||= context.rpc('renew',{...handle,lease_ms:30000}).then(()=>{},error=>{controller.abort(error);}).finally(()=>{checking=undefined;});
  const timer=setInterval(()=>{void check();},500);
  timer.unref?.();
  try {
-  const work=await context.rpc('load_work',{...handle}) as FrozenExperimentWork;
+  const work=await context.rpc('load_work',{...handle}) as FrozenExperimentWork;draft=work.experiment_config.scope==='skill-trigger-analysis'&&(work.runplan.config as {core_trigger?:{kind?:string}}|undefined)?.core_trigger?.kind==='draft';
   const config=work.runplan?.config as {frozen_ras_events?:Record<string,unknown[]>}|undefined;
   if (!work.frozen_ras_events && config?.frozen_ras_events) work.frozen_ras_events=config.frozen_ras_events[handle.case_id];
-  const evaluated=await runWithCoreExperimentContext(context,()=>prepareCoreExperimentRuntime(context,work,()=>evaluateFrozenExperimentWork(work,{user:context.actor.username,signal:controller.signal}),{signal:controller.signal}));
+  const evaluated=await runWithCoreExperimentContext(context,async()=>{
+   if(work.experiment_config.scope==='skill-trigger-analysis'){
+    const {evaluateCoreTriggerWork}=await import('./trigger-runtime');return evaluateCoreTriggerWork(work,context,controller.signal);
+   }
+   return prepareCoreExperimentRuntime(context,work,()=>evaluateFrozenExperimentWork(work,{user:context.actor.username,signal:controller.signal}),{signal:controller.signal});
+  });
   const result=attachExperimentSkillDerived(work,evaluated);
   controller.signal.throwIfAborted();
   await check();controller.signal.throwIfAborted();
   const payload={...handle,result};
   submitting=true;
   await submitCoreOperationReceipt(context,'complete',payload,`experiment:${handle.attempt_id}:${handle.fence}:complete`);
+  if(draft){const {finalizeCoreTriggerDraft}=await import('./trigger-draft');await finalizeCoreTriggerDraft(context,handle.experiment_id);}
   return 'done';
  } catch(error) {
   if((error as {code?:string})?.code==='EVALUATION_CLEANUP_UNCONFIRMED')observed.unconfirmed=true;
@@ -71,6 +77,7 @@ export async function runCoreExperimentWork(handle:ExperimentWorkHandle,context:
   const payload={...handle,...(failure.coreExperimentFailureResult?{result:failure.coreExperimentFailureResult}:{}),error:{message:failure?.message||'Experiment scoring failed',...(failure?.code?{code:failure.code}:{})}};
   try {await context.rpc('fail',{...payload,operation_key:`experiment:${handle.attempt_id}:${handle.fence}:fail`,operation_request:payload});}
   catch(cause){if(![409,410].includes((cause as {status?:number})?.status||0))throw cause;}
+  if(draft){const {finalizeCoreTriggerDraft}=await import('./trigger-draft');await finalizeCoreTriggerDraft(context,handle.experiment_id);}
   return 'failed';
  } finally {clearInterval(timer);try{if(checking)await checking;}finally{observed.state=observed.unconfirmed?'unconfirmed':'confirmed';observed.controller=undefined;observed.finish();}}
 }

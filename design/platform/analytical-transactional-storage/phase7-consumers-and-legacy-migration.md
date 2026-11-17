@@ -6,13 +6,13 @@
 
 Trace CRUD/标签/bundle、Dataset版本/回流/生成、实验/比较/直接轨迹评测、结果/RunPlan、诊断会话与报告、Workbench/Grayscale、Benchmark、Flow和版本比较已有typed接管。它们的legacy分支不是待迁证据；仍真实使用的旧静态配置和事务控制域也不能先删或全局拦截。
 
-| 依赖层 | 尚未接管或未闭环功能 | 实际入口与依赖 | 验收要求 |
+| 依赖层 | 当前状态与剩余功能 | 实际入口与依赖 | 验收要求 |
 |---|---|---|---|
 | L0 | 96模型、真实物理字段、关系、owner/凭据与未知数据迁移计划 | `services/storage/legacy.py`、`__main__.py`、`prisma/schema.prisma`；原inspect/export仅原始快照，migration-plan仅核心DDL升级 | 新工具只读、无apply；未知/孤儿/owner歧义/缺转换器不得ready，原导出不放松 |
-| L1 | 优化点旧页面resolve回调 | `skills/by-name/[name]/optimization-points/resolve`仍只更新旧SkillIssue；新列表已合并typed派生Issue | 原PATCH/DTO不变；真实actor、Skill范围、当前机器selection；静态/feedback仍原域，新派生只写014注解；重复可恢复，threadId缺省保留null语义 |
-| L2 | Skill运行/日志等剩余动态消费者 | `skills/[id]/runs`、`skills/logs`仍需完整运行/评测快照；Dashboard/Fleet/Task/Quality、定价observed models、Skill列表/版本、Agent列表已接通 | 复用原快照与聚合算法；保持真实结果语义，不以泛化实验分数替代answerScore，不回写历史版本 |
-| L3 | final_result编辑、独立rejudge/cancel | `trace_service.py`明确409；eval/rejudge及evaluation/cancel仍旧库 | 编辑→冻结证据/配置→持久任务→lease/fence/取消→实际结果与Issue；不可仅去409；新编辑不改旧运行输入 |
-| L3 | Batch与旧Trigger评测 | debug/batch-tasks缺typed context；旧trigger运行仍写SkillTriggerEvalRun/Evaluation/SkillIssue，被新聚合过滤 | 保留任务/评分/运行DTO；Dataset/Skill/Evaluator版本、进度/取消/重启与空Issue替代语义一起闭环 |
+| L1 | 已实现/隔离验收：原优化点resolve回调；历史导入另待 | 原入口已分别解决 typed 派生问题和合法旧 static/feedback；旧 dynamic/trigger 历史不普通回退 | 原PATCH/DTO不变；真实actor、Skill范围、当前机器selection；静态/feedback仍原域，新派生只写014注解；重复可恢复，threadId缺省保留null语义 |
+| L2 | 已实现/隔离验收：Skill runs/logs 与统计读取；历史导入另待 | 原 runs/logs、Dashboard/Fleet/Task/Quality、定价 observed models、Skill 列表/版本、Agent 列表已接通当前授权快照 | 复用原快照与聚合算法；保持真实结果语义，不以泛化实验分数替代answerScore，不回写历史版本 |
+| L3 | 已实现/隔离验收：final_result 编辑、独立 rejudge/cancel；历史导入另待 | 原编辑、rejudge/cancel 已走私有 Outcome 持久任务、可信录制与当前投影，原页面保留 | 编辑→冻结证据/配置→持久任务→lease/fence/取消→实际结果与Issue；不可仅去409；新编辑不改旧运行输入 |
+| L3 | Batch Trace/Dataset 已实现/隔离验收；原 Trigger A–D 已独立复核、E 当前复核中 | Batch 原执行/重试/评分/取消已接管；原 Trigger A–C 为独立 Run/live 采样，D 为单聚合问题与真实解决注解，E 起草/删除未闭环；旧历史导入另待 | 保留任务/评分/运行DTO；Dataset/Skill/Evaluator版本、进度/取消/重启与空Issue替代语义一起闭环 |
 | L4 | upload/proxy/OpenCode complete、OTLP logs、旧spool重放 | logs→各framework spool→consumer→saveExecutionRecord旧Execution/Session；core下consumer仍启动 | 新接收需真实actor/来源证明及durable ack，旧积压不可仅按payload.user推断授权；原解析/合并/去重保留，确认indexed后才推进cursor |
 | L4 | OTLP metrics/Infra采样与关联 | metrics/poller→旧InfraSource/InfraMetricSample；infra树与人工SessionInfraLink读旧Trace | source配置/密钥、CH时序事实与人工关系分域；新Trace root/endpoint/model/window完整，不猜目标 |
 | L5 | RAS事件与FI Trace消费者 | RasAnomalyEvent及关联/删除仍旧库，FI runs/:id/trace读旧Session | 先接事件事实与稳定Trace关联/删除屏障，再迁FI控制事务；已有实验collect桥接不能误报双写 |
@@ -90,7 +90,10 @@ T3首个可独立落地消费者限定为原`modelconfig/pricing GET`的observed
 | T3模型列表首片 | 已实现/隔离验收 | 只迁pricing GET observed模型；价格PUT及其旧控制域不迁 |
 | T3授权摘要与首批统计 | 已实现/隔离验收 | Dashboard/Fleet/Quality/Task使用当前授权投影，保留原统计算法、DTO及界面；原Trace钻取、筛选、空结果及执行记录已验证 |
 | T3 Skill/Agent列表与版本 | 已实现/隔离验收 | 原Skill列表、版本usage/trend/执行输出和Agent列表/自动发现；sessionless、真实Agent ID、原Recorder来源及登录别名兼容已回归，UI不变 |
-| T3其他动态消费者 | 待实施 | Skill runs/logs及其他剩余读写继续按清单接入；Agent删除与静态配置控制域未迁，不将本片视为全部领域完成 |
+| T3 Skill runs/logs | 已实现/隔离验收 | 原运行/日志使用已授权历史快照与原聚合；Agent删除、静态控制域和旧历史导入仍未迁 |
+| L3 Trace Outcome | 已实现/隔离验收 | 原 final_result/rejudge/cancel 已走新持久链路，保留原页面及历史输入 |
+| L3 Batch Trace/Dataset | 已实现/隔离验收 | 原采样/数据集执行、评分、重试与取消链路已接管，旧 shell/静态资产及历史导入另待 |
+| L3 原 Trigger | A–E 已实现/隔离验收 | 原 live、实际 indexed Trace、聚合优化点/自动与手工解决、AI起草/占位CAS及Set删除均闭环；原页面0分→AI新版本→100分完成，旧动态历史语义导入仍待 |
 | L3–L8其他消费者及历史迁移 | 待实施 | 按本文依赖，不能拿清单/目录或测试绿替代业务接管和历史apply |
 
 最终应用5794项（5772通过/22跳过）、存储969项（790通过/179跳过）均零失败，PG/nativeOG解决注解及迁移保留各13项通过；实际HTTP/CH/IAM和数据指纹证据见[实施状态](implementation-status.md#2026-11-15-剩余消费者盘点语义计划与首批闭环)。当前只读计划时间预算在SQL/循环边界检查，最终deadline复核保证超时不返回完整内容hash；max_bytes限制原始读入字节而非进程RSS。原前端JSX/CSS未改，本轮无浏览器验证。此记录只结算三片已验收工作，不将后续条目标为完成。
@@ -227,3 +230,57 @@ Dataset Batch 真实运行补充：Agent 标准记录明确携带的 skill_versi
 最小设计应保留control中的source ID、workspace/访问范围、endpoint/scrape URL、push/pull、私有authHeaders、model/硬件参数、采样间隔/enabled及Trace↔source/model人工覆盖关联；CH采样需稳定样本/receipt、原tsMs含0、via、nullable model、gauges、累计counters、histogram buckets/sum/count、waitingByReason。保留+Inf、counter reset和原窗口/排序/最新n/导出含义；原全局唯一endpoint、无owner的历史源与人工关联必须显式迁移归属。后续在核心设计/表字典中细化必要增量迁移并验证三库，不运行或混用已延期的第二版水位/容量草稿。当前vLLM归一化不宣称覆盖所有OTLP metric类型、temporality或exemplar。
 
 验收至少覆盖原客户端upload到原Trace页、同包/丢ACK/改包冲突、新快照不重复Trace、completion先到/迟到/重启/墓碑、APIKey/device冲突/撤销/伪造主体、分包或CH失败时pending且cursor不前移、旧源/旧cursor不变，以及Infra push/pull到历史/最新/model/导出/自动与人工关联及私有源隔离。容量与万级Span继续第二版，不能代替上述第一版原功能闭环。
+
+
+### 第一版原 Trigger 评测接入：A–C 复核切片
+
+原 Trigger 的 root、upload、draft、run、runs、cancel 入口先执行实际 IAM capability 检查，再使用可信兼容账号访问静态 Skill/版本、UserSettings 和 TriggerSet。请求中的 user 不授权。原页面和 API DTO 保留；core 下动态 Run 不读写旧 SkillTriggerEvalRun。此切片只覆盖授权及原 live 运行主链路，聚合 Evaluation/SkillIssue、自动 resolve、AI draft 和 Set 删除关联清理仍待 D/E 闭环，不能称为原 Trigger 整体完成或据此切换环境。
+
+每次原 Run 建一个独立私有 Experiment、一个聚合 evaluate work，复用已有 RunPlan、lease/fence、controller proof 和操作回执，不增加表或 purpose。trigger_begin 同事务防止同实际主体、Skill、版本重复 active；相同操作丢 ACK 先恢复准确回执。409 保留现有 running Run DTO。latestOnly 只选 done，后续 pending/failed/cancelled 不遮住上一次完成。内部 head 排除原通用 Experiment 列表及其统计读取。
+
+RunPlan 固定 TriggerSet ID/版本/完整 items、目标 Skill 完整内容和版本（0 有效）、其他 Skill 的启动时最新内容、其他被测版本历史及模型连接摘要和参数。省略版本只在启动时选择最新；执行/恢复不重新选择。原多 query、多采样、超时重试、>= threshold、竞争路由及空分母 0 逻辑保留，运行物化仍为原 description-only Skill；冻结完整正文供来源/历史和后续优化点使用，不把正文喂给路由测试。模型恢复必须匹配封存连接，未配置 key 时不向 OpenCode 新增空 key。
+
+每个真实样本先写 intent，再调用原 live 算法。原 Session 消息经 work 绑定的可信 Recorder、全部 ingest 批次 indexed 确认后才删除 Session，随后保存 observed 结果；物理进程退出确认后保存关闭时间。样本响应 latency 在决策结束封存，不包含录制/删除等待；Run duration 保存真实完整运行区间，恢复不计入停机时间。已观测样本按原完成顺序聚合，恢复不重复模型。明确未创建 Session、尚未 send 且物理退出已确认的失败保留 failed；未知发送/录制、硬重启缺物理退出证明仍 pending/503。全 Session error 不生成成功分数。
+
+取消先持久 fence，再以准确 attempt 身份核实物理退出/清理；新操作等待未确认清理。客户端沿原 success=true ACK，坏 JSON、丢响应保留原意图；取消仅根据可信 Run 操作摘要清理同账号、同 Skill、准确对应的未确认 start，不误清其他版本。只读 GET 不激活 work 或模型。读取已完成结果重新检查实际采样 Trace 的当前授权、来源和删除状态。
+
+验证分层记录在本片 evidence：专项 Node、后端真实 Recorder+内存 facts、类型及 lint；本地 Mock 原生 OpenCode、原 HTTP/API 客户端、原界面、全量及 PG/openGauss 由最终冻结源验收记录补齐。内存 facts 或 VM 模型替身不等价于原生 CH/模型链路。旧 TriggerSet/Run/Evaluation/SkillIssue/resolve 关联仍须显式语义迁移，普通新 Run 不冒充导入历史。
+
+A–C 独立审查修正：真实 withCoreExperiments 的 trigger_begin 序列化必须携带原 HTTP operation_key/operation_request，并在网络重试中保持完全相同；仅 stub rpc 的运行测试不能证明该契约。客户端 success=true 还须附带匹配 Skill/请求版本/测试集的完整原 Run 或有效版本 Set，只有 ID、缺日期/必要字段或错归属的 ACK 保留意图；取消还验证准确 Run ID 与可信操作摘要。通用 list 默认及按 ID read_view 均隐藏内部 Trigger，专用读取继续按原授权；普通实验读取不变。最初真实 HTTP 400、零模型调用的失败证据保留，修正后另建隔离验收环境，不覆盖旧证据。
+
+
+### 第一版原 Trigger：D 聚合优化点与真实解决（复核切片）
+
+抽原纯 builder，legacy persistence 与 core 使用同一套 summary/evidence/suggestedFix 构造，不改原算法或建议文案。core 只使用本次封存的完整目标版本和其他已测试版本历史；运行物化继续 description-only。独立旧源码提取的三组 golden 覆盖漏/误触发、Unicode 长 query、历史描述，以及全 pass 但有 competitor 仍生成一个 low issue；仅全 pass 且无 competitor 不生成新 Evaluation/Issue。
+
+新完成结果携带 signed coreTriggerDerived，后端限定 sealed Trigger scope、原聚合 report、Skill/version、真实 sample Trace 和当前来源。每次最多一条 Evaluation、一条 dedupKey=trigger:<skillName> 的 Issue；generator=trigger-evaluator@1.0，runId 为原公开 TriggerRun ID，ruleId/dimension/reasoning 保留 null，owner 展示沿封存兼容账号且不用于授权。generic 结果不能伪造此 envelope。
+
+接受完成结果、记录机器选择、生成新问题与解决同主体/Skill/version 旧 typed trigger 问题在同一事务。自动解决使用正式 derived_issue_resolve 操作回执及 014 注解，resolvedAt/公共 resolvedRunId 可追溯；故障回滚不留下半条解决记录。原 manual resolve 的 nullable context 和 includeResolved 历史继续可用。最新 clean 完成推进空 frontier；failed/cancelled/迟到提交既不解决旧问题也不产生新问题。
+
+原优化点 HTTP/聚合仍读取合法旧 static/feedback，动态 Trigger/Evaluation/SkillIssue 不回落旧权威。已存在旧动态历史继续列迁移清单；本片不读时补造旧 Issue，不改旧库数据。list/detail/frontier/手工解决前后核对实际采样 Trace 的当前授权、来源和删除屏障。原页面/DTO、数据库 schema/purpose/parser 不变。D 专项与邻接测试不代替最终原生/原页面、全量与三库验收；E 的 AI draft、placeholder CAS 和 Set 删除关联清理仍待后续独立切片。
+
+
+### 第一版原 Trigger：E 起草与 Set 删除（复核切片）
+
+AI draft 保留原 direct createModel.invoke、SYSTEM/USER prompt、18条要求与原宽松非空解析；两条合法输出也接受，replaceUserEdited=true 不合并旧条目。每次以 operation 派生稳定 placeholder ID，固定实际最新 Skill 完整内容/版本（0有效）、用于提示的解析正文/description和非秘密模型连接摘要。返回 success+set 前已存在独立 kind=draft 的 typed work；内部 draft head 不混入通用 Experiment 或原 Trigger Run 列表。409 保留原 existingSet。缺模型配置封存为可追溯失败意图，后台 CAS failed，不以最新配置重试原意图。
+
+复用既有 flow-model-delivery 单次 intent/observed，真实 direct system/user/assistant或失败消息经过可信 JudgeTrace、全部 indexed 后才记录 observed。记录缺失/未知提交保持 pending，不因5分钟占位过期重发；已观察响应/失败恢复不访问当前模型或再次 invoke。采样文本沿原 parser 解析，item ID 由工作和条目索引稳定派生，支持同一结果的静态 CAS 恢复。Model usage 映射保留真实0值。真实运行与只读恢复分别验证，不把 VM 模型替身当原生 provider 验收。
+
+placeholder 完成只做按原 ID/owner/Skill/version/status/updatedAt/原 items/元数据的精确 updateMany CAS，不插入新行。相同 ready/failed 完成重放可确认旧 ACK；编辑冲突返回409并保留用户数据。typed result 与旧静态投影不宣称跨库原子，已完成 result 的静态确认可由原授权 POST 恢复；GET 仅读取，不启动模型或写回。ready 历史版本保留，新起草仍沿原规则清理 failed/stale 占位，活动或未知 typed 调用不当作僵尸重跑。
+
+**删除口径更正：原 Set DELETE 只删 Set，不级联 Run/Evaluation/SkillIssue。** 旧 triggerSetId 是普通字符串，无 FK/cascade；隔离旧原 handler 对照为 Set/Run/Evaluation/Issue 由1/1/1/1变为0/1/1/1，history仍200。本片不删除 Run/Issue head；已有完成和在飞 Run 使用封存 Set 继续，原历史/优化点保持。删除后仅对缺失 placeholder 所对应的 draft 做准确持久 fence、物理调用结束确认与清理，取消状态阻止迟到提交；draft begin 后激活前重新核对静态占位，CAS 只更新已有行，删后不复活。DELETE 的 read/delete 能力用于专用 draft 清理，不借此取消 Run，也不要求额外 write。
+
+实际 withCoreExperiments→requestCore wire 回归覆盖 begin、模型 checkpoint/complete 和删除清理的原 operation_key/request 及现有 frozen-assets purpose 签名。无新 schema、purpose、parser、模型框架或前端变动，旧 dynamic 历史仍在语义迁移清单。最终全量、PG/openGauss、真实本地 provider、原 HTTP/原界面及异常验收由冻结源统一确认；本片自身仍不授权生产切换。
+
+
+E 复审修正：原 UI 首轮 reload 未检查 runs HTTP 错误，会把409错误 DTO 当成空历史并停止 running 轮询；已有 running 的 refresh 路径与首轮不同，必须以原函数对照。仅 Trigger read postflight 的 head revision/currentRun 变化携带 TRIGGER_READ_CHANGED，HTTP helper 只在 experiments RPC 白名单输出，Node transport 仅该端口/409识别，原 Trigger handler 增精确 retry header。apiFetch 只对原 GET /trigger/:name/runs 的对应409，在原15秒预算内最多3次重读；每次重新核对实时凭据/账号、尊重 Abort，既不扩大授权也不放松来源一致性。耗尽、普通409、403、404等进入原 reload catch 保留现有状态，不以错误 DTO 伪装空列表；普通源冲突/墓碑不重试，POST冲突及 existingRun/Set、其他 GET 契约不变。原 TSX/页面代码未修改，真实旧失败夹具保留，冻结 V2 后另跑实际 apiFetch→原 HTTP/模型链路，再跑最终门禁。
+
+
+E 起草 CAS 跨语言修正：Python canonical JSON 会改变 Item 对象键顺序，不能用 raw JSON.stringify 比较确认已提交的同一 ready 结果。完成确认与启动前检查共用结构比较，忽略对象键顺序和 JSON 中不存在的 optional undefined，保留数组顺序、真实字段值及 null。ready 确认比较静态行原 itemsJson 的解析值，不经过会 trim/coerce/drop 字段的公开 DTO 归一化，因此 query/shouldTrigger/rationale/source、顺序、空白或扩展字段的真实编辑仍冲突。既有 SQL CAS 条件、JSON 写入格式和 owner/version/元数据保护不变，不泛化409为成功。Python sort_keys 往返到实际 Prisma ready/重放的 RED/GREEN 与编辑拒绝专项独立记录。
+
+
+### 第一版原 Trigger 最终隔离验收（2026-11-17）
+
+A–E 最终冻结源经 Spec→Quality 独立复核，完整应用6078项（6056通过、22跳过、0失败/取消），后端1141项（962通过、179可选引擎跳过、0失败）；PG与原生openGauss各27/27，关系库专项使用MemoryFacts，不等同完整CH组合矩阵。SQLite+真实CH+原生OpenCode的104次原HTTP请求及8次本地模型调用覆盖取消、丢ACK、ready回执恢复、原聚合文本与自动/手工解决，未调用外部LLM。原Next界面实际保留v0、手编0分、AI新建v2、复测100分及两条Run历史，应用console无error/warn。277个TSX/CSS与本批基线一致，无新增schema/parser/purpose。
+
+刷新前两库备份，65个core/96个旧表及15个CH表原行摘要子集保留；仅负例Outbox重试元数据正常推进，并明确向隔离admin既有模型列表追加一个本地验收配置，旧配置/active选择及账号密钥保留。原实验100分、Workbench0分、诊断done/report和4身份再次读回。证据位于exclude/storage-core-trigger/20261116-lrv_m9yj，完整边界见implementation-status.md。原Trigger历史与其他旧动态表尚未语义导入；后续按可信公共采集、Infra及其他控制消费者依赖继续，未切生产。

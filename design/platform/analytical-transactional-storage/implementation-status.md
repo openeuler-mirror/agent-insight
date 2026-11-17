@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-15。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
 
 ## 产品验收纠偏（2026-11-12）
 
@@ -512,3 +512,26 @@ apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多
 证据：`exclude/storage-core-trace-lookup/20261116-9l5_pk9r/` 的`final-code-verification.json`、`candidate-v1-result.json`、`candidate-v1-final-python-report.json`、`candidate-v1-native/`、`lookup-spec-*`、`lookup-quality-*`、`old-frozen-real-dto.json`、`main-http-report.json`、`main-data-preservation.json`及`main-browser-report.json`。没有启动额外Agent/外部模型，没有修改或重导旧Trace事实。
 
 本片仅恢复准确定位的正常读取，不解决一般列表的完整物化、N+1选择读取及第二版容量目标；后续按已审计的原Trigger、可信公共采集和Infra必要存储缺口继续推进，完整旧库/旧spool迁移及生产切换仍未完成。
+
+
+## 2026-11-17 第一版 Trigger 评测完整接入
+
+原 Trigger 的 run/runs/cancel、真实采样 Trace、聚合优化点/自动及手工解决、AI 起草的独立版本与占位 CAS 已接入新动态存储。保留原 live 路由算法、原 direct LLM 提示词/宽松解析、最新 Skill 起草与固定评测版本0、原模型选择及环境兜底；RunPlan封存数据集、Skill历史/竞争配置和模型连接，恢复不重选来源。Set DELETE 按原行为只删除 Set，保留完成及在飞 Run/Evaluation/Issue；仅准确终止已丢占位的 draft，迟到结果不复活。原 API/DTO 与277个TSX/CSS不变，schema仍015、65事务表+15CH，无新增parser/purpose。
+
+最终复核修复两项实际跨链路问题：原首次 reload 将 runs 的409误读为空且停止轮询，现在仅准确 TRIGGER_READ_CHANGED 的 GET 在原15秒预算内有限重读，其他错误沿原catch保留状态；Python canonical JSON 的键序变化导致 ready 确认误冲突，现在对原静态 itemsJson 做结构等价比较，仍拒绝值、数组顺序、空白及扩展字段的真实编辑，原SQL CAS不变。
+
+| 验证 | 最终结果与边界 |
+|---|---|
+| 完整应用 | 最终V3：6078项，6056通过、22跳过、0失败/取消，267.39秒；Node24、原完整glob与collector预检、并行4、独立HOME/SQLite，3102个来源文件与最终源一致 |
+| 完整后端 | 1141项，962通过、179可选引擎跳过、0失败，494.37秒；ResourceWarning作为error，160个来源文件稳定 |
+| PG / 原生openGauss | 各27/27、无跳过；307.263/266.217秒，各27个自有schema回查残留0，164个来源文件稳定。事实sink为MemoryFacts，不称完整三库×CH矩阵 |
+| 真实原HTTP/CH/OpenCode | 104次原请求，8次本地provider调用（5次原生OpenCode、3次direct draft），4个原生Session与2个direct Trace均indexed；三条业务Run覆盖0分、干净自动解决、100%但竞争低级问题及手工解决。原聚合文本/提示词精确对照，丢ACK同Run不重启，ready真实提交后丢ACK可恢复，失败/删除占位不复活，旧动态Trigger写入0。没有外部LLM效果验收 |
+| 原界面 | 原Next58488实际手编数据集0分→AI新建v2（旧v1保留）→v0 Skill复测100分，两个Run历史可读，应用console error/warn为0。AI按钮调用期间IAB控制曾超时，关闭自有页重开后实际ready v2与provider draft回执均存在；没有声称原生确认弹窗控制已验证。页面及布局未改 |
+| 独立审查 | A–E均完成Spec→Quality；最终E3 Spec58项及真实Python→Prisma八种编辑拒绝，Quality60项（含实际SQLite并发CAS）及3项后端迟到/删除/不可变专项通过；来源指纹一致 |
+| 数据保留 | 刷新前2份SQLite备份及integrity ok；65core/96旧表原行、15CH原事实摘要子集保留，仅既有负例Outbox重试元数据正常推进。隔离admin模型列表明确追加一个本地验收配置，旧模型配置/active选择及密钥不变；新增隔离Skill、两版Set、两Run与录制事实。原实验100分、Workbench0分、诊断done/report及4身份再次读回。默认数据/生产未操作 |
+
+全量初轮失败保留并已定位环境原因：OS维护/闲置睡眠与四项超时/一取消时间重叠，保持同源与原超时的醒着专项119项零失败；随后四项PowerShell异常来自旧便携运行时Modules目录为空。同一官方7.7.0运行时在隔离证据目录恢复后，旧新二进制SHA相同、236个模块文件，35项专项和最终完整6078项通过。共享损坏运行时未修改，无依赖版本、测试超时或系统电源配置变更；仅测试进程临时防睡眠。原失败日志与运行时hash分别保留，不将首次运行称通过。
+
+证据：`exclude/storage-core-trigger/20261116-lrv_m9yj/` 的 `final-code-verification.json`、`final-v3-restored-result.json`、`final-v3-python-report.json`、`final-v3-native/`、`acceptance-final-v3/native-http-final-v3/report.json`、`spec-e-v3-report.json`、`quality-e-v3-report.json`、`main-data-preservation.json`、`main-regression-readback.json`、`main-trigger-final-http-readback.json`和 `main-original-trigger-{zero,pass}.png`。原隔离验收页为 http://localhost:58488/skill-eval/trigger/storage-trigger-20261117-31b888?version=0 ，沿用原admin账号；本地模型服务保留供验收。
+
+下一片：先落地可信公共source/快照及completion的持久回执，再接原upload、proxy、logs/consumer；Infra需要原功能必要控制/采样模型，之后继续其他控制域及96模型旧数据语义导入。旧Trigger历史也仍在显式迁移清单；本片完成不代表全产品接管、千级容量或生产切换。

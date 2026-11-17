@@ -70,6 +70,8 @@ async function upstream(path: string, options: { token?: string; method?: string
           const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));
           if(value&&typeof value==='object'&&['REQUEST_EXPIRED','QUEUE_LIMIT','SOURCE_NOT_AVAILABLE','IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED','INVALID_CONFIG','NOT_FOUND','DATASET_DELETING','DATASET_NOT_READY'].includes(value.code))code=value.code;
         }catch{}
+      }else if(path.startsWith('/v1/compat/experiments?')&&response.status===409){
+        try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));if(value&&typeof value==='object'&&!Array.isArray(value)&&value.code==='TRIGGER_READ_CHANGED')code=value.code;}catch{}
       }else void response.body?.cancel();
       const status = [400, 401, 403, 404, 409, 410, 413, 415, 422, 429, 501, 503].includes(response.status) ? response.status : 502;
       throw new CoreError(status, status === 401 ? 'Authentication required' : status === 403 ? 'Forbidden' : 'Storage core request failed',code);

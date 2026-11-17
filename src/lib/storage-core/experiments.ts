@@ -11,6 +11,7 @@ import {readCoreBytes,requestCore} from './server';
 
 export interface ExperimentActor {token:string;workspace:string;principal:string;username:string}
 export interface CoreExperimentContext {
+ triggerRoute?:boolean;
  frozenStartModelSelection?:Record<string,unknown>|null;cancelSignal?:AbortSignal;compatibilityRoute?:boolean;recordCoreTrace?:import('@/lib/engine/evaluation/evaluator-execution-recorder').CoreTraceRecorder;readView?:PrismaClient;actor:ExperimentActor;request:Request;options:CompatibilityOptions;operationKey:string;body:Record<string,unknown>;
  rpc:(action:string,payload?:Record<string,unknown>)=>Promise<unknown>;
 }
@@ -19,7 +20,7 @@ const globalContexts=globalThis as unknown as Record<symbol,AsyncLocalStorage<Co
 const contexts=globalContexts[contextKey] ||= new AsyncLocalStorage<CoreExperimentContext>();
 const LIMIT=64*1024*1024;
 const collectionRoutes=new Set(['agents','traces','eval-runs','eval-results','eval-traces','cancellations','environment-preparations']);
-const mutations=new Set(['create','update','case_upsert','case_upsert_many','case_remove','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','derived_issue_resolve','start','checkpoint','complete','fail','retry','cancel','review','comment','comment_remove','remove','outcome_begin','outcome_cancel','outcome_query']);
+const mutations=new Set(['create','update','case_upsert','case_upsert_many','case_remove','execute_start','execute_complete','execute_fail','execute_reconcile','cancellation_update','derived_issue_resolve','start','checkpoint','complete','fail','retry','cancel','review','comment','comment_remove','remove','outcome_begin','outcome_cancel','outcome_query','trigger_begin','trigger_cancel','trigger_cleanup','trigger_delete_draft','trigger_delete_draft_cleanup']);
 export const getCoreExperimentContext=()=>contexts.getStore();
 export function requireCoreExperimentContext():CoreExperimentContext {
  const context=contexts.getStore();if(!context)throw Object.assign(new Error('Trusted Experiment repository scope required'),{status:503});return context;
@@ -46,11 +47,11 @@ export async function withCoreExperiments<T>(request:Request,action:()=>Promise<
   if(Buffer.byteLength(data,'utf8')>LIMIT)throw Object.assign(new Error('Experiment request too large'),{status:413});
   let controller:Record<string,string>={};
   const config=payload.config;
-  if(['start','execute_start','outcome_begin'].includes(actionName)&&config&&typeof config==='object'&&('core_flow_analysis' in config||'core_outcome' in config||Array.isArray((config as Record<string,unknown>).derived_skill_ids)&&((config as Record<string,unknown>).derived_skill_ids as unknown[]).length)){
+  if(['start','execute_start','outcome_begin','trigger_begin'].includes(actionName)&&config&&typeof config==='object'&&('core_flow_analysis' in config||'core_outcome' in config||Array.isArray((config as Record<string,unknown>).derived_skill_ids)&&((config as Record<string,unknown>).derived_skill_ids as unknown[]).length)){
    const {validateControllerSkillScope,controllerHeaders}=await import('./controller');if(Array.isArray((config as Record<string,unknown>).derived_skill_ids)&&((config as Record<string,unknown>).derived_skill_ids as unknown[]).length)await validateControllerSkillScope(actor.username,config as Record<string,unknown>);controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');
   }
-  if(actionName==='outcome_query'){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
-  if(actionName==='complete'&&(payload.result as {evidence?:{json?:{coreOutcome?:unknown}}}|undefined)?.evidence?.json?.coreOutcome){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
+  if(actionName==='outcome_query'||['trigger_cleanup','trigger_delete_draft_cleanup'].includes(actionName)||actionName==='checkpoint'&&(['trigger_samples','trigger_started_at_ms','trigger_finished_at_ms','trigger_runtime_closed'].some(name=>Object.hasOwn(payload.checkpoint as Record<string,unknown>||{},name))||payload.trigger_draft===true&&Object.hasOwn(payload.checkpoint as Record<string,unknown>||{},'_flow_model_calls'))){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
+  if(actionName==='complete'&&['coreOutcome','coreTriggerResult','coreTriggerDraft'].some(name=>Object.hasOwn((payload.result as {evidence?:{json?:Record<string,unknown>}}|undefined)?.evidence?.json||{},name))){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
   if(['execute_start','execute_complete','execute_fail'].includes(actionName)||actionName==='start'&&payload.source_execution_run_id!==undefined||actionName==='checkpoint'&&((payload.checkpoint as Record<string,unknown>|undefined)?.cleanup_confirmed===true||['runtime_started_at_ms','runtime_finished_at_ms'].some(name=>Object.hasOwn(payload.checkpoint as Record<string,unknown>||{},name)))){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-execution/v1');}
   if(actionName==='cancellation_update'){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-cancellation/v1');}
   if(actionName==='derived_issue_resolve'){const {controllerHeaders}=await import('./controller');controller=await controllerHeaders(actor,data,'experiment-frozen-assets/v1');}
@@ -95,14 +96,14 @@ export async function withCoreExperimentReadRoute<T>(request:Request,handler:(re
  },options);
 }
 
-export async function prepareCoreExperimentRuntime<T>(context:CoreExperimentContext,raw:unknown,action:()=>Promise<T>,runtimeOptions:{signal?:AbortSignal;publicExecution?:boolean}={}):Promise<T>{
+export async function prepareCoreExperimentRuntime<T>(context:CoreExperimentContext,raw:unknown,action:()=>Promise<T>,runtimeOptions:{signal?:AbortSignal;publicExecution?:boolean;modelConfiguration?:import('@/lib/storage/server-config').ModelConfig}={}):Promise<T>{
  const work=raw as {handle:Record<string,unknown>;runplan?:{config?:{model_selection?:Record<string,unknown>|null}}};
  if(!work?.handle)throw Object.assign(new Error('Frozen Experiment work handle required'),{status:503});
  if(runtimeOptions.publicExecution&&work.handle.phase!=='execute')throw Object.assign(new Error('Business Agent runtime requires an execution handle'),{status:503});
  const selection=work.runplan?.config?.model_selection;let model:import('@/lib/storage/server-config').ModelConfig|null=null;
  if(selection){
-  const {getUserSettings}=await import('@/lib/storage/server-config');const settings=await getUserSettings(context.actor.username);
-  model=settings.configs.find(candidate=>candidate.id===selection.id)||null;
+  if(runtimeOptions.modelConfiguration)model=runtimeOptions.modelConfiguration;
+  else{const {getUserSettings}=await import('@/lib/storage/server-config');const settings=await getUserSettings(context.actor.username);model=settings.configs.find(candidate=>candidate.id===selection.id)||null;}
   if(!model||!matchesFrozenModelSelection(model,selection))throw Object.assign(new Error('Frozen model connection changed or is unavailable'),{status:503});
  }
  const recordCoreTrace:import('@/lib/engine/evaluation/evaluator-execution-recorder').CoreTraceRecorder=async payload=>{

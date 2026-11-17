@@ -302,3 +302,38 @@ Dataset 模式的原 start、retry-execute、retry-evaluate、abort 与平面进
 - 客户端为 start/retry-execute 复用现有摘要/UUID 意图；只有严格 ok=true 的 abort ACK 才清理同账号、同 Task 的待确认意图，随后相同用例可显式启动新任务。存储仅保存有界 hash/key/时间与 scope 摘要，不保存正文或凭据；失败、坏 JSON 和其他账号/Task 不清理。
 
 本片的最终真实 HTTP、本机运行器、原界面与全量/三库验收由实现状态页记录。没有新表、迁移、parser 或前端布局变化；静态控制域与全部旧库语义迁移尚未完成。
+
+
+### 第一版原 Trigger 评测主链路（复核中）
+
+原 Trigger API 在访问静态配置前校验实际 IAM，兼容账号仅供静态归属和原 DTO 展示，请求 user 不授权。每次 Run 使用独立私有 Experiment 和一个聚合 evaluate work，成功返回前已持久建立。重复操作恢复准确回执；同主体/Skill/版本 active 返回原 409+run；不同版本可独立运行。通用 Experiment 列表/统计不包含内部 head。latestOnly 仅取完成 Run。
+
+计划固定测试集版本/查询、目标 Skill 版本和完整内容、竞争 Skill 启动时内容、被测历史、模型摘要和参数。执行沿用原多查询/多采样/重试与 description-only 物化，不改路由判定和原零值语义。每个样本先保存 intent，真实 Session 消息全部 indexed 后才删除 Session 并保存 observed，物理退出确认后关闭运行；决策延迟不含录制等待，恢复沿原完成顺序且不重采样。未知投递或硬重启缺退出证明返回 pending/503，不能因租约过期重跑；明确未 send 且确认退出保留 failed。读取结果检查实际采样 Trace 的当前授权和来源，GET 不启动模型。
+
+取消使用持久 fence 和准确 attempt 清理证明。原 success=true ACK、原 DTO 和页面保留；客户端仅按可信操作摘要清除对应的待确认启动意图，不清其他版本。未配置模型 key 时不新增空/占位认证。
+
+A–C 主链与 D 聚合优化点已独立复核；E 起草/删除为当前复核切片，最终门禁完成前不宣称全部 Trigger 已完成或切生产。静态 Skill/版本、UserSettings、TriggerSet 及旧历史语义迁移继续按原边界；最终隔离原 HTTP/原生 Mock/界面和三库门禁见实现状态记录。
+
+Trigger 启动的私有 RPC 序列化包含原 HTTP 幂等 key/request，网络重试不更换意图。客户端仅收到 success=true 及对应 Skill/请求版本/测试集的完整 Run 或有效版本 Set 后清理待确认操作；仅 ID、不完整 DTO、坏 JSON 或响应丢失均保留。取消 ACK 还须匹配准确 Run ID。内部 Trigger 在通用 list 默认和按 ID read_view 中同样隐藏，专用 Trigger 历史/详情保持授权读取。
+
+
+### 原 Trigger 聚合优化点与解决记录（D 复核中）
+
+原 Trigger 每次最多生成一条聚合问题，沿用原 summary、evidence 和 suggestedFix，包含实际测试版本的 description 和其他被测版本历史。dedupKey 为 trigger:<skillName>，generator 为 trigger-evaluator@1.0，runId 为原 Trigger 历史 ID；ruleId、dimension、reasoning 仍为 null。全通过且无竞争不创建新问题；全通过但仍有竞争 Skill 会生成 low 问题。
+
+机器完成、新问题和旧 typed trigger 问题的自动解决同事务提交。解决状态使用正式幂等回执与 014 注解，保留 resolvedAt、resolvedRunId 和 includeResolved 历史；失败/取消/迟到结果不清旧问题。派生列表、详情、当前 frontier 与手动解决均检查实际 sample Trace 的当前授权和来源。原优化点入口继续读取合法旧 static/feedback，旧动态 Trigger 历史需单独语义迁移，不作普通查询回退或读时补造。AI 起草及测试集删除清理见下方 E 复核切片；本片未切生产。
+
+
+### 原 Trigger AI 起草与测试集删除（E 复核中）
+
+起草继续使用原 direct 模型调用和提示：要求18条，但原解析只要求合法非空，合法两条也可 ready；新版本不合并旧 user-edited 条目。稳定占位与独立 typed work 在确认前建立，固定 Skill 正文/版本及模型摘要。真实 direct JudgeTrace indexed 后才保存已观察响应/失败；未知提交和5分钟旧占位不触发盲目重投，恢复不会再次调用模型。原成功、冲突和版本 DTO 保留。
+
+完成以 owner/版本/状态/原时间和原字节作精确 CAS；重复完成确认同一 ready/failed，用户编辑冲突保留原数据。typed 结果与静态投影分别幂等，不承诺跨库原子；授权 POST 可恢复确认，GET 只读。
+
+Set DELETE 保留原行为：只删测试集版本，已有 Run/Evaluation/SkillIssue 历史不删除，在飞 Run 沿封存测试集继续。仅缺失占位对应的 draft 被精确 fence 并确认停止；迟到激活重新检查占位，完成仅 update 原行，不会重建已删占位。新起草保留既有 ready 版本；显式 DELETE 按原行为删除所有 Set 版本。原页面不变，无新 schema/purpose/parser，最终隔离验收通过前不切生产。
+
+
+原 Trigger 历史读取遇到明确的 head 版本瞬时变化时，helper 仅通过白名单代码 TRIGGER_READ_CHANGED 传递精确重试标记。客户端只对 GET /trigger/:name/runs 的该409在原15秒预算内最多重试3次，核对当前凭据/账号并尊重 Abort；耗尽或其他读取错误进入原页面错误分支，保留已显示历史，不把错误数据当作空列表。普通409、权限/删除/来源错误不重试；启动/取消等写入冲突与其他路由不变。
+
+
+起草 ready 确认使用稳定的 Item 结构比较，避免 Python JSON 对象键排序导致同一结果误报409。对象键顺序和线上不存在的 optional undefined 不影响确认；数组顺序、真实字段值和 null 保留，用户编辑仍冲突。原 SQL CAS 条件及 JSON 存储格式不变。

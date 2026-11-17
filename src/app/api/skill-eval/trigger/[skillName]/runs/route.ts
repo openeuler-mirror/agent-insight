@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {isCoreTriggerRoute,withCoreTriggerRoute,coreTriggerFailure,readCoreTriggerRuns} from '@/lib/storage-core/trigger';
 import { NextResponse } from 'next/server';
 import { listTriggerEvalRuns, findLatestDoneRun } from '@/server/skill_trigger_eval_storage';
 
@@ -27,7 +29,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ skillName: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'read',scoped=>GET(scoped,{params}));
   try {
     const { skillName } = await params;
     const { searchParams } = new URL(request.url);
@@ -42,6 +45,7 @@ export async function GET(
     const limit = limitRaw ? Math.max(1, Math.min(200, Number(limitRaw))) : 50;
     const latestOnly = searchParams.get('latestOnly') === 'true';
 
+    if(isCoreTriggerRoute())return NextResponse.json(await readCoreTriggerRuns(decodedSkillName,{skillVersion,limit,latestOnly}));
     if (latestOnly) {
       const run = await findLatestDoneRun(user, decodedSkillName, skillVersion);
       return NextResponse.json({ run });
@@ -49,6 +53,7 @@ export async function GET(
     const runs = await listTriggerEvalRuns(user, decodedSkillName, { skillVersion, limit });
     return NextResponse.json({ runs });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger/runs GET error:', error);
     return NextResponse.json({ error: 'failed to load runs' }, { status: 500 });
   }

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {isCoreTriggerRoute,withCoreTriggerRoute,coreTriggerFailure,cancelCoreTriggerRun} from '@/lib/storage-core/trigger';
 import { NextResponse } from 'next/server';
 import { findTriggerEvalRun, markRunCancelled } from '@/server/skill_trigger_eval_storage';
 import { abortTriggerEvalRun } from '@/server/trigger_eval_run_registry';
@@ -36,7 +38,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ skillName: string; runId: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'cancel',scoped=>POST(scoped,{params}));
   try {
     const { skillName, runId } = await params;
     const body = await request.json().catch(() => ({}));
@@ -45,6 +48,7 @@ export async function POST(
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
 
+    if(isCoreTriggerRoute())return cancelCoreTriggerRun(decodeURIComponent(skillName),runId);
     const existing = await findTriggerEvalRun(user, runId);
     if (!existing) {
       return NextResponse.json({ error: 'run not found' }, { status: 404 });
@@ -66,6 +70,7 @@ export async function POST(
       run: cancelled ?? existing,
     });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger/run/cancel POST error:', error);
     const msg = error instanceof Error ? error.message : 'failed to cancel run';
     return NextResponse.json({ error: msg }, { status: 500 });
