@@ -15,7 +15,7 @@ import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession
  * limitations under the License.
  */
 
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw,semanticContext} from '@/lib/storage-core/semantic-sources';
 
 type Tx = Omit<typeof prismaRaw, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 type RelinkResult = { linked: number; ambiguous: number; unresolved: number };
@@ -323,13 +323,14 @@ async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkRe
 }
 
 export function relinkGoalPlusSource(sourceDbId: string): Promise<RelinkResult> {
-  const pending = relinks.get(sourceDbId);
+  const actor=hasCoreCollectorTraceSource()?semanticContext().actor:null;const storageKey=actor?actor.workspace+'\0'+actor.principal+'\0'+sourceDbId:sourceDbId;
+  const pending = relinks.get(storageKey);
   if (pending) {
     pending.dirty = true;
     return pending.promise;
   }
   const state = { dirty: true, promise: Promise.resolve({ linked: 0, ambiguous: 0, unresolved: 0 }) };
-  relinks.set(sourceDbId, state);
+  relinks.set(storageKey, state);
   state.promise = (async () => {
     let result: RelinkResult = { linked: 0, ambiguous: 0, unresolved: 0 };
     try {
@@ -348,7 +349,7 @@ export function relinkGoalPlusSource(sourceDbId: string): Promise<RelinkResult> 
       } while (state.dirty);
       return result;
     } finally {
-      relinks.delete(sourceDbId);
+      relinks.delete(storageKey);
     }
   })();
   return state.promise;

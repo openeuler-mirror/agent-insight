@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreUsageAdmin} from '@/lib/storage-core/usage';
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -16,18 +19,20 @@
 
 import { NextResponse } from 'next/server';
 
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import { isUsageAdmin } from '@/lib/usage-analytics/auth';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
     const enabled = isUsageEnabled();
     if (!enabled) {
         return NextResponse.json({ enabled: false, isAdmin: false });
     }
     // 只解析 API Key，绝不接受 explicitUser。
     const { username } = await resolveUser(request);
-    return NextResponse.json({ enabled: true, isAdmin: isUsageAdmin(username) });
+    return NextResponse.json({ enabled: true, isAdmin: isStorageCoreEnabled()?await coreUsageAdmin():isUsageAdmin(username) });
 }
+
+export async function GET(request:Request){return !isUsageEnabled()?handleGET(request):semanticRoute(request,()=>handleGET(request));}

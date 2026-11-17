@@ -2,7 +2,7 @@ import {createHash,createHmac} from 'node:crypto';
 import {constants} from 'node:fs';
 import {open,lstat} from 'node:fs/promises';
 import path from 'node:path';
-const purposes=new Set(['experiment-cancellation/v1','experiment-frozen-assets/v1','experiment-background/v1','workbench-handoff/v1','workbench-verification/v1','experiment-execution/v1','benchmark-device/v1','trace-analytics/v1','collector-source/v1','infra/v1','fault-injection/v1','platform-control/v1','platform-control-prepare/v1','platform-control-write/v1','platform-control-bootstrap/v1']);
+const purposes=new Set(['experiment-cancellation/v1','experiment-frozen-assets/v1','experiment-background/v1','workbench-handoff/v1','workbench-verification/v1','experiment-execution/v1','benchmark-device/v1','trace-analytics/v1','collector-source/v1','infra/v1','fault-injection/v1','platform-control/v1','platform-control-prepare/v1','platform-control-write/v1','platform-control-bootstrap/v1','semantic-usage/v1']);
 function unavailable():never{throw Object.assign(new Error('Private storage controller credential unavailable'),{status:503});}
 export async function readControllerKey(file=process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE):Promise<string>{
  if(!file||!path.isAbsolute(file))unavailable();

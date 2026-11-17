@@ -15,7 +15,7 @@ import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession
  * limitations under the License.
  */
 
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw} from '@/lib/storage-core/semantic-sources';
 
 import type { CollaborationLocator } from './contracts';
 import { upsertCollaborationEndpointResolution, type CollaborationEndpointSide } from './persist';

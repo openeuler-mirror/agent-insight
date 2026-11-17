@@ -3806,3 +3806,18 @@ platform_control_records只承载固定的原资产/设置/客户端/会话控�
 设备控制从真实dc哈希、owner/client、当前撤销和IAM绑定建立私有受限scope，不返回owner SDK key。安装令牌一次消费；同owner复用保持原规则，跨owner交接必须证明旧dc，且旧client标记与全部凭据撤销在同事务完成；无旧证明的新安装独立注册，不触旧记录。普通User读取只可回显当前提供的凭据，持read-only key不会取得数据库保存的更高权限key。
 
 Skill文件包完整保存base64字节与mode，正文/文件引用封存于内部不可变release，external version alias稳定。读取仅对已授权、选中的版本下载正文和文件，物化目录按core origin/workspace/principal隔离，保留同步路径接口，不向调用者把工件ref当文件路径。目录与计数不预载全部正文/模型秘密；超出固定kind有界预算明确失败，禁止静默截断。旧local模式和组织/IDaaS的现有可信登录入口不同：后两者仍先验证真实身份；新主体仅personal workspace，不推断管理员。新用户原示例按既有typed Dataset和Trace bundle导入，不写旧Session/Execution库，也不触发额外模型执行。
+
+### 020 Goal Plus / Collaboration / Usage（第一版等价接入）
+
+本版本新增5张事务表、3张CH表，020累计77 OLTP+19 CH。12种固定投影的完整业务字段、类型、nullable/default、复合唯一组及父关联见[`semantic-models.json`](../../../services/storage/schema/semantic-models.json)；不开放线上动态模型。DDL分别为三库020_semantic_usage.sql，CH为004_semantic_usage.sql。
+
+| 表 | 完整字段与类型 | 主键、约束、索引与关联 |
+|---|---|---|
+| semantic_scopes | workspace_id/owner_principal_id/domain/legacy_username TEXT NOT NULL；revision BIGINT NOT NULL DEFAULT0 | PK(workspace,owner,domain)；workspace/principal FK；domain goal/collaboration/usage；revision>=0；owner域CAS先加锁再修改；label仅兼容字段，授权使用actual principal |
+| semantic_records | workspace_id/owner_principal_id/kind/record_id/content_hash/payload_ref/state TEXT NOT NULL；revision/created_at_ms/updated_at_ms BIGINT NOT NULL | PK(workspace,owner,kind,record_id)；workspace/principal FK；kind限定12种；active/deleted；hash64、revision>0、非负元数据时钟、updated>=created；索引(workspace,owner,kind,state,id)；原业务日期在payload保真；父记录同owner由固定契约校验 |
+| semantic_unique_keys | workspace_id/owner_principal_id/kind/constraint_key/key_hash/record_id TEXT NOT NULL | PK(workspace,owner,kind,constraint,key_hash)；复合FK到semantic_records；原nullable唯一组有NULL则不登记；record更新与唯一键替换同事务 |
+| usage_event_receipts | workspace_id/owner_principal_id/event_id/content_hash/date_key/raw_state TEXT NOT NULL；received_at_ms BIGINT NOT NULL | PK(workspace,owner,event_id)；workspace/principal FK；hash64、received>=0、raw_state active/retired；索引(workspace,owner,raw_state,date_key,event_id)；清理保留永久回执，防重放重复累计 |
+| usage_daily_heads | workspace_id/owner_principal_id/date_key/feature_key/event_key/legacy_username/content_hash TEXT NOT NULL；total/first_occurred_ms/last_occurred_ms/revision BIGINT NOT NULL | PK(workspace,owner,date,feature,event)；workspace/principal FK；total>=0（历史零值保留）、revision>0、first<=last、hash64；索引(workspace,date,feature,owner)；CH current hash/revision publication fence |
+| CH semantic_immutable_facts / usage_event_facts / usage_daily_facts | workspace_id/owner_principal_id/kind/record_id/content_hash/body_json String；retry_version UInt64 DEFAULT1 | 各自ReplacingMergeTree(retry_version)；ORDER BY(workspace,owner,kind,id,hash)；hash64、retry>0；只返回当前OLTP目录所证明的hash，不把跨库回滚孤儿视为已接收 |
+
+事务表使用同一参数化SQL契约；PG/openGauss BIGINT，SQLite INTEGER；business Float/Boolean/DateTime按固定catalog校验，并保留原DTO。source fingerprint、快照/事件正文和Session binding不可覆盖。Execution link不再FK旧库，必须解析真实Trace alias并复核owner/当前授权/删除屏障；原Session-only pending绑定保持待解析。

@@ -1,3 +1,7 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {CoreCollaborationStore} from '@/lib/storage-core/collaboration-store';
+import {getCoreControlContext} from '@/lib/storage-core/control-context';
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -21,11 +25,13 @@ import { CollaborationService } from './service';
 import { CollaborationStore, sqlDatabase } from './store';
 
 
-export const collaborationService = new CollaborationService(new CollaborationStore(sqlDatabase(db.getClient())));
+export const collaborationService = new CollaborationService(isStorageCoreEnabled()?new CoreCollaborationStore():new CollaborationStore(sqlDatabase(db.getClient())));
 
-export const collaborationHandlers = createCollaborationHandlers({
+const originalHandlers = createCollaborationHandlers({
     service: collaborationService,
-    authenticate: async apiKey => (await db.findUserByApiKey(apiKey))?.username ?? null,
+    authenticate: async apiKey => isStorageCoreEnabled()?getCoreControlContext()?.actor.username??null:(await db.findUserByApiKey(apiKey))?.username??null,
 });
 
 export const collaborationTraceProjection = new CollaborationProjection(collaborationService);
+
+export const collaborationHandlers={report:(request:Request)=>semanticRoute(request,()=>originalHandlers.report(request)),bind:(request:Request)=>semanticRoute(request,()=>originalHandlers.bind(request)),graph:(request:Request,id:string)=>semanticRoute(request,()=>originalHandlers.graph(request,id))};

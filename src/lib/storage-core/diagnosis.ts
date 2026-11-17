@@ -1,4 +1,4 @@
-import {getCoreControlContext,withCoreControlRequest} from './control-context';
+import {getCoreControlContext,withCoreControlRequest,runWithCoreControlActor} from './control-context';
 import {createHash,randomUUID} from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -112,7 +112,7 @@ export async function handleCoreDiagnosisStream(request:Request,options:Diagnosi
   let upstream=reply.opencode_session_id;
   const indexed=new Map<string,Record<string,unknown>>();
   const renew=async()=>{await operation(actor,'renew',handle,options);};
-  if(isUsageEnabled())recordUsageEvent({user:actor.username,featureKey:'fault',eventKey:reply.is_first_user_message?'fault.diagnosis.run':'fault.message.send'});
+  if(isUsageEnabled())runWithCoreControlActor({...actor,username:actor.username},options,()=>recordUsageEvent({user:actor.username,featureKey:'fault',eventKey:reply.is_first_user_message?'fault.diagnosis.run':'fault.message.send'}));
   return streamDiagnosisTurn({executionId,diagnosisSessionId:reply.session.id,sessionId:upstream,signal:request.signal,renew,
    checkpoint:async content=>{const saved=await operation(actor,'checkpoint',{...handle,expected_revision:revision,content},options);revision=saved.turn.revision;},
    finish:async terminal=>{

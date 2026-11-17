@@ -1,3 +1,4 @@
+import {recordUsageEvent} from '@/lib/usage-analytics/collector';
 import {db,prismaRaw} from '@/lib/storage/prisma';
 import {readConfig,findBestMatchConfig,findBestOutcomeConfig,findBestRoutingConfig,extractInvokedSkillsFromSessionInteractions,fillConfigKeyActionsFromParsedFlows,getEvaluationContextLabel,buildRecordEvaluationSnapshots,resolveImmutableSkillVersion} from '@/lib/storage/data-service';
 import {judgeAnswer,analyzeFailures,normalizeInteractions,type InvokedSkill,type JudgeCriteria} from '@/lib/engine/evaluation/judge';
@@ -188,6 +189,7 @@ export async function handleCoreFinalResultEdit(request:Request,options:import('
   if(typeof context.body.final_result!=='string')return Response.json({error:'final_result must be a string'},{status:400});
   const started=await begin(context,task,'edited-final-result',context.body.final_result.trim());
   void activateExperimentWork(context,started.experiment_id,{concurrency:1}).catch(error=>console.error('[Core Outcome] Background evaluation pending',{status:(error as {status?:number})?.status||503}));
+  recordUsageEvent({user:context.actor.username,featureKey:'trace',eventKey:'trace.update'});
   return Response.json({success:true,message:'Final Result 已保存，正在后台重新评估'});
  },options);}catch(cause){return coreExperimentFailure(cause);}
 }
@@ -211,6 +213,8 @@ export async function handleCoreQueryEdit(request:Request,options:import('./comp
    if(!saved||typeof saved.execution_id!=='string'||typeof saved.task_id!=='string')unavailable('Query scheduling receipt unavailable');
   }
   const selected=await readCoreOutcome(saved.task_id);
-  return Response.json({success:true,message:'Query 已更新',record:await publicRecord(context,saved,selected)});
+  const record=await publicRecord(context,saved,selected);
+  recordUsageEvent({user:context.actor.username,featureKey:'trace',eventKey:'trace.update'});
+  return Response.json({success:true,message:'Query 已更新',record});
  },options);}catch(cause){return coreExperimentFailure(cause);}
 }

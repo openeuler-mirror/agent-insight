@@ -76,6 +76,34 @@ class ClickHouseStore:
         for statement in sql.split(';'):
             if statement.strip():self._request(statement)
 
+    def initialize_semantic_usage_schema(self):
+        sql=(Path(__file__).parent/'schema'/'clickhouse'/'004_semantic_usage.sql').read_text()
+        for statement in sql.split(';'):
+            if statement.strip():self._request(statement)
+
+    def write_semantic_fact(self,table,row):
+        if table not in {'semantic_immutable_facts','usage_event_facts','usage_daily_facts'}:raise ValueError('Known semantic fact table required')
+        if set(row)!={'workspace_id','owner_principal_id','kind','record_id','content_hash','body_json','retry_version'}:raise ValueError('Fixed semantic fact required')
+        for field in ('workspace_id','owner_principal_id','kind','record_id'):identifier(row[field])
+        if not re.fullmatch(r'[a-f0-9]{64}',row['content_hash']):raise ValueError('Semantic digest required')
+        self._write_analytics_fact(table,row)
+
+    def delete_usage_event_facts(self,workspace,owner,ids):
+        identifier(workspace);identifier(owner)
+        if not isinstance(ids,list) or not 1<=len(ids)<=50000:raise ValueError('Bounded usage cleanup required')
+        parameters={'workspace':workspace,'owner':owner}
+        names=[]
+        for i,value in enumerate(ids):parameters['event'+str(i)]=identifier(value);names.append('{event'+str(i)+':String}')
+        self._request('ALTER TABLE usage_event_facts DELETE WHERE workspace_id={workspace:String} AND owner_principal_id={owner:String} AND record_id IN ('+','.join(names)+') SETTINGS mutations_sync=1',parameters=parameters)
+
+    def read_semantic_fact(self,table,workspace,owner,kind,record,content):
+        if table not in {'semantic_immutable_facts','usage_event_facts','usage_daily_facts'}:raise ValueError('Known semantic fact table required')
+        sql='SELECT body_json FROM '+table+' FINAL WHERE workspace_id={workspace:String} AND owner_principal_id={owner:String} AND kind={kind:String} AND record_id={record:String} AND content_hash={content:String} LIMIT 2 FORMAT JSONEachRow'
+        raw=self._request(sql,parameters={'workspace':workspace,'owner':owner,'kind':kind,'record':record,'content':content})
+        rows=[json.loads(line) for line in raw.decode().splitlines() if line]
+        if len(rows)!=1:return None
+        return json.loads(rows[0]['body_json'])
+
     def initialize_infra_schema(self):
         sql=(Path(__file__).parent/'schema'/'clickhouse'/'003_infra.sql').read_text()
         for statement in sql.split(';'):

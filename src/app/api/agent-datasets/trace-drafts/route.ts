@@ -1,3 +1,4 @@
+import {getCoreControlContext,withCoreControlRequest} from '@/lib/storage-core/control-context';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,7 +29,7 @@ import { readCoreBytes } from '@/lib/storage-core/server';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
-  if (isStorageCoreEnabled()) return coreDraft(request);
+  if (isStorageCoreEnabled()) return getCoreControlContext()?coreDraft(request):withCoreControlRequest(request,()=>coreDraft(request));
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();

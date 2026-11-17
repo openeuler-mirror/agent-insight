@@ -441,3 +441,13 @@ Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型
 原工作台、优化/生成会话、消息/blocks/VFS、候选、评测任务壳和调试结果使用固定控制记录，动态Experiment/评测/诊断继续用既有typed库。Agent删除提交既有Trace删除屏障及Agent软删除，工件保留；新用户原示例使用typed Dataset和既有Trace bundle导入。公开URL/DTO和界面保持，4个TSX仅加入请求封装导入，其中runtime provider另接动态header回调；不改JSX/CSS/文案/布局。SSE、AbortSignal和FormData沿原请求处理。
 
 单次固定kind读最多20000记录、载荷128MiB、写批次2000操作；超限明确失败，不截断结果。这些是当前有界正确性保护，不是容量认证。019仅做必要隔离快速验证；全量、真实PG/openGauss/CH、原UI和历史迁移统一验收，尚不切生产。历史任务的状态/时间由迁移保留；已有历史marker的控制记录不会进入自动执行选择、设备/install鉴权或Infra抓取，Experiment/Benchmark/FI同样核验运行保护。诊断/report与完整历史转换仍待接入，当前history fence version仍0，未满足完整保护的历史记录继续阻断，不能据此切库。
+
+## Goal Plus、协作和用量兼容（020，逻辑完成待集中验收）
+
+原 Goal Plus 快照上报、来源/目标/Run详情、重关联与完整性计算，以及协作事件、绑定、图和 Trace 投影沿用原API、响应和界面。固定投影目录只允许八种Goal Plus与四种协作记录；Node保留原算法，线上服务不接收任意SQL或Prisma过滤表达式。元数据与关系在事务库，快照/协作事件正文在CH；实际Trace关联使用新库alias与实时IAM，不创建旧Execution占位记录。组管理员可显式读取组内数据，写入必须实际owner；来源fingerprint、事件正文和绑定一经建立不能被不同内容覆盖。
+
+020新增5张事务表；CH显式应用schema/clickhouse/004_semantic_usage.sql或ClickHouseStore.initialize_semantic_usage_schema，至020累计77事务表+19CH。服务不自动升级已有CH。CH事实只有与当前事务目录hash一致时可读；跨库回滚留下的孤儿、缺失或被改动的事实不能伪装为成功。
+
+用量队列保留原容量、丢弃、202和重试语义。每条事件携带认证时的私有主体范围，混合用户分开写；body.user不参与授权。永久eventID回执防止同批、跨批、原始事件清理后的重放重复计数；清理只删除原始事实，不删除日报或去重凭据。管理员统计按当前组范围，普通成员不能访问管理接口；关闭统计保持原有无需存储操作的响应。
+
+旧数据迁移需显式manifest映射实际owner，先父后子并保留原ID/JSON/日期。历史raw事件与原日报分别导入，raw不再次累计daily；不会从历史状态启动任务或模型。该批已完成开发接线，完整测试、原生三库、真实CH、原界面和迁移演练留待统一验收，当前未切生产。

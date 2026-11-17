@@ -1,3 +1,4 @@
+import {recordVerifiedCoreUsage} from './usage';
 import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -109,6 +110,16 @@ export async function compatibleRequest(request:Request,target:string,fields:str
    if(typeof value?.rootExecutionId!=='string')throw new CompatibilityError(502,'Invalid export response');
    const name=value.rootExecutionId.replace(/[^A-Za-z0-9._-]+/g,'_').slice(0,120) || 'trace';
    result.headers.set('content-disposition',`attachment; filename="trace-${name}.json"`);
+  }
+  if(status>=200&&status<300&&actor.username){
+   let feature:string|undefined,event:string|undefined;
+   if(target==='/v1/compat/observe/data'&&request.method==='DELETE'&&Number((data.value as Record<string,unknown>)?.count)>0){feature='trace';event='trace.delete';}
+   else if(target==='/v1/compat/observe/data'&&request.method==='PATCH'){feature='trace';event='trace.update';}
+   else if(target==='/v1/compat/observe/traces/import'){feature='trace';event='trace.import';}
+   else if(target==='/v1/compat/observe/traces/export'){feature='trace';event='trace.export';}
+   else if(/^\/v1\/compat\/executions\/[^/]+\/tags$/.test(target)&&['POST','PUT','DELETE'].includes(request.method)){feature='trace';event=request.method==='DELETE'?'trace.tag.unbind':'trace.tag.bind';}
+   else if(/^\/v1\/compat\/tags(?:\/[^/]+)?$/.test(target)&&['POST','PUT','DELETE'].includes(request.method)){feature='version-management';event=request.method==='POST'?'version.tag.create':request.method==='DELETE'?'version.tag.delete':'version.tag.update';}
+   if(feature&&event)recordVerifiedCoreUsage({...actor,username:actor.username},options,feature,event);
   }
   return result;
  } catch(error) {return failure(error);}

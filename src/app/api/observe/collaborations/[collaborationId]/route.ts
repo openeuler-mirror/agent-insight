@@ -1,3 +1,4 @@
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -19,6 +20,8 @@ import { collaborationHandlers } from '@/lib/collaboration/runtime';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request, context: { params: Promise<{ collaborationId: string }> }) {
+async function handleGET(request: Request, context: { params: Promise<{ collaborationId: string }> }) {
     return collaborationHandlers.graph(request, (await context.params).collaborationId);
 }
+
+export async function GET(request: Request, context: { params: Promise<{ collaborationId: string }> }) {return semanticRoute(request,()=>handleGET(request,context));}

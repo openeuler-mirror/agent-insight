@@ -1,3 +1,4 @@
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,12 +16,12 @@
  */
 
 import { NextResponse } from 'next/server';
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import { relinkGoalPlusSource } from '@/lib/ingest/goal-plus/correlate';
 import { projectGoalPlusCollaborations } from '@/lib/ingest/collaboration/providers/goal-plus';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw} from '@/lib/storage-core/semantic-sources';
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const { username } = await resolveUser(request);
   if (!username) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const body = await request.json().catch(() => ({}));
@@ -40,3 +41,5 @@ export async function POST(request: Request) {
   }
   return NextResponse.json({ correlation, collaborationProjection });
 }
+
+export async function POST(request: Request) {return semanticRoute(request,()=>handlePOST(request));}

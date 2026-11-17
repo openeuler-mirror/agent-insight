@@ -366,6 +366,18 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             from .compatibility import LegacyTraceReads
             from .compatibility_list import LegacyTraceList
             compat_path=pieces[2:]
+            if compat_path==['semantic-usage']:
+                if self.command!='POST':self.reply(404,{'error':'Unknown semantic route'});return
+                value,error=self.body(max_bytes=32*1024*1024)
+                if error:self.reply(error,{'error':'Bounded semantic JSON required'});return
+                workspace=runtime.workspace(token,params.get('workspace_id'),None)
+                from .controller_protocol import verify_controller_proof
+                principal=runtime.iam.scope(token).principal_id
+                if not verify_controller_proof(runtime.controller_key_file,'semantic-usage/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private semantic attestation required')
+                if not isinstance(value,dict) or set(value)!={'action','payload'}:raise ValueError('Fixed semantic action required')
+                from .semantic_usage import SemanticUsageStore
+                result=SemanticUsageStore(runtime.control,runtime.facts).dispatch(token,workspace,value['action'],value['payload'])
+                self.reply(200,{'value':result},max_bytes=32*1024*1024);return
             if compat_path==['infra']:
                 if self.command!='POST':self.reply(404,{'error':'Unknown Infra route'});return
                 value,error=self.body(max_bytes=8*1024*1024+65536)

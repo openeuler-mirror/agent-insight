@@ -1,0 +1,264 @@
+{
+  "version": 20,
+  "tables": [
+    {
+      "name": "semantic_records",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "record_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "semantic_scopes",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "domain",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "legacy_username",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        }
+      ]
+    },
+    {
+      "name": "semantic_unique_keys",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "constraint_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "key_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "record_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "usage_daily_heads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "date_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "feature_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "legacy_username",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "total",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "first_occurred_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "last_occurred_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "usage_event_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "date_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "received_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "raw_state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        }
+      ]
+    }
+  ]
+}

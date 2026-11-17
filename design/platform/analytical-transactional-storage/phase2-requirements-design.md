@@ -517,3 +517,15 @@ FI claim保持原响应并附加claimToken；新旧业务客户端最小回传�
 作用域来自真实request或已品牌后台actor，不能用user参数换映射token。全局仓储不缓存actor；每次调用读AsyncLocal当前scope，服务端复核原token实际capability。collector-preparation仅在已品牌collector边界使用独立controller目的、同owner write读取相关静态依赖和可信Node临时模型材料，输出仍仅原冻结摘要，不替采集者取得execute。普通设置/凭据读取保持owner与私有controller限制。原local用户名登录bootstrap仅限原已选择模式的可信入口；组织/IDaaS仍先验证真实身份，不增加新登录UI。
 
 设备token/credential查真实hash、owner、撤销和client绑定；安装token消费/注册/改绑/撤销为同事务，命令TTL/状态/CAS和配置快照/投递/加载回执沿原算法。工作台消息/blocks/VFS、会话关联、任务幂等/单active、候选/复测/发布CAS由同一领域事务保留，已typed动态评测/实验/诊断不复制到本表。删除软标记并保留工件/历史，查询保持原删除后的不可见语义，旧数据导入不得自动重启外部任务。
+
+### 第一版 Goal Plus、协作与用量接入（020；集中验收待完成）
+
+本批只替换原功能背后的数据来源。原 Goal Plus 规范化、快照投影与回放、完整性计算、原生会话精确关联，以及协作端点/位置推断、图分页和 Trace 投影继续在 Node 执行；公开 API/DTO 与前端不改。Node 的兼容读取仅面向原有八个 Goal Plus 和四个协作模型的固定投影，where/include/orderBy 在已授权的内存投影上执行，服务端不接受 Prisma 查询、模型名扩展或任意 SQL。`semantic-models.json` 是这12种记录的完整 scalar 类型、nullable/default、唯一字段组和父关联契约，线上未知种类/字段直接拒绝。
+
+020新增五张事务表，至此为77事务表+19 CH表：semantic_scopes保存workspace+实际owner+domain的CAS；semantic_records保存固定种类、原ID、当前私有artifact引用与hash；semantic_unique_keys把原复合唯一键（NULL不参与）落实为范围唯一约束。source workspaceFingerprint不可变；快照和关系事件正文不可改；候选迭代移除采用逻辑退休。所有父记录必须同workspace/owner真实存在；Execution关联解析既有Trace alias后检查当前IAM和实际owner，无旧Execution占位行。组管理员可显式只读组内owner投影，修改始终实际owner。采集准备使用签名的owner-only write准备范围，不向上报者返回其他主体数据或模型秘密。
+
+CH004显式建立semantic_immutable_facts、usage_event_facts和usage_daily_facts，启动不自动改CH。Goal快照和协作事件先写CH，再在同一事务提交目录与范围CAS；跨库失败留下的事实没有当前事务目录/hash证明就不可见。CH排序键包含content_hash，避免回滚的新事实覆盖旧已提交版本；读取逐项核对当前回执hash，缺失/损坏报错。私有artifact保留接收原文及恢复依据，不能用它静默替代缺失的CH事实。当前投影的所有原字段、日期、原JSON字符串和ID保持。
+
+Usage继续实现既有UsageStorage接口。每个入队事件在已验证的请求/后台范围内以私有WeakMap绑定actor/workspace/凭据；混合用户按真实主体分批写，不从body.user恢复权限，不在全局storage缓存首用户。永久usage_event_receipts先做同批/跨批去重，usage_daily_heads在owner事务锁内更新count/first/last/revision，CH分别保留原事件和当前日报事实。物理原始事件清理只限实际owner及截止日期，保留永久去重回执和日报；重放已清理eventID不重新累计。队列容量、202 accepted/dropped、一次重试与日期/指标算法沿用原逻辑；关闭统计时不新增认证/存储要求。管理接口按当前组管理范围读，普通成员没有管理面权限。
+
+离线迁移可在显式隔离manifest事务中调用SemanticUsageStore.import_history_row；原12模型ID和字段保留，先父后子，Trace关联要求已迁真实alias，所有事实仅导入历史，不触发采集、模型或任务。PlatformUsageEvent只导原事实/去重凭据，不累加日报；PlatformUsageDaily直接导原聚合值，避免历史raw与daily双计。未知owner、缺父/Trace映射、同ID不同内容明确阻断。默认数据库、生产服务和旧spool不在本批自动迁移；完整三库、真实CH、全量、原UI与旧数据演练统一验收。

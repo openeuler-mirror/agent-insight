@@ -1,3 +1,4 @@
+import {getCoreControlContext,withCoreControlRequest} from '@/lib/storage-core/control-context';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -85,7 +86,8 @@ export async function GET(req: Request) {
     }
 }
 
-export async function PUT(req: Request) {
+export async function PUT(req: Request):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreControlContext())return withCoreControlRequest(req,()=>PUT(req));
     try {
         const url = new URL(req.url);
         const { username } = await resolveUser(req, url.searchParams.get('user'));

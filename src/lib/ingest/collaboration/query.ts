@@ -15,7 +15,7 @@ import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession
  * limitations under the License.
  */
 
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw} from '@/lib/storage-core/semantic-sources';
 import { Prisma } from '@prisma/client';
 import { goalPlusActiveMainSessionIdentities } from '@/lib/ingest/goal-plus/correlate';
 import { goalPlusCurrentRunIds } from '@/lib/ingest/goal-plus/trace-scope';
