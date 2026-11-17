@@ -33,6 +33,7 @@ import { dispatchCommand } from '@/lib/reliability/control-dispatch';
 import { hasUsableTraceInteractions } from '@/lib/engine/experiment/fi-orchestrate';
 import type { SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-target';
 import { executionModelMatches } from '@/lib/skill-workbench/execution-model';
+import { readJiuwenSessionIndex } from '@/lib/ingest/otel/jiuwen/spool';
 import { isTraceGenerationFailureRetryable } from './trace-retry-policy';
 export { isTraceGenerationFailureRetryable } from './trace-retry-policy';
 
@@ -141,6 +142,25 @@ export function readTriggerDecision(resultJson: string | null | undefined, targe
 export function parseTraceIdFromCommandResult(resultJson: string | null | undefined): string | null {
   const traceId = parseObject(resultJson).traceId;
   return typeof traceId === 'string' && traceId.trim() ? traceId.trim() : null;
+}
+
+async function traceIdFromCompletedCommand(resultJson: string | null | undefined, timeoutMs: number): Promise<string | null> {
+  const direct = parseTraceIdFromCommandResult(resultJson);
+  if (direct) return direct;
+  const facts = parseObject(resultJson);
+  const sessionId = typeof facts.sessionId === 'string' ? facts.sessionId : '';
+  if (!/^web_[A-Za-z0-9_-]{8,100}$/.test(sessionId)) return null;
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const index = readJiuwenSessionIndex();
+    const keys = index.sessionToKeys.get(sessionId);
+    if (keys?.size === 1 && !index.multiTraceSessions.has(sessionId)) {
+      const key = [...keys][0];
+      if (/^[a-f0-9]{32}$/.test(key)) return `jiuwen-${key}`;
+    }
+    if (Date.now() >= deadline) return null;
+    await sleep(1_000);
+  } while (true);
 }
 
 export function isTraceGenerationCommandTerminal(status: string): boolean {
@@ -337,7 +357,7 @@ export async function reconcileGeneratedTraceCase(input: {
     let traceId = attempt.traceId;
     if (!traceId && attempt.commandId) {
       const command = await getCommand(attempt.commandId);
-      traceId = parseTraceIdFromCommandResult(command?.resultJson);
+      traceId = await traceIdFromCompletedCommand(command?.resultJson, 0);
       if (traceId) {
         await prisma.experimentTraceAttempt.updateMany({
           where: { id: attempt.id, traceId: null, case: { traceAttempts: { none: { id: { not: attempt.id }, traceId } } } },
@@ -527,7 +547,9 @@ async function runAttempt(input: {
     const dispatched = await dispatchCommand(input.req.workerId, frame);
     if (dispatched.delivered) await markSent(frame.commandId, 'wss');
     const command = await waitForCommand(frame.commandId, commandWaitMs, input.req.signal);
-    const traceId = parseTraceIdFromCommandResult(command?.resultJson);
+    const traceId = command?.status === 'SUCCEEDED'
+      ? await traceIdFromCompletedCommand(command.resultJson, TRACE_INGEST_TIMEOUT_MS)
+      : parseTraceIdFromCommandResult(command?.resultJson);
     observedTraceId = traceId;
     if (traceId && await prisma.experimentTraceAttempt.count({ where: { caseId: input.item.caseId, attemptNo: { lt: attempt.attemptNo }, traceId } })) {
       observedTraceId = null;

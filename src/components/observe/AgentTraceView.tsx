@@ -19,6 +19,8 @@
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { InferenceAnalysisButton } from './InferenceAnalysisButton';
+import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
@@ -35,6 +37,13 @@ import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
+import {
+    resolveEventRenderCount,
+    truncateForPreview,
+    TRACE_DISCLOSURE_PREVIEW_CHARS,
+    TRACE_EVENT_RENDER_BATCH,
+    TRACE_INLINE_PREVIEW_CHARS,
+} from '@/lib/client/trace-render-budget';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
 import { getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
@@ -323,6 +332,17 @@ function buildAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
     return roots;
 }
 
+// 同一个 events 数组在一次展示期间不变；树结构在渲染、展开统计和搜索里会被
+// 反复构建，缓存放在包装层按数组身份复用结果，纯函数本身保持可独立抽取测试。
+const eventTreeCache = new WeakMap<AgentEvent[], AgentEventTreeEntry[]>();
+function getAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
+    const cached = eventTreeCache.get(events);
+    if (cached) return cached;
+    const roots = buildAgentEventTree(events);
+    eventTreeCache.set(events, roots);
+    return roots;
+}
+
 type TraceTreeFilters = { treeKindFilter: string; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
 
 function traceAgentMatchesFilters(node: AgentNode, filters: TraceTreeFilters): boolean {
@@ -380,15 +400,32 @@ function buildDefaultExpandedKeys(root: AgentNode): Set<string> {
             }
             entry.children.forEach(visitEvent);
         };
-        buildAgentEventTree(node.events).forEach(visitEvent);
+        getAgentEventTree(node.events).forEach(visitEvent);
         node.children.forEach(c => visit(c, depth + 1));
     };
     visit(root, 0);
     return keys;
 }
 
-function aggregateSubtreeStats(node: AgentNode) {
-    const stats = {
+type SubtreeStats = {
+    interactions: number;
+    llmCalls: number;
+    toolCalls: number;
+    skillCalls: number;
+    taskCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+    totalTokens: number;
+};
+
+const subtreeStatsCache = new WeakMap<AgentNode, SubtreeStats>();
+function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
+    const cached = subtreeStatsCache.get(node);
+    if (cached) return cached;
+    const stats: SubtreeStats = {
         interactions: node.stats.interactions,
         llmCalls: node.stats.llmCalls,
         toolCalls: node.stats.toolCalls,
@@ -415,6 +452,7 @@ function aggregateSubtreeStats(node: AgentNode) {
         stats.reasoningTokens += c.reasoningTokens;
         stats.totalTokens += c.totalTokens;
     }
+    subtreeStatsCache.set(node, stats);
     return stats;
 }
 
@@ -536,6 +574,7 @@ interface RasSpanInfo {
 
 interface TraceCtxValue {
     framework?: string;
+    rootSessionId?: string;
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
@@ -876,7 +915,7 @@ export default function AgentTraceView({
                     }
                     entry.children.forEach(visitEvent);
                 };
-                buildAgentEventTree(n.events).forEach(visitEvent);
+                getAgentEventTree(n.events).forEach(visitEvent);
             });
         }
         return keys;
@@ -972,7 +1011,7 @@ export default function AgentTraceView({
                     visit(childNode, childParents);
                 }
             };
-            buildAgentEventTree(node.events).forEach(entry => visitEvent(entry, myParents));
+            getAgentEventTree(node.events).forEach(entry => visitEvent(entry, myParents));
             node.children.filter(child => !handledChildIds.has(child.id)).forEach(child => visit(child, myParents));
         };
         visit(tree, []);
@@ -1060,6 +1099,7 @@ export default function AgentTraceView({
 
     const ctxValue: TraceCtxValue = {
         framework: framework?.trim().toLowerCase(),
+        rootSessionId,
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
@@ -1081,7 +1121,7 @@ export default function AgentTraceView({
     return (
         <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
             <TraceCtx.Provider value={ctxValue}>
-            <div className="flex flex-col gap-2.5">
+            <div className="@container/agent-trace flex min-w-0 flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1114,9 +1154,14 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className="grid gap-3 min-h-[520px] h-[calc(100vh-200px)]" style={{ gridTemplateColumns: 'minmax(400px, 62%) 1fr' }}>
+            <div className="grid min-w-0 grid-cols-1 gap-3 @min-[900px]/agent-trace:min-h-[520px] @min-[900px]/agent-trace:h-[calc(100vh-200px)] @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
                 {/* ─── Left: Unified Span Tree ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
+                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                    {['qoder', 'opencode'].includes(ctxValue.framework || '') && (
+                        <div className="flex justify-end px-2.5 py-1.5 border-b border-border">
+                            <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'trace', rootSessionId, interactions: displayInteractions })} />
+                        </div>
+                    )}
                     {/* Toolbar: expand/collapse + search + filters */}
                     <div className={cn(
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
@@ -1248,13 +1293,14 @@ export default function AgentTraceView({
                     <div className="flex items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
                         <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
-                        <span className="w-12 text-right">{tt('traceTree.spanDuration')}</span>
+                        <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
                         <span className="w-11 text-right">{tt('traceTree.spanTokens')}</span>
                         <span className="w-2" />
                     </div>
 
                     <div role="tree" className="overflow-y-auto overflow-x-auto flex-1 py-1">
                         <UnifiedSpanTree
+                            key={stableTraceIdentity ?? 'trace'}
                             node={tree}
                             nodeMap={nodeMap}
                             expandedKeys={expandedKeys}
@@ -1271,7 +1317,7 @@ export default function AgentTraceView({
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
+                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
                         <div className="p-4 space-y-3">
                             <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
@@ -1475,9 +1521,35 @@ function UnifiedSpanTree({
     const { matchedKeys, activeMatchKey, searchQuery, treeKindFilter, minDurationMs, minTokenK, slowOnly: ctxSlowOnly } = ctx;
 
     const events = node.events;
-    const eventTree = buildAgentEventTree(events);
+    const eventTree = getAgentEventTree(events);
     const unanchoredChildren = node.children.filter(child => !events.some(event => event.spawnedChildId === child.id));
     const hasContent = events.length > 0 || unanchoredChildren.length > 0;
+
+    // 一次渲染的顶层事件行数。超大 Trace 首屏先给出前几批调用，其余按需追加；
+    // 搜索、筛选和跳转到深层节点时自动放开，避免命中的行不在 DOM 里。
+    const [eventRenderLimit, setEventRenderLimit] = React.useState(TRACE_EVENT_RENDER_BATCH);
+    const filtersActive = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0
+        || ctxSlowOnly || Boolean(searchQuery.trim());
+    const eventRootIndexes = React.useMemo(
+        () => eventTree.map(entry => entry.eventIndex),
+        [eventTree],
+    );
+    const selectedEventIndex = React.useMemo(() => {
+        if (!selectedKey?.startsWith('e:')) return null;
+        const body = selectedKey.slice(2);
+        const splitAt = body.lastIndexOf(':');
+        if (splitAt < 0 || body.slice(0, splitAt) !== node.id) return null;
+        const index = Number.parseInt(body.slice(splitAt + 1), 10);
+        return Number.isFinite(index) ? index : null;
+    }, [selectedKey, node.id]);
+    const renderedEventCount = resolveEventRenderCount(eventRootIndexes, eventRenderLimit, {
+        revealAll: filtersActive,
+        revealThrough: selectedEventIndex,
+    });
+    const renderedEventEntries = renderedEventCount >= eventTree.length
+        ? eventTree
+        : eventTree.slice(0, renderedEventCount);
+    const hiddenEventCount = eventTree.length - renderedEventCount;
 
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
@@ -1664,7 +1736,7 @@ function UnifiedSpanTree({
                 )}
                 {/* Metrics */}
                 <span className={cn(
-                    'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
+                    'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                     status === 'slow' ? 'text-warning' : 'text-foreground-muted',
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
@@ -1680,12 +1752,26 @@ function UnifiedSpanTree({
             {/* Events */}
             {hasContent && isExpanded && (
                 <div>
-                    {eventTree.map((entry, entryIndex) => renderEventEntry(
+                    {renderedEventEntries.map((entry, entryIndex) => renderEventEntry(
                         entry,
                         depth + 1,
-                        entryIndex === eventTree.length - 1 && unanchoredChildren.length === 0,
+                        entryIndex === renderedEventEntries.length - 1 && hiddenEventCount === 0 && unanchoredChildren.length === 0,
                         depth === 0 ? [] : [...prefixBits, !isLast],
                     ))}
+                    {hiddenEventCount > 0 && (
+                        <div className="flex items-center py-1 pl-2">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs text-foreground-muted"
+                                onClick={() => setEventRenderLimit(count => count + TRACE_EVENT_RENDER_BATCH)}
+                            >
+                                {locale === 'zh'
+                                    ? `继续加载更多调用（已显示 ${renderedEventCount}/${eventTree.length}）`
+                                    : `Show more calls (${renderedEventCount}/${eventTree.length})`}
+                            </Button>
+                        </div>
+                    )}
                     {unanchoredChildren.map((child, index) => <UnifiedSpanTree
                         key={child.id} node={child} nodeMap={nodeMap} expandedKeys={expandedKeys}
                         onToggleKey={onToggleKey} selectedKey={selectedKey} onSelect={onSelect}
@@ -1835,7 +1921,7 @@ function UnifiedEventRow({
 
             {/* Metrics */}
             <span className={cn(
-                'w-12 text-right text-xs tabular-nums shrink-0 font-mono',
+                'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                 isSlow ? 'text-warning' : 'text-foreground-muted',
             )}>
                 {formatDuration(spanDurationMs)}
@@ -1858,6 +1944,8 @@ function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { la
     const [copied, setCopied] = useState(false);
     if (raw == null) return null;
     const trimmed = raw.trim();
+    // 大文本只在弹窗里完整渲染；内联预览有上限，避免每次选中节点都解析/布局全文。
+    const preview = truncateForPreview(trimmed, TRACE_INLINE_PREVIEW_CHARS);
     const onCopy = async () => {
         try {
             await copyText(trimmed);
@@ -1893,23 +1981,30 @@ function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { la
                     // 预览区走 SmartViewer:JSON → 可交互树(嵌套 JSON 字符串自动展开)、
                     // Markdown → 渲染、其余纯文本(真实换行,不再满屏 \n 字面)。
                     // 展开节点等交互留给 SmartViewer,弹窗入口在头部"查看全部"。
-                    <div style={{
-                        background: 'var(--background-secondary)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 6,
-                        maxHeight: 180,
-                        overflow: 'auto',
-                        position: 'relative',
-                    }}>
-                        <SmartViewer
-                            text={trimmed}
-                            toolbar={false}
-                            maxHeight="none"
-                            theme="light"
-                            unescape={false}
-                            className="sv-inline sv-compact"
-                        />
-                    </div>
+                    <>
+                        <div style={{
+                            background: 'var(--background-secondary)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            maxHeight: 180,
+                            overflow: 'auto',
+                            position: 'relative',
+                        }}>
+                            <SmartViewer
+                                text={preview.text}
+                                toolbar={false}
+                                maxHeight="none"
+                                theme="light"
+                                unescape={false}
+                                className="sv-inline sv-compact"
+                            />
+                        </div>
+                        {preview.truncated && (
+                            <div style={{ marginTop: '0.25rem', fontSize: '0.5625rem', color: 'var(--foreground-muted)' }}>
+                                {`预览已截断 · 共 ${preview.totalChars.toLocaleString()} 字符，点击「查看全部」读取完整内容`}
+                            </div>
+                        )}
+                    </>
                 ) : (
                     <div style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)', fontStyle: 'italic' }}>{emptyText || '(空)'}</div>
                 )}
@@ -2278,6 +2373,8 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
     const trimmed = text.trim();
     if (!trimmed) return null;
     const isLong = trimmed.length > PREVIEW_CHARS;
+    // 展开后也只内联渲染一段；更长的原文留在「查看全部」弹窗里按需读取。
+    const inline = truncateForPreview(trimmed, TRACE_DISCLOSURE_PREVIEW_CHARS);
 
     return (
         <div className="border-b border-border last:border-b-0">
@@ -2297,8 +2394,13 @@ function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultO
                     {/* L5 "Block content" — indented further under its block header; bg
                      *  is transparent so it inherits the expanded message's tint. */}
                     <div className={cn('max-h-[260px] overflow-auto py-2 pl-10 pr-3 text-xs leading-6 whitespace-pre-wrap break-words', tone === 'muted' ? 'text-foreground-secondary' : 'text-foreground')}>
-                        {trimmed}
+                        {inline.text}
                     </div>
+                    {inline.truncated && (
+                        <div className="px-3 pb-1.5 pl-10 text-[10px] text-foreground-muted">
+                            {`预览已截断 · 共 ${inline.totalChars.toLocaleString()} 字符`}
+                        </div>
+                    )}
                     {isLong && (
                         <div className="border-t border-border px-3 py-1.5 text-right">
                             <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
@@ -2427,6 +2529,7 @@ function SnapshotMessageRow({
         || (hasToolCalls ? `${toolCalls.length} 个工具调用: ${toolCalls.slice(0, 3).map(c => c.name).join(', ')}` : '');
     const firstLine = previewSource.split(/\n/).find(l => l.trim()) || '';
     const isLong = trimmed.length > PREVIEW_CHARS;
+    const inlineContent = truncateForPreview(trimmed, TRACE_DISCLOSURE_PREVIEW_CHARS);
     // Assistant turns render content as a "Response" disclosure bar matching the
     // "Thought" bar; system/user messages keep their plain inline content.
     const isAssistant = message.role === 'assistant';
@@ -2494,10 +2597,11 @@ function SnapshotMessageRow({
                             ) : (
                                 <>
                                     <div className="border-t border-border first:border-t-0 max-h-[280px] overflow-auto px-3 py-2 text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
-                                        {trimmed}
+                                        {inlineContent.text}
                                     </div>
                                     {isLong && (
-                                        <div className="border-t border-border px-3 py-1.5 text-right">
+                                        <div className="border-t border-border px-3 py-1.5 text-right text-[10px] text-foreground-muted">
+                                            {inlineContent.truncated && <span className="mr-2">{`已截断 · 共 ${inlineContent.totalChars.toLocaleString()} 字符`}</span>}
                                             <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
                                                 查看全部
                                             </Button>
@@ -2918,7 +3022,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
 
 function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
     const { locale } = useLocale();
-    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const { findEventAnomalies, framework, rootSessionId } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const startClock = formatClockMs(event.startedAt);
@@ -2942,12 +3046,19 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
         : event.kind === 'ras' ? (event.summary || event.interaction?.content || '')
         : '';
 
-    const argsStr = event.args !== undefined
-        ? (typeof event.args === 'string' ? event.args : JSON.stringify(event.args, null, 2))
-        : null;
-    const outputStr = (event.output !== undefined && event.output !== null)
-        ? (typeof event.output === 'string' ? event.output : JSON.stringify(event.output, null, 2))
-        : null;
+    // 大对象序列化只随事件变化重算，不随面板内的复制/展开等局部状态重复执行。
+    const argsStr = React.useMemo(
+        () => (event.args !== undefined
+            ? (typeof event.args === 'string' ? event.args : JSON.stringify(event.args, null, 2))
+            : null),
+        [event.args],
+    );
+    const outputStr = React.useMemo(
+        () => ((event.output !== undefined && event.output !== null)
+            ? (typeof event.output === 'string' ? event.output : JSON.stringify(event.output, null, 2))
+            : null),
+        [event.output],
+    );
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -2956,6 +3067,9 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 <div className="flex items-center gap-2 mb-1.5">
                     <KindBadge kind={event.kind} size="sm" />
                     <span className="flex-1 text-base font-semibold truncate text-foreground">{title}</span>
+                    {event.kind === 'llm' && ['qoder', 'opencode'].includes(framework || '') && (
+                        <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'llm', rootSessionId, interaction: event.interaction })} />
+                    )}
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
@@ -3721,6 +3835,39 @@ function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsU
     const stats = aggregateSubtreeStats(node);
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {node.sessionId !== 'COLLABORATION' && <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />}
+
+            <section aria-label={node.sessionId === 'COLLABORATION' ? 'Trace members' : 'Child Agents'}>
+                <h4 className="mb-2 text-xs font-semibold text-foreground-muted">
+                    {node.sessionId === 'COLLABORATION' ? (locale === 'zh' ? '集合成员' : 'Trace members') : (locale === 'zh' ? '子 Agent' : 'Child Agents')} ({childAgents.length})
+                </h4>
+                <div className="flex flex-col gap-1.5">
+                    {childAgents.map((child, index) => child.state === 'resolved' ? <AgentRelationCard
+                        key={child.taskId || child.nodeId}
+                        agentName={child.agentName}
+                        subagentType={child.subagentType}
+                        stats={child.stats}
+                        reported={child.reported}
+                        locale={locale}
+                        durationBasisMs={getAgentActiveDurationMs(node)}
+                        onNavigate={child.taskId && overviewCtx.onSubagentNavigate
+                            ? () => overviewCtx.onSubagentNavigate?.(child.taskId) : undefined}
+                        onSelect={child.nodeId ? () => onSelectChild(child.nodeId!) : undefined}
+                        label={child.taskId && overviewCtx.onSubagentNavigate
+                            ? locale === 'zh' ? '打开子 Agent 的 Trace' : 'Open child Agent Trace'
+                            : locale === 'zh' ? '选择子 Agent' : 'Select child Agent'}
+                    /> : <div key={index} role="status" className="rounded-md border border-border bg-background-secondary p-2 text-sm text-foreground-muted">
+                        {child.state === 'pending' ? (locale === 'zh' ? '等待子 Trace' : 'Waiting for child Trace')
+                            : child.state === 'ambiguous' ? (locale === 'zh' ? '子 Agent 关系存在冲突' : 'Conflicting child Agent relationships')
+                            : (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')}
+                    </div>)}
+                    {!childAgents.length && <p className="text-sm text-foreground-muted">
+                        {relationsUnavailable ? (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')
+                            : (locale === 'zh' ? '无子 Trace' : 'No child Trace')}
+                    </p>}
+                </div>
+            </section>
+
             <div>
                 <SectionTitle>调用统计</SectionTitle>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
@@ -3758,39 +3905,6 @@ function OverviewTab({ node, onSelectChild, parentAgent, childAgents, relationsU
                     })}
                 </div>
             </div>
-
-            {node.sessionId !== 'COLLABORATION' && <ParentAgentCard parent={parentAgent ?? null} onNavigate={overviewCtx.onSubagentNavigate} locale={locale} />}
-
-            <section aria-label={node.sessionId === 'COLLABORATION' ? 'Trace members' : 'Child Agents'}>
-                <h4 className="mb-2 text-xs font-semibold text-foreground-muted">
-                    {node.sessionId === 'COLLABORATION' ? (locale === 'zh' ? '集合成员' : 'Trace members') : (locale === 'zh' ? '子 Agent' : 'Child Agents')} ({childAgents.length})
-                </h4>
-                <div className="flex flex-col gap-1.5">
-                    {childAgents.map((child, index) => child.state === 'resolved' ? <AgentRelationCard
-                        key={child.taskId || child.nodeId}
-                        agentName={child.agentName}
-                        subagentType={child.subagentType}
-                        stats={child.stats}
-                        reported={child.reported}
-                        locale={locale}
-                        durationBasisMs={getAgentActiveDurationMs(node)}
-                        onNavigate={child.taskId && overviewCtx.onSubagentNavigate
-                            ? () => overviewCtx.onSubagentNavigate?.(child.taskId) : undefined}
-                        onSelect={child.nodeId ? () => onSelectChild(child.nodeId!) : undefined}
-                        label={child.taskId && overviewCtx.onSubagentNavigate
-                            ? locale === 'zh' ? '打开子 Agent 的 Trace' : 'Open child Agent Trace'
-                            : locale === 'zh' ? '选择子 Agent' : 'Select child Agent'}
-                    /> : <div key={index} role="status" className="rounded-md border border-border bg-background-secondary p-2 text-sm text-foreground-muted">
-                        {child.state === 'pending' ? (locale === 'zh' ? '等待子 Trace' : 'Waiting for child Trace')
-                            : child.state === 'ambiguous' ? (locale === 'zh' ? '子 Agent 关系存在冲突' : 'Conflicting child Agent relationships')
-                            : (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')}
-                    </div>)}
-                    {!childAgents.length && <p className="text-sm text-foreground-muted">
-                        {relationsUnavailable ? (locale === 'zh' ? '子 Agent 信息暂不可用' : 'Child Agent temporarily unavailable')
-                            : (locale === 'zh' ? '无子 Trace' : 'No child Trace')}
-                    </p>}
-                </div>
-            </section>
 
             {/* TopN quick navigation panel — shown only for root agent or when tree context has data */}
             <TopNPanel />
@@ -4219,7 +4333,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     dur: string | null; time: string; onClose: () => void;
     node: AgentNode; interactions: RawInteraction[];
 }) {
-    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const { findEventAnomalies, framework, rootSessionId } = React.useContext(TraceCtx);
     const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const title = event.name || event.summary?.slice(0, 60) || km.label;
@@ -4230,6 +4344,9 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                 <DialogHeader className="flex-row items-center gap-2 p-4 pr-12 border-b border-border space-y-0">
                     <KindBadge kind={event.kind} size="sm" />
                     <DialogTitle className="flex-1 font-semibold text-sm truncate text-foreground">{title}</DialogTitle>
+                    {event.kind === 'llm' && ['qoder', 'opencode'].includes(framework || '') && (
+                        <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'llm', rootSessionId, interaction: event.interaction })} />
+                    )}
                     <div className="flex gap-3 items-center shrink-0 text-xs text-foreground-muted">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}

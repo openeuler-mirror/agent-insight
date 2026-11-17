@@ -68,6 +68,7 @@
                   "zh/how-to/platform/qa",
                   "zh/how-to/platform/release-docker-image",
                   "zh/how-to/platform/settings/access-control",
+                  "zh/how-to/platform/settings/agent-runtimes",
                   "zh/how-to/platform/settings/model-registry",
                   "zh/how-to/platform/settings/usage-analytics",
                   "zh/how-to/platform/settings/web-search",
@@ -168,6 +169,7 @@
               {
                 "group": "评测",
                 "pages": [
+                  "zh/reference/evaluation/datasets-api",
                   "zh/reference/evaluation/experiments-api",
                   "zh/reference/evaluation/execution-environment",
                   "zh/reference/evaluation/evaluator-output",
@@ -175,8 +177,15 @@
                 ]
               },
               {
+                "group": "持续优化",
+                "pages": [
+                  "zh/reference/optimization/skills-api"
+                ]
+              },
+              {
                 "group": "可靠性",
                 "pages": [
+                  "zh/reference/reliability/client-control-api",
                   "zh/reference/reliability/agent-fault-injection/fault-catalog"
                 ]
               }
@@ -289,6 +298,7 @@
                 "group": "Operations",
                 "pages": [
                   "en/how-to/navigation",
+                  "en/how-to/platform/deploy-docker",
                   "en/how-to/platform/upgrade-and-rollback",
                   "en/how-to/platform/backup-and-restore"
                 ]
@@ -315,16 +325,30 @@
               {
                 "group": "Observability",
                 "pages": [
+                  "en/reference/observability/client-compatibility",
                   "en/reference/observability/trace-ingestion"
                 ]
               },
               {
                 "group": "Evaluation",
                 "pages": [
+                  "en/reference/evaluation/datasets-api",
                   "en/reference/evaluation/experiments-api",
                   "en/reference/evaluation/execution-environment",
                   "en/reference/evaluation/evaluator-output",
                   "en/reference/evaluation/benchmark-protocol"
+                ]
+              },
+              {
+                "group": "Optimization",
+                "pages": [
+                  "en/reference/optimization/skills-api"
+                ]
+              },
+              {
+                "group": "Reliability",
+                "pages": [
+                  "en/reference/reliability/client-control-api"
                 ]
               }
             ]

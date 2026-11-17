@@ -23,7 +23,7 @@ changefreq: monthly
 - 把 Skill 当成版本化资产，完成生成、分析、A/B 测试和优化迭代
 
 <p align="center">
-  <img src="../../../images/home.png" alt="Agent Insight 首页概览" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+  <img src="../../../images/home.png" alt="首页汇总 Agent 状态、运行指标与调用趋势" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
 </p>
 
 ## 平台结构
@@ -50,7 +50,7 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 
 仪表盘快速汇总最近运行情况，并把“可靠性”和“性能”拆成两个独立页签：
 
-- **可靠性**：基于链路跟踪中的 RAS 异常与恢复事件，展示故障率、恢复率、故障/恢复趋势、故障级别占比、故障模式、Agent 可靠性和近期故障 Trace。没有 RAS 异常事件的 Trace（包括列表中显示为 unknown 的情况）按无故障统计；恢复失败、结果未知或没有恢复结果统一显示为“未恢复”。
+- **可靠性**：基于链路追踪中的 RAS 异常与恢复事件，展示故障率、恢复率、故障/恢复趋势、故障级别占比、故障模式、Agent 可靠性和近期故障 Trace。没有 RAS 异常事件的 Trace（包括列表中显示为 unknown 的情况）按无故障统计；恢复失败、结果未知或没有恢复结果统一显示为“未恢复”。
 - **性能**：展示端到端时延分布、单次调用上下文峰值分布和慢 Trace 排行。
 - 可靠性页底部的“失败热点 · Agent”和“失败原因分类”来自 Execution 硬错误与 Judge 判定，是排障补充信息，不计入 RAS 可靠性指标。
 

@@ -28,6 +28,8 @@ const UPGRADEABLE = {
     "9fd0637399b14ac69810e20e3ec2e8d2aedbb58236b09871d7c158313e26e128",
     "9fda3fa4224105a48a6619f764c7bee04c1bdc0df32a74d880a295a1e5f03da6",
     "f550a10d49e564c9a088bb9a4f295a1a6c3cdb8bd889aa1589b3f1a30743be17",
+    // 2026-08-16 bundle shipped before the Codex 0.166 rollout update.
+    "bf5c5fb2a1bac4f3307727b1b0d98d7955dd7e2e262face237f1c4557c45e912",
   ]),
   "install-modules.cjs": new Set([
     "8d54ec546990463477e30c9a20773f2b3c0c9845ee768ea7d8180286b8326e22",

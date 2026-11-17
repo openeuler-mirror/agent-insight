@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import path from 'node:path';
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { POST as appendExperimentCases } from '@/app/api/experiments/[id]/cases/route';
 import { prisma } from '@/lib/storage/prisma';
@@ -57,6 +58,8 @@ function appendRequest(experimentId: string, count: number): Promise<Response> {
 
 test.after(async () => {
   await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  await prisma.$disconnect();
+  database.dispose();
 });
 
 test('case 追加数量边界：200 条成功，201 条拒绝且不产生部分写入', async () => {

@@ -129,6 +129,7 @@ test('AcTrail lifecycle: OTLP endpoint, spool, persistence and both observe read
     Object.assign(process.env, oldEnv);
     fs.rmSync(root, { recursive: true, force: true });
   });
+  await prismaRaw.user.create({ data: { username: 'actrail-tester', apiKey: 'actrail-lifecycle-key' } });
   const { POST } = await import('@/app/api/ingest/otel/v1/traces/route');
   const { listSources } = await import('@/lib/ingest/otel-consumer/sources');
   const { saveExecutionRecord } = await import('@/lib/storage/data-service');
@@ -139,16 +140,16 @@ test('AcTrail lifecycle: OTLP endpoint, spool, persistence and both observe read
     await context.test(`${kind}: nonzero root exit persists and remains failed in all read modes`, async () => {
       const caseTraceId = kind === 'process.exit' ? traceId : '00000000000000000000000000000302';
       const runningResponse = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body([], caseTraceId)),
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-witty-api-key': 'actrail-lifecycle-key' }, body: JSON.stringify(body([], caseTraceId)),
       }));
       assert.equal(runningResponse.status, 200);
       const runningRecord = source.aggregate(caseTraceId).record;
       assert.ok(runningRecord);
       await saveExecutionRecord(runningRecord);
-      const runningList = await GET(new Request(`http://localhost/api/observe/data?taskId=${caseTraceId}&skipAutoEvalReady=1&fields=light`));
+      const runningList = await GET(new Request(`http://localhost/api/observe/data?user=actrail-tester&taskId=${caseTraceId}&skipAutoEvalReady=1&fields=light`));
       assert.equal((await runningList.json())[0].trace_status, 'running');
       const response = await POST(new Request('http://localhost/api/ingest/otel/v1/traces', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-witty-api-key': 'actrail-lifecycle-key' },
         body: JSON.stringify(body([span(kind, 'exit', 7, { 'process.exit_code': 130, 'actrail.action.status': 'error' })], caseTraceId)),
       }));
       assert.equal(response.status, 200);
@@ -159,7 +160,7 @@ test('AcTrail lifecycle: OTLP endpoint, spool, persistence and both observe read
       const session = await prismaRaw.session.findFirst({ where: { taskId: caseTraceId } });
       assert.equal(session?.endTime?.toISOString(), '1970-01-01T00:00:09.000Z');
       for (const query of ['skipAutoEvalReady=1&fields=light', 'skipAutoEvalReady=0', 'paginated=1&databasePagination=1&page=1&pageSize=10&skipAutoEvalReady=1&fields=light&status=failed', 'paginated=1&databasePagination=1&page=1&pageSize=10&skipAutoEvalReady=1&fields=light']) {
-        const result = await GET(new Request(`http://localhost/api/observe/data?taskId=${caseTraceId}&${query}`));
+        const result = await GET(new Request(`http://localhost/api/observe/data?user=actrail-tester&taskId=${caseTraceId}&${query}`));
         assert.equal(result.status, 200);
         const payload = await result.json();
         const records = Array.isArray(payload) ? payload : payload.records;

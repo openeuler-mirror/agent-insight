@@ -16,6 +16,8 @@
 
 import type { DiagnosisProgressSnapshot } from './progress-types';
 
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.6';
+
 export type AgentDebugModule = 'memory' | 'reflection' | 'planning' | 'action' | 'system' | 'others' | 'unknown';
 export type AgentDebugSeverity = 'high' | 'medium' | 'low';
 export type AgentDebugStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -264,7 +266,8 @@ export interface AgentDebugPhase1Cell extends AgentDebugTraceLocation {
   anchorId?: string;
 }
 
-export type AgentDebugSkillsAnalysisStatus = 'pending' | 'running' | 'done' | 'failed';
+export type AgentDebugSkillsAnalysisStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+export type AgentDebugSkillsSkipReason = 'no-skill-targets' | 'missing-skill';
 
 export interface AgentDebugSkillsKeyActionResult {
   actionId: string;
@@ -287,6 +290,7 @@ export interface AgentDebugSkillsAnalysis {
   runId?: string;
   progress?: DiagnosisProgressSnapshot | null;
   status: AgentDebugSkillsAnalysisStatus;
+  skipReason?: AgentDebugSkillsSkipReason;
   source: 'agent-debug';
   generatedAt?: string;
   updatedAt?: string;

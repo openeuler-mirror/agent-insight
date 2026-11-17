@@ -40,7 +40,6 @@ function makeProtobufTraceBody(overrides?: {
   const traceReqType = root.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 
   const traceId = Buffer.from(overrides?.traceId || "0af7651916cd43dd8448eb211c80319c", "hex")
-  const spanId = Buffer.from(overrides?.spanId || "b7ad6b7169203331", "hex")
   const parentSpanId = overrides?.parentSpanId
     ? Buffer.from(overrides.parentSpanId, "hex")
     : undefined

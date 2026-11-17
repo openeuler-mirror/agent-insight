@@ -1265,6 +1265,10 @@ test('a repeated completion resumes an interrupted normalizing evaluation', asyn
     const reportBytes = Buffer.from(JSON.stringify(rawResult.officialReport))
     await fsp.mkdir(path.dirname(reportAbsolutePath), { recursive: true })
     await fsp.writeFile(reportAbsolutePath, reportBytes)
+    const logBytes = Buffer.from('ok')
+    const logDigest = `sha256:${createHash('sha256').update(logBytes).digest('hex')}`
+    await fsp.writeFile(path.join(process.env.AGENT_INSIGHT_HOME!, 'data', `test/${evidenceIds[1]}.txt`), logBytes)
+    await fsp.writeFile(path.join(process.env.AGENT_INSIGHT_HOME!, 'data', `test/${evidenceIds[2]}.log`), logBytes)
     await prisma.experiment.create({
       data: {
         id: experimentId,
@@ -1311,8 +1315,8 @@ test('a repeated completion resumes an interrupted normalizing evaluation', asyn
     await prisma.benchmarkEvaluationArtifact.createMany({
       data: [
         { id: evidenceIds[0], evaluationId, name: 'report.json', kind: 'official-report', mediaType: 'application/json', sha256: `sha256:${createHash('sha256').update(reportBytes).digest('hex')}`, sizeBytes: reportBytes.byteLength, storagePath: reportStoragePath },
-        { id: evidenceIds[1], evaluationId, name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain', sha256: `sha256:${'2'.repeat(64)}`, sizeBytes: 2, storagePath: `test/${evidenceIds[1]}.txt` },
-        { id: evidenceIds[2], evaluationId, name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain', sha256: `sha256:${'3'.repeat(64)}`, sizeBytes: 2, storagePath: `test/${evidenceIds[2]}.log` },
+        { id: evidenceIds[1], evaluationId, name: 'test_output.txt', kind: 'test-output', mediaType: 'text/plain', sha256: logDigest, sizeBytes: 2, storagePath: `test/${evidenceIds[1]}.txt` },
+        { id: evidenceIds[2], evaluationId, name: 'run_instance.log', kind: 'harness-log', mediaType: 'text/plain', sha256: logDigest, sizeBytes: 2, storagePath: `test/${evidenceIds[2]}.log` },
       ],
     })
 

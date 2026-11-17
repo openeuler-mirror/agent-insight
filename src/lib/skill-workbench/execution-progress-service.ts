@@ -15,8 +15,7 @@
  */
 
 import type { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/storage/prisma'
-import { loadCaseExecutionProgressInTransaction } from '@/lib/engine/experiment/execution-progress-service'
+import { loadCaseExecutionProgressInTransaction, readExecutionProgressSnapshot } from '@/lib/engine/experiment/execution-progress-service'
 import { readExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding'
 import type { SkillExecutionSnapshot, SkillRunProgress, SkillProgressRun } from './execution-progress'
 import type { AbCaseStates } from './ab-comparison'
@@ -24,11 +23,11 @@ import type { AbCaseStates } from './ab-comparison'
 const parse = (value: string | null | undefined) => { try { return JSON.parse(value || '{}') } catch { return {} } }
 
 export async function loadSkillExecutionProgress(experimentId: string, user: string): Promise<SkillExecutionSnapshot | null> {
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const experiment = await tx.experiment.findFirst({ where: { id: experimentId, user, scope: 'skill-workbench', deletedAt: null } })
+  return readExecutionProgressSnapshot(async (tx: Prisma.TransactionClient) => {
+    const experiment = await tx.experiment.findFirst({ where: { id: experimentId, user, scope: 'skill-workbench', deletedAt: null }, select: { configSnapshotJson: true, evaluatorIdsJson: true, preset: true, createdAt: true, status: true } })
     if (!experiment) return null
     const config = parse(experiment.configSnapshotJson)
-    const task = config.grayscaleTaskId ? await tx.grayscaleTask.findFirst({ where: { id: String(config.grayscaleTaskId), user } }) : null
+    const task = config.grayscaleTaskId ? await tx.grayscaleTask.findFirst({ where: { id: String(config.grayscaleTaskId), user }, select: { id: true, caseStatesJson: true } }) : null
     const states: AbCaseStates = parse(task?.caseStatesJson)
     const rows = await tx.experimentCase.findMany({ where: { experimentId, deletedAt: null }, select: { id: true, caseValuesJson: true, createdAt: true } })
     const cancelled = await tx.experimentCancellation.findMany({ where: { experimentId }, select: { caseKey: true } })

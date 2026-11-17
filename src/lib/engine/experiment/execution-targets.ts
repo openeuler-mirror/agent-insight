@@ -96,14 +96,19 @@ export async function listClientTraceGenerationAvailability(
         ...(platform.models || []).map((model) => ({ id: model, label: model })),
       ];
       for (const agent of platform.agents || []) {
+        const entry = platform.agentCatalog?.find(item => item.id === agent);
+        if (platform.agentCatalog && (!entry || !entry.ready)) {
+          diagnostics.push({ ...identity, platform: platform.id, code: 'AGENT_UNAVAILABLE', message: `${entry?.label || agent}：${entry?.unavailableReason || 'Agent 未就绪'}` });
+          continue;
+        }
         targets.push({
           workerId: client.clientId,
           host,
           hostname: client.hostname,
           platform: platform.id,
           agent,
-          agentLabel: agent,
-          models,
+          agentLabel: entry?.label || agent,
+          models: entry ? [{ id: '', label: '平台默认' }, ...entry.models.map(id => ({ id, label: id }))] : models,
           lastSeenAt: client.lastSeenAt.toISOString(),
           parameterDefinitions: definitionsForTarget(platform.parameterDefinitions || [], platform.id, agent),
           supportsSkillConcurrency: Number(platform.runExperimentCase?.skillSnapshotVersion || 0) >= 5,

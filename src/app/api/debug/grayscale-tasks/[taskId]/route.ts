@@ -53,7 +53,6 @@ import {
     forLegacyRowProjection,
     normalizeAbEvaluators,
     TASK_COMPLETION_EVALUATOR_ID,
-    TRACE_EVALUATOR_ID,
 } from '@/lib/grayscale/ab-evaluator-selection';
 import {
     evaluateSkillTriggerAnalysis,

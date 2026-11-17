@@ -130,7 +130,7 @@ test('Goal Plus parent references and Session API recover late data, reject conf
     assert.equal(spy.mock.callCount(), 1, 'parent and child queries must share one projection plan');
     spy.mock.restore();
     assert.equal((await request('worker', 'structure', 'parent-test-bob')).status, 403);
-    assert.equal((await (await request('worker', 'structure', 'invalid-key')).json()).parentAgent, null);
+    assert.equal((await request('worker', 'structure', 'invalid-key')).status, 401);
     assert.deepEqual(Object.keys((await projection.plan('bob')).parentAgents || {}), []);
 
     await trace('grandchild');

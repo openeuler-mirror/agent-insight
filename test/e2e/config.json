@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "defaults": {
+    "mode": "mock",
+    "cases": [
+      "001",
+      "002",
+      "003",
+      "004",
+      "005"
+    ],
+    "runUt": true,
+    "model": {
+      "baseUrl": "https://api.deepseek.com",
+      "modelName": "deepseek-flash",
+      "key": {
+        "fileEnv": "E2E_MODEL_KEY_FILE"
+      },
+      "options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "contextTokens": 131072,
+      "outputTokens": 8192,
+      "maxRequests": 500
+    },
+    "resources": {
+      "cpus": 2,
+      "memoryMiB": 7168,
+      "workspaceGiB": 8,
+      "minFreeDiskGiB": 12,
+      "hostReserveMiB": 1024,
+      "pids": 512,
+      "appHeapMiB": 2560,
+      "tmpMiB": 1024,
+      "stateMiB": 1024,
+      "prismaMiB": 256,
+      "relayMemoryMiB": 256,
+      "relayCpus": 0.25,
+      "concurrentRuns": 1,
+      "retainedWorkspaceLimit": 2,
+      "openFiles": 1024
+    },
+    "timeouts": {
+      "utMs": 1800000,
+      "utFileMs": 300000,
+      "caseMs": 2700000,
+      "runMs": 10800000,
+      "modelRequestMs": 180000,
+      "cleanupGraceMs": 90000
+    },
+    "storage": {
+      "stateRootEnv": "E2E_STATE_ROOT",
+      "reportsDir": "exclude/core-e2e"
+    },
+    "application": {
+      "mode": "production"
+    },
+    "caseModes": {
+      "001": "real",
+      "002": "mock",
+      "003": "mock",
+      "004": "mock",
+      "005": "mock"
+    }
+  },
+  "profiles": {
+    "pr": {
+      "account": {
+        "username": "test_e2e_pr@example.com"
+      }
+    },
+    "daily": {
+      "account": {
+        "username": "test_e2e_daily@example.com"
+      }
+    }
+  }
+}

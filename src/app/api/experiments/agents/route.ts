@@ -196,11 +196,21 @@ export async function GET(req: Request) {
       }
     }
 
+    const hasRunnableJiuwen = Array.from(byName.values()).some((candidate) =>
+      candidate.targets.some((target) => target.platform === 'jiuwenswarm' && target.supportsGenericTrace));
     const agents = Array.from(byName.values())
+      .filter((candidate) => !(
+        hasRunnableJiuwen
+        && candidate.frameworks.size === 1
+        && candidate.frameworks.has('jiuwenswarm')
+        && !candidate.targets.some((target) => target.platform === 'jiuwenswarm')
+      ))
       .sort((a, b) => b.traces - a.traces || b.targets.length - a.targets.length || a.name.localeCompare(b.name))
       .slice(0, 50)
       .map((item) => ({
         name: item.name,
+        ...(item.targets.some(target => target.supportsGenericTrace && target.agentLabel !== item.name)
+          ? { label: item.targets.find(target => target.supportsGenericTrace)?.agentLabel } : {}),
         traces: item.traces,
         frameworks: Array.from(item.frameworks).sort(),
         executable: item.targets.some(target => target.supportsGenericTrace || target.supportsFaultInjection || target.supportsBenchmark || target.preparableBenchmarkKeys.length > 0),

@@ -36,7 +36,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
 
     assert.deepEqual(
         navigation.find(item => item.key === 'observe')?.children?.map(item => item.key),
-        ['agents', 'trace', 'version-analysis', 'infra'],
+        ['agents', 'trace', 'task-insight', 'version-analysis', 'infra'],
     );
     assert.deepEqual(
         navigation.find(item => item.key === 'evaluation')?.children?.map(item => item.key),
@@ -48,7 +48,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     );
     assert.deepEqual(
         navigation.find(item => item.key === 'config')?.children?.map(item => item.key),
-        ['skill-management', 'model-registry', 'web-search', 'access-install', 'access-client'],
+        ['skill-management', 'model-registry', 'agent-runtimes', 'web-search', 'access-install', 'access-client'],
     );
 
     const skillItem = navigation
@@ -65,6 +65,12 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     assert.ok(traceItem);
     assert.equal(isSidebarItemActive(traceItem, '/details'), true);
 
+    const taskInsightItem = navigation.find(item => item.key === 'observe')?.children?.find(item => item.key === 'task-insight');
+    assert.ok(taskInsightItem);
+    assert.equal(taskInsightItem.href, '/task-insight');
+    assert.equal(isSidebarItemActive(taskInsightItem, '/task-insight'), true);
+    assert.equal(isSidebarItemActive(taskInsightItem, '/trace'), false);
+
     const versionAnalysisItem = navigation
         .find(item => item.key === 'observe')
         ?.children?.find(item => item.key === 'version-analysis');
@@ -76,7 +82,7 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     const navigationForAdmin = getSidebarNavigation(true);
     assert.deepEqual(
         navigationForAdmin.find(item => item.key === 'config')?.children?.map(item => item.key),
-        ['skill-management', 'model-registry', 'web-search', 'access-install', 'access-client', 'usage'],
+        ['skill-management', 'model-registry', 'agent-runtimes', 'web-search', 'access-install', 'access-client', 'usage'],
     );
 });
 

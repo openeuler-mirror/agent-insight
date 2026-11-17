@@ -30,8 +30,8 @@ const { validateResolved } = require('../services/executor/src/xgovernor/model-r
 for (const kind of ['pi', 'xiaoo']) {
   test(`${kind} sends resolved capabilities on open and retains per-turn reasoning after reloading its handle`, async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'xgov-model-wire-'))
-    let close: (() => Promise<unknown>) | undefined
-    t.after(async () => { try { await close?.() } finally { fs.rmSync(directory, { recursive: true, force: true }) } })
+    const cleanup: { close?: () => Promise<unknown> } = {}
+    t.after(async () => { try { await cleanup.close?.() } finally { fs.rmSync(directory, { recursive: true, force: true }) } })
     const platform = kind === 'pi' ? 'pi-agent' : 'xiaoo'
     const config = normalizeExecutionConfig({ profiles: { 'xgovernor-local-docker': {
       sourceRevision: 'a'.repeat(40), runtimes: { [platform]: {
@@ -91,7 +91,7 @@ for (const kind of ['pi', 'xiaoo']) {
     })
     const context = { runId, async persist() {} }
     const prepared = await backend.prepare(task, context)
-    close = () => backend.close(prepared)
+    cleanup.close = () => backend.close(prepared)
     const opened = requests.find(item => item.url.endsWith('/sessions/open'))!.payload
     assert.deepEqual(opened.llm.capabilities, caps)
     assert.equal(opened.llm.model, 'selected')

@@ -1,3 +1,10 @@
+---
+title: "内置故障覆盖矩阵"
+description: "列出内置故障类型、注入方式、子场景及关联检测能力，供配置和核对故障注入实验。"
+keywords: ["Agent Insight", "故障注入", "故障目录", "可靠性评测"]
+changefreq: "monthly"
+---
+
 # 内置故障覆盖矩阵
 
 > **Insight 拓扑说明**：编排与 Judge 在 agent-insight 服务端；本机 FI Worker + [`agent_fault_injection/`](https://gitcode.com/openeuler/agent-insight/tree/master/agent_fault_injection) 负责注入与采集。独立 FastAPI/Vite 不纳入产品路径。

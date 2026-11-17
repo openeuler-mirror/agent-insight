@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { evidenceSource } from '../../../packages/benchmark-protocol/artifact-path.cjs'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -168,6 +169,7 @@ export async function getBenchmarkExperimentResult(input: {
           id: true,
           status: true,
           normalizedResultJson: true,
+          runtimeFactsJson: true,
           artifacts: {
             orderBy: { createdAt: 'asc' },
             select: {
@@ -243,6 +245,7 @@ export async function getBenchmarkExperimentResult(input: {
         ? { evaluationId: evaluation.id, status: evaluation.status }
         : null,
       evidenceArtifacts: (evaluation?.artifacts || []).map((artifact) => ({
+        evidenceSource: evidenceSource(evaluation?.runtimeFactsJson, artifact.id),
         artifactId: artifact.id,
         name: artifact.name,
         kind: artifact.kind,

@@ -1,5 +1,8 @@
 ---
 title: "操作指南"
+description: "按部署、观测、评测、诊断和优化任务组织操作步骤，帮助用户查找所需指南。"
+keywords: ["Agent Insight", "操作指南", "平台部署", "运行观测", "评测优化"]
+changefreq: "monthly"
 ---
 
 针对安装、配置、使用与扩展目标查找操作步骤。
@@ -9,6 +12,7 @@ title: "操作指南"
 ## 平台公共
 
 - [用 Docker 部署服务端](./platform/deploy-docker.md)
+- [在 OpenShift 上部署服务端](./platform/deploy-openshift.md)（含 Developer Sandbox 集群内构建）
 - [升级与回滚](./platform/upgrade-and-rollback.md)
 - [备份与恢复](./platform/backup-and-restore.md)
 - [Conventions & Extension](./platform/conventions-and-extension.md)
@@ -19,7 +23,9 @@ title: "操作指南"
 - [Q&A](./platform/qa.md)
 - [Docker 镜像发布](./platform/release-docker-image.md)
 - [客户端安装](./platform/settings/access-control.md)
+- [Agent 运行时](./platform/settings/agent-runtimes.md)
 - [模型注册](./platform/settings/model-registry.md)
+- [Agent 运行时](./platform/settings/agent-runtime.md)
 - [用量统计](./platform/settings/usage-analytics.md)
 - [联网搜索](./platform/settings/web-search.md)
 - [概览面板](./platform/workspace-overview.md)
@@ -36,6 +42,7 @@ title: "操作指南"
 - [QwenPaw Trace Collector](./observability/qwenpaw-trace-collector.md)
 - [Trae IDE 接入指南](./observability/trae-integration.md)
 - [链路追踪](./observability/view-traces.md)：查看模型与工具的关联、筛选及详情；明确关联的普通工具缩进到对应 LLM 下
+- [Token 与任务分析](./observability/token-task-insight.md)：按任务类型与用户拆 Token/成本，识别长时任务与可延后的夜间执行项
 - [WorkBuddy Trace Collector](./observability/workbuddy-trace-collector.md)
 
 ## 评测
@@ -44,7 +51,7 @@ title: "操作指南"
 - [SWE-bench 部署指南](./evaluation/benchmarks/deploy-swe-bench.md)
 - [ZSoft 部署指南](./evaluation/benchmarks/deploy-zsoft.md)
 - [Benchmark 接入开发规范](./evaluation/benchmarks/develop-benchmark.md)
-- [自定义 Benchmark 接入指南](./evaluation/benchmarks/onboard-custom-benchmark.md)
+- [自定义 Benchmark 接入指南](./evaluation/benchmarks/onboard-custom-benchmark.md)（含项目地址与 Benchmark 来源驱动的自动接入 Skill）
 - [ZSoft 评测资产发布指南](./evaluation/benchmarks/release-zsoft-assets.md)
 - [评测数据集](./evaluation/datasets.md)
 - [评估器开发指南](./evaluation/develop-evaluator.md)
@@ -58,13 +65,13 @@ title: "操作指南"
 
 ## 诊断
 
-- [智能诊断](./diagnosis/agent-debug/diagnosis.md)
+- [智能诊断](./diagnosis/agent-debug/diagnosis.md)（含评测输入冻结、诊断发现与 Skill 基线核验）
 
 ## 优化
 
 - [Skill 生成](./optimization/skills/generate.md)
 - [Skills 管理](./optimization/skills/manage.md)
-- [Skill 优化](./optimization/skills/optimize.md)（含执行期间查看前文与恢复输出跟随）
+- [Skill 优化](./optimization/skills/optimize.md)（含诊断优化计划、同配置复测与发布门禁）
 - [Skill 生成、评估与优化使用指南](./optimization/skills/skill-workflow.md)
 
 ## 可靠性

@@ -42,6 +42,27 @@ export async function runAgentDebugSkillsAnalysis(args: {
   const emit = (key: string, state: 'started' | 'completed' | 'failed', title: string, summary: string) => args.progress?.emit({ key, module: 'skills', kind: 'stage', state, title, summary });
   emit('comparison-start', 'started', '提取 Skill 关键动作', '正在读取 Skill 要求与实际执行轨迹。');
   const comparison = await buildSkillKeyActionComparison(args.execution, taskId, args.user, interactions);
+  if (comparison.status === 'no-skill-targets' || comparison.status === 'missing-skill') {
+    args.progress?.emit({
+      key: 'skipped',
+      kind: 'task',
+      module: 'skills',
+      state: 'skipped',
+      title: 'Skills 步骤核验已跳过',
+      summary: skillKeyActionComparisonMessage(comparison),
+    });
+    const now = new Date().toISOString();
+    return {
+      status: 'skipped',
+      skipReason: comparison.status,
+      source: 'agent-debug',
+      generatedAt: now,
+      updatedAt: now,
+      interactionHash: args.interactionHash,
+      errorMessage: null,
+      keyActionResults: [],
+    };
+  }
   if (comparison.status !== 'ok') {
     throw new Error(skillKeyActionComparisonMessage(comparison));
   }

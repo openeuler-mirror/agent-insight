@@ -75,7 +75,7 @@ export async function GET(
     : null;
 
   return NextResponse.json({
-    row: summarizeSkillsAnalysisRow(row),
+    row: summarizeSkillsAnalysisRow(row, skillsAnalysis),
     skillsAnalysis: withProgress(skillsAnalysis, row),
     stale: Boolean(row && row.interactionsHash !== interactionHash),
   });
@@ -135,13 +135,6 @@ export async function POST(
   const runningAnalysis = { ...runningAgentDebugSkillsAnalysis({ interactionHash }), runId };
   const progress = createDiagnosisProgress({ user, executionId: execution.id, runId });
   progress.emit({ key: 'accepted', kind: 'task', module: 'skills', state: 'started', title: 'Skills 核验已开始', summary: '独立核验任务已创建。' });
-  const runningRow = await upsertAgentDebugSkillsAnalysis({
-    executionId: execution.id,
-    user,
-    interactionsHash: interactionHash,
-    skillsAnalysis: runningAnalysis,
-  });
-
   setActiveAgentDebugBackgroundJob({
     progress,
     kind: 'skills-analysis',
@@ -149,6 +142,18 @@ export async function POST(
     interactionsHash: interactionHash,
     startedAt: Date.now(),
   });
+  let runningRow: Awaited<ReturnType<typeof upsertAgentDebugSkillsAnalysis>>;
+  try {
+    runningRow = await upsertAgentDebugSkillsAnalysis({
+      executionId: execution.id,
+      user,
+      interactionsHash: interactionHash,
+      skillsAnalysis: runningAnalysis,
+    });
+  } catch (error) {
+    clearActiveAgentDebugBackgroundJob('skills-analysis', execution.id, interactionHash);
+    throw error;
+  }
 
   void runAgentDebugSkillsAnalysis({
       execution,
@@ -186,13 +191,16 @@ export async function POST(
   }, { status: 202 });
 }
 
-function summarizeSkillsAnalysisRow(row: Awaited<ReturnType<typeof findAgentDebugSkillsAnalysis>>) {
+function summarizeSkillsAnalysisRow(
+  row: Awaited<ReturnType<typeof findAgentDebugSkillsAnalysis>>,
+  analysis?: AgentDebugSkillsAnalysis | null,
+) {
   if (!row) return null;
   return {
     id: row.id,
     executionId: row.executionId,
-    status: row.status,
-    errorMessage: row.errorMessage,
+    status: analysis?.status ?? row.status,
+    errorMessage: analysis?.status === 'skipped' ? null : row.errorMessage,
     interactionsHash: row.interactionsHash,
     keyActionCount: row.keyActionCount,
     ranAt: row.ranAt,

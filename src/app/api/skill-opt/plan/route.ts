@@ -139,6 +139,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'session skill/version mismatch' }, { status: 400 });
     }
 
+    const diagnosisPlan = await prismaRaw.skillOptPlan.findUnique({ where: { sessionId }, include: { items: { orderBy: { rank: 'asc' } }, session: true } });
+    if (diagnosisPlan && safeParse<{ source?: string }>(diagnosisPlan.operatorMeta, {}).source === 'diagnosis') {
+      const identity = await resolveUser(req);
+      if (!identity.username || diagnosisPlan.session.user !== identity.username) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+      return NextResponse.json({ plan: serializePlan(diagnosisPlan), reused: true });
+    }
+
     // 找 skill + 鉴权（与 optimization-points 路由同款）
     const where: any = { name: skillName, OR: [{ user }, { user: null }, { visibility: 'public' }] };
     const skills = await db.findSkills(where);
@@ -283,6 +290,11 @@ export async function GET(req: NextRequest) {
       where: { sessionId },
       include: { items: { orderBy: { rank: 'asc' } } },
     });
+    if (plan && safeParse<{ source?: string }>(plan.operatorMeta, {}).source === 'diagnosis') {
+      const identity = await resolveUser(req);
+      const session = await prismaRaw.skillOptSession.findFirst({ where: { id: sessionId, user: identity.username || '' } });
+      if (!identity.username || !session) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
     return NextResponse.json({ plan: plan ? serializePlan(plan) : null });
   } catch (err: any) {
     console.error('[skill-opt plan GET] failed:', err?.message || err);
@@ -312,6 +324,7 @@ function serializePlan(plan: any) {
       proposedEdit: it.proposedEdit,
       conflictNote: it.conflictNote,
       sourceIssueIds: safeParse(it.sourceIssueIds, []),
+      sourceRefs: safeParse(it.sourceRefsJson, []),
       sourcesBreakdown: safeParse(it.sourcesBreakdown, {}),
       prevalence: it.prevalence,
     })),

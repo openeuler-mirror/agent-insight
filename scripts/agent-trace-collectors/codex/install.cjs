@@ -26,6 +26,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const {
+  COLLECTOR_VERSION,
   atomicWriteFile,
   installHooksDocument,
   installOtelBlock,
@@ -35,7 +36,11 @@ const { sha256, getAgentInsightHome } = require("../shared/trace-transport.cjs")
 const { installSharedModules } = require("../shared/install-modules.cjs");
 
 const COLLECTOR_FILES = [
+  "app-server-proxy.cjs",
   "codex-trace-core.cjs",
+  "lifecycle-reducer.cjs",
+  "source-classifier.cjs",
+  "rollout-reader.cjs",
   "config-core.cjs",
   "hook-handler.cjs",
   "relay.cjs",
@@ -51,6 +56,7 @@ function parseArgs(argv) {
     startRelay: true,
     installEditors: true,
     skipVersionCheck: false,
+    desktopRolloutIngress: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -60,6 +66,7 @@ function parseArgs(argv) {
     else if (arg === "--no-start") result.startRelay = false;
     else if (arg === "--skip-editor-install") result.installEditors = false;
     else if (arg === "--skip-version-check") result.skipVersionCheck = true;
+    else if (arg === "--enable-desktop-rollout") result.desktopRolloutIngress = true;
     else throw new Error(`Unknown install argument: ${arg}`);
   }
   if (!Number.isInteger(result.relayPort) || result.relayPort < 1024 || result.relayPort > 65535) {
@@ -177,12 +184,15 @@ function startRelay(collectorDir, configPath) {
 
 async function installEditorExtensions(collectorDir) {
   const { buildVsix } = require("./build-vsix.cjs");
+  const extensionManifest = JSON.parse(
+    await fsp.readFile(path.join(collectorDir, "vscode-extension", "package.json"), "utf8"),
+  );
   const vsix = await buildVsix({
     sourceDir: path.join(collectorDir, "vscode-extension"),
     outputPath: path.join(
       collectorDir,
       "out",
-      "agent-insight-codex-trace-0.1.0.vsix",
+      `agent-insight-codex-trace-${extensionManifest.version}.vsix`,
     ),
   });
   const editors = [];
@@ -251,6 +261,7 @@ async function install(options) {
 
   const collectorConfig = {
     version: 1,
+    collectorVersion: COLLECTOR_VERSION,
     enabled: true,
     apiKey,
     endpoint: `${baseUrl}/api/ingest/otel/v1/traces`,
@@ -258,6 +269,13 @@ async function install(options) {
     relayPort: options.relayPort,
     uploadIntervalMs: 5 * 60 * 1000,
     homeDir: options.homeDir,
+    desktopRolloutIngress: options.desktopRolloutIngress,
+    desktopRolloutScanIntervalMs: 10_000,
+    // 446-3：Desktop rollout 的回填边界取安装时刻；重装/升级保留既有边界，
+    // 保证「不回填启用（安装）前的历史」对旧配置升级同样成立。
+    desktopRolloutBackfillAfterMs: Number(priorConfig?.desktopRolloutBackfillAfterMs) > 0
+      ? Number(priorConfig.desktopRolloutBackfillAfterMs)
+      : Date.now(),
   };
   await atomicWriteFile(configPath, `${JSON.stringify(collectorConfig, null, 2)}\n`);
   const extensionInstall = options.installEditors
@@ -266,6 +284,7 @@ async function install(options) {
   const handlerSource = await fsp.readFile(handlerPath);
   const state = {
     version: 1,
+    collectorVersion: COLLECTOR_VERSION,
     installedAt: new Date().toISOString(),
     hooksPath,
     hooksFileExisted: priorState?.hooksFileExisted ?? hooksExisted,
@@ -286,6 +305,7 @@ async function install(options) {
   if (options.startRelay) startRelay(collectorDir, configPath);
   return {
     collectorDir,
+    collectorVersion: COLLECTOR_VERSION,
     hooksAdded: hooksMutation.added,
     otelConfigured: otelMutation.changed || !otelMutation.conflict,
     otelConflict: otelMutation.conflict ? otelMutation.reason : undefined,
@@ -298,7 +318,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const result = await install(options);
   process.stdout.write([
-    `Agent Insight Codex collector installed at ${result.collectorDir}`,
+    `Agent Insight Codex collector ${result.collectorVersion} installed at ${result.collectorDir}`,
     `Hooks added: ${result.hooksAdded}`,
     result.otelConflict
       ? `OTel configuration conflict: ${result.otelConflict}`

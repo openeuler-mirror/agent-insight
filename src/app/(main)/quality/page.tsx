@@ -16,7 +16,7 @@
 
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Activity, Loader2 } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -83,17 +83,19 @@ export default function QualityPage() {
     }, [user]);
 
     // 切 Agent/窗口/Skill → 全页重算（BR-002）。
+    const reportGenRef = useRef(0);
     const loadReport = useCallback((agent: string, window: WindowKind, skill: string) => {
-        if (!agent || !user) { setReport(null); return; }
+        const gen = ++reportGenRef.current;
+        if (!agent || !user) { setReport(null); setLoading(false); return; }
         setLoading(true);
         setBucketSel(null);
         const q = new URLSearchParams({ agent, window, user });
         if (skill && skill !== 'all') q.set('skill', skill);
         apiFetch(`/api/quality/report?${q.toString()}`)
             .then((r) => r.json())
-            .then((d) => setReport(d?.error ? null : d))
-            .catch(() => setReport(null))
-            .finally(() => setLoading(false));
+            .then((d) => { if (gen === reportGenRef.current) setReport(d?.error ? null : d); })
+            .catch(() => { if (gen === reportGenRef.current) setReport(null); })
+            .finally(() => { if (gen === reportGenRef.current) setLoading(false); });
     }, [user]);
 
     useEffect(() => {

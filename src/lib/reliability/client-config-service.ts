@@ -162,9 +162,19 @@ async function getOrInitConfig(user: string, clientId: string, platform: Reliabi
     where: { clientId_platform: { clientId, platform } },
   })
   if (existing) return existing
-  return prisma.reliabilityClientConfig.create({
-    data: { clientId, user, platform, revision: 0, overrideJson: '{}' },
-  })
+  try {
+    return await prisma.reliabilityClientConfig.create({
+      data: { clientId, user, platform, revision: 0, overrideJson: '{}' },
+    })
+  } catch (error) {
+    if ((error as { code?: string }).code === 'P2002') {
+      const concurrent = await prisma.reliabilityClientConfig.findUnique({
+        where: { clientId_platform: { clientId, platform } },
+      })
+      if (concurrent) return concurrent
+    }
+    throw error
+  }
 }
 
 function normalizeOverride(override: Record<string, unknown>): Record<string, unknown> {

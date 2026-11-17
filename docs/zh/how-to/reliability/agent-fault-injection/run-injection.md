@@ -83,7 +83,9 @@ FI 运行只关联本次业务 Agent 的主会话；RAS 内部判定或标题生
 
 业务 Trace 仍由普通采集器独立上传。实验编排按原有业务 Agent、有效回复和结束状态检查 Trace，就绪后才启动所选评估器；终态采集的 Trace 回传宽限期仍为 180 秒。采集完成但 Trace 迟到期间显示等待 Trace，最终缺失仍作为 Trace 生成失败处理。
 
-OpenCode 的 `MessageAbortedError` 与采集产物中的 `fault_intercepted` 只说明生成被中断，不单独证明检测正确或恢复成功。新 FI 流水线只有请求、开始、完成三个注入节点；历史评判数据和标记只读保留。旧 `POST /api/fault-injection/runs/:runId/rejudge` 返回 `410 FI_JUDGE_REMOVED`，不会再发模型请求。
+OpenCode 的 `MessageAbortedError` 与采集产物中的 `fault_intercepted` 只说明生成被中断，不单独证明检测正确或恢复成功。故障已激活且未超时时，FI 优先检查同一业务 Session 的原生中断错误，再判断进程退出码；即使 OpenCode 返回 `0`，也记录 `termination_reason=fault_intercepted`、`agent_execution_status=interrupted`，并保留真实退出码。注入与采集完成时，FI 流程仍可为 `completed`，这与 Agent 执行被中断并不矛盾。
+
+新 FI 流水线只有请求、开始、完成三个注入节点；历史评判数据和标记只读保留。旧 `POST /api/fault-injection/runs/:runId/rejudge` 返回 `410 FI_JUDGE_REMOVED`，不会再发模型请求。
 
 本机产物目录（排障用；权威数据在平台 DB）：
 

@@ -15,12 +15,14 @@
  */
 
 import { SETUP_BASH_HOME, SETUP_POWERSHELL_HOME } from '@/lib/ingest/setup/home';
+import { DIFY_BASH_SETUP_FUNCTION, DIFY_WINDOWS_SETUP, difySetupScript } from '@/lib/ingest/setup/dify';
 import { NextResponse } from 'next/server';
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 import { db } from '@/lib/storage/prisma';
+import { INFERENCE_PROXY_UNIX_SETUP_BLOCK } from './inference-proxy-setup';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
@@ -42,6 +44,10 @@ const QODER_SETUP_COMPONENTS = new Set([
     'qoder_trace_collector.mjs',
     'qoder_uploader_client.mjs',
     'qoder_work_setup.mjs',
+    'inference_gateway.mjs',
+    'inference_config.mjs',
+    'inference_proxy.mjs',
+    'model-proxy.sh',
 ]);
 
 async function serveQoderSetupComponent(component: string): Promise<NextResponse> {
@@ -56,7 +62,7 @@ async function serveQoderSetupComponent(component: string): Promise<NextResponse
         const source = await readFile(path.join(process.cwd(), 'scripts', component), 'utf8');
         return new NextResponse(source, {
             headers: {
-                'Content-Type': 'text/javascript; charset=utf-8',
+                'Content-Type': component.endsWith('.sh') ? 'text/x-shellscript; charset=utf-8' : 'text/javascript; charset=utf-8',
                 'Cache-Control': 'no-store',
             },
         });
@@ -166,6 +172,7 @@ function generateBashScript(
         'if [ -n "${AGENT_INSIGHT_FRAMEWORKS:-}" ]; then NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS="$AGENT_INSIGHT_FRAMEWORKS"; fi',
         'if [ "${AGENT_INSIGHT_NO_KEY:-}" = "1" ] || [ "${AGENT_INSIGHT_NO_KEY:-}" = "true" ]; then FORCE_NO_KEY=true; fi',
         '',
+        DIFY_BASH_SETUP_FUNCTION,
         getAgentInsightRasBashInstaller(),
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -263,7 +270,8 @@ function generateBashScript(
         '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
         '    { name: \'QwenPaw\', value: \'qwenpaw\' },',
         '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },',
-        '    { name: \'WorkBuddy\', value: \'workbuddy\' }',
+        '    { name: \'WorkBuddy\', value: \'workbuddy\' },',
+        '    { name: \'Dify\', value: \'dify\' }',
         '];',
         '',
         'async function select() {',
@@ -334,6 +342,8 @@ function generateBashScript(
         'fi',
         '',
         '# Set installation flags based on selection',
+        'INSTALL_DIFY=false',
+        'if [[ ",$SELECTED_FRAMEWORKS," == *",dify,"* ]]; then INSTALL_DIFY=true; fi',
         'INSTALL_OPENCODE=false',
         'INSTALL_CLAUDE=false',
         'INSTALL_OPENCLAW=false',
@@ -411,7 +421,7 @@ function generateBashScript(
         'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then',
+        'if [ "$INSTALL_DIFY" = "false" ] && [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_ACTRAIL" = "false" ] && [ "$INSTALL_CODEX" = "false" ] && [ "$INSTALL_QWENCODE" = "false" ] && [ "$INSTALL_DEEPSEEK_HARNESS" = "false" ] && [ "$INSTALL_QWENPAW" = "false" ] && [ "$INSTALL_MCTS_XGOVERNOR" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -836,6 +846,7 @@ function generateBashScript(
         'rm "${AGENT_INSIGHT_CONFIG_FILE}.bak"',
         'echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         '',
+        'if [ "$INSTALL_DIFY" = "true" ]; then agent_insight_setup_dify "$FINAL_HOST" "$FINAL_KEY" || exit 1; fi',
         '# 6.34 Install Agent RAS runtime (additive; does not replace Trace collectors)',
         'if { [ "$INSTALL_OPENCODE" = "true" ] && [ -z "$OPENCODE_PLUGIN_QUERY" ]; } || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then',
         '    echo "🛡️  Installing Agent RAS runtime..."',
@@ -1108,6 +1119,7 @@ function generateBashScript(
         'fi',
         '',
         '# 6.6 Configure OpenClaw official OTel logs',
+        INFERENCE_PROXY_UNIX_SETUP_BLOCK,
         ...CODEAGENT_UNIX_SETUP_BLOCK.split('\n'),
         '',
         ...ACTRAIL_UNIX_SETUP_BLOCK.split('\n'),
@@ -1275,6 +1287,7 @@ function generateBashScript(
         'echo "🖥️  Registering resident client..."',
         'if ! install_agent_insight_client "$FINAL_HOST" "$FINAL_KEY"; then',
         '    if [ "$INSTALL_MCTS_XGOVERNOR" = "true" ]; then echo "❌ MCTS 环境已配置，但客户端注册或启动失败，请处理上方错误后重新执行本命令"; exit 1; fi',
+        '    if [ -f "$AGENT_INSIGHT_HOME/client/jiuwen-enterprise.json" ] || [ -n "${AGENT_INSIGHT_JIUWEN_ENTERPRISE_CONFIG:-}" ]; then echo "❌ 企业实验客户端安装失败，请修复上方错误后重试；不会回退个人版"; exit 1; fi',
         '    echo "⚠️  常驻客户端未注册。Trace 采集不受影响，但「客户端配置」页看不到本机。"',
         '    if [ -f "$AGENT_INSIGHT_HOME/client/config.json" ]; then',
         '        echo "    注意：本机此前已绑定其他账号，该绑定仍然有效 —— 此时 Trace 归新账号、"',
@@ -1479,7 +1492,8 @@ function generatePowerShellScript(
         '    { name: \'DeepSeek Harness\', value: \'deepseek-harness\' },',
         '    { name: \'QwenPaw\', value: \'qwenpaw\' },',
         '    { name: \'MCTS (xGovernor)\', value: \'mcts-xgovernor\' },',
-        '    { name: \'WorkBuddy\', value: \'workbuddy\' }',
+        '    { name: \'WorkBuddy\', value: \'workbuddy\' },',
+        '    { name: \'Dify\', value: \'dify\' }',
         '];',
         '',
         'async function select() {',
@@ -1553,6 +1567,7 @@ function generatePowerShellScript(
         '}',
         '',
         '# Set installation flags based on selection',
+        'if ($SELECTED_FRAMEWORKS -match "(^|,)dify(,|$)") { ' + DIFY_WINDOWS_SETUP + ' }',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
         '$INSTALL_OPENCLAW = $false',
@@ -2661,6 +2676,11 @@ export async function GET(request: Request) {
         : noninteractive ? [{ ...FRAMEWORK_OPTIONS[0] }] : [];
     const installProfile = resolveInstallProfile(requestedPreselected);
     const preselected = installProfile.effectiveFrameworks;
+    if (preselected.some(item => item.value === 'dify') && (preselected.length === 1 || detectPlatform(request) === 'windows')) {
+        return new NextResponse(difySetupScript(baseUrl, apiKey, detectPlatform(request)), {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+    }
     const llamaIndexVenv = (requestUrl.searchParams.get('llamaindexVenv') || '')
         .replace(/[\0\r\n]/g, '')
         .trim()
@@ -2703,9 +2723,9 @@ export async function GET(request: Request) {
             installProfile.goalPlusHosts,
             installProfile.autoAddedFrameworks.map(framework => framework.value),
         );
-        return new NextResponse(script, {
+        return new NextResponse('\uFEFF' + script, {
             headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Type': 'application/x-powershell; charset=utf-8',
                 'Cache-Control': 'no-store',
             },
         });

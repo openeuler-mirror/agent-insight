@@ -22,7 +22,7 @@
 //  - flags.* 显式告诉前端哪些维度当前无数据源。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import {
     normalizeWindow, planOf, bucketStarts, bucketLabel, pct,
     isSuccess, agentCountOf, assignBuckets, rowCost, rowTokens, type FleetRow,
@@ -59,9 +59,9 @@ function topN<T>(arr: T[], key: (t: T) => number, n: number): T[] {
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        // 作用域：按当前登录用户过滤（客户端传 ?user=）。解析不出用户则回退全量。
-        const { username } = await resolveUser(req, url.searchParams.get('user'));
-        const userFilter = username ? { user: username } : {};
+        const { username, user } = await resolveTraceReadScope(req);
+        if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        const userFilter = user ? { user } : {};
 
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);

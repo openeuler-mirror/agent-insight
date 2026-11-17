@@ -15,6 +15,14 @@
  */
 
 import { claimOptimizationFinalization, OptimizationCancelledError } from './optimization-cancellation';
+import {
+  describeFinalizationError,
+  OptimizationFinalizationError,
+  releaseWorkbenchOptimizationSession,
+  settleWorkbenchOptimizationTask,
+  withBoundedFinalizationRetry,
+  type OptimizationTaskSettlement,
+} from './optimization-finalization';
 import { findSkillMd, type PlaygroundFiles } from '@/lib/skill-generator/skill-files';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { resolveRetestableExperimentBaseline } from './experiment-baseline';
@@ -137,7 +145,7 @@ export async function getWorkbenchOptimization(user: string, sessionId: string) 
   if (!session?.optSessionId) return null;
   const opt = await prismaRaw.skillOptSession.findFirst({
     where: { id: session.optSessionId, user },
-    include: { messages: { orderBy: { createdAt: 'asc' } }, iterations: { orderBy: { draftNumber: 'asc' } } },
+    include: { plan: { include: { items: { orderBy: { rank: 'asc' } } } }, messages: { orderBy: { createdAt: 'asc' } }, iterations: { orderBy: { draftNumber: 'asc' } } },
   });
   return opt ? { ...opt, files: parseObject(opt.files), baselineFiles: parseObject(session.filesJson) } : null;
 }
@@ -145,7 +153,7 @@ export async function getWorkbenchOptimization(user: string, sessionId: string) 
 export async function syncWorkbenchOptimization(input: {
   user: string;
   sessionId: string;
-  sourceKind: 'user' | 'evaluation' | 'experiment';
+  sourceKind: 'user' | 'evaluation' | 'experiment' | 'diagnosis';
   sourceRefs?: unknown[];
   sourceExperimentId?: string;
   recordId?: string;
@@ -165,13 +173,14 @@ export async function syncWorkbenchOptimization(input: {
   });
   if (!opt) return { kind: 'not_found' as const };
   const updatesWorkingSnapshot = session.source !== 'management';
-  const baseline = updatesWorkingSnapshot ? null : await resolveRetestableExperimentBaseline({
+  const baseline = updatesWorkingSnapshot || input.sourceKind === 'diagnosis' ? null : await resolveRetestableExperimentBaseline({
     user: input.user,
     skillName: session.skillName,
     skillVersion: session.workVersion,
     sourceExperimentId: input.sourceExperimentId,
   });
-  const sourceExperimentId = baseline?.experiment.id;
+  const diagnosisSource = input.sourceRefs?.find((ref): ref is { type: string; experimentId: string } => !!ref && typeof ref === 'object' && (ref as { type?: string }).type === 'diagnosis' && typeof (ref as { experimentId?: unknown }).experimentId === 'string');
+  const sourceExperimentId = input.sourceKind === 'diagnosis' ? diagnosisSource?.experimentId : baseline?.experiment.id;
   const sourceRefs = [
     ...(input.sourceRefs || []),
     ...(baseline ? [{
@@ -246,9 +255,9 @@ export async function syncWorkbenchOptimization(input: {
       initialStatus: recordInput.status,
     });
   if (!record) return { kind: 'not_found' as const };
-  if (qualityPassed) {
+  if (qualityPassed && (input.sourceKind !== 'diagnosis' || sourceExperimentId)) {
     const evidence = await linkCandidateVerification({ user: input.user, recordId: record.id,
-      skillName: session.skillName, baseVersion: session.workVersion, files: candidateFiles, sourceExperimentId: input.sourceExperimentId });
+      skillName: session.skillName, baseVersion: session.workVersion, files: candidateFiles, sourceExperimentId });
     if (evidence) {
       record.status = evidence.status;
       record.errorMessage = evidence.errorMessage;
@@ -306,7 +315,7 @@ export async function beginWorkbenchOptimizationRun(input: {
   user: string;
   optSessionId: string;
   runId: string;
-  sourceKind: 'user' | 'evaluation';
+  sourceKind: 'user' | 'evaluation' | 'diagnosis';
   sourceRefs: unknown[];
 }) {
   const workbench = await prismaRaw.skillWorkbenchSession.findFirst({
@@ -381,11 +390,95 @@ export async function updateWorkbenchOptimizationProgress(input: {
   });
 }
 
+const UNCONFIRMED_STOP_MESSAGE = '停止 OpenCode 执行未确认';
+
+function isUnconfirmedStopError(error: unknown) {
+  return error instanceof Error && error.message.includes(UNCONFIRMED_STOP_MESSAGE);
+}
+
+async function failOptimizationRecord(input: {
+  user: string;
+  recordId: string;
+  errorMessage: string;
+}) {
+  try {
+    const record = await prismaRaw.skillOptimizationRecord.findUnique({
+      where: { id: input.recordId },
+      select: { skillName: true, status: true },
+    });
+    if (!record || record.status !== 'optimizing') return;
+    await withBoundedFinalizationRetry(() => transitionSkillOptimizationRecord({
+      user: input.user,
+      skillName: record.skillName,
+      recordId: input.recordId,
+      to: 'optimization_failed',
+      errorMessage: input.errorMessage,
+    }));
+  } catch (error) {
+    console.error('[optimization finalization] failed to mark record failed:', error);
+  }
+}
+
+/**
+ * 失败收尾：先占用收尾权，再以有界重试写入失败终态。任务已被取消/终态时让位，
+ * 待处理取消优先；写入本身持续失败时保留原始错误与收尾错误两个原因上抛。
+ */
+async function finalizeOptimizationFailure(input: {
+  user: string;
+  workbenchSessionId: string;
+  taskId: string;
+  recordId?: string;
+  stage: string;
+  activeStep?: number;
+  message: string;
+  signal?: AbortSignal;
+}) {
+  let settlement: OptimizationTaskSettlement = 'already-settled';
+  try {
+    await withBoundedFinalizationRetry(() => claimOptimizationFinalization(input.taskId), input.signal);
+    settlement = await settleWorkbenchOptimizationTask({
+      taskId: input.taskId,
+      status: 'failed',
+      progress: {
+        stage: input.stage,
+        ...(input.activeStep !== undefined ? { activeStep: input.activeStep } : {}),
+        percent: 100,
+      },
+      errorMessage: input.message,
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (error instanceof OptimizationCancelledError || isUnconfirmedStopError(error)) throw error;
+    console.error(
+      '[optimization finalization] failed state could not be written, original error preserved:',
+      { taskId: input.taskId, originalError: input.message, finalizationError: error },
+    );
+    throw new OptimizationFinalizationError(input.message, [describeFinalizationError(error)]);
+  }
+  if (settlement === 'cancelled') throw new OptimizationCancelledError();
+  // 'already-settled' 可能来自「写入已提交但响应超时」：会话和记录仍按终态收尾，
+  // 释放逻辑本身只在没有活跃任务时生效，不会覆盖新一轮。
+  try {
+    await releaseWorkbenchOptimizationSession(input.workbenchSessionId, input.signal);
+  } catch (error) {
+    console.error(
+      '[optimization finalization] session could not be released after failure:',
+      { taskId: input.taskId, originalError: input.message, finalizationError: error },
+    );
+    throw new OptimizationFinalizationError(input.message, [`会话状态恢复失败：${describeFinalizationError(error)}`]);
+  }
+  if (input.recordId) await failOptimizationRecord({
+    user: input.user,
+    recordId: input.recordId,
+    errorMessage: input.message,
+  });
+}
+
 export async function finishWorkbenchOptimizationRun(input: {
   user: string;
   workbenchSessionId: string;
   taskId: string;
-  sourceKind: 'user' | 'evaluation';
+  sourceKind: 'user' | 'evaluation' | 'diagnosis';
   sourceRefs: unknown[];
   recordId?: string;
   error?: string | null;
@@ -394,40 +487,27 @@ export async function finishWorkbenchOptimizationRun(input: {
 }) {
   input.signal?.throwIfAborted();
   if (input.error) {
-    await claimOptimizationFinalization(input.taskId);
     const currentTask = await prismaRaw.skillWorkbenchTask.findUnique({
       where: { id: input.taskId },
       select: { progressJson: true },
-    });
+    }).catch(() => null);
     const currentProgress = parseObject(currentTask?.progressJson || '{}');
     const activeStep = Number(currentProgress.activeStep) || 1;
-    const failedRecord = input.recordId
-      ? await prismaRaw.skillOptimizationRecord.findUnique({
-        where: { id: input.recordId },
-        select: { skillName: true },
-      })
-      : null;
-    await Promise.all([
-      updateSkillWorkbenchTask({
-        taskId: input.taskId,
-        status: 'failed',
-        progress: { stage: '优化失败', activeStep, percent: 100 },
-        errorMessage: input.error,
-      }),
-      prismaRaw.skillWorkbenchSession.update({
-        where: { id: input.workbenchSessionId },
-        data: { stage: 'ready' },
-      }),
-      input.recordId && failedRecord ? transitionSkillOptimizationRecord({
+    try {
+      await finalizeOptimizationFailure({
         user: input.user,
-        skillName: failedRecord.skillName,
+        workbenchSessionId: input.workbenchSessionId,
+        taskId: input.taskId,
         recordId: input.recordId,
-        to: 'optimization_failed',
-        errorMessage: input.error,
-      }).catch(() => undefined) : Promise.resolve(),
-    ]);
-    if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })
-      .catch((error) => console.error('[optimization verification cleanup]', error));
+        stage: '优化失败',
+        activeStep,
+        message: input.error,
+        signal: input.signal,
+      });
+    } finally {
+      if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })
+        .catch((error) => console.error('[optimization verification cleanup]', error));
+    }
     return { kind: 'failed' as const };
   }
   try {
@@ -493,25 +573,15 @@ export async function finishWorkbenchOptimizationRun(input: {
     });
     if (result.kind === 'not_found' || result.kind === 'incomplete') {
       const reason = result.kind === 'incomplete' ? result.reason : '优化会话不存在';
-      await updateSkillWorkbenchTask({
+      await finalizeOptimizationFailure({
+        user: input.user,
+        workbenchSessionId: input.workbenchSessionId,
         taskId: input.taskId,
-        status: 'failed',
-        progress: { stage: '优化结果不完整', percent: 100 },
-        errorMessage: reason,
+        recordId: input.recordId,
+        stage: '优化结果不完整',
+        message: reason,
+        signal: input.signal,
       });
-      if (input.recordId) {
-        const failedRecord = await prismaRaw.skillOptimizationRecord.findUnique({
-          where: { id: input.recordId },
-          select: { skillName: true },
-        });
-        if (failedRecord) await transitionSkillOptimizationRecord({
-          user: input.user,
-          skillName: failedRecord.skillName,
-          recordId: input.recordId,
-          to: 'optimization_failed',
-          errorMessage: reason,
-        }).catch(() => undefined);
-      }
       return result;
     }
     const optimizationRecord = 'record' in result && result.record ? result.record : null;
@@ -531,31 +601,32 @@ export async function finishWorkbenchOptimizationRun(input: {
       activeStep: 4,
       percent: 90,
     });
-    await updateSkillWorkbenchTask({
+    const settlement = await settleWorkbenchOptimizationTask({
       taskId: input.taskId,
       status: 'done',
       progress: { stage: '优化完成', activeStep: 5, percent: 100 },
       resultType: optimizationRecord ? 'optimization-record' : 'snapshot-evaluation',
       resultId: optimizationRecord?.id || result.quality.id,
       errorMessage: null,
+      signal: input.signal,
     });
+    if (settlement === 'cancelled') throw new OptimizationCancelledError();
     return result;
   } catch (error) {
-    if (error instanceof OptimizationCancelledError || (error instanceof Error && error.message.includes('停止 OpenCode 执行未确认'))) throw error;
+    if (error instanceof OptimizationCancelledError || isUnconfirmedStopError(error)) throw error;
     input.signal?.throwIfAborted();
+    // 已带两个原因上抛的收尾错误无需再次收尾，避免把收尾错误当成新的原始错误。
+    if (error instanceof OptimizationFinalizationError) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    await Promise.all([
-      updateSkillWorkbenchTask({
-        taskId: input.taskId,
-        status: 'failed',
-        progress: { stage: '保存失败', percent: 100 },
-        errorMessage: message,
-      }),
-      prismaRaw.skillWorkbenchSession.update({
-        where: { id: input.workbenchSessionId },
-        data: { stage: 'ready' },
-      }),
-    ]);
+    await finalizeOptimizationFailure({
+      user: input.user,
+      workbenchSessionId: input.workbenchSessionId,
+      taskId: input.taskId,
+      recordId: input.recordId,
+      stage: '保存失败',
+      message,
+      signal: input.signal,
+    });
     return { kind: 'failed' as const, reason: message };
   } finally {
     if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })

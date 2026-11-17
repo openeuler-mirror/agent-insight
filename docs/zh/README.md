@@ -1,3 +1,10 @@
+---
+title: "Agent Insight 中文文档"
+description: "提供 Agent Insight 中文文档入口，按教程、操作指南、参考与解释组织平台各业务领域的资料。"
+keywords: ["Agent Insight", "中文文档", "入门教程", "操作指南"]
+changefreq: "monthly"
+---
+
 # Agent Insight 中文文档
 
 中文为权威源。文档按用途分类，再按观测、评测、诊断、优化、可靠性和平台公共组织；源码模块位置以当前代码为准。
@@ -10,7 +17,7 @@
 ## 按角色开始
 
 - 初次使用：[快速开始](./tutorial/platform/01-quick-start.md) → [第一次评测](./tutorial/evaluation/01-first-experiment.md)。
-- 部署与运维：[Docker 部署](./how-to/platform/deploy-docker.md) · [Benchmark 服务部署](./how-to/evaluation/benchmarks/deploy-services.md)。
+- 部署与运维：[Docker 部署](./how-to/platform/deploy-docker.md) · [OpenShift 部署](./how-to/platform/deploy-openshift.md) · [Benchmark 服务部署](./how-to/evaluation/benchmarks/deploy-services.md)。
 - 开发与集成：[开发者导航](./explanation/platform/developer-index.md) · [HTTP 接口](./reference/platform/http-api.md) · [内部契约](./reference/platform/api-and-contracts.md)。
 - 可靠性：[Agent RAS](./explanation/reliability/agent-ras/navigation.md) · [故障注入](./explanation/reliability/agent-fault-injection/navigation.md)。
 

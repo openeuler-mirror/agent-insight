@@ -1,0 +1,115 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+ARG UBI_NODE_IMAGE=registry.access.redhat.com/ubi9/nodejs-22@sha256:18efae02a19cdfbda303ff98d096cfcc2e123f300aff146e7dab1e75b9116dec
+
+FROM ${UBI_NODE_IMAGE} AS ubi-base
+USER 0
+
+RUN dnf -y update \
+    && dnf -y install openssl python3 findutils tar gzip \
+    && dnf clean all
+
+FROM ubi-base AS builder
+
+ENV NODE_ENV=development \
+    NEXT_TELEMETRY_DISABLED=1 \
+    AGENT_INSIGHT_HOME=/tmp/agent-insight-build
+
+WORKDIR /src
+
+COPY package.json package-lock.json .npmrc ./
+COPY scripts ./scripts
+COPY prisma ./prisma
+COPY .env.example ./
+RUN --mount=type=cache,id=agent-insight-ubi9-npm,target=/opt/app-root/src/.npm \
+    npm ci --no-audit --no-fund
+
+COPY . .
+RUN NODE_ENV=production npm run build \
+    && NODE_ENV=production npm pack --pack-destination /tmp
+
+FROM ubi-base
+USER 0
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
+# Runtime updates use BaseOS/AppStream; DNF retains its platform Python.
+COPY scripts/requirements-container.txt /usr/local/share/agent-insight/python-runtime-requirements.txt
+RUN if [ ! -f /etc/yum.repos.d/ubi.repo ]; then true; else \
+        sed -i '/^\[ubi-9-codeready-builder-rpms\]/,/^\[/{s/^enabled[[:space:]]*=[[:space:]]*1[[:space:]]*$/enabled = 0/;}' /etc/yum.repos.d/ubi.repo; \
+    fi \
+    && dnf -y install python3.11 python3.11-pip \
+    && dnf clean all \
+    && python3.11 -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
+        -r /usr/local/share/agent-insight/python-runtime-requirements.txt \
+    && ln -sfn /usr/bin/python3.11 /usr/local/bin/python3
+
+ARG SOURCE_REVISION=unknown
+
+LABEL org.opencontainers.image.title="Agent Insight for OpenShift" \
+      org.opencontainers.image.source="https://gitcode.com/openeuler/agent-insight" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    AGENT_INSIGHT_HOME=/data/agent-insight \
+    HOME=/data/agent-insight \
+    XDG_CACHE_HOME=/data/agent-insight/.cache \
+    XDG_CONFIG_HOME=/data/agent-insight/.config \
+    XDG_DATA_HOME=/data/agent-insight/.local/share \
+    XDG_STATE_HOME=/data/agent-insight/.local/state \
+    NPM_CONFIG_CACHE=/data/agent-insight/.npm \
+    NPM_CONFIG_PREFIX=/data/agent-insight/.npm-global \
+    PATH=/app/node_modules/.bin:$PATH \
+    OPENCODE_BIN=/app/node_modules/.bin/opencode
+
+WORKDIR /app
+
+COPY --from=builder /src/node_modules /app/node_modules
+COPY --from=builder /tmp/agent-insight-*.tgz /tmp/agent-insight.tgz
+
+RUN mkdir -p /app/node_modules/agent-insight \
+    && tar -xzf /tmp/agent-insight.tgz --strip-components=1 -C /app/node_modules/agent-insight \
+    && AGENT_INSIGHT_HOME=/tmp/agent-insight-install node /app/node_modules/agent-insight/scripts/postinstall.js \
+    && rm -rf /tmp/agent-insight-install /tmp/agent-insight.tgz \
+    && test -x /app/node_modules/.bin/opencode \
+    && command -v dnf
+
+COPY --from=builder /src/tools/mcp-web-search /app/node_modules/agent-insight/tools/mcp-web-search
+COPY scripts/docker-entrypoint.sh /usr/local/bin/agent-insight-entrypoint
+COPY scripts/container-runtime.py /usr/local/bin/agent-insight-container-runtime.py
+
+# SCC supplies the runtime UID; Prisma must recreate its local client as that UID.
+RUN chmod +x /usr/local/bin/agent-insight-entrypoint \
+    && mkdir -p /app/source /data/agent-insight \
+    && find /app/node_modules/agent-insight/node_modules/.prisma/client -mindepth 1 -delete \
+    && for directory in \
+        /app/source \
+        /app/node_modules/.prisma \
+        /app/node_modules/@prisma/client \
+        /app/node_modules/agent-insight/prisma \
+        /app/node_modules/agent-insight/node_modules/.prisma \
+        /app/node_modules/agent-insight/.next/standalone/node_modules/.prisma \
+        /data/agent-insight; \
+        do [ ! -e "$directory" ] || { chgrp -R 0 "$directory" && chmod -R g=u "$directory"; }; done
+
+EXPOSE 3000
+VOLUME ["/data/agent-insight"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+    CMD node -e "require('http').get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"
+
+CMD ["agent-insight-entrypoint"]

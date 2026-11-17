@@ -121,6 +121,40 @@ test("opencode 上报 payload：多轮交互一轮都不能少", async () => {
   assert.equal(derived.llm_call_count, 2, "两轮助手回复应计 2 次 LLM 调用")
 })
 
+test("opencode 上报 payload：斜杠命令保留 chat.message 中的用户原始输入", async () => {
+  const { buildState, mergeGraph } = await import("../scripts/opencode_uploader_client.js")
+  const messageID = "msg_slash_command"
+  const originalInput = "/aet-pr 创建可靠性相关的特性"
+  const expandedPrompt = [
+    "Automatically detect the language of user input and respond in the same language.",
+    "Intent routing and common usage patterns...",
+  ].join("\n")
+  const records = [
+    { kind: "chat.message", sessionID: SID, payload: { messageID, text: originalInput } },
+    {
+      kind: "event",
+      sessionID: SID,
+      payload: {
+        type: "message.updated",
+        event: { properties: { info: { id: messageID, sessionID: SID, role: "user", time: { created: 1 } } } },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: SID,
+      payload: {
+        type: "message.part.updated",
+        event: { properties: { part: { id: "prt_expanded", messageID, sessionID: SID, type: "text", text: expandedPrompt } } },
+      },
+    },
+  ]
+
+  const interactions = mergeGraph(buildState(records), SID)
+  const firstUserMessage = interactions.find((message: any) => message.role === "user")
+
+  assert.equal(firstUserMessage?.content, originalInput)
+})
+
 // ── openclaw watcher：新旧地址都复用通用无损上传语义 ─────────────────────────
 
 test("openclaw 兼容入口原样委托通用 upload，并复用 400/401 身份错误", async () => {

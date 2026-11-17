@@ -85,3 +85,41 @@ test('pickGranularity custom 落入 [min,max]', () => {
     const g = pickGranularity('custom', from, now, DEFAULT_POLICY);
     assert.ok(['hour', 'day', 'week'].includes(g));
 });
+
+// ── 异常桶判定的中位数口径（1d → 按小时桶，锚定 to=12:00 整点）──────────
+// 成本预算 latencyMs=120_000：latency 48_000 → 成本分 60 → 综合分 80；
+// latency 96_000 → 成本分 20 → 综合分 60；latency 12_000 → 成本分 90 → 综合分 95。
+function latBucket(now: Date, minutesAgo: number, latency: number): TraceLite[] {
+    return [0, 1, 2, 3, 4].map((i) => trace(
+        new Date(now.getTime() - (minutesAgo + i * 5) * 60_000),
+        { latency, tokens: 100, stepCount: 2 },
+    ));
+}
+
+test('异常桶判定：偶数个非空桶按中位数取阈值，20 分差不标异常', () => {
+    const now = new Date('2026-06-09T12:00:00Z');
+    const from = new Date(now.getTime() - 86_400_000);
+    // 11:00–12:00 桶综合分 80，10:00–11:00 桶综合分 60，其余 22 个桶为空。
+    const traces = [...latBucket(now, 30, 48_000), ...latBucket(now, 90, 96_000)];
+    const { buckets } = bucketTrends({ traces, window: '1d', from, to: now, policy: DEFAULT_POLICY });
+    const nonEmpty = buckets.filter((b) => b.n_traces > 0);
+    assert.equal(nonEmpty.length, 2, `应恰好 2 个非空桶，实际 ${nonEmpty.length}`);
+    const comps = nonEmpty.map((b) => b.composite).sort((a, b) => a - b);
+    assert.deepEqual(comps, [60, 80], `样本应给出 60/80 两桶，实际 ${comps}`);
+    // 中位数 = (60+80)/2 = 70 → 阈值 55；60 未跌破，不应有任何桶被标异常。
+    // 若误取上中位 80 → 阈值 65，60 分桶会被 QualityTrendChart 染成异常柱。
+    assert.deepEqual(buckets.filter((b) => b.anomaly).map((b) => b.composite), [],
+        '两桶相差 20，未跌破 中位−15，不应标出异常桶');
+});
+
+test('异常桶判定：奇数个非空桶的中位口径不变（跌破 中位−15 仍标异常）', () => {
+    const now = new Date('2026-06-09T12:00:00Z');
+    const from = new Date(now.getTime() - 86_400_000);
+    // 三个非空桶：80 / 60 / 95 → 中位 80 → 阈值 65 → 仅 60 分桶为异常。
+    const traces = [...latBucket(now, 30, 48_000), ...latBucket(now, 90, 96_000), ...latBucket(now, 150, 12_000)];
+    const { buckets } = bucketTrends({ traces, window: '1d', from, to: now, policy: DEFAULT_POLICY });
+    const nonEmpty = buckets.filter((b) => b.n_traces > 0);
+    assert.equal(nonEmpty.length, 3, `应恰好 3 个非空桶，实际 ${nonEmpty.length}`);
+    const anomalous = buckets.filter((b) => b.anomaly).map((b) => b.composite);
+    assert.deepEqual(anomalous, [60], `仅 60 分桶应标异常，实际 ${anomalous}`);
+});
