@@ -38,6 +38,26 @@ An independent deadline covers both the request and response-body parsing. Timeo
 
 The form is saved only after a successful, non-cancelled test. It is frozen during testing to avoid duplicate submission. Saving itself is not cancellable, avoiding an incorrect “not saved” report. Health checks distinguish timeout, cancellation, and other failures and keep the error visible until dismissal or retry.
 
+## Server diagnostics
+
+Probes emit structured records with `scope: "ModelConnectionTest"` to the server console and the existing `agent-insight.log`. `AGENT_INSIGHT_LOG_DIR` selects the directory (default `/var/log/agent-insight`); console output remains available if file logging is unavailable. Failures use `error`, visible at the default level. Successes use `info`; set `AGENT_INSIGHT_LOG_LEVEL=info` and restart to include them. Browser responses retain the existing generic errors.
+
+- `testId/result/elapsedMs/timeoutMs` identify each probe and its outcome.
+- `attempts` describe the actual endpoint after protocol adaptation, method, header names, and `authorizationPresent/apiKeyHeaderPresent`. Header values, request bodies, and model output are omitted.
+- `attempts[].proxy.mode` is `direct` or `proxy`; `env` identifies the selected environment variable and `endpoint` includes only proxy scheme, host, and port. `noProxyConfigured` indicates exclusion rules exist; `bypassed` indicates an actual match. Diagnostics and dispatch share the same cached configuration and matching logic. An explicitly injected transport is marked `custom`.
+- `upstream` retains the HTTP status, Content-Type, request ID, sanitized authentication challenge and error reason. Supported JSON formats include `error.code/type/message`, top-level `code/message`, and gateway `error_code/error_msg/request_id`. Only diagnostic JSON fields are retained. Plain-text/HTML errors are sanitized, with HTML tags removed. Missing reasons require gateway-side investigation.
+- `proxyTunnelStatus/causeCodes` distinguish proxy CONNECT rejection from a model HTTP response and preserve transport error codes. A rejected tunnel does not expose its error body as a model response.
+
+Error-body observation is limited to 8192 bytes, and reasons to 2048 characters. Oversized bodies are omitted entirely with `bodyTruncated`; incomplete bodies on timeout or cancellation are omitted with `bodyIncomplete`. Observation follows SDK stream consumption without additional reads, retries, or deadline extensions. API keys, all custom-header values, URL credentials and query values are redacted when echoed. Endpoint URLs omit credentials and queries; cookies, full response headers and arbitrary JSON fields are never logged.
+
+After reproducing the failure, filter container logs for the relevant time window:
+
+```bash
+docker logs --since 10m <container> 2>&1 | grep '"scope":"ModelConnectionTest"'
+```
+
+Compare `testId`, `attempts[].proxy.mode/bypassed`, and `upstream.status/errorCode/reason/requestId` against the successful curl request. Upstream HTTP `401` still maps to API `422`; diagnostics preserve the upstream status.
+
 Implementation: [model test route](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/eval/settings/test/route.ts).
 
 [中文权威版本](../../../zh/reference/platform/model-connection-test.md)
