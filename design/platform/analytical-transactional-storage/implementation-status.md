@@ -572,3 +572,24 @@ A完成：公共source专属账本、原输入/静态前态工件、CAS快照/�
 证据位于 `exclude/storage-core-collector/20261117-i_wpbhkw/`：`source-a-v2-final-code-verification.json`、`source-a-v2-final-{result,python-report}.json`、`source-a-v2-final-native/`、`spec-source-a-v2-report.json`、`quality-source-a-v2-report.json`、`original-upload-golden-v3/report.json`、`source-a-real-http-v2/report.json`及`source-a-v2-readback/report.json`。首次真实harness错误将私有投影当公共DTO，随后UInt64字符串比较错误，均保留原失败日志并以新独立夹具验证，未覆盖失败证据。自有两套临时HTTP进程在pending清零后停止，数据保留；原58488验收环境及模型服务未刷新，默认数据库/spool/生产未操作。
 
 后续按B原准备算法与静态选择、C原upload/completion/子Agent线程及异步分析和indexed ACK继续；再接proxy/logs/consumer、Infra必要模型和其他控制域，最后显式映射旧96模型/旧spool。当前仍非全产品迁移完成，未切生产，也未做第二版容量验收。
+
+
+## 2026-11-17 原采集共享准备与可信静态捕获
+
+B完成共享准备基础：原upload quick/save共同复用消息合并、query/label/版本、OpenCode/Langfuse、Session默认时间、子Agent切片、Thread自然键和命名hook计算。core准备绑定实际actor、source operation/revision、原输入hash/前态/封存时间，仅捕获相关Skill必要版本及匹配静态元数据；模型只保存非秘密摘要。没有启用公共core upload/completion，不把内存capture或Thread计划称为已持久接入；原UI、schema及侧车不变。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 完整应用 | 最终v3：6140项，6118通过、22跳过、0失败/取消，354.27秒；Node24、原glob/collector预检、并行4、独立HOME/SQLite。仅对两个旧runtime测试旁路记录loopback响应/子进程状态，不改产品或测试超时；3111个代码来源与当前相同 |
+| 实际原行为对照 | 冻结旧原代码与当前v3各自真实Prisma/原HTTP handler：18组、20写请求、外网/模型0，原Session/portable/children/Thread/非空配置逐字段相同。22个生成ID按自然身份映射；63个明确系统默认时钟须在各自真实运行窗口，显式时间/0/null/正文/扩展精确 |
+| 规格与质量 | v3 Spec独立64/64、5套实际反例及v2九组SQLite/一组headless回归；Quality独立71/71及四组真实反例复演全部通过。8交付文件哈希前后一致，277个TSX/CSS未改 |
+| 类型/lint | 全项目tsc通过。scoped eslint显式关闭遗留no-explicit-any后0error/2既有warning；原raw lint错误日志保留，不称全仓lint clean |
+| 后端/数据 | 163个后端来源、原Prisma与DDL均与A相同，保留A的1192后端/PG43/OG43证据，非B新跑。所有真实写入仅本片新建SQLite夹具；原58488/helper与模型服务未刷新，默认库/spool/生产未操作 |
+
+Spec v1发现并修复falsy timestamp拒存、metadata-only新增解析坏旧Session、headless再次完成重置首次时钟；Quality v2进一步发现并修复旧坏graph无关解析、显式null/empty框架误允许缩小丢消息及缺省框架相反行为、底层adapter实际全库正文读取、切换Thread错误套旧ID。新增实际存储/可信品牌捕获、JS大小写语义、原shrink/Thread时序矩阵，保持旧坏字节及现有记录。首次比较器漏列系统默认clock的失败报告保留，随后只补精确clock路径并检查实际运行时间窗，未放宽显式值检查。
+
+v1完整测试因已知Spec回归主动停止，取消项不当功能结论；停止前xiaoo两秒fixture曾返回timeout，原同源/原超时专项8/8。v2完整6115项仅旧opencode-core-capture重启夹具失败，未改A与v2的带诊断并行专项各2/2；最终v3完整6140项零失败。历史两项原因尚未证明，保留失败及旁路诊断，不称已定位或通过调大超时修复。
+
+证据：`exclude/storage-core-collector/20261117-i_wpbhkw/` 的 `source-b-v3-final-code-verification.json`、`source-b-v3-final-result.json`、`source-b-v3-backend-fingerprint-reuse.json`、`source-b-v3-legacy-golden/{report,legacy-equivalence}.json`、`spec-source-b-v3-report.json`、`quality-source-b-v3-report.json`、`source-B-v3/`和`source-b-v3-full-runtime.jsonl`；旧失败/反例与v1/v2完整输出分别保留。
+
+下一片C：首次capture/完整计划持久CAS、可信typed flow前态、空Session/Thread控制与child图持久化、原Node Session投影、公共upload/completion全部indexed ACK，以及原异步分析/Flow/Outcome及内部采集身份闭环。pure skipped并不等公共handler停止分析，需按原route完整对照；仍未完成public采集整体、proxy/logs/consumer、Infra/其他控制域或完整96模型历史语义导入，未切生产。

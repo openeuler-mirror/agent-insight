@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions, getDefaultIngestUser } from '@/lib/storage/data-service';
+import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions, getDefaultIngestUser, prepareUploadQuickData } from '@/lib/storage/data-service';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
-import { analyzeFailures, analyzeSession, InvokedSkill, normalizeInteractions } from '@/lib/engine/evaluation/judge';
+import { analyzeFailures, analyzeSession, InvokedSkill } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
@@ -280,60 +280,10 @@ export async function POST(request: Request) {
     }
 
     const interactions = data.interactions || [];
-    const normalized = normalizeInteractions(interactions);
-    
-    normalized.forEach((turn, idx) => {
-        const hasRespTool = !!turn.responseMessage?.tool_calls?.length;
-        const reqToolCount = turn.requestMessages?.filter((m: any) => m.role === 'assistant' && m.tool_calls?.length).length || 0;
-        console.log(`[Upload-Debug] Turn ${idx}: ReqMsgs=${turn.requestMessages?.length}, RespRole=${turn.responseMessage?.role}, RespTool=${hasRespTool}, AssistantReqTools=${reqToolCount}`);
-    });
+    const {normalized, quickData} = await prepareUploadQuickData(data,username);
+    const quickSkillsWithVersions = quickData.invokedSkills;
+    const quickSkills = quickData.skills;
 
-    const quickSkillsWithVersions: InvokedSkill[] = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
-    
-    console.log(`[Upload-API] Extracted skills: ${JSON.stringify(quickSkillsWithVersions)}`);
-    
-    const quickSkills = quickSkillsWithVersions.map(s => s.name);
-    
-    let quickSkillVersion = quickSkillsWithVersions[0]?.version ?? data.skill_version;
-    console.log(`[Upload-API] Initial quickSkillVersion: ${quickSkillVersion} (from tool call: ${quickSkillsWithVersions[0]?.version}, from data: ${data.skill_version})`);
-    
-    if (quickSkillVersion === null || quickSkillVersion === undefined) {
-        const primarySkillName = quickSkills.length > 0 ? quickSkills[0] : data.skill;
-        console.log(`[Upload-API] No version from tool call, querying database for skill: ${primarySkillName}`);
-        if (primarySkillName) {
-            try {
-                const skillRecord = await db.findSkill(primarySkillName, username || null);
-                console.log(`[Upload-API] Skill record found: ${skillRecord ? skillRecord.name : 'null'}, activeVersion: ${skillRecord?.activeVersion}, versions: ${skillRecord?.versions?.map((v: any) => v.version).join(',')}`);
-                if (skillRecord && skillRecord.versions && skillRecord.versions.length > 0) {
-                    const targetVersion = skillRecord.activeVersion || 0;
-                    const sv = skillRecord.versions.find((v: any) => v.version === targetVersion);
-                    if (sv) {
-                        quickSkillVersion = sv.version;
-                        console.log(`[Upload-API] Quick save: using active version ${quickSkillVersion} for skill ${primarySkillName}`);
-                    } else {
-                        quickSkillVersion = skillRecord.versions[0].version;
-                        console.log(`[Upload-API] Quick save: using fallback version ${quickSkillVersion} for skill ${primarySkillName}`);
-                    }
-                } else {
-                    console.log(`[Upload-API] Skill record not found or no versions available`);
-                }
-            } catch (e) {
-                console.warn(`[Upload-API] Failed to fetch skill version for ${primarySkillName}:`, e);
-            }
-        }
-    }
-    
-    console.log(`[Upload-API] Final quickSkillVersion: ${quickSkillVersion}`);
-    
-    const quickData = { 
-        ...data, 
-        skip_evaluation: true,
-        skills: quickSkills,
-        invokedSkills: quickSkillsWithVersions,
-        skill: quickSkills.length > 0 ? quickSkills[0] : data.skill,
-        skill_version: quickSkillVersion
-    };
-    
     try {
         await saveExecutionRecord(quickData);
         if (data.framework === 'opencode' && data.opencode_cli_completed && data.task_id) {

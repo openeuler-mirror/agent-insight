@@ -12,8 +12,8 @@ Trace CRUD/标签/bundle、Dataset版本/回流/生成、实验/比较/直接轨
 | L1 | 已实现/隔离验收：原优化点resolve回调；历史导入另待 | 原入口已分别解决 typed 派生问题和合法旧 static/feedback；旧 dynamic/trigger 历史不普通回退 | 原PATCH/DTO不变；真实actor、Skill范围、当前机器selection；静态/feedback仍原域，新派生只写014注解；重复可恢复，threadId缺省保留null语义 |
 | L2 | 已实现/隔离验收：Skill runs/logs 与统计读取；历史导入另待 | 原 runs/logs、Dashboard/Fleet/Task/Quality、定价 observed models、Skill 列表/版本、Agent 列表已接通当前授权快照 | 复用原快照与聚合算法；保持真实结果语义，不以泛化实验分数替代answerScore，不回写历史版本 |
 | L3 | 已实现/隔离验收：final_result 编辑、独立 rejudge/cancel；历史导入另待 | 原编辑、rejudge/cancel 已走私有 Outcome 持久任务、可信录制与当前投影，原页面保留 | 编辑→冻结证据/配置→持久任务→lease/fence/取消→实际结果与Issue；不可仅去409；新编辑不改旧运行输入 |
-| L3 | Batch Trace/Dataset 已实现/隔离验收；原 Trigger A–D 已独立复核、E 当前复核中 | Batch 原执行/重试/评分/取消已接管；原 Trigger A–C 为独立 Run/live 采样，D 为单聚合问题与真实解决注解，E 起草/删除未闭环；旧历史导入另待 | 保留任务/评分/运行DTO；Dataset/Skill/Evaluator版本、进度/取消/重启与空Issue替代语义一起闭环 |
-| L4 | upload/proxy/OpenCode complete、OTLP logs、旧spool重放 | logs→各framework spool→consumer→saveExecutionRecord旧Execution/Session；core下consumer仍启动 | 新接收需真实actor/来源证明及durable ack，旧积压不可仅按payload.user推断授权；原解析/合并/去重保留，确认indexed后才推进cursor |
+| L3 | Batch Trace/Dataset 与原 Trigger A–E 已实现/隔离验收 | Batch 原执行/重试/评分/取消已接管；Trigger 运行/录制/聚合优化点/解决/AI起草及Set删除语义已闭环；旧历史导入另待 | 保留任务/评分/运行DTO；Dataset/Skill/Evaluator版本、进度/取消/重启与空Issue替代语义一起闭环 |
+| L4 | 身份与私有Source基础已验收；原upload/proxy/OpenCode complete、OTLP logs、旧spool接入仍待 | 原公共handler与logs→framework spool→consumer→saveExecutionRecord仍旧Execution/Session；B准备与C完整ACK未激活，core下consumer仍启动 | 新接收需真实actor/来源证明及durable ack，旧积压不可仅按payload.user推断授权；原解析/合并/去重保留，确认indexed后才推进cursor |
 | L4 | OTLP metrics/Infra采样与关联 | metrics/poller→旧InfraSource/InfraMetricSample；infra树与人工SessionInfraLink读旧Trace | source配置/密钥、CH时序事实与人工关系分域；新Trace root/endpoint/model/window完整，不猜目标 |
 | L5 | RAS事件与FI Trace消费者 | RasAnomalyEvent及关联/删除仍旧库，FI runs/:id/trace读旧Session | 先接事件事实与稳定Trace关联/删除屏障，再迁FI控制事务；已有实验collect桥接不能误报双写 |
 | L6 | 资产/配置/会话与客户端控制域 | Skill/版本/文件、Config/UserSettings、RegisteredAgent、Workbench/优化会话/计划、客户端凭据/命令/配置、FI Task/Run/Worker | 真实事务权威逐域迁移；迁移在线/busy/lease/outbox只能历史化，不能自动重启外部执行 |
@@ -326,3 +326,21 @@ A补充实现约束：原包接收与Source commit的重放hash先于后来compl
 
 
 A已完成最终隔离验收：6098项应用测试（6076通过、22跳过）及1192项后端测试（1013通过、179可选跳过），零失败；PG/原生openGauss各43/43、自有schema残留0。真实SQLite+CH的48次私有HTTP验证快照/墓碑/完成与分包pending；修复缺失摘要误返空结果后，另16次真实HTTP确认缺失503、合法筛选空结果及旧快照精确导出，65事务表/15CH表逻辑内容前后一致。Spec→Quality均通过，原公共handler、277个TSX/CSS及DDL未改。B/C尚未激活；私有Session含规范化传输字段，公共DTO等价必须在C复用原Node payload projection验证。完整证据与未完成边界见implementation-status.md。
+
+
+B采用共享准备提取，而非通过“内存Prisma/recording DB”执行整个save。明确输入为canonical身份、源revision、原Execution/Session及线程/子树前态、封存静态业务配置和固定默认时钟，纯计算不访问DB/模型/当前时间。legacy save消费同一组原算法；注册Agent、历史身份规范化、GoalPlus/协作等真正副作用以命名post-hook显式列出。先抽确定性消息/query/version/Session/子树/thread，再集中静态Skill/config/score/key-actions捕获及原配置投影，B全部闭合才交付C。模型调用保留原analysis边界及冻结输入，不伪装纯计算，也不把凭据或完整含秘密UserSettings写入准备产物。
+
+原等价基线已扩充为14组：原九组外增加Jiuwen独立child及重放、Langfuse四节点完整/单调合并、Codex两轮线程事件及双向execution关联。冻结旧Next handler与真实独立Prisma执行，15次写请求、出网0；位于同证据目录original-upload-golden-v5，提供完整portable/SessionDTO/child/Thread/ExecutionSkill对照。此前v4因仅子Span缺真实root导致aggregate返回null，属于harness输入修正，原失败日志保留。
+
+B允许将原upload的quick技能提取/activeVersion选择窄提取为共享prepareUploadQuickData，并由原legacy handler直接调用同一函数；这不启用core提前分支，不改变鉴权、内部tag、保存/分析时序、返回及原副作用。故B验收口径是公共入口尚未接管新存储及原行为逐字段等价，而非upload文件字节完全不变；必须使用冻结旧原handler的golden对照，检查data原地变更对异步分析输入的影响。
+
+C接缝须显式补齐：B的FrozenCollectorPreparation只是可序列化输入，不是已持久状态。A当前reserve只封存原请求/前态；C应在任何模型或后置处理前以同operation/input hash/base revision的首次CAS封存静态capture和完整计划，后续恢复先用该工件，不重新选择最新配置。ExecutionMatch须由既有typed flow_lookup捕获，不读旧动态表。headless completion还须持久保存原空Session/default startTime/label，供后到upload使用；不能伪造Execution或CH Span补载体。
+
+C的图操作还需覆盖所有实际派生child、原sweep条件、root/child indexed确认和Thread控制状态。现65表没有独立TraceThread/Event权威，不能把B纯thread plan称已落库；先细化必要控制存储与threadOnly契约，复用现有模型只在领域含义匹配时使用。公共Session读取应复用原Node pipeline（Claude normalize、subagent name inference、OpenCode timing、payload versions/structure、parent/child与Thread，及既有Dify/GoalPlus/collaboration分支），不得凭规范化Span传输字段猜测裁剪原raw扩展。全部实际来源/删除/IAM屏障及合法空结果语义继续保留。
+
+
+B已完成最终隔离验收（2026-11-17）：原quick/save共享准备、冻结相关静态输入、root/Session/skills/child/Thread/命名hook计划及completion纯计划；原legacy入口仍使用相同算法，未激活公共core writer。最终Node6140项（6118通过、22跳过、零失败/取消），原18组真实SQLite/API/Session/portable/Thread/config对照相同；Spec64项及实际反例、Quality71项及4组真实反例复演通过。8个交付文件与3111冻结来源一致，277个TSX/CSS未变，163个后端来源及DDL与A相同，沿用A已完成后端/引擎验证而非本片新跑三库。证据在同collector目录source-b-v3-*及两份review报告。
+
+独立复核修正了原falsy timestamp/default clock、无关旧坏JSON不解析、headless首次Session时钟、framework缺省与显式清空的缩小保护、实际静态正文查询范围，以及Thread自然身份/原前置时序。legacy存储字符串保持原表示，不借此清洗/迁移旧数据；canonical core读取须由可信producer提供已校验数组。static capture用轻量目录保留JS折叠匹配，正文只取选中ID/必要版本；routing精确case版本与业务definition折叠case不能混用。
+
+C额外边界：纯存储plan的skipped/background字段不代表原public handler全部行为。原handler并不检查save.skipped，autoEvaluation开启仍可进入异步分支；激活前需按原整体逻辑覆盖护栏跳过、threadOnly、pending-parent、in-progress/setting及响应flags，不能因plan早退静默关闭原分析。Thread前置可在snapshot缩小保护前生效，pending-parent原在Thread之前，均须按原时序保留。首次durable capture/wholeplan CAS、typed flow前态、无Trace空Session/Thread、图ACK及source-fenced异步结果仍属C未完成内容。

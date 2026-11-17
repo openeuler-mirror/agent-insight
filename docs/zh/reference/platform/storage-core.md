@@ -367,3 +367,20 @@ API 与设备均有效时须指向同一主体/空间，旧别名允许不同，
 已发布且具有非空 head 的 Source 必须存在匹配的真实 CH 摘要。合法 status/agent/search 筛选可能排除该行：只对缺失的已知 Source ID 做一次有界、去掉这些筛选的存在性查询，校验空间、namespace、native ID、bucket 与 revision，并在查询后再次核对来源边界。真实摘要缺失返回503，不能伪装 accepted 或空列表；存在性查询的行不加入筛选结果。没有 head 的空 completion/未提交意图仍允许没有摘要。
 
 当前私有 Session 读取会带规范化 Span 传输字段，不能据此称原公共 Session DTO 等价。原 portable 导出保留完整原快照；公共适配仍须复用原 Node 的 payload version 与结构交互投影，在启用前逐字段验证原 DTO、缓存与原界面。
+
+
+### 公共采集的共享准备（尚未激活新存储入口）
+
+原 upload 的 quick Skill/version 选择与 legacy save 现在共用确定性准备函数：保留原 adapter 归一化、单调合并/允许缩小、query 保护、显式 label 版本重写、版本0、OpenCode 指标与 Langfuse 原树。legacy 入口仍使用原持久化与分析副作用；本片仅提取共享逻辑，没有增加新库提前分支或修改前端。
+
+`captureCoreCollectorPreparation` 只接受服务端品牌采集身份，在当前权限复核下捕获本次相关 Skill/必要版本、实际命中的 routing/outcome 配置、这些配置真正需要的静态 ParsedFlow、相关注册 Agent、单个 Skill 分数及 autoEvaluation 开关。模型仅保留既有 `freezeModelSelection` 的非秘密连接摘要；API key、Authorization、自定义鉴权头及完整 UserSettings 不进入准备产物。没有遍历全部 Skill 版本读取 ParsedFlow。
+
+`prepareCoreCollectorSnapshot` 使用捕获值、原请求和 Source 前态，计算 root/Session、逐层子 Agent 及各层 Skill、Thread/event 计划与具名后置处理。计算阶段不读取数据库/当前配置、不调用模型，也不选择新的当前时间；默认 Execution/Session 时钟来自第一次封存的 received_at_ms，显式时间保持原值。绑定校验包含 task/canonical execution、operation/input hash、base revision，以及原请求和接收时间/完成时间/来源/前态的独立摘要；改包、换前态或默认时间不得沿旧准备继续。该绑定用于完整性校验，本身不授予权限。
+
+threadOnly 保留真实线程计划且没有 Execution/伪 Span；更小快照被原护栏拒绝时，仍保留原先在护栏之前产生的线程写计划。completion 的纯准备保留已有 Session 字段，缺失时给出原 label=opencode、空 interactions 和首次默认 startTime 的 Session 计划；无 Execution 时不补造 Execution。未关联父级的 Codex pending 单元也不转成普通根执行。
+
+**持久化接线仍在后续入口切片。** 当前 capture/plan 是可序列化准备值，必须由后续 C 在模型调用和后置处理之前，以首次 CAS 封存到 source operation；恢复先读原 capture/plan，不重新查询最新静态资产。`execution_match`、独立的 `previous_session` 与已校验 Thread ID 是明确前态接口：生产者须使用新库的 typed Flow/Session/Thread 读取，不回落旧动态表。当前 capture 默认没有 execution_match，尚未接通该生产者。A 的 headless completion 仍需承载原空 Session/默认时钟，Thread/Event 也尚无新库持久表；仅返回计划不表示已经落库。子 Agent 图、所有分包 indexed ACK、具名后置处理的当前授权/来源 fence、Config key-action 的 expected_config CAS，以及原公共 Session DTO/页面验证，均由 C 闭环。
+
+共享 Session 准备区分旧存储表示与已验证的 canonical 表示：旧 interactions/graph JSON 可以损坏，正常 metadata 或消息更新不得额外解析、清洗或覆盖无关旧字段；只有确有 incoming Langfuse nodes 数组时，才沿原条件尝试解码旧 graph 并合并。core 直接传入已校验的数组，不借共享准备自动迁移旧坏 JSON。框架能力按实际字段覆盖语义选择：未传 framework 继承前态，显式 null/空串保持 Generic，不能用逻辑或回退。
+
+静态捕获先读取仅含 name/id/activeVersion 的轻量账号目录，按原 JavaScript 大小写匹配及原先后选择 ID，再读取选中 ID 的轻量版本号和必要版本正文；不通过旧 findSkill 连带装载全部正文。routing 的精确名称版本回退另用定点轻量元数据，不与业务 Skill 的折叠大小写选择混用。Thread 计划仍按原 raw 阶段的 framework/身份条件生成：incoming 自然线程使用对应可信 lookup ID 或稳定新 ID，不能无条件复用旧 Thread ID；复用已有线程时，projection.threadId 必须来自该 incoming 自然键的受信读取。缩小护栏前真实发生的 Thread 计划仍保留，但不改变被拒快照的 Root 关联或新增后置 reconcile；pending-parent 更早停止，不产生 Thread。

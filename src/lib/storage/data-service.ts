@@ -97,6 +97,14 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
  */
 const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
+export function supportsSubagentExecutionDerivation(framework:string|null|undefined):boolean {
+    return typeof framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(framework);
+}
+
+export function resolveExecutionPreparationFramework(data:ExecutionRecord,existingExecution?:{framework?:string|null}):string|null|undefined {
+    return Object.prototype.hasOwnProperty.call(data,'framework') ? data.framework : existingExecution?.framework || undefined;
+}
+
 export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
     const adapter = getAdapter(framework);
     return adapter.capabilities?.allowSnapshotShrink === true
@@ -620,10 +628,10 @@ export function findBestMatchConfig(
     matchMode: ConfigMatchMode = 'any'
 ): ConfigItem | undefined {
     if (!userQuery) return undefined;
-    
+
     const trimmedUserQuery = normalizeQueryForMatch(userQuery);
     if (!trimmedUserQuery) return undefined;
-    
+
     const matchingConfigs = configs
         .filter(c => c.query && c.query.trim())
         .filter(c => {
@@ -637,9 +645,9 @@ export function findBestMatchConfig(
             }
             return configSupportsDatasetType(c.dataset_type, matchMode);
         });
-    
+
     if (matchingConfigs.length === 0) return undefined;
-    
+
     return matchingConfigs.reduce((best, current) => {
         const bestLen = normalizeQueryForMatch(best.query || '').length;
         const currentLen = normalizeQueryForMatch(current.query || '').length;
@@ -833,7 +841,7 @@ export function getEvaluationContextLabel(
     }, 'Skill execution benchmark');
 }
 
-function getRoutingExpectedSkills(config?: ConfigItem): { skill: string; version: number | null }[] {
+export function getRoutingExpectedSkills(config?: ConfigItem): { skill: string; version: number | null }[] {
     if (!config) return [];
 
     const expectedSkills = normalizeExpectedSkills(config.expectedSkills);
@@ -971,7 +979,8 @@ function getKeyActionFlowTargets(config: ConfigItem): { skill: string; version: 
 
 export async function fillConfigKeyActionsFromParsedFlows(
     config: ConfigItem,
-    user?: string | null
+    user?: string | null,
+    source?: {findSkill:typeof db.findSkill; findParsedFlow:typeof db.findParsedFlow; updateConfig?:typeof db.updateConfig},
 ): Promise<void> {
     if (!config || (Array.isArray(config.key_actions) && config.key_actions.length > 0)) {
         return;
@@ -985,7 +994,7 @@ export async function fillConfigKeyActionsFromParsedFlows(
     const allActions: { name: string; actions: ExtractedKeyAction[] }[] = [];
 
     for (const target of targets) {
-        const skill = await db.findSkill(target.skill, user || null);
+        const skill = await (source ? source.findSkill(target.skill,user || null) : db.findSkill(target.skill,user || null));
         if (!skill) {
             continue;
         }
@@ -998,7 +1007,7 @@ export async function fillConfigKeyActionsFromParsedFlows(
             continue;
         }
 
-        const parsedFlow = await db.findParsedFlow(skill.id, resolvedVersion, user || null);
+        const parsedFlow = await (source ? source.findParsedFlow(skill.id,resolvedVersion,user || null) : db.findParsedFlow(skill.id,resolvedVersion,user || null));
         if (!parsedFlow?.flowJson) {
             continue;
         }
@@ -1035,8 +1044,9 @@ export async function fillConfigKeyActionsFromParsedFlows(
     }));
     config.extractedKeyActions = extractedActions;
 
+    if (source && !source.updateConfig) return;
     try {
-        await db.updateConfig(config.id, {
+        await (source?.updateConfig ? source.updateConfig.bind(source) : db.updateConfig.bind(db))(config.id, {
             keyActions: JSON.stringify(config.key_actions),
             extractedKeyActions: JSON.stringify(extractedActions),
         });
@@ -1049,7 +1059,8 @@ export async function fillConfigKeyActionsFromParsedFlows(
 async function buildRoutingEvaluationSnapshot(
     record: Pick<ExecutionRecord, 'query' | 'skill' | 'skill_version' | 'invokedSkills' | 'skills' | 'user'>,
     routingConfig?: ConfigItem,
-    evaluationUser?: string | null
+    evaluationUser?: string | null,
+    frozenSkills?: ReadonlyArray<{name:string;activeVersion?:number|null}>,
 ): Promise<RoutingEvaluationSnapshot> {
     const invokedSkills = getEffectiveInvokedSkills(record);
     const skillContexts = collectSkillContexts(record, routingConfig);
@@ -1092,7 +1103,7 @@ async function buildRoutingEvaluationSnapshot(
 
     if (skillNamesForLookup.length > 0) {
         try {
-            const skills = await db.findSkills({
+            const skills = frozenSkills ?? await db.findSkills({
                 name: { in: skillNamesForLookup },
                 user: evaluationUser || null,
             });
@@ -1242,11 +1253,12 @@ function buildOutcomeEvaluationSnapshot(
 export async function buildRecordEvaluationSnapshots(
     record: ExecutionRecord,
     configs: ConfigItem[],
-    evaluationUser?: string | null
+    evaluationUser?: string | null,
+    frozenSkills?: ReadonlyArray<{name:string;activeVersion?:number|null}>,
 ): Promise<ExecutionRecord> {
     const routingConfig = record.query ? await findBestRoutingConfig(configs, record.query, evaluationUser ?? record.user ?? null) : undefined;
     const outcomeConfig = findBestOutcomeConfig(configs, record);
-    const routingEvaluation = await buildRoutingEvaluationSnapshot(record, routingConfig, evaluationUser ?? record.user ?? null);
+    const routingEvaluation = await buildRoutingEvaluationSnapshot(record, routingConfig, evaluationUser ?? record.user ?? null, frozenSkills);
     return {
         ...record,
         routing_evaluation: routingEvaluation,
@@ -2280,11 +2292,11 @@ export async function readConfig(
     const normalizedConfigs = configs.map((c: any) => {
         const parse = (s: string | null, fieldName: string) => {
             if (!s) return undefined;
-            try { 
-                return JSON.parse(s); 
-            } catch (e) { 
+            try {
+                return JSON.parse(s);
+            } catch (e) {
                 console.error(`[readConfig] Failed to parse ${fieldName} for config ${c.id}:`, e);
-                return undefined; 
+                return undefined;
             }
         };
         return {
@@ -2473,26 +2485,16 @@ export function scopeTraceThreadEventKey(
     return `trace-thread:${scope}:${eventKey}`;
 }
 
-async function persistTraceThreadRecord(
-    data: ExecutionRecord,
-    recordId?: string,
-): Promise<string | undefined> {
+export function prepareTraceThread(options: {data:ExecutionRecord; recordId?:string; threadId?:string}) {
+    const {data, recordId, threadId} = options;
     const input = data.traceThread;
-    if (!TRACE_THREAD_STORAGE_ENABLED || !input?.sourceThreadId || !data.framework || !data.user) {
-        return data.traceThreadId;
+    if (!input?.sourceThreadId || !data.framework || !data.user) {
+        return null;
     }
 
     const startedAt = traceThreadDate(input.startedAt);
     const updatedAt = traceThreadDate(input.updatedAt) || startedAt;
-    const thread = await prismaRaw.traceThread.upsert({
-        where: {
-            user_framework_sourceThreadId: {
-                user: data.user,
-                framework: data.framework,
-                sourceThreadId: input.sourceThreadId,
-            },
-        },
-        create: {
+    const create = {
             framework: data.framework,
             sourceThreadId: input.sourceThreadId,
             sourceKind: input.sourceKind || data.sourceKind,
@@ -2500,14 +2502,14 @@ async function persistTraceThreadRecord(
             startedAt,
             updatedAt,
             metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
-        },
-        update: {
+        };
+    const update = {
             sourceKind: input.sourceKind || data.sourceKind,
             ...(startedAt ? { startedAt } : {}),
             ...(updatedAt ? { updatedAt } : {}),
             ...(input.metadata ? { metadataJson: JSON.stringify(input.metadata) } : {}),
-        },
-    });
+        };
+    const events: any[] = [];
 
     for (const event of input.events || []) {
         const eventStartedAt = traceThreadDate(event.startedAt);
@@ -2527,7 +2529,7 @@ async function persistTraceThreadRecord(
             ...(event.relatedSourceTurnId ? { relatedSourceExecutionId: event.relatedSourceTurnId } : {}),
         };
         const values = {
-            traceThreadId: thread.id,
+            traceThreadId: threadId,
             executionId: primaryExecutionId,
             relatedExecutionId: undefined,
             kind: event.kind,
@@ -2538,11 +2540,26 @@ async function persistTraceThreadRecord(
             completedAt: eventCompletedAt,
             payloadJson: Object.keys(payload).length > 0 ? JSON.stringify(payload) : null,
         };
-        await prismaRaw.traceThreadEvent.upsert({
-            where: { eventKey: scopedEventKey },
-            create: { eventKey: scopedEventKey, ...values },
-            update: values,
-        });
+        events.push({eventKey:scopedEventKey, ...values});
+    }
+    return {thread:{id:threadId, ...create}, create, update, events};
+}
+
+async function persistTraceThreadRecord(
+    data: ExecutionRecord,
+    recordId?: string,
+): Promise<string | undefined> {
+    if (!TRACE_THREAD_STORAGE_ENABLED) return data.traceThreadId;
+    const plan = prepareTraceThread({data, recordId});
+    if (!plan) return data.traceThreadId;
+    const thread = await prismaRaw.traceThread.upsert({
+        where:{user_framework_sourceThreadId:{user:data.user!,framework:data.framework!,sourceThreadId:data.traceThread!.sourceThreadId}},
+        create:plan.create, update:plan.update,
+    });
+    const linked = prepareTraceThread({data, recordId, threadId:thread.id})!;
+    for (const event of linked.events) {
+        const {eventKey,...values} = event;
+        await prismaRaw.traceThreadEvent.upsert({where:{eventKey}, create:{eventKey,...values}, update:values});
     }
     return thread.id;
 }
@@ -2583,53 +2600,19 @@ async function reconcileTraceThreadExecutions(traceThreadId: string | undefined)
     }
 }
 
-export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
-    return withTraceTiming({ scope: 'save', traceId: data.task_id, uploadId: data.upload_id, framework: data.framework },
-        () => saveExecutionRecordInternal(data, options));
+export interface ExecutionPreparationInput {
+    data: ExecutionRecord;
+    recordId: string;
+    existingExecution?: any;
+    existingSession?: any;
+    defaultTimestamp: string;
+    allowSnapshotShrink: boolean;
 }
 
-async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
-    const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
-    const id = data.upload_id || data.task_id;
-    let recordId = id || crypto.randomUUID();
-
-    // A Codex automatic unit without direct/unique parent evidence is written to
-    // the spool with a `pending:` execution id. It is retained there for a later
-    // correlated replay, but is never a user-authored root task and must not
-    // leak through a generic ingestion fallback into the execution list.
-    if (String(data.framework || '').toLowerCase() === 'codex' && recordId.startsWith('pending:')) {
-        return { success: true, record: { ...data, task_id: data.task_id || recordId, interactions: [] } };
-    }
-
-    if (data.task_id) {
-        try {
-            const where: any = { taskId: data.task_id };
-            if (data.framework) where.framework = data.framework;
-            const existingByTask = await timeTraceStage('identity-query', () => db.findExecutions(where, { timestamp: 'desc' }));
-            if (existingByTask && existingByTask.length > 0 && existingByTask[0]?.id) {
-                const exact = existingByTask.find((x: any) => x.id === data.task_id);
-                const canonicalId = (exact && exact.id) ? exact.id : existingByTask[0].id;
-                if (canonicalId !== recordId) {
-                    recordId = canonicalId;
-                }
-            }
-        } catch {}
-    }
-
-    const persistedTraceThreadId = await persistTraceThreadRecord(data, recordId);
-    if (data.threadOnly) {
-        await reconcileTraceThreadExecutions(persistedTraceThreadId);
-        return {
-            success: true,
-            record: { ...data, traceThreadId: persistedTraceThreadId, interactions: [] },
-        };
-    }
-
+export function prepareExecutionRecordState(input: ExecutionPreparationInput) {
+    const {recordId, existingExecution:dbRecord, existingSession, defaultTimestamp, allowSnapshotShrink} = input;
+    const data = structuredClone(input.data);
     let existingRecord: ExecutionRecord | null = null;
-    const dbRecord = await timeTraceStage('execution-read', () => db.findExecutionById(recordId));
-
-    traceTimingEvent('identity-resolved', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
-    const finishPreparation = beginTraceStage('prepare');
 
     if (dbRecord) {
         existingRecord = {
@@ -2682,7 +2665,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
     const isUpdate = !!existingRecord;
 
     if (!isUpdate && !targetRecord.timestamp && !data.timestamp) {
-        targetRecord.timestamp = new Date().toISOString();
+        targetRecord.timestamp = defaultTimestamp;
     } else if (data.timestamp) {
         targetRecord.timestamp = data.timestamp;
     }
@@ -2726,13 +2709,6 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         incomingSkillVersion: targetRecord.skill_version ?? null,
         explicitRewrite: explicitSkillVersionRewrite,
     });
-    if (guarded.blocked) {
-        console.warn(
-            `[Data-Service] Preserving existing skill_version for execution ${recordId}: ` +
-            `existing=${existingRecord?.skill_version}, incoming=${targetRecord.skill_version} blocked. ` +
-            `Skill version is immutable history; only NULL → value or explicit label-binding rewrite is allowed.`
-        );
-    }
     targetRecord.skill_version = guarded.resolved ?? undefined;
     if (!targetRecord.agentName && targetRecord.agent) {
         targetRecord.agentName = targetRecord.agent;
@@ -2752,36 +2728,11 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
     targetRecord.upload_id = recordId;
 
     if ((!targetRecord.label || !targetRecord.model || !targetRecord.user) && targetRecord.task_id) {
-        const session = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
+        const session = existingSession;
         if (session) {
             if (!targetRecord.label && session.label) targetRecord.label = session.label;
             if (!targetRecord.model && session.model) targetRecord.model = session.model;
             if (!targetRecord.user && session.user) targetRecord.user = session.user;
-        }
-    }
-
-    if (!targetRecord.user) {
-        const defaultUser = getDefaultIngestUser();
-        if (defaultUser) {
-            // 无 key / 无法解析 user 时，确定性地归到配置的默认账号（开箱即用共享账号场景）。
-            // 覆盖 OTLP / proxy / opencode 等所有「不 reject、user 落空」的路径 —— 它们都汇到这里。
-            targetRecord.user = defaultUser;
-            console.log(`[Data-Service] No user on record for task ${targetRecord.task_id}, defaulting to AGENT_INSIGHT_DEFAULT_INGEST_USER=${defaultUser}`);
-        } else {
-            // 未配置默认账号：保留旧兜底（DB 第一个用户）。注意这是**非确定性**的（取决于建表顺序），
-            // 生产建议配 AGENT_INSIGHT_DEFAULT_INGEST_USER 明确指定，避免数据莫名归到某个账号。
-            try {
-                const client = db.getClient();
-                if ('query' in client) {
-                    const res = await (client as any).query('SELECT username FROM "User" LIMIT 1');
-                    if (res.rows[0]) {
-                        targetRecord.user = res.rows[0].username;
-                        console.log(`[Data-Service] Fallback resolved user for task ${targetRecord.task_id} to: ${targetRecord.user}`);
-                    }
-                }
-            } catch (e) {
-                console.warn('[Data-Service] Fallback user lookup failed:', e);
-            }
         }
     }
 
@@ -2812,7 +2763,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         try {
             const mergeStrategy = targetRecord.session_merge_strategy || storageAdapter.sessionMergeStrategy || 'monotonic';
             if (mergeStrategy !== 'snapshot-replace') {
-                const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
+
                 let existingInteractions = existingSession?.interactions
                     ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                     : [];
@@ -2827,9 +2778,9 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
                 // 严格更小则判为退化快照，保留库里现有记录、不覆盖。只有适配器声明完整快照
                 // 能力的框架允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
+                const allowShrink = allowSnapshotShrink;
                 if (!allowShrink) {
-                    const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
+
                     let existingInteractions = existingSession?.interactions
                         ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                         : [];
@@ -2837,25 +2788,11 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                     const existingCount = Array.isArray(existingInteractions) ? existingInteractions.length : 0;
                     const incomingCount = Array.isArray(incomingInteractions) ? incomingInteractions.length : 0;
                     if (existingCount > 0 && incomingCount < existingCount) {
-                        console.warn(
-                            `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
-                            `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            (storageAdapter.descriptor.id === 'jiuwenswarm'
-                                ? `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`
-                                : `当前框架未声明允许快照缩小。`),
-                        );
-                        finishPreparation();
-                        traceTimingEvent('save-skipped', { executionId: recordId, reason: 'smaller-snapshot' });
-                        return { success: true, record: targetRecord };
+                        return {targetRecord, existingRecord, mergedInteractionsForSession, explicitSkillVersionRewrite, skipped:true, data};
                     }
                 }
             }
-        } catch (e) {
-            // 护栏/合并的 DB 读取失败时 fail-open：按原逻辑继续落库，不因检查本身报错而阻断写入。
-            if (e && typeof e === 'object' && 'task_id' in (targetRecord as any)) {
-                console.warn('[Data-Service] snapshot-replace 退化检查异常，按原逻辑继续：', (e as Error)?.message || e);
-            }
-        }
+        } catch {}
 
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
@@ -2882,62 +2819,121 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             targetRecord.reasoning_tokens = derived.reasoning_tokens;
         }
     }
-    let isSkillCorrect = false; // Reset to false and recalculate based on current config
-    let isAnswerCorrect = targetRecord.is_answer_correct || false;
-    let judgmentReason = targetRecord.judgment_reason || NO_OUTCOME_MATCH_REASON;
+    return {targetRecord, existingRecord, mergedInteractionsForSession, explicitSkillVersionRewrite, skipped:false, data};
+}
+
+export function prepareExecutionSession(input: {record:ExecutionRecord; interactions:any[]|null; existingSession?:any; defaultTimestamp:string}) {
+    const targetRecord = structuredClone(input.record);
+    const {interactions:mergedInteractionsForSession, existingSession, defaultTimestamp} = input;
+    const explicitTraceStartedAt = targetRecord.trace_started_at
+        ? new Date(targetRecord.trace_started_at)
+        : null;
+    const hasExplicitTraceStart = explicitTraceStartedAt != null
+        && Number.isFinite(explicitTraceStartedAt.getTime());
+    const explicitTraceCompletedAt = targetRecord.trace_completed_at
+        ? new Date(targetRecord.trace_completed_at)
+        : null;
+    const hasExplicitTraceCompletion = explicitTraceCompletedAt != null
+        && Number.isFinite(explicitTraceCompletedAt.getTime());
+    const inferredHermesTraceCompletedAt = !hasExplicitTraceCompletion
+        && targetRecord.framework === 'hermes'
+        && typeof targetRecord.final_result === 'string'
+        && targetRecord.final_result.trim()
+        ? inferTraceCompletionFromInteractions(mergedInteractionsForSession)
+        : null;
+    const traceCompletedAtForSession = hasExplicitTraceCompletion
+        ? explicitTraceCompletedAt
+        : inferredHermesTraceCompletedAt;
+    if (!hasExplicitTraceCompletion && inferredHermesTraceCompletedAt) {
+        targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
+    }
+    const hasTraceCompletion = traceCompletedAtForSession != null
+        && Number.isFinite(traceCompletedAtForSession.getTime())
+        && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
+
+    if (targetRecord.task_id && mergedInteractionsForSession) {
+        const isLangfuseTrace = ['langfuse', 'langfuse-langgraph', 'dify'].includes(targetRecord.framework || '');
+        let langfuseTraceNodesJson: string | undefined;
+        if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
+
+            let existingNodes: LangfuseTraceNode[] = Array.isArray(existingSession?.langfuseTraceNodes) ? existingSession.langfuseTraceNodes : [];
+            if (typeof existingSession?.langfuseTraceNodes === 'string' && existingSession.langfuseTraceNodes.trim()) {
+                try {
+                    const parsed = JSON.parse(existingSession.langfuseTraceNodes);
+                    if (Array.isArray(parsed)) existingNodes = parsed;
+                } catch {}
+            }
+            targetRecord.langfuseTraceNodes = mergeLangfuseTraceNodes(existingNodes, targetRecord.langfuseTraceNodes);
+            langfuseTraceNodesJson = JSON.stringify(targetRecord.langfuseTraceNodes);
+        }
+        const create =             {
+                taskId: targetRecord.task_id,
+                query: targetRecord.query,
+                label: targetRecord.label,
+                user: targetRecord.user,
+                model: targetRecord.model,
+                interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
+                ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
+            };
+        const update = {
+                query: targetRecord.query,
+                label: targetRecord.label,
+                user: targetRecord.user,
+                model: targetRecord.model,
+                interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
+            };
+        const completionAt = hasTraceCompletion ? traceCompletedAtForSession
+            : targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true ? new Date(defaultTimestamp) : null;
+        const defined = (value: Record<string, any>) => Object.fromEntries(Object.entries(value).filter(([,item]) => item !== undefined));
+        const merged = {...(existingSession || {label:null, query:null, model:null, user:null, startTime:defaultTimestamp, endTime:null}), ...defined(existingSession ? update : create)} as Record<string, any>;
+        const iso = (value: any) => value instanceof Date ? value.toISOString() : value;
+        return {record:targetRecord, create, update, completionAt, session:{...merged,
+            startTime:iso(merged.startTime), endTime:completionAt ? completionAt.toISOString() : iso(merged.endTime ?? null),
+            interactions:mergedInteractionsForSession,
+            ...(langfuseTraceNodesJson !== undefined ? {langfuseTraceNodes:targetRecord.langfuseTraceNodes} : {}),
+        }};
+    }
+    return {record:targetRecord, session:existingSession ? structuredClone(existingSession) : null, create:null, update:null, completionAt:null};
+}
+
+export function prepareExecutionRouting(record:ExecutionRecord, routingConfig:ConfigItem|undefined, skills:ReadonlyArray<{name:string;activeVersion?:number|null}>) {
+    const targetRecord = structuredClone(record);
+    let isSkillCorrect = false;
     targetRecord.skill_trigger_rate = null;
-
-    const configs = await timeTraceStage('config-read', () => readConfig(targetRecord.user));
-    if (configs.length > 0) {
-        const routingConfig = await findBestRoutingConfig(configs, targetRecord.query, targetRecord.user);
-        const outcomeConfig = findBestOutcomeConfig(configs, targetRecord);
-
         if (routingConfig) {
             const invokedSkillsWithVersion = Array.isArray(targetRecord.invokedSkills) ? targetRecord.invokedSkills : [];
             const skillsFallback = Array.isArray(targetRecord.skills) ? targetRecord.skills : [];
             const invokedSkillsFallback = skillsFallback.map(name => ({ name, version: null as number | null }));
 
             const expectedSkillsList = getRoutingExpectedSkills(routingConfig);
-            
+
             if (expectedSkillsList.length > 0) {
-                const skillsToCheck = invokedSkillsWithVersion.length > 0 
-                    ? invokedSkillsWithVersion 
+                const skillsToCheck = invokedSkillsWithVersion.length > 0
+                    ? invokedSkillsWithVersion
                     : invokedSkillsFallback;
-                
+
                 if (skillsToCheck.length > 0) {
                     let correctInvokedSkills = 0;
-                    
+
                     const validExpectedSkills = expectedSkillsList.filter(e => e.skill?.trim());
-                    
-                    const skillNames = validExpectedSkills.map(e => e.skill.trim());
-                    const skillsMap = new Map<string, any>();
-                    
-                    if (skillNames.length > 0) {
-                        try {
-                            const skills = await db.findSkills({
-                                name: { in: skillNames },
-                                user: targetRecord.user || null
-                            });
-                            
-                            for (const skill of skills) {
-                                skillsMap.set(skill.name, skill);
-                            }
-                        } catch (err) {
-                            console.error('[Judgment] Error fetching skills for version check:', err);
-                        }
-                    }
-                    
+
+                    const skillsMap = new Map(skills.map(skill=>[skill.name,skill]));
+
                     for (const expected of validExpectedSkills) {
                         const expectedName = expected.skill.trim();
                         const expectedVer = expected.version ?? null;
-                        
+
                         const matchingInvoked = skillsToCheck.find(
                             (s) => s.name === expectedName
                         );
-                        
+
                         if (matchingInvoked) {
                             let isVersionMatch = false;
-                            
+
                             if (expectedVer === null) {
                                 isVersionMatch = true;
                             } else if (matchingInvoked.version !== null) {
@@ -2951,7 +2947,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                                     isVersionMatch = false;
                                 }
                             }
-                            
+
                             if (isVersionMatch) {
                                 correctInvokedSkills++;
                                 if (!isSkillCorrect) {
@@ -2960,7 +2956,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                             }
                         }
                     }
-                    
+
                     if (validExpectedSkills.length > 0) {
                         targetRecord.skill_trigger_rate = correctInvokedSkills / validExpectedSkills.length;
                     }
@@ -2968,6 +2964,189 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             }
             targetRecord.is_skill_correct = isSkillCorrect;
         }
+    targetRecord.is_skill_correct = isSkillCorrect;
+    return targetRecord;
+}
+
+export async function prepareUploadQuickData(data:ExecutionRecord, username:string|null|undefined, findSkill:typeof db.findSkill = (name,user)=>db.findSkill(name,user)) {
+    const normalized = normalizeInteractions(data.interactions || []);
+    const invokedSkills = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
+    const skills = invokedSkills.map(skill=>skill.name);
+    let skillVersion = invokedSkills[0]?.version ?? data.skill_version;
+    if (skillVersion == null) {
+        const primary = skills.length ? skills[0] : data.skill;
+        if (primary) {
+            try {
+                const record = await findSkill(primary,username || null);
+                if (record?.versions?.length) {
+                    const selected = record.versions.find((version:any)=>version.version === (record.activeVersion || 0)) ?? record.versions[0];
+                    skillVersion = selected.version;
+                }
+            } catch {}
+        }
+    }
+    return {normalized, quickData:{...data,skip_evaluation:true,skills,invokedSkills,skill:skills.length ? skills[0] : data.skill,skill_version:skillVersion}};
+}
+
+export function prepareExecutionWrite(input:{record:ExecutionRecord;existingExecution?:any;recordId:string;agentId?:string;receivedAt:Date|null;interactions:any[]|null;defaultTimestamp:string}) {
+    const {record:targetRecord,existingExecution:dbRecord,recordId,agentId,receivedAt,interactions:mergedInteractionsForSession,defaultTimestamp} = input;
+    const storedAgentName = targetRecord.agentName || getFrameworkPrimaryAgentName(targetRecord.framework);
+    const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
+        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession,storedAgentName)) : null;
+    const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
+    const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt,receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
+    return {id:recordId,
+            taskId: targetRecord.task_id,
+            query: targetRecord.query,
+            framework: targetRecord.framework,
+            traceThreadId: targetRecord.traceThreadId,
+            sourceExecutionId: targetRecord.sourceExecutionId,
+            sourceKind: targetRecord.sourceKind,
+            executionStatus: targetRecord.executionStatus,
+            tokens: targetRecord.tokens,
+            cost: targetRecord.cost,
+            latency: targetRecord.latency,
+            timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(defaultTimestamp),
+            lastIngestedAt,
+            finalResult: targetRecord.final_result,
+            skill: targetRecord.skill,
+            skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
+            invokedSkills: targetRecord.invokedSkills ? JSON.stringify(targetRecord.invokedSkills) : null,
+            isSkillCorrect: targetRecord.is_skill_correct,
+            isAnswerCorrect: targetRecord.is_answer_correct,
+            answerScore: targetRecord.answer_score,
+            skillScore: targetRecord.skill_score,
+            judgmentReason: targetRecord.judgment_reason,
+            failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
+            skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
+            label: targetRecord.label,
+            user: targetRecord.user,
+            agentName: storedAgentName,
+            agentId: agentId,
+            skillVersion: targetRecord.skill_version,
+            model: targetRecord.model,
+            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
+            clientId: targetRecord.clientId,
+            hostIp: targetRecord.hostIp,
+            hostName: targetRecord.hostName,
+            observedIp: targetRecord.observedIp,
+            toolCallCount: targetRecord.tool_call_count,
+            llmCallCount: targetRecord.llm_call_count,
+            inputTokens: targetRecord.input_tokens,
+            outputTokens: targetRecord.output_tokens,
+            toolCallErrorCount: targetRecord.tool_call_error_count,
+            skillTriggerRate: targetRecord.skill_trigger_rate,
+            cacheReadInputTokens: targetRecord.cache_read_input_tokens,
+            cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
+            maxSingleCallTokens: targetRecord.max_single_call_tokens,
+            reasoningTokens: targetRecord.reasoning_tokens,
+            observedAgents: observedAgentsJson,
+        };
+}
+
+export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    return withTraceTiming({ scope: 'save', traceId: data.task_id, uploadId: data.upload_id, framework: data.framework },
+        () => saveExecutionRecordInternal(data, options));
+}
+
+async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
+    const id = data.upload_id || data.task_id;
+    let recordId = id || crypto.randomUUID();
+
+    // A Codex automatic unit without direct/unique parent evidence is written to
+    // the spool with a `pending:` execution id. It is retained there for a later
+    // correlated replay, but is never a user-authored root task and must not
+    // leak through a generic ingestion fallback into the execution list.
+    if (String(data.framework || '').toLowerCase() === 'codex' && recordId.startsWith('pending:')) {
+        return { success: true, record: { ...data, task_id: data.task_id || recordId, interactions: [] } };
+    }
+
+    if (data.task_id) {
+        try {
+            const where: any = { taskId: data.task_id };
+            if (data.framework) where.framework = data.framework;
+            const existingByTask = await timeTraceStage('identity-query', () => db.findExecutions(where, { timestamp: 'desc' }));
+            if (existingByTask && existingByTask.length > 0 && existingByTask[0]?.id) {
+                const exact = existingByTask.find((x: any) => x.id === data.task_id);
+                const canonicalId = (exact && exact.id) ? exact.id : existingByTask[0].id;
+                if (canonicalId !== recordId) {
+                    recordId = canonicalId;
+                }
+            }
+        } catch {}
+    }
+
+    const persistedTraceThreadId = await persistTraceThreadRecord(data, recordId);
+    if (data.threadOnly) {
+        await reconcileTraceThreadExecutions(persistedTraceThreadId);
+        return {
+            success: true,
+            record: { ...data, traceThreadId: persistedTraceThreadId, interactions: [] },
+        };
+    }
+
+    const dbRecord = await timeTraceStage('execution-read', () => db.findExecutionById(recordId));
+    traceTimingEvent('identity-resolved', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
+    const finishPreparation = beginTraceStage('prepare');
+    let existingSession: any = null;
+    const sessionTaskId = data.task_id || dbRecord?.taskId;
+    if (sessionTaskId) {
+        const incomingMetadata = {...dbRecord,...data};
+        if (!incomingMetadata.label || !incomingMetadata.model || !incomingMetadata.user) {
+            existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(sessionTaskId));
+        } else if (data.interactions) {
+            try { existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(sessionTaskId)); } catch {}
+        }
+    }
+    if (!data.user && !dbRecord?.user && !existingSession?.user) {
+        const defaultUser = getDefaultIngestUser();
+        if (defaultUser) data.user = defaultUser;
+        else {
+            try {
+                const client = db.getClient();
+                if ('query' in client) {
+                    const res = await (client as any).query('SELECT username FROM "User" LIMIT 1');
+                    if (res.rows[0]) data.user = res.rows[0].username;
+                }
+            } catch {}
+        }
+    }
+    const prepared = prepareExecutionRecordState({data, recordId, existingExecution:dbRecord, existingSession, defaultTimestamp:new Date().toISOString(), allowSnapshotShrink:allowsSnapshotShrinkForFramework(resolveExecutionPreparationFramework(data,dbRecord))});
+    if (prepared.explicitSkillVersionRewrite) {
+        data.skill = prepared.data.skill; data.skill_version = prepared.data.skill_version;
+        data.skills = prepared.data.skills; data.invokedSkills = prepared.data.invokedSkills;
+    }
+    data = prepared.data;
+    let {targetRecord} = prepared;
+    const {mergedInteractionsForSession} = prepared;
+    const {existingRecord, explicitSkillVersionRewrite} = prepared;
+    const isUpdate = !!existingRecord;
+    if (prepared.skipped) {
+        finishPreparation();
+        traceTimingEvent('save-skipped', { executionId: recordId, reason:'smaller-snapshot' });
+        return {success:true, record:targetRecord};
+    }
+    let isSkillCorrect = false; // Reset to false and recalculate based on current config
+    let isAnswerCorrect = targetRecord.is_answer_correct || false;
+    let judgmentReason = targetRecord.judgment_reason || NO_OUTCOME_MATCH_REASON;
+    targetRecord.skill_trigger_rate = null;
+
+    const configs = await timeTraceStage('config-read', () => readConfig(targetRecord.user));
+    if (configs.length > 0) {
+        const routingConfig = await findBestRoutingConfig(configs, targetRecord.query, targetRecord.user);
+        const outcomeConfig = findBestOutcomeConfig(configs, targetRecord);
+
+        let routingSkills: Array<{name:string;activeVersion?:number|null}> = [];
+        if (routingConfig) {
+            const skillNames = getRoutingExpectedSkills(routingConfig).filter(item=>item.skill?.trim()).map(item=>item.skill.trim());
+            if (skillNames.length) {
+                try {routingSkills = await db.findSkills({name:{in:skillNames},user:targetRecord.user || null});}
+                catch (err) {console.error('[Judgment] Error fetching skills for version check:',err);}
+            }
+        }
+        targetRecord = prepareExecutionRouting(targetRecord,routingConfig,routingSkills);
+        isSkillCorrect = targetRecord.is_skill_correct ?? false;
 
         if (outcomeConfig) {
             await fillConfigKeyActionsFromParsedFlows(outcomeConfig, targetRecord.user);
@@ -3026,8 +3205,8 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                     try {
                         const matchRecord = await db.findExecutionMatch(targetRecord.task_id || targetRecord.upload_id || '');
                         if (matchRecord?.extractedSteps) {
-                            executionSteps = typeof matchRecord.extractedSteps === 'string' 
-                                ? JSON.parse(matchRecord.extractedSteps) 
+                            executionSteps = typeof matchRecord.extractedSteps === 'string'
+                                ? JSON.parse(matchRecord.extractedSteps)
                                 : matchRecord.extractedSteps;
                         }
                     } catch (e) {
@@ -3146,113 +3325,11 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         }
     }
 
-    // 写入时预解析 agents 列表并 denormalize 存入 observedAgents,供轻量列表(fields=light)直接读取,
-    // 无需加载/解析 session interactions。与读侧 extractObservedAgentNames(interactions) 同源同口径
-    // (含 opencode 'build' 等只出现在 interactions 里的 agent 名),保证 light 与 heavy 的 agents 一致、不丢数据。
-    const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
-        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession, storedAgentName, observedAgentOptions))
-        : null;
     const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
     const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt, receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
     finishPreparation();
-    await timeTraceStage('execution-upsert', () => db.upsertExecution({
-        where: { id: recordId },
-        create: {
-            id: recordId,
-            taskId: targetRecord.task_id,
-            query: targetRecord.query,
-            framework: targetRecord.framework,
-            traceThreadId: targetRecord.traceThreadId,
-            sourceExecutionId: targetRecord.sourceExecutionId,
-            sourceKind: targetRecord.sourceKind,
-            executionStatus: targetRecord.executionStatus,
-            tokens: targetRecord.tokens,
-            cost: targetRecord.cost,
-            latency: targetRecord.latency,
-            timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
-            lastIngestedAt,
-            finalResult: targetRecord.final_result,
-            skill: targetRecord.skill,
-            skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
-            invokedSkills: targetRecord.invokedSkills ? JSON.stringify(targetRecord.invokedSkills) : null,
-            isSkillCorrect: targetRecord.is_skill_correct,
-            isAnswerCorrect: targetRecord.is_answer_correct,
-            answerScore: targetRecord.answer_score,
-            skillScore: targetRecord.skill_score,
-            judgmentReason: targetRecord.judgment_reason,
-            failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
-            skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
-            label: targetRecord.label,
-            user: targetRecord.user,
-            agentName: storedAgentName,
-            agentId: agentId,
-            skillVersion: targetRecord.skill_version,
-            model: targetRecord.model,
-            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
-            clientId: targetRecord.clientId,
-            hostIp: targetRecord.hostIp,
-            hostName: targetRecord.hostName,
-            observedIp: targetRecord.observedIp,
-            toolCallCount: targetRecord.tool_call_count,
-            llmCallCount: targetRecord.llm_call_count,
-            inputTokens: targetRecord.input_tokens,
-            outputTokens: targetRecord.output_tokens,
-            toolCallErrorCount: targetRecord.tool_call_error_count,
-            skillTriggerRate: targetRecord.skill_trigger_rate,
-            cacheReadInputTokens: targetRecord.cache_read_input_tokens,
-            cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
-            maxSingleCallTokens: targetRecord.max_single_call_tokens,
-            reasoningTokens: targetRecord.reasoning_tokens,
-            observedAgents: observedAgentsJson,
-        },
-        update: {
-            taskId: targetRecord.task_id,
-            query: targetRecord.query,
-            framework: targetRecord.framework,
-            traceThreadId: targetRecord.traceThreadId,
-            sourceExecutionId: targetRecord.sourceExecutionId,
-            sourceKind: targetRecord.sourceKind,
-            executionStatus: targetRecord.executionStatus,
-            tokens: targetRecord.tokens,
-            cost: targetRecord.cost,
-            latency: targetRecord.latency,
-            timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
-            lastIngestedAt,
-            finalResult: targetRecord.final_result,
-            skill: targetRecord.skill,
-            skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
-            invokedSkills: targetRecord.invokedSkills ? JSON.stringify(targetRecord.invokedSkills) : null,
-            isSkillCorrect: targetRecord.is_skill_correct,
-            isAnswerCorrect: targetRecord.is_answer_correct,
-            answerScore: targetRecord.answer_score,
-            skillScore: targetRecord.skill_score,
-            judgmentReason: targetRecord.judgment_reason,
-            failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
-            skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
-            label: targetRecord.label,
-            user: targetRecord.user,
-            agentName: storedAgentName,
-            agentId: agentId,
-            skillVersion: targetRecord.skill_version,
-            model: targetRecord.model,
-            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
-            clientId: targetRecord.clientId,
-            hostIp: targetRecord.hostIp,
-            hostName: targetRecord.hostName,
-            observedIp: targetRecord.observedIp,
-            toolCallCount: targetRecord.tool_call_count,
-            llmCallCount: targetRecord.llm_call_count,
-            inputTokens: targetRecord.input_tokens,
-            outputTokens: targetRecord.output_tokens,
-            toolCallErrorCount: targetRecord.tool_call_error_count,
-            skillTriggerRate: targetRecord.skill_trigger_rate,
-            cacheReadInputTokens: targetRecord.cache_read_input_tokens,
-            cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
-            maxSingleCallTokens: targetRecord.max_single_call_tokens,
-            reasoningTokens: targetRecord.reasoning_tokens,
-            observedAgents: observedAgentsJson,
-        }
-    }));
+    const {id:preparedId,...executionFields} = prepareExecutionWrite({record:targetRecord,existingExecution:dbRecord,recordId,agentId,receivedAt,interactions:mergedInteractionsForSession,defaultTimestamp:new Date().toISOString()});
+    await timeTraceStage('execution-upsert', () => db.upsertExecution({where:{id:recordId},create:{id:preparedId,...executionFields},update:executionFields}));
     traceTimingEvent('execution-written', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
     const finishPostExecution = beginTraceStage('post-execution');
     await reconcileTraceThreadExecutions(targetRecord.traceThreadId);
@@ -3354,78 +3431,13 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         console.warn(`[Data-Service] normalize legacy Codex session history failed user=${targetRecord.user}:`, e);
     }
 
-    const explicitTraceStartedAt = targetRecord.trace_started_at
-        ? new Date(targetRecord.trace_started_at)
-        : null;
-    const hasExplicitTraceStart = explicitTraceStartedAt != null
-        && Number.isFinite(explicitTraceStartedAt.getTime());
-    const explicitTraceCompletedAt = targetRecord.trace_completed_at
-        ? new Date(targetRecord.trace_completed_at)
-        : null;
-    const hasExplicitTraceCompletion = explicitTraceCompletedAt != null
-        && Number.isFinite(explicitTraceCompletedAt.getTime());
-    const inferredHermesTraceCompletedAt = !hasExplicitTraceCompletion
-        && targetRecord.framework === 'hermes'
-        && typeof targetRecord.final_result === 'string'
-        && targetRecord.final_result.trim()
-        ? inferTraceCompletionFromInteractions(mergedInteractionsForSession)
-        : null;
-    const traceCompletedAtForSession = hasExplicitTraceCompletion
-        ? explicitTraceCompletedAt
-        : inferredHermesTraceCompletedAt;
-    if (!hasExplicitTraceCompletion && inferredHermesTraceCompletedAt) {
-        targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
-    }
-    const hasTraceCompletion = traceCompletedAtForSession != null
-        && Number.isFinite(traceCompletedAtForSession.getTime())
-        && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
-
+    const sessionPrepared = prepareExecutionSession({record:targetRecord, interactions:mergedInteractionsForSession, existingSession, defaultTimestamp:new Date().toISOString()});
+    targetRecord = sessionPrepared.record;
     finishPostExecution();
     const finishSession = beginTraceStage('session-save');
-    if (targetRecord.task_id && mergedInteractionsForSession) {
-        const isLangfuseTrace = ['langfuse', 'langfuse-langgraph', 'dify'].includes(targetRecord.framework || '');
-        let langfuseTraceNodesJson: string | undefined;
-        if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
-            const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
-            let existingNodes: LangfuseTraceNode[] = [];
-            if (typeof existingSession?.langfuseTraceNodes === 'string' && existingSession.langfuseTraceNodes.trim()) {
-                try {
-                    const parsed = JSON.parse(existingSession.langfuseTraceNodes);
-                    if (Array.isArray(parsed)) existingNodes = parsed;
-                } catch {}
-            }
-            targetRecord.langfuseTraceNodes = mergeLangfuseTraceNodes(existingNodes, targetRecord.langfuseTraceNodes);
-            langfuseTraceNodesJson = JSON.stringify(targetRecord.langfuseTraceNodes);
-        }
-        await timeTraceStage('session-upsert', () => db.upsertSession(
-            targetRecord.task_id!,
-            {
-                taskId: targetRecord.task_id,
-                query: targetRecord.query,
-                label: targetRecord.label,
-                user: targetRecord.user,
-                model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession),
-                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
-                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
-                ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
-            },
-            {
-                query: targetRecord.query,
-                label: targetRecord.label,
-                user: targetRecord.user,
-                model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession),
-                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
-                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
-            }
-        ));
-        if (hasTraceCompletion) {
-            await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
-        }
-        if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true && !hasTraceCompletion) {
-            await db.updateSession(targetRecord.task_id, { endTime: new Date() });
-        }
+    if (targetRecord.task_id && sessionPrepared.create && sessionPrepared.update) {
+        await timeTraceStage('session-upsert', () => db.upsertSession(targetRecord.task_id!, sessionPrepared.create, sessionPrepared.update));
+        if (sessionPrepared.completionAt) await db.updateSession(targetRecord.task_id, {endTime:sessionPrepared.completionAt});
     }
 
     finishSession();
@@ -3508,15 +3520,12 @@ interface DeriveSubagentArgs {
  * 幂等：deterministic id `<parentExecId>__sub__<sid>`，多次重放同一份 interactions 不会重复建行。
  * 同 sessionID 多次 parallel spawn → 合并成同一 execution（取第一次的父）。
  */
-export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promise<void> {
+export function prepareSubagentExecutions(args: DeriveSubagentArgs, defaultTimestamp:string) {
     const { parentExecutionId, parentTaskId, parentFramework, parentUser, clientId, hostIp, hostName, observedIp, interactions } = args;
-    if (!Array.isArray(interactions) || interactions.length === 0) return;
+    if (!Array.isArray(interactions) || interactions.length === 0) return {children:[], sweep:false};
 
     const tree = buildAgentCallTree(interactions as any);
-    if (!tree) {
-        await sweepStaleSubagents(parentExecutionId, new Set());
-        return;
-    }
+    if (!tree) return {children:[], sweep:true};
 
     // 收集所有非 root node。同 sessionID 只取首次出现的 node（保留真实父）。
     type SubNode = {
@@ -3534,7 +3543,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         seenSid.add(sid);
         subNodes.push({ node: n, sessionId: sid, parentNodeId: n.parentId });
     });
-    if (subNodes.length === 0) return;
+    if (subNodes.length === 0) return {children:[], sweep:false};
 
     // BFS：父先于子处理，这样查 parent exec id 时 mapping 一定已就绪
     subNodes.sort((a, b) => a.node.depth - b.node.depth);
@@ -3547,6 +3556,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
     // 历史上 derive 逻辑变化（如平铺 → 嵌套）会留下旧 id 的孤儿行；用 sweep 修正。
     const freshExecIds = new Set<string>();
 
+    const children: any[] = [];
     for (const sn of subNodes) {
         const { node, sessionId, parentNodeId } = sn;
         const directParentExecId = nodeIdToExecId.get(parentNodeId) ?? parentExecutionId;
@@ -3593,16 +3603,10 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         const spawnDescription = findSubagentSpawnDescription(interactions, sessionId);
         const subagentRoleName = findSubagentRoleName(node, interactions);
         const queryText = (spawnDescription || projection.query).slice(0, 500);
-        let ownSkills = extractExplicitSkillsFromNode(node);
-        if (EXECUTION_SKILL_ENABLED) {
-            try {
-                ownSkills = await snapshotSkillVersions(ownSkills, parentUser);
-            } catch (e) {
-                console.warn(`[Data-Service] sub skill version snapshot failed sub=${sessionId}:`, e);
-            }
-        }
+        const ownSkills = extractExplicitSkillsFromNode(node);
 
-        const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
+
+        const timestamp = node.startedAt ? new Date(node.startedAt) : new Date(defaultTimestamp);
         const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
             const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
             const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
@@ -3643,57 +3647,36 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions, storedAgentName, observedAgentOptions)),
         } as const;
 
-        try {
-            await db.upsertExecution({
-                where: { id: childExecutionId },
-                create: { id: childExecutionId, ...baseFields },
-                update: { ...baseFields },
-            });
-        } catch (e) {
-            console.warn(`[Data-Service] upsertExecution(sub) failed sub=${sessionId}:`, e);
-            continue;
-        }
-
-        // 这一层 sub-agent 自己显式调用的 skill(agent 作用域,不含其更深子孙)。
-        if (EXECUTION_SKILL_ENABLED) {
-            try {
-                await persistExecutionSkills(childExecutionId, ownSkills, { user: parentUser ?? null });
-            } catch (e) {
-                console.warn(`[Data-Service] sub ExecutionSkill persist failed sub=${sessionId}:`, e);
-            }
-        }
-
-        try {
-            await db.upsertSession(
-                sessionId,
-                {
-                    taskId: sessionId,
-                    label: subagentRoleName,
-                    user: parentUser ?? null,
-                    query: queryText,
-                    interactions: JSON.stringify(childInteractions),
-                    ...(node.startedAt != null ? { startTime: timestamp } : {}),
-                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
-                },
-                {
-                    label: subagentRoleName,
-                    user: parentUser ?? null,
-                    query: queryText,
-                    interactions: JSON.stringify(childInteractions),
-                    ...(node.startedAt != null ? { startTime: timestamp } : {}),
-                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
-                },
-            );
-        } catch (e) {
-            console.warn(`[Data-Service] upsertSession(sub) failed sub=${sessionId}:`, e);
-        }
+        children.push({execution:{id:childExecutionId,...baseFields}, skills:ownSkills, session:{taskId:sessionId,label:subagentRoleName,user:parentUser ?? null,query:queryText,interactions:childInteractions,
+            startTime:node.startedAt != null ? timestamp.toISOString() : defaultTimestamp,endTime:childCompletedAt?.toISOString() ?? null}, sessionHasStart:node.startedAt != null});
     }
+    return {children, sweep:true};
+}
 
-    // 派生完成 → 删掉同 root 下"本轮没派生出来"的 sub-agent 行（孤儿）。
-    // 触发场景：上次 derive 用旧 (扁平) 逻辑写过的行、interactions 被截短后部分 sub-agent 消失、
-    // sub-agent 重命名导致 sessionId 变化等。Session 表按 taskId @unique，新 derive 已经把
-    // 切片覆盖到正确的 Session 行，所以删掉孤儿 Execution 是安全的（不影响保留行的 interactions）。
-    await sweepStaleSubagents(parentExecutionId, freshExecIds);
+export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promise<void> {
+    const {parentExecutionId,parentUser} = args;
+    const prepared = prepareSubagentExecutions(args, new Date().toISOString());
+    const freshExecIds = new Set<string>();
+    for (const child of prepared.children) {
+        const {id:childExecutionId,...baseFields} = child.execution;
+        const sessionId = child.session.taskId;
+        let ownSkills:InvokedSkill[] = child.skills;
+        if (EXECUTION_SKILL_ENABLED) {
+            try {ownSkills = await snapshotSkillVersions(ownSkills,parentUser);} catch {}
+        }
+        baseFields.skills = ownSkills.length ? JSON.stringify(ownSkills.map(skill=>skill.name)) : null;
+        baseFields.invokedSkills = ownSkills.length ? JSON.stringify(ownSkills) : null;
+        freshExecIds.add(childExecutionId);
+        try {await db.upsertExecution({where:{id:childExecutionId},create:{id:childExecutionId,...baseFields},update:baseFields});}
+        catch (e) {console.warn(`[Data-Service] upsertExecution(sub) failed sub=${sessionId}:`,e);continue;}
+        if (EXECUTION_SKILL_ENABLED) {
+            try {await persistExecutionSkills(childExecutionId,ownSkills,{user:parentUser ?? null});} catch {}
+        }
+        const {startTime,endTime,interactions,...fields} = child.session;
+        const values = {...fields,interactions:JSON.stringify(interactions),...(child.sessionHasStart ? {startTime:new Date(startTime)} : {}),...(endTime ? {endTime:new Date(endTime)} : {})};
+        try {await db.upsertSession(sessionId,values,values);} catch (e) {console.warn(`[Data-Service] upsertSession(sub) failed sub=${sessionId}:`,e);}
+    }
+    if (prepared.sweep) await sweepStaleSubagents(parentExecutionId,freshExecIds);
 }
 
 /**

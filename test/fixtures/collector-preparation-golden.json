@@ -1,0 +1,3014 @@
+{
+  "source": "original frozen legacy upload/completion handlers and actual isolated Prisma",
+  "source_head": "06161b196abeabd57d34aa8bc7b8db43b151b33a",
+  "evidence_sha256": "4aa6e7adefc9e98035c1b91eca51e493602dfebe404ead241e105dc6792dcf79",
+  "cases": [
+    {
+      "name": "pi-full",
+      "input": {
+        "task_id": "collector-pi-task",
+        "upload_id": "collector-pi-execution",
+        "framework": "pi-agent",
+        "user": "forged",
+        "query": "first immutable query",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:03.000Z",
+        "tokens": 0,
+        "cost": 0,
+        "latency": 0,
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "second turn",
+            "timestamp": "2026-11-16T12:00:01.000Z"
+          },
+          {
+            "role": "assistant",
+            "content": "second response",
+            "timestamp": "2026-11-16T12:00:02.000Z"
+          }
+        ],
+        "session_merge_strategy": "snapshot-replace",
+        "complete_session_snapshot": true,
+        "extension": {
+          "n": 0,
+          "nullable": null
+        }
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-pi-execution",
+          "taskId": "collector-pi-task",
+          "query": "first immutable query",
+          "framework": "pi-agent",
+          "tokens": 0,
+          "cost": 0,
+          "latency": 0,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "pi-agent",
+          "finalResult": null,
+          "skill": "collector-golden-skill",
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [
+            "pi-agent"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-pi-task",
+          "label": "collector-golden-skill-v0",
+          "query": "first immutable query",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": "2026-11-16T12:00:03.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "second turn",
+              "timestamp": "2026-11-16T12:00:01.000Z"
+            },
+            {
+              "role": "assistant",
+              "content": "second response",
+              "timestamp": "2026-11-16T12:00:02.000Z"
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "pi-shrink-canonical",
+      "input": {
+        "task_id": "collector-pi-task",
+        "upload_id": "new-ignored-upload-id",
+        "framework": "pi-agent",
+        "user": "forged",
+        "query": "replacement query",
+        "skill": "collector-golden-skill",
+        "skill_version": 2,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:03.000Z",
+        "tokens": 0,
+        "cost": 0,
+        "latency": 0,
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          }
+        ],
+        "session_merge_strategy": "snapshot-replace",
+        "complete_session_snapshot": true,
+        "extension": {
+          "n": 0,
+          "nullable": null
+        }
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-pi-execution",
+          "taskId": "collector-pi-task",
+          "query": "first immutable query",
+          "framework": "pi-agent",
+          "tokens": 0,
+          "cost": 0,
+          "latency": 0,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "pi-agent",
+          "finalResult": null,
+          "skill": "collector-golden-skill",
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [
+            "pi-agent"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-pi-task",
+          "label": "collector-golden-skill-v0",
+          "query": "first immutable query",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": "2026-11-16T12:00:03.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "opencode-in-progress",
+      "input": {
+        "task_id": "collector-opencode-task",
+        "framework": "opencode",
+        "query": "opencode original query",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          }
+        ]
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-opencode-task",
+          "taskId": "collector-opencode-task",
+          "query": "opencode original query",
+          "framework": "opencode",
+          "tokens": 0,
+          "cost": null,
+          "latency": 0,
+          "toolCallCount": 1,
+          "llmCallCount": 1,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "toolCallErrorCount": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "maxSingleCallTokens": 0,
+          "reasoningTokens": 0,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": null,
+          "finalResult": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+          "skill": "collector-golden-skill",
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-opencode-task",
+          "label": "collector-golden-skill-v0",
+          "query": "opencode original query",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": null,
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "opencode-merge",
+      "input": {
+        "task_id": "collector-opencode-task",
+        "framework": "opencode",
+        "query": "must not replace",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "user",
+            "content": "second turn",
+            "timestamp": "2026-11-16T12:00:01.000Z"
+          },
+          {
+            "role": "assistant",
+            "content": "second response",
+            "timestamp": "2026-11-16T12:00:02.000Z"
+          }
+        ]
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-opencode-task",
+          "taskId": "collector-opencode-task",
+          "query": "opencode original query",
+          "framework": "opencode",
+          "tokens": 0,
+          "cost": null,
+          "latency": 1000,
+          "toolCallCount": 1,
+          "llmCallCount": 2,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "toolCallErrorCount": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "maxSingleCallTokens": 0,
+          "reasoningTokens": 0,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": null,
+          "finalResult": "second response",
+          "skill": "collector-golden-skill",
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-opencode-task",
+          "label": "collector-golden-skill-v0",
+          "query": "opencode original query",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": null,
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              },
+              "tool_calls": []
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "second turn",
+              "timestamp": "2026-11-16T12:00:01.000Z"
+            },
+            {
+              "role": "assistant",
+              "content": "second response",
+              "timestamp": "2026-11-16T12:00:02.000Z"
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "completion-first-empty",
+      "input": {
+        "task_id": "collector-completion-first",
+        "completed_at": "2026-11-17T00:00:01.000Z"
+      },
+      "snapshot": null,
+      "session": {
+        "id": "cmwk74wvs000e35f6vm6e2zg3",
+        "taskId": "collector-completion-first",
+        "label": "opencode",
+        "query": null,
+        "startTime": "2026-11-17T04:32:34.936Z",
+        "endTime": "2026-11-17T00:00:01.000Z",
+        "interactions": "[]",
+        "langfuseTraceNodes": null,
+        "user": "collector-golden-owner",
+        "model": null
+      },
+      "children": []
+    },
+    {
+      "name": "completion-cross-day-messages",
+      "input": {
+        "task_id": "collector-completion-first",
+        "framework": "opencode",
+        "query": "opencode original query",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T23:59:58.000Z",
+        "trace_started_at": "2026-11-16T23:59:58.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          }
+        ]
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-completion-first",
+          "taskId": "collector-completion-first",
+          "query": "opencode original query",
+          "framework": "opencode",
+          "tokens": 0,
+          "cost": null,
+          "latency": 0,
+          "toolCallCount": 1,
+          "llmCallCount": 1,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "toolCallErrorCount": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0,
+          "maxSingleCallTokens": 0,
+          "reasoningTokens": 0,
+          "timestamp": "2026-11-16T23:59:58.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": null,
+          "finalResult": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+          "skill": "collector-golden-skill",
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-completion-first",
+          "label": "collector-golden-skill-v0",
+          "query": "opencode original query",
+          "startTime": "2026-11-16T23:59:58.000Z",
+          "endTime": "2026-11-17T00:00:01.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T23:59:58.000Z"
+    },
+    {
+      "name": "nullable-framework",
+      "input": {
+        "task_id": "collector-null-task",
+        "upload_id": "collector-null-execution",
+        "framework": null,
+        "user": "forged",
+        "query": "first immutable query",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:03.000Z",
+        "tokens": 0,
+        "cost": 0,
+        "latency": 0,
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          }
+        ],
+        "session_merge_strategy": "snapshot-replace",
+        "complete_session_snapshot": true,
+        "extension": {
+          "n": 0,
+          "nullable": null
+        }
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-null-execution",
+          "taskId": "collector-null-task",
+          "query": "first immutable query",
+          "framework": null,
+          "tokens": 0,
+          "cost": 0,
+          "latency": 0,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": null,
+          "finalResult": null,
+          "skill": "collector-golden-skill",
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-null-task",
+          "label": "collector-golden-skill-v0",
+          "query": "first immutable query",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": "2026-11-16T12:00:03.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "missing-interactions-execution-only",
+      "input": {
+        "task_id": "collector-no-session-task",
+        "framework": "opencode",
+        "query": "execution without a Session",
+        "timestamp": "2026-11-16T12:00:00.000Z"
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-no-session-task",
+          "taskId": "collector-no-session-task",
+          "query": "execution without a Session",
+          "framework": "opencode",
+          "tokens": null,
+          "cost": null,
+          "latency": null,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": null,
+          "finalResult": null,
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "without-skill",
+          "observedAgents": [],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": null
+      },
+      "children": [],
+      "session_default_clock": null
+    },
+    {
+      "name": "completion-creates-session-for-existing-execution",
+      "input": {
+        "task_id": "collector-no-session-task",
+        "completed_at": "2026-11-17T00:00:05.000Z"
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-no-session-task",
+          "taskId": "collector-no-session-task",
+          "query": "execution without a Session",
+          "framework": "opencode",
+          "tokens": null,
+          "cost": null,
+          "latency": null,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": null,
+          "finalResult": null,
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "without-skill",
+          "observedAgents": [],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-no-session-task",
+          "label": "opencode",
+          "query": null,
+          "startTime": "2026-11-17T04:32:34.960Z",
+          "endTime": "2026-11-17T00:00:05.000Z",
+          "interactions": [],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-17T04:32:34.960Z"
+    },
+    {
+      "name": "jiuwen-child-trace",
+      "input": {
+        "task_id": "jiuwen-f2f25ceff55028faa26e1b68038731f6",
+        "query": "创建一个子 Agent 计算 1+1",
+        "framework": "jiuwenswarm",
+        "agentName": "main_agent",
+        "agent": "main_agent",
+        "agents": [
+          "main_agent",
+          "statusline-setup"
+        ],
+        "model": "example-model",
+        "tokens": 131238,
+        "input_tokens": 129925,
+        "output_tokens": 1313,
+        "tool_call_count": 4,
+        "llm_call_count": 6,
+        "latency": 9450.796,
+        "final_result": "2",
+        "interactions": [
+          {
+            "role": "system",
+            "content": "你是一个简洁的助手。",
+            "agent": "main_agent",
+            "system_prompt_length": 10
+          },
+          {
+            "role": "user",
+            "content": "创建一个子 Agent 计算 1+1"
+          },
+          {
+            "role": "assistant",
+            "agent": "main_agent",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_00_lCEvTFC6BZsCA1XpKEaU9026",
+                "type": "function",
+                "function": {
+                  "name": "tool_search",
+                  "arguments": "{\"query\": \"创建团队并添加成员，向成员委派任务并接收结果 team build_team spawn_member send_message\"}"
+                },
+                "state": "success",
+                "output": "{\"success\":true,\"data\":{\"query\":\"创建团队并添加成员，向成员委派任务并接收结果 team build_team spawn_member send_message\",\"results\":[{\"name\":\"cron\",\"description\":\"使用 action 接口：status、list、add、update、remove、run、runs、wake，并兼容结构化 schedule/payload/delivery 字段。处理“2分钟后”“明天上午9点”“下周一”这类时间时，优先根据系统提示中已提供的当前日期与时间直接换算并调用 cron，不要为了简单的时间换算先调用 code 或 bash。创建一次性提醒时，schedule.at 默认直接使用用户当前本地时区偏移来写，例如 +08:00；除非用户明确要求，否则不要改写成 Z 或 UTC。给当前聊天创建提醒时，优先使用 payload.kind=systemEvent 和 sessionTarget=current。向用户确认创建结果时，优先按 schedule.at 里的原始时区/偏移表述，不要自行改写成 UTC。\\n\\n【投递频道】delivery.channel / targets：用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\\n\\n【强制：wake_offset_seconds】这是提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则**禁止**传 wake_offset_seconds 字段；不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。用户未明确指定时必须省略该字段，后端会默认使用 0 秒（到点执行，不提前唤醒）。\\n\\n【重要：cron 表达式格式】只支持7段式(Quartz格式)：秒 分 时 日 月 周 年。字段取值范围：秒(0-59)，分(0-59)，时(0-23)，日(1-31)，月(1-12)，周(0-6或?，0=周日…6=周六；推荐用字母缩写 SUN/MON/…/SAT 避免歧义)，年(1970-2099或*)。日和周字段：不能同时指定具体值，其中一个必须用?表示'不指定'。年份字段：*表示跨年周期，固定年份只在该年执行。真正只执行一次：所有字段均为固定值(无*和?)，如'0 30 17 29 4 ? 2026'表示2026年4月29日17:30:00执行一次。例：每天9点 -> '0 0 9 * * ? *'；每15分钟 -> '0 */15 * * * ? *'；每周一9点 -> '0 0 9 ? * MON *'。注意：一次性任务建议优先使用 schedule.at (ISO8601格式)，cron更适合周期性任务。\\n\\n【重要：cron 表达式限制】标准 cron 的 */X 语义是'当字段值能被 X 整除时触发'，而非'每隔 X 单位触发'。只有当周期单位能被 X 整除时，间隔才是均匀的。以下是各字段的限制：\\n- 秒/分(0-59)：*/X 仅支持 X 整除60的值：1/2/3/4/5/6/10/12/15/20/30。  例如 */40 实际在每小时第0分和第40分触发（间隔40分→20分交替），并非每40分钟。  用户要求'每隔40分钟'时，必须先告知此限制并让用户确认是否接受不均匀间隔，  或建议改用整除60的间隔（如20分钟或30分钟）。未经用户确认不得直接创建。\\n- 小时(0-23)：*/X 仅支持 X 整除24的值：1/2/3/4/6/8/12。  例如 */5 实际在每天0/5/10/15/20时触发（间隔5h→4h→5h→4h交替），并非每5小时。  用户要求'每隔5小时'时，必须告知限制并让用户确认，或建议改用整除24的间隔。\\n- 日(1-31)：*/X 不可靠，因为不同月份天数不同（28/29/30/31）。  例如 */15 在2月只触发1、15日（共2次），在31天月份触发1、16、31日（共3次）。  用户要求'每隔X天'时，建议改用'每周X'或指定固定日期（如每月1号、15号）。\\n- 月(1-12)：*/X 仅支持 X 整除12的值：1/2/3/4/6。  例如 */5 实际在1/5/10月触发，并非每5个月均匀触发。\\n- 周(0-6)：*/X 仅支持 X 整除7的值：1/7。编号0=周日…6=周六，与系统解析(croniter)一致，注意不是Quartz的1=SUN；推荐用字母缩写（如WED/FRI）避免歧义。  例如 */2 实际在SUN/TUE/THU触发，并非'每隔2周'。  用户要求'每隔2周'时，应直接指定具体星期几或建议简化为'每周一'。\\n处理'每隔X分钟/小时/天'需求时，务必检查 X 是否整除对应周期单位；若不整除，必须告知用户限制，让用户确认后再创建，或建议替代方案。\",\"parameters\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"status\",\"list\",\"add\",\"update\",\"remove\",\"run\",\"runs\",\"wake\"],\"description\":\"要执行的 cron 操作\"},\"job\":{\"type\":\"object\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"任务名称\"},\"enabled\":{\"type\":\"boolean\",\"description\":\"任务是否启用\"},\"schedule\":{\"type\":\"object\",\"description\":\"结构化调度定义，支持 at/every/cron\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"at\",\"every\",\"cron\"],\"description\":\"调度类型：at、every 或 cron\"},\"at\":{\"type\":\"string\",\"description\":\"一次性执行时间，ISO 8601\"},\"everyMs\":{\"type\":\"integer\",\"description\":\"循环间隔，毫秒\"},\"anchorMs\":{\"type\":\"integer\",\"description\":\"every 调度的起始锚点毫秒时间戳\"},\"expr\":{\"type\":\"string\",\"description\":\"cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"tz\":{\"type\":\"string\",\"description\":\"cron 调度使用的时区\"},\"staggerMs\":{\"type\":\"integer\",\"description\":\"cron 调度的可选抖动毫秒数\"}}},\"payload\":{\"type\":\"object\",\"description\":\"结构化任务负载，支持 systemEvent 或 agentTurn\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"systemEvent\",\"agentTurn\"],\"description\":\"负载类型：systemEvent 或 agentTurn\"},\"text\":{\"type\":\"string\",\"description\":\"systemEvent提醒文本。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"message\":{\"type\":\"string\",\"description\":\"agentTurn 发送给代理的消息\"},\"model\":{\"type\":\"string\",\"description\":\"agentTurn 可选模型覆盖\"},\"thinking\":{\"type\":\"string\",\"description\":\"agentTurn 的思考预算或模式\"},\"timeoutSeconds\":{\"type\":\"integer\",\"description\":\"agentTurn 超时时间（秒）\"},\"allowUnsafeExternalContent\":{\"type\":\"boolean\",\"description\":\"是否允许不安全的外部内容\"},\"lightContext\":{\"type\":\"boolean\",\"description\":\"是否使用轻量上下文执行\"},\"deliver\":{\"type\":\"string\",\"description\":\"agentTurn 自带的投递策略字段\"},\"channel\":{\"type\":\"string\",\"description\":\"agentTurn 的默认投递频道\"},\"to\":{\"type\":\"string\",\"description\":\"agentTurn 的目标收件人\"},\"bestEffortDeliver\":{\"type\":\"boolean\",\"description\":\"是否最佳努力投递\"},\"fallbacks\":{\"type\":\"array\",\"description\":\"agentTurn 的回退投递列表\",\"items\":{\"type\":\"string\",\"description\":\"agentTurn 的回退投递列表\"}}}},\"delivery\":{\"type\":\"object\",\"description\":\"提醒结果的投递方式\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"none\",\"announce\",\"webhook\"],\"description\":\"投递模式：none、announce 或 webhook\"},\"channel\":{\"type\":\"string\",\"description\":\"announce 模式投递频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"},\"to\":{\"type\":\"string\",\"description\":\"目标收件人或会话标识\"},\"accountId\":{\"type\":\"string\",\"description\":\"投递账号标识\"},\"bestEffort\":{\"description\":\"announce/webhook 是否最佳努力投递\"},\"failureDestination\":{\"description\":\"失败时的兜底投递目标\"}}},\"sessionTarget\":{\"type\":\"string\",\"description\":\"会话目标：main、isolated、current 或 session:<id>\"},\"wakeMode\":{\"type\":\"string\",\"enum\":[\"now\",\"next-heartbeat\"],\"description\":\"唤醒模式：now 或 next-heartbeat\"},\"deleteAfterRun\":{\"type\":\"boolean\",\"description\":\"执行后是否自动删除该任务\"},\"cron_expr\":{\"type\":\"string\",\"description\":\"兼容层cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"timezone\":{\"type\":\"string\",\"description\":\"兼容层时区字段\"},\"wake_offset_seconds\":{\"type\":\"integer\",\"description\":\"提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则禁止传该字段；不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。用户未明确指定时必须省略，后端默认 0 秒（到点执行，不提前唤醒）。\",\"default\":0},\"description\":{\"type\":\"string\",\"description\":\"具体任务内容，到点执行时发给助手。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"targets\":{\"type\":\"string\",\"description\":\"目标频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"}},\"description\":\"用于 add 的任务对象；支持结构化字段和兼容层字段\"},\"jobId\":{\"type\":\"string\",\"description\":\"用于 update/remove/run/runs 的任务 ID\"},\"patch\":{\"type\":\"object\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"任务名称\"},\"enabled\":{\"type\":\"boolean\",\"description\":\"任务是否启用\"},\"schedule\":{\"type\":\"object\",\"description\":\"结构化调度定义，支持 at/every/cron\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"at\",\"every\",\"cron\"],\"description\":\"调度类型：at、every 或 cron\"},\"at\":{\"type\":\"string\",\"description\":\"一次性执行时间，ISO 8601\"},\"everyMs\":{\"type\":\"integer\",\"description\":\"循环间隔，毫秒\"},\"anchorMs\":{\"type\":\"integer\",\"description\":\"every 调度的起始锚点毫秒时间戳\"},\"expr\":{\"type\":\"string\",\"description\":\"cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"tz\":{\"type\":\"string\",\"description\":\"cron 调度使用的时区\"},\"staggerMs\":{\"type\":\"integer\",\"description\":\"cron 调度的可选抖动毫秒数\"}}},\"payload\":{\"type\":\"object\",\"description\":\"结构化任务负载，支持 systemEvent 或 agentTurn\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"systemEvent\",\"agentTurn\"],\"description\":\"负载类型：systemEvent 或 agentTurn\"},\"text\":{\"type\":\"string\",\"description\":\"systemEvent提醒文本。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"message\":{\"type\":\"string\",\"description\":\"agentTurn 发送给代理的消息\"},\"model\":{\"type\":\"string\",\"description\":\"agentTurn 可选模型覆盖\"},\"thinking\":{\"type\":\"string\",\"description\":\"agentTurn 的思考预算或模式\"},\"timeoutSeconds\":{\"type\":\"integer\",\"description\":\"agentTurn 超时时间（秒）\"},\"allowUnsafeExternalContent\":{\"type\":\"boolean\",\"description\":\"是否允许不安全的外部内容\"},\"lightContext\":{\"type\":\"boolean\",\"description\":\"是否使用轻量上下文执行\"},\"deliver\":{\"type\":\"string\",\"description\":\"agentTurn 自带的投递策略字段\"},\"channel\":{\"type\":\"string\",\"description\":\"agentTurn 的默认投递频道\"},\"to\":{\"type\":\"string\",\"description\":\"agentTurn 的目标收件人\"},\"bestEffortDeliver\":{\"type\":\"boolean\",\"description\":\"是否最佳努力投递\"},\"fallbacks\":{\"type\":\"array\",\"description\":\"agentTurn 的回退投递列表\",\"items\":{\"type\":\"string\",\"description\":\"agentTurn 的回退投递列表\"}}}},\"delivery\":{\"type\":\"object\",\"description\":\"提醒结果的投递方式\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"none\",\"announce\",\"webhook\"],\"description\":\"投递模式：none、announce 或 webhook\"},\"channel\":{\"type\":\"string\",\"description\":\"announce 模式投递频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"},\"to\":{\"type\":\"string\",\"description\":\"目标收件人或会话标识\"},\"accountId\":{\"type\":\"string\",\"description\":\"投递账号标识\"},\"bestEffort\":{\"description\":\"announce/webhook 是否最佳努力投递\"},\"failureDestination\":{\"description\":\"失败时的兜底投递目标\"}}},\"sessionTarget\":{\"type\":\"string\",\"description\":\"会话目标：main、isolated、current 或 session:<id>\"},\"wakeMode\":{\"type\":\"string\",\"enum\":[\"now\",\"next-heartbeat\"],\"description\":\"唤醒模式：now 或 next-heartbeat\"},\"deleteAfterRun\":{\"type\":\"boolean\",\"description\":\"执行后是否自动删除该任务\"},\"cron_expr\":{\"type\":\"string\",\"description\":\"兼容层cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"timezone\":{\"type\":\"string\",\"description\":\"兼容层时区字段\"},\"wake_offset_seconds\":{\"type\":\"integer\",\"description\":\"提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则禁止传该字段；不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。用户未明确指定时必须省略，后端默认 0 秒（到点执行，不提前唤醒）。\",\"default\":0},\"description\":{\"type\":\"string\",\"description\":\"具体任务内容，到点执行时发给助手。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"targets\":{\"type\":\"string\",\"description\":\"目标频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"}},\"description\":\"用于 update 的补丁对象\"},\"includeDisabled\":{\"type\":\"boolean\",\"description\":\"list 时是否包含已禁用任务\"},\"text\":{\"type\":\"string\",\"description\":\"wake 动作要发送的提示文本\"},\"mode\":{\"type\":\"string\",\"enum\":[\"now\",\"next-heartbeat\"],\"description\":\"wake 的触发模式\"},\"contextMessages\":{\"type\":\"integer\",\"description\":\"保留给上下文提示的兼容字段\"}},\"required\":[\"action\"],\"additionalProperties\":true}},{\"name\":\"submit_goal_report\",\"description\":\"仅当本次用户消息中包含 <goal_task> 标签（即处于 Goal 执行轮）时才调用本工具；普通对话轮（无 <goal_task>）绝不要调用本工具。本工具用于提交当前 goal 尝试的结构化结果。这是本次 goal 尝试的最终工具动作；工具调用成功后不要再调用其他工具，已有进展但目标仍可继续推进时使用 continue；只有具备可审计完成证据时才使用 complete；只有缺少用户输入、权限、依赖、外部服务或环境状态且无法继续任何有意义推进时才使用 blocked。\",\"parameters\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"continue\",\"complete\",\"blocked\"],\"description\":\"当前 goal 尝试结果：continue、complete 或 blocked。目标尚未完成但仍可推进时，不要报告 blocked。\"},\"evidence\":{\"type\":\"string\",\"description\":\"支持该状态的可审计证据，例如测试输出、命令结果、文件路径、工具结果、完成证明，或确切阻塞原因。\"},\"remaining_work\":{\"type\":\"string\",\"description\":\"目标未完成时说明剩余工作；完成时可以为空。\"},\"next_instruction\":{\"type\":\"string\",\"description\":\"status=continue 时给出下一次尝试的具体、可执行指令；其他状态可以为空。\"}},\"required\":[\"status\",\"evidence\"]}},{\"name\":\"cron_create_job\",\"description\":\"\\n创建新的 cron 定时任务，使用扁平字段（name, cron_expr, timezone, targets, description, wake_offset_seconds）。\\n\\n【targets】用户未明确指定投递渠道时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\\n\\n【强制：wake_offset_seconds】除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则**禁止**传 wake_offset_seconds。\\n用户未明确指定时必须省略该字段，后端会默认使用 0 秒（到点执行，不提前唤醒）。\\n不要因为是查询/准备类任务而传 60 或其他正值；禁止从任务类型、距离触发时间或历史记录推断。\\n\\n【重要：cron 表达式格式】只支持7段式(Quartz格式)：秒 分 时 日 月 周 年。\\n日和周字段：不能同时指定具体值，其中一个必须用?表示'不指定'。\\n年份字段：*表示跨年周期执行，固定年份只在该年执行。\\n真正只执行一次：所有字段均为固定值（无*和?），如'0 0 17 28 3 ? 2026'。\\n例：每天9点 -> '0 0 9 * * ? *'；每15分钟 -> '0 */15 * * * ? *'；每周一9点 -> '0 0 9 ? * MON *'。\\n\\n【重要：cron 表达式限制】标准 cron 的 */X 语义是'当字段值能被 X 整除时触发'，而非'每隔 X 单位触发'。\\n只有当周期单位能被 X 整除时，间隔才是均匀的。以下是各字段的限制：\\n- 秒/分(0-59)：*/X 仅支持 X 整除60的值：1/2/3/4/5/6/10/12/15/20/30。\\n  例如 */40 实际在每小时第0分和第40分触发（间隔40分→20分交替），并非每40分钟。\\n  用户要求'每隔40分钟'时，必须先告知此限制并让用户确认是否接受不均匀间隔，\\n  或建议改用整除60的间隔（如20分钟或30分钟）。未经用户确认不得直接创建。\\n- 小时(0-23)：*/X 仅支持 X 整除24的值：1/2/3/4/6/8/12。\\n  例如 */5 实际在每天0/5/10/15/20时触发（间隔5h→4h→5h→4h交替），并非每5小时。\\n- 日(1-31)：*/X 不可靠，因为不同月份天数不同（28/29/30/31）。\\n- 月(1-12)：*/X 仅支持 X 整除12的值：1/2/3/4/6。\\n- 周(0-6)：*/X 仅支持 X 整除7的值：1/7。编号0=周日…6=周六，与系统解析(croniter)一致，注意不是Quartz的1=SUN；推荐用字母缩写（如WED/FRI）避免歧义。\\n\\n处理'每隔X分钟/小时/天'需求时，务必检查 X 是否整除对应周期单位；\\n若不整除，必须告知用户限制，让用户确认后再创建，或建议替代方案。\\n\",\"parameters\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"任务名称\"},\"cron_expr\":{\"type\":\"string\",\"description\":\"Cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"timezone\":{\"type\":\"string\",\"description\":\"时区，如 Asia/Shanghai\",\"default\":\"Asia/Shanghai\"},\"targets\":{\"type\":\"string\",\"description\":\"Legacy compatibility target channel\",\"enum\":[\"web\",\"tui\",\"feishu\",\"whatsapp\",\"wecom\",\"xiaoyi\",\"wechat\",\"dingtalk\"]},\"enabled\":{\"type\":\"boolean\",\"description\":\"是否启用\",\"default\":true},\"description\":{\"type\":\"string\",\"description\":\"具体任务内容，到点执行时发给助手。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"wake_offset_seconds\":{\"type\":\"integer\",\"description\":\"提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则禁止传该字段；用户未明确指定时必须省略，后端默认 0 秒（到点执行，不提前唤醒）。不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。\",\"default\":0}},\"required\":[\"name\",\"cron_expr\",\"timezone\",\"description\"]}},{\"name\":\"acp_chat\",\"description\":\"Send a user message to an external ACP-compatible agent subprocess defined in config.yaml under acp_agents.<name> (command + args). Use for Codex CLI, Gemini CLI, or any other stdio ACP agent. Parameter agent is the profile key, message is the prompt. Set new_session=true to restart the subprocess and ACP session for that profile.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"agent\":{\"type\":\"string\",\"description\":\"agent\"},\"message\":{\"type\":\"string\",\"description\":\"message\"},\"new_session\":{\"type\":\"boolean\",\"description\":\"new session\",\"default\":false}},\"additionalProperties\":false,\"title\":\"acp chat\",\"required\":[\"agent\",\"message\"]}},{\"name\":\"cron_delete_job\",\"description\":\"根据任务 ID 删除 cron 定时任务。\",\"parameters\":{\"type\":\"object\",\"properties\":{\"job_id\":{\"type\":\"string\",\"description\":\"要删除的任务 ID\"}},\"required\":[\"job_id\"]}}],\"count\":5},\"include_extracted_content_only_once\":false}",
+                "timing": {
+                  "started_at": 1794119799483,
+                  "completed_at": 1794119799498
+                }
+              }
+            ],
+            "usage": {
+              "input": 19527,
+              "output": 327,
+              "total": 19854,
+              "reasoning": 240,
+              "cache": {
+                "read": 3840
+              }
+            },
+            "modelID": "example-model",
+            "timeInfo": {
+              "created": 1794119797230,
+              "completed": 1794119799476
+            },
+            "parts": [
+              {
+                "type": "reasoning",
+                "text": "The user wants a team with one execution member, delegate 1+1 calculation to that member, then only reply the result. Mode is \"team\". I don't have team tools in direct list... Let me check available tools: I have subagent tools (spawn/wait/list/send_input/close/resume). The task says \"创建一个仅含一名执行成员的团队\" — create a team with one member. In this environment, \"team\" mode likely uses subagent_spawn? But guidance says only spawn when user explicitly requests delegation/parallel agents. Here the user explicitly asks to delegate to a member — that counts as explicit request for delegation.\n\nHowever, the instructions say \"可用子代理类型\" only lists statusline-setup. Hmm. That is the only registered subagent type. There might be team tools available via deferred search: build_team, spawn_member, send_message, build_team are mentioned in call_goal descriptions! The tool descriptions mention \"spawn_member / spawn_teammate / send_message / build_team\" — suggesting such tools exist as deferred tools. Let me tool_search for team creation.\n\nLet me search."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "agent": "main_agent",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_00_Ur9CUs10gK8uztVvFchn2153",
+                "type": "function",
+                "function": {
+                  "name": "task",
+                  "arguments": "{\"subagent_type\":\"statusline-setup\",\"display_name\":\"执行成员\",\"role\":\"计算 1+1 并返回结果\",\"task_description\":\"你是本次团队中唯一的执行成员。任务：计算 1+1。要求：不要读写任何文件，不要联网，不要调用任何工具，只做算术。完成后仅用一行输出结果，格式为：结果=<数值>\",\"subagent_session_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\"}"
+                },
+                "state": "success",
+                "output": "{\"success\":true,\"data\":{\"subagent_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\",\"sub_session_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\",\"task_id\":\"49528727ccbf49eba95f047f28b91936\",\"status\":\"pending_init\"},\"include_extracted_content_only_once\":false}",
+                "timing": {
+                  "started_at": 1794119803457,
+                  "completed_at": 1794119803461
+                }
+              }
+            ],
+            "usage": {
+              "input": 25939,
+              "output": 626,
+              "total": 26565,
+              "reasoning": 444,
+              "cache": {
+                "read": 19584
+              }
+            },
+            "modelID": "example-model",
+            "timeInfo": {
+              "created": 1794119799516,
+              "completed": 1794119803453
+            },
+            "parts": [
+              {
+                "type": "reasoning",
+                "text": "No team tools found (build_team/spawn_member don't exist). So in this environment, delegation to a member must use subagent tools. The available subagent type is only \"statusline-setup\" though. Hmm.\n\nThe direct tools include subagent_spawn with subagent_type required. Available subagent types list only shows statusline-setup. I could spawn with subagent_type \"statusline-setup\"? That's odd but it's the only registered type. The task is an acceptance test for multi-agent trace: they want a team with one execution member that computes 1+1.\n\nWait — mode is \"team\". Maybe there are team tools available named differently. Let me search once more with different query? The guidance says don't repeat similar searches. I searched for team creation; got cron, goal report, acp. So no team tools.\n\nGiven mode is team yet no team tools, subagent_spawn is the delegation mechanism available. I'll spawn one subagent (one execution member) with a simple task, wait, then reply result only.\n\nLet me try subagent_spawn with subagent_type \"statusline-setup\" — risky, it's a status line config agent, tools \"All tools\". It could compute 1+1. Alternatively maybe subagent_type accepts something like \"general\". Let's try \"statusline-setup\" as it's the only registered one.\n\nActually let me just call subagent_spawn with subagent_type \"statusline-setup\" and a task to compute 1+1 without using tools, reply with just the number.\n\nThen wait with timeout 120000. Then reply result.\n\nThen close the subagent to release slot? Task says \"成员完成后你只回复结果并结束\" — reply only result. Closing is fine but adds tool calls; probably fine. I'll close to release slot — but user said reply only the result. Closing is internal, acceptable. Actually might affect trace? Keep it clean: just wait then reply. I'll close it to avoid leaving live instance... Hmm, \"不要创建更多成员\" only. I'll close for cleanliness.\n\nLet's do spawn."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "agent": "main_agent",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_00_ET_iE9Pem23zhbnSwN1SeLD4151",
+                "type": "function",
+                "function": {
+                  "name": "subagent_wait",
+                  "arguments": "{\"subagent_ids\": [\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\"], \"timeout_ms\": 120000}"
+                },
+                "state": "success",
+                "output": "{\"success\":true,\"data\":{\"statuses\":{\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\":\"completed\"},\"results\":{\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\":\"结果=2\"},\"output_files\":{\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\":\"/tmp/agent-insight-jiuwen-test/agent/workspace/sub_agents/ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588/outputs/49528727ccbf49eba95f047f28b91936.md\"},\"timed_out\":false},\"include_extracted_content_only_once\":false}",
+                "timing": {
+                  "started_at": 1794119804556,
+                  "completed_at": 1794119804557
+                }
+              }
+            ],
+            "usage": {
+              "input": 26622,
+              "output": 111,
+              "total": 26733,
+              "reasoning": 0,
+              "cache": {
+                "read": 26368
+              }
+            },
+            "modelID": "example-model",
+            "timeInfo": {
+              "created": 1794119803481,
+              "completed": 1794119804554
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "statusline-setup",
+            "content": "结果=2",
+            "tool_calls": [],
+            "usage": {
+              "input": 4015,
+              "output": 73,
+              "total": 4088,
+              "reasoning": 69,
+              "cache": {
+                "read": 0
+              }
+            },
+            "modelID": "example-model",
+            "timeInfo": {
+              "created": 1794119803501,
+              "completed": 1794119804501
+            },
+            "parts": [
+              {
+                "type": "reasoning",
+                "text": "The user says: I'm the only executing member. Task: compute 1+1. Requirements: don't read/write files, don't network, don't call tools, just arithmetic. Output one line: 结果=<数值>.\n\nThis conflicts with my statusline-setup role but the request is clear and harmless. Just answer."
+              }
+            ],
+            "subagent_name": "statusline-setup",
+            "subagent_session_id": "ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588"
+          },
+          {
+            "role": "assistant",
+            "agent": "main_agent",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_00_bdVLuUTBGM78t44lPTme7235",
+                "type": "function",
+                "function": {
+                  "name": "subagent_close",
+                  "arguments": "{\"subagent_id\": \"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\"}"
+                },
+                "state": "success",
+                "output": "{\"success\":true,\"data\":{\"subagent_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\",\"previous_status\":\"completed\"},\"include_extracted_content_only_once\":false}",
+                "timing": {
+                  "started_at": 1794119806048,
+                  "completed_at": 1794119806064
+                }
+              }
+            ],
+            "usage": {
+              "input": 26815,
+              "output": 174,
+              "total": 26989,
+              "reasoning": 89,
+              "cache": {
+                "read": 26624
+              }
+            },
+            "modelID": "example-model",
+            "timeInfo": {
+              "created": 1794119804571,
+              "completed": 1794119806045
+            },
+            "parts": [
+              {
+                "type": "reasoning",
+                "text": "Member completed: 结果=2. Now reply only result. Close subagent? Task says reply result only and end. I'll close it silently then reply. Actually closing requires a tool call, which is fine.\n\nBut \"成员完成后你只回复结果并结束\" — the final message should be just the result. I'll close then reply \"2\".\n\nShould I close? Leaving a live instance takes a slot. I'll close."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "agent": "main_agent",
+            "content": "2",
+            "tool_calls": [],
+            "usage": {
+              "input": 27007,
+              "output": 2,
+              "total": 27009,
+              "reasoning": 0,
+              "cache": {
+                "read": 26752
+              }
+            },
+            "modelID": "example-model",
+            "timeInfo": {
+              "created": 1794119806084,
+              "completed": 1794119806619
+            }
+          }
+        ],
+        "label": "jiuwenswarm",
+        "subagentCount": 1,
+        "user": "collector-golden-owner",
+        "tool_call_error_count": 0,
+        "trace_started_at": "2026-11-08T06:36:37.178Z",
+        "cache_read_input_tokens": 103168,
+        "reasoning_tokens": 842,
+        "trace_completed_at": "2026-11-08T06:36:46.629Z"
+      },
+      "snapshot": {
+        "execution": {
+          "id": "jiuwen-f2f25ceff55028faa26e1b68038731f6",
+          "taskId": "jiuwen-f2f25ceff55028faa26e1b68038731f6",
+          "query": "创建一个子 Agent 计算 1+1",
+          "framework": "jiuwenswarm",
+          "tokens": 131238,
+          "cost": null,
+          "latency": 9450.796,
+          "toolCallCount": 4,
+          "llmCallCount": 6,
+          "inputTokens": 129925,
+          "outputTokens": 1313,
+          "toolCallErrorCount": 0,
+          "cacheReadInputTokens": 103168,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": 842,
+          "timestamp": "2026-11-17T04:32:34.968Z",
+          "model": "example-model",
+          "endpoint": null,
+          "agentName": "main_agent",
+          "finalResult": "2",
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "jiuwenswarm",
+          "observedAgents": [
+            "main_agent",
+            "statusline-setup"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "jiuwen-f2f25ceff55028faa26e1b68038731f6",
+          "label": "jiuwenswarm",
+          "query": "创建一个子 Agent 计算 1+1",
+          "startTime": "2026-11-08T06:36:37.178Z",
+          "endTime": "2026-11-08T06:36:46.629Z",
+          "interactions": [
+            {
+              "role": "system",
+              "content": "你是一个简洁的助手。",
+              "agent": "main_agent",
+              "system_prompt_length": 10
+            },
+            {
+              "role": "user",
+              "content": "创建一个子 Agent 计算 1+1"
+            },
+            {
+              "role": "assistant",
+              "agent": "main_agent",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call_00_lCEvTFC6BZsCA1XpKEaU9026",
+                  "type": "function",
+                  "function": {
+                    "name": "tool_search",
+                    "arguments": "{\"query\": \"创建团队并添加成员，向成员委派任务并接收结果 team build_team spawn_member send_message\"}"
+                  },
+                  "state": "success",
+                  "output": "{\"success\":true,\"data\":{\"query\":\"创建团队并添加成员，向成员委派任务并接收结果 team build_team spawn_member send_message\",\"results\":[{\"name\":\"cron\",\"description\":\"使用 action 接口：status、list、add、update、remove、run、runs、wake，并兼容结构化 schedule/payload/delivery 字段。处理“2分钟后”“明天上午9点”“下周一”这类时间时，优先根据系统提示中已提供的当前日期与时间直接换算并调用 cron，不要为了简单的时间换算先调用 code 或 bash。创建一次性提醒时，schedule.at 默认直接使用用户当前本地时区偏移来写，例如 +08:00；除非用户明确要求，否则不要改写成 Z 或 UTC。给当前聊天创建提醒时，优先使用 payload.kind=systemEvent 和 sessionTarget=current。向用户确认创建结果时，优先按 schedule.at 里的原始时区/偏移表述，不要自行改写成 UTC。\\n\\n【投递频道】delivery.channel / targets：用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\\n\\n【强制：wake_offset_seconds】这是提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则**禁止**传 wake_offset_seconds 字段；不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。用户未明确指定时必须省略该字段，后端会默认使用 0 秒（到点执行，不提前唤醒）。\\n\\n【重要：cron 表达式格式】只支持7段式(Quartz格式)：秒 分 时 日 月 周 年。字段取值范围：秒(0-59)，分(0-59)，时(0-23)，日(1-31)，月(1-12)，周(0-6或?，0=周日…6=周六；推荐用字母缩写 SUN/MON/…/SAT 避免歧义)，年(1970-2099或*)。日和周字段：不能同时指定具体值，其中一个必须用?表示'不指定'。年份字段：*表示跨年周期，固定年份只在该年执行。真正只执行一次：所有字段均为固定值(无*和?)，如'0 30 17 29 4 ? 2026'表示2026年4月29日17:30:00执行一次。例：每天9点 -> '0 0 9 * * ? *'；每15分钟 -> '0 */15 * * * ? *'；每周一9点 -> '0 0 9 ? * MON *'。注意：一次性任务建议优先使用 schedule.at (ISO8601格式)，cron更适合周期性任务。\\n\\n【重要：cron 表达式限制】标准 cron 的 */X 语义是'当字段值能被 X 整除时触发'，而非'每隔 X 单位触发'。只有当周期单位能被 X 整除时，间隔才是均匀的。以下是各字段的限制：\\n- 秒/分(0-59)：*/X 仅支持 X 整除60的值：1/2/3/4/5/6/10/12/15/20/30。  例如 */40 实际在每小时第0分和第40分触发（间隔40分→20分交替），并非每40分钟。  用户要求'每隔40分钟'时，必须先告知此限制并让用户确认是否接受不均匀间隔，  或建议改用整除60的间隔（如20分钟或30分钟）。未经用户确认不得直接创建。\\n- 小时(0-23)：*/X 仅支持 X 整除24的值：1/2/3/4/6/8/12。  例如 */5 实际在每天0/5/10/15/20时触发（间隔5h→4h→5h→4h交替），并非每5小时。  用户要求'每隔5小时'时，必须告知限制并让用户确认，或建议改用整除24的间隔。\\n- 日(1-31)：*/X 不可靠，因为不同月份天数不同（28/29/30/31）。  例如 */15 在2月只触发1、15日（共2次），在31天月份触发1、16、31日（共3次）。  用户要求'每隔X天'时，建议改用'每周X'或指定固定日期（如每月1号、15号）。\\n- 月(1-12)：*/X 仅支持 X 整除12的值：1/2/3/4/6。  例如 */5 实际在1/5/10月触发，并非每5个月均匀触发。\\n- 周(0-6)：*/X 仅支持 X 整除7的值：1/7。编号0=周日…6=周六，与系统解析(croniter)一致，注意不是Quartz的1=SUN；推荐用字母缩写（如WED/FRI）避免歧义。  例如 */2 实际在SUN/TUE/THU触发，并非'每隔2周'。  用户要求'每隔2周'时，应直接指定具体星期几或建议简化为'每周一'。\\n处理'每隔X分钟/小时/天'需求时，务必检查 X 是否整除对应周期单位；若不整除，必须告知用户限制，让用户确认后再创建，或建议替代方案。\",\"parameters\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"status\",\"list\",\"add\",\"update\",\"remove\",\"run\",\"runs\",\"wake\"],\"description\":\"要执行的 cron 操作\"},\"job\":{\"type\":\"object\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"任务名称\"},\"enabled\":{\"type\":\"boolean\",\"description\":\"任务是否启用\"},\"schedule\":{\"type\":\"object\",\"description\":\"结构化调度定义，支持 at/every/cron\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"at\",\"every\",\"cron\"],\"description\":\"调度类型：at、every 或 cron\"},\"at\":{\"type\":\"string\",\"description\":\"一次性执行时间，ISO 8601\"},\"everyMs\":{\"type\":\"integer\",\"description\":\"循环间隔，毫秒\"},\"anchorMs\":{\"type\":\"integer\",\"description\":\"every 调度的起始锚点毫秒时间戳\"},\"expr\":{\"type\":\"string\",\"description\":\"cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"tz\":{\"type\":\"string\",\"description\":\"cron 调度使用的时区\"},\"staggerMs\":{\"type\":\"integer\",\"description\":\"cron 调度的可选抖动毫秒数\"}}},\"payload\":{\"type\":\"object\",\"description\":\"结构化任务负载，支持 systemEvent 或 agentTurn\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"systemEvent\",\"agentTurn\"],\"description\":\"负载类型：systemEvent 或 agentTurn\"},\"text\":{\"type\":\"string\",\"description\":\"systemEvent提醒文本。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"message\":{\"type\":\"string\",\"description\":\"agentTurn 发送给代理的消息\"},\"model\":{\"type\":\"string\",\"description\":\"agentTurn 可选模型覆盖\"},\"thinking\":{\"type\":\"string\",\"description\":\"agentTurn 的思考预算或模式\"},\"timeoutSeconds\":{\"type\":\"integer\",\"description\":\"agentTurn 超时时间（秒）\"},\"allowUnsafeExternalContent\":{\"type\":\"boolean\",\"description\":\"是否允许不安全的外部内容\"},\"lightContext\":{\"type\":\"boolean\",\"description\":\"是否使用轻量上下文执行\"},\"deliver\":{\"type\":\"string\",\"description\":\"agentTurn 自带的投递策略字段\"},\"channel\":{\"type\":\"string\",\"description\":\"agentTurn 的默认投递频道\"},\"to\":{\"type\":\"string\",\"description\":\"agentTurn 的目标收件人\"},\"bestEffortDeliver\":{\"type\":\"boolean\",\"description\":\"是否最佳努力投递\"},\"fallbacks\":{\"type\":\"array\",\"description\":\"agentTurn 的回退投递列表\",\"items\":{\"type\":\"string\",\"description\":\"agentTurn 的回退投递列表\"}}}},\"delivery\":{\"type\":\"object\",\"description\":\"提醒结果的投递方式\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"none\",\"announce\",\"webhook\"],\"description\":\"投递模式：none、announce 或 webhook\"},\"channel\":{\"type\":\"string\",\"description\":\"announce 模式投递频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"},\"to\":{\"type\":\"string\",\"description\":\"目标收件人或会话标识\"},\"accountId\":{\"type\":\"string\",\"description\":\"投递账号标识\"},\"bestEffort\":{\"description\":\"announce/webhook 是否最佳努力投递\"},\"failureDestination\":{\"description\":\"失败时的兜底投递目标\"}}},\"sessionTarget\":{\"type\":\"string\",\"description\":\"会话目标：main、isolated、current 或 session:<id>\"},\"wakeMode\":{\"type\":\"string\",\"enum\":[\"now\",\"next-heartbeat\"],\"description\":\"唤醒模式：now 或 next-heartbeat\"},\"deleteAfterRun\":{\"type\":\"boolean\",\"description\":\"执行后是否自动删除该任务\"},\"cron_expr\":{\"type\":\"string\",\"description\":\"兼容层cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"timezone\":{\"type\":\"string\",\"description\":\"兼容层时区字段\"},\"wake_offset_seconds\":{\"type\":\"integer\",\"description\":\"提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则禁止传该字段；不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。用户未明确指定时必须省略，后端默认 0 秒（到点执行，不提前唤醒）。\",\"default\":0},\"description\":{\"type\":\"string\",\"description\":\"具体任务内容，到点执行时发给助手。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"targets\":{\"type\":\"string\",\"description\":\"目标频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"}},\"description\":\"用于 add 的任务对象；支持结构化字段和兼容层字段\"},\"jobId\":{\"type\":\"string\",\"description\":\"用于 update/remove/run/runs 的任务 ID\"},\"patch\":{\"type\":\"object\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"任务名称\"},\"enabled\":{\"type\":\"boolean\",\"description\":\"任务是否启用\"},\"schedule\":{\"type\":\"object\",\"description\":\"结构化调度定义，支持 at/every/cron\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"at\",\"every\",\"cron\"],\"description\":\"调度类型：at、every 或 cron\"},\"at\":{\"type\":\"string\",\"description\":\"一次性执行时间，ISO 8601\"},\"everyMs\":{\"type\":\"integer\",\"description\":\"循环间隔，毫秒\"},\"anchorMs\":{\"type\":\"integer\",\"description\":\"every 调度的起始锚点毫秒时间戳\"},\"expr\":{\"type\":\"string\",\"description\":\"cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"tz\":{\"type\":\"string\",\"description\":\"cron 调度使用的时区\"},\"staggerMs\":{\"type\":\"integer\",\"description\":\"cron 调度的可选抖动毫秒数\"}}},\"payload\":{\"type\":\"object\",\"description\":\"结构化任务负载，支持 systemEvent 或 agentTurn\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"systemEvent\",\"agentTurn\"],\"description\":\"负载类型：systemEvent 或 agentTurn\"},\"text\":{\"type\":\"string\",\"description\":\"systemEvent提醒文本。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"message\":{\"type\":\"string\",\"description\":\"agentTurn 发送给代理的消息\"},\"model\":{\"type\":\"string\",\"description\":\"agentTurn 可选模型覆盖\"},\"thinking\":{\"type\":\"string\",\"description\":\"agentTurn 的思考预算或模式\"},\"timeoutSeconds\":{\"type\":\"integer\",\"description\":\"agentTurn 超时时间（秒）\"},\"allowUnsafeExternalContent\":{\"type\":\"boolean\",\"description\":\"是否允许不安全的外部内容\"},\"lightContext\":{\"type\":\"boolean\",\"description\":\"是否使用轻量上下文执行\"},\"deliver\":{\"type\":\"string\",\"description\":\"agentTurn 自带的投递策略字段\"},\"channel\":{\"type\":\"string\",\"description\":\"agentTurn 的默认投递频道\"},\"to\":{\"type\":\"string\",\"description\":\"agentTurn 的目标收件人\"},\"bestEffortDeliver\":{\"type\":\"boolean\",\"description\":\"是否最佳努力投递\"},\"fallbacks\":{\"type\":\"array\",\"description\":\"agentTurn 的回退投递列表\",\"items\":{\"type\":\"string\",\"description\":\"agentTurn 的回退投递列表\"}}}},\"delivery\":{\"type\":\"object\",\"description\":\"提醒结果的投递方式\",\"required\":[],\"additionalProperties\":true,\"properties\":{\"mode\":{\"type\":\"string\",\"enum\":[\"none\",\"announce\",\"webhook\"],\"description\":\"投递模式：none、announce 或 webhook\"},\"channel\":{\"type\":\"string\",\"description\":\"announce 模式投递频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"},\"to\":{\"type\":\"string\",\"description\":\"目标收件人或会话标识\"},\"accountId\":{\"type\":\"string\",\"description\":\"投递账号标识\"},\"bestEffort\":{\"description\":\"announce/webhook 是否最佳努力投递\"},\"failureDestination\":{\"description\":\"失败时的兜底投递目标\"}}},\"sessionTarget\":{\"type\":\"string\",\"description\":\"会话目标：main、isolated、current 或 session:<id>\"},\"wakeMode\":{\"type\":\"string\",\"enum\":[\"now\",\"next-heartbeat\"],\"description\":\"唤醒模式：now 或 next-heartbeat\"},\"deleteAfterRun\":{\"type\":\"boolean\",\"description\":\"执行后是否自动删除该任务\"},\"cron_expr\":{\"type\":\"string\",\"description\":\"兼容层cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"timezone\":{\"type\":\"string\",\"description\":\"兼容层时区字段\"},\"wake_offset_seconds\":{\"type\":\"integer\",\"description\":\"提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则禁止传该字段；不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。用户未明确指定时必须省略，后端默认 0 秒（到点执行，不提前唤醒）。\",\"default\":0},\"description\":{\"type\":\"string\",\"description\":\"具体任务内容，到点执行时发给助手。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"targets\":{\"type\":\"string\",\"description\":\"目标频道。用户未明确指定时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\"}},\"description\":\"用于 update 的补丁对象\"},\"includeDisabled\":{\"type\":\"boolean\",\"description\":\"list 时是否包含已禁用任务\"},\"text\":{\"type\":\"string\",\"description\":\"wake 动作要发送的提示文本\"},\"mode\":{\"type\":\"string\",\"enum\":[\"now\",\"next-heartbeat\"],\"description\":\"wake 的触发模式\"},\"contextMessages\":{\"type\":\"integer\",\"description\":\"保留给上下文提示的兼容字段\"}},\"required\":[\"action\"],\"additionalProperties\":true}},{\"name\":\"submit_goal_report\",\"description\":\"仅当本次用户消息中包含 <goal_task> 标签（即处于 Goal 执行轮）时才调用本工具；普通对话轮（无 <goal_task>）绝不要调用本工具。本工具用于提交当前 goal 尝试的结构化结果。这是本次 goal 尝试的最终工具动作；工具调用成功后不要再调用其他工具，已有进展但目标仍可继续推进时使用 continue；只有具备可审计完成证据时才使用 complete；只有缺少用户输入、权限、依赖、外部服务或环境状态且无法继续任何有意义推进时才使用 blocked。\",\"parameters\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"continue\",\"complete\",\"blocked\"],\"description\":\"当前 goal 尝试结果：continue、complete 或 blocked。目标尚未完成但仍可推进时，不要报告 blocked。\"},\"evidence\":{\"type\":\"string\",\"description\":\"支持该状态的可审计证据，例如测试输出、命令结果、文件路径、工具结果、完成证明，或确切阻塞原因。\"},\"remaining_work\":{\"type\":\"string\",\"description\":\"目标未完成时说明剩余工作；完成时可以为空。\"},\"next_instruction\":{\"type\":\"string\",\"description\":\"status=continue 时给出下一次尝试的具体、可执行指令；其他状态可以为空。\"}},\"required\":[\"status\",\"evidence\"]}},{\"name\":\"cron_create_job\",\"description\":\"\\n创建新的 cron 定时任务，使用扁平字段（name, cron_expr, timezone, targets, description, wake_offset_seconds）。\\n\\n【targets】用户未明确指定投递渠道时不填，系统自动使用当前对话渠道；**禁止从历史记录推断。**\\n\\n【强制：wake_offset_seconds】除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则**禁止**传 wake_offset_seconds。\\n用户未明确指定时必须省略该字段，后端会默认使用 0 秒（到点执行，不提前唤醒）。\\n不要因为是查询/准备类任务而传 60 或其他正值；禁止从任务类型、距离触发时间或历史记录推断。\\n\\n【重要：cron 表达式格式】只支持7段式(Quartz格式)：秒 分 时 日 月 周 年。\\n日和周字段：不能同时指定具体值，其中一个必须用?表示'不指定'。\\n年份字段：*表示跨年周期执行，固定年份只在该年执行。\\n真正只执行一次：所有字段均为固定值（无*和?），如'0 0 17 28 3 ? 2026'。\\n例：每天9点 -> '0 0 9 * * ? *'；每15分钟 -> '0 */15 * * * ? *'；每周一9点 -> '0 0 9 ? * MON *'。\\n\\n【重要：cron 表达式限制】标准 cron 的 */X 语义是'当字段值能被 X 整除时触发'，而非'每隔 X 单位触发'。\\n只有当周期单位能被 X 整除时，间隔才是均匀的。以下是各字段的限制：\\n- 秒/分(0-59)：*/X 仅支持 X 整除60的值：1/2/3/4/5/6/10/12/15/20/30。\\n  例如 */40 实际在每小时第0分和第40分触发（间隔40分→20分交替），并非每40分钟。\\n  用户要求'每隔40分钟'时，必须先告知此限制并让用户确认是否接受不均匀间隔，\\n  或建议改用整除60的间隔（如20分钟或30分钟）。未经用户确认不得直接创建。\\n- 小时(0-23)：*/X 仅支持 X 整除24的值：1/2/3/4/6/8/12。\\n  例如 */5 实际在每天0/5/10/15/20时触发（间隔5h→4h→5h→4h交替），并非每5小时。\\n- 日(1-31)：*/X 不可靠，因为不同月份天数不同（28/29/30/31）。\\n- 月(1-12)：*/X 仅支持 X 整除12的值：1/2/3/4/6。\\n- 周(0-6)：*/X 仅支持 X 整除7的值：1/7。编号0=周日…6=周六，与系统解析(croniter)一致，注意不是Quartz的1=SUN；推荐用字母缩写（如WED/FRI）避免歧义。\\n\\n处理'每隔X分钟/小时/天'需求时，务必检查 X 是否整除对应周期单位；\\n若不整除，必须告知用户限制，让用户确认后再创建，或建议替代方案。\\n\",\"parameters\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"任务名称\"},\"cron_expr\":{\"type\":\"string\",\"description\":\"Cron表达式(7段式)。字段顺序：秒 分 时 日 月 周 年。星期编号0=周日…6=周六（与系统解析croniter一致，非Quartz的1=SUN），推荐字母缩写，如每周三、周五17:30 -> '0 30 17 ? * WED,FRI *'。日和周：不能同时指定具体值，其中一个用?。年份：*跨年周期，固定年份只在该年执行。一次性：所有字段固定值，如'0 0 17 28 3 ? 2026'。例：每天9点'0 0 9 * * ? *'；每15分钟'0 */15 * * * ? *'。详见工具描述。\"},\"timezone\":{\"type\":\"string\",\"description\":\"时区，如 Asia/Shanghai\",\"default\":\"Asia/Shanghai\"},\"targets\":{\"type\":\"string\",\"description\":\"Legacy compatibility target channel\",\"enum\":[\"web\",\"tui\",\"feishu\",\"whatsapp\",\"wecom\",\"xiaoyi\",\"wechat\",\"dingtalk\"]},\"enabled\":{\"type\":\"boolean\",\"description\":\"是否启用\",\"default\":true},\"description\":{\"type\":\"string\",\"description\":\"具体任务内容，到点执行时发给助手。不要包含时间/频率信息（如'每隔40分钟'、'每天9点'）\"},\"wake_offset_seconds\":{\"type\":\"integer\",\"description\":\"提前唤醒秒数，不是任务执行时间。除非用户明确说“提前 X 秒/分钟唤醒/准备/执行”，否则禁止传该字段；用户未明确指定时必须省略，后端默认 0 秒（到点执行，不提前唤醒）。不要根据任务类型、提醒/查询场景、距离触发时间或历史记录推断为 60 或其他正值。\",\"default\":0}},\"required\":[\"name\",\"cron_expr\",\"timezone\",\"description\"]}},{\"name\":\"acp_chat\",\"description\":\"Send a user message to an external ACP-compatible agent subprocess defined in config.yaml under acp_agents.<name> (command + args). Use for Codex CLI, Gemini CLI, or any other stdio ACP agent. Parameter agent is the profile key, message is the prompt. Set new_session=true to restart the subprocess and ACP session for that profile.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"agent\":{\"type\":\"string\",\"description\":\"agent\"},\"message\":{\"type\":\"string\",\"description\":\"message\"},\"new_session\":{\"type\":\"boolean\",\"description\":\"new session\",\"default\":false}},\"additionalProperties\":false,\"title\":\"acp chat\",\"required\":[\"agent\",\"message\"]}},{\"name\":\"cron_delete_job\",\"description\":\"根据任务 ID 删除 cron 定时任务。\",\"parameters\":{\"type\":\"object\",\"properties\":{\"job_id\":{\"type\":\"string\",\"description\":\"要删除的任务 ID\"}},\"required\":[\"job_id\"]}}],\"count\":5},\"include_extracted_content_only_once\":false}",
+                  "timing": {
+                    "started_at": 1794119799483,
+                    "completed_at": 1794119799498
+                  }
+                }
+              ],
+              "usage": {
+                "input": 19527,
+                "output": 327,
+                "total": 19854,
+                "reasoning": 240,
+                "cache": {
+                  "read": 3840
+                }
+              },
+              "modelID": "example-model",
+              "timeInfo": {
+                "created": 1794119797230,
+                "completed": 1794119799476
+              },
+              "parts": [
+                {
+                  "type": "reasoning",
+                  "text": "The user wants a team with one execution member, delegate 1+1 calculation to that member, then only reply the result. Mode is \"team\". I don't have team tools in direct list... Let me check available tools: I have subagent tools (spawn/wait/list/send_input/close/resume). The task says \"创建一个仅含一名执行成员的团队\" — create a team with one member. In this environment, \"team\" mode likely uses subagent_spawn? But guidance says only spawn when user explicitly requests delegation/parallel agents. Here the user explicitly asks to delegate to a member — that counts as explicit request for delegation.\n\nHowever, the instructions say \"可用子代理类型\" only lists statusline-setup. Hmm. That is the only registered subagent type. There might be team tools available via deferred search: build_team, spawn_member, send_message, build_team are mentioned in call_goal descriptions! The tool descriptions mention \"spawn_member / spawn_teammate / send_message / build_team\" — suggesting such tools exist as deferred tools. Let me tool_search for team creation.\n\nLet me search."
+                }
+              ]
+            },
+            {
+              "role": "assistant",
+              "agent": "main_agent",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call_00_Ur9CUs10gK8uztVvFchn2153",
+                  "type": "function",
+                  "function": {
+                    "name": "task",
+                    "arguments": "{\"subagent_type\":\"statusline-setup\",\"display_name\":\"执行成员\",\"role\":\"计算 1+1 并返回结果\",\"task_description\":\"你是本次团队中唯一的执行成员。任务：计算 1+1。要求：不要读写任何文件，不要联网，不要调用任何工具，只做算术。完成后仅用一行输出结果，格式为：结果=<数值>\",\"subagent_session_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\"}"
+                  },
+                  "state": "success",
+                  "output": "{\"success\":true,\"data\":{\"subagent_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\",\"sub_session_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\",\"task_id\":\"49528727ccbf49eba95f047f28b91936\",\"status\":\"pending_init\"},\"include_extracted_content_only_once\":false}",
+                  "timing": {
+                    "started_at": 1794119803457,
+                    "completed_at": 1794119803461
+                  }
+                }
+              ],
+              "usage": {
+                "input": 25939,
+                "output": 626,
+                "total": 26565,
+                "reasoning": 444,
+                "cache": {
+                  "read": 19584
+                }
+              },
+              "modelID": "example-model",
+              "timeInfo": {
+                "created": 1794119799516,
+                "completed": 1794119803453
+              },
+              "parts": [
+                {
+                  "type": "reasoning",
+                  "text": "No team tools found (build_team/spawn_member don't exist). So in this environment, delegation to a member must use subagent tools. The available subagent type is only \"statusline-setup\" though. Hmm.\n\nThe direct tools include subagent_spawn with subagent_type required. Available subagent types list only shows statusline-setup. I could spawn with subagent_type \"statusline-setup\"? That's odd but it's the only registered type. The task is an acceptance test for multi-agent trace: they want a team with one execution member that computes 1+1.\n\nWait — mode is \"team\". Maybe there are team tools available named differently. Let me search once more with different query? The guidance says don't repeat similar searches. I searched for team creation; got cron, goal report, acp. So no team tools.\n\nGiven mode is team yet no team tools, subagent_spawn is the delegation mechanism available. I'll spawn one subagent (one execution member) with a simple task, wait, then reply result only.\n\nLet me try subagent_spawn with subagent_type \"statusline-setup\" — risky, it's a status line config agent, tools \"All tools\". It could compute 1+1. Alternatively maybe subagent_type accepts something like \"general\". Let's try \"statusline-setup\" as it's the only registered one.\n\nActually let me just call subagent_spawn with subagent_type \"statusline-setup\" and a task to compute 1+1 without using tools, reply with just the number.\n\nThen wait with timeout 120000. Then reply result.\n\nThen close the subagent to release slot? Task says \"成员完成后你只回复结果并结束\" — reply only result. Closing is fine but adds tool calls; probably fine. I'll close to release slot — but user said reply only the result. Closing is internal, acceptable. Actually might affect trace? Keep it clean: just wait then reply. I'll close it to avoid leaving live instance... Hmm, \"不要创建更多成员\" only. I'll close for cleanliness.\n\nLet's do spawn."
+                }
+              ]
+            },
+            {
+              "role": "assistant",
+              "agent": "main_agent",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call_00_ET_iE9Pem23zhbnSwN1SeLD4151",
+                  "type": "function",
+                  "function": {
+                    "name": "subagent_wait",
+                    "arguments": "{\"subagent_ids\": [\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\"], \"timeout_ms\": 120000}"
+                  },
+                  "state": "success",
+                  "output": "{\"success\":true,\"data\":{\"statuses\":{\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\":\"completed\"},\"results\":{\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\":\"结果=2\"},\"output_files\":{\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\":\"/tmp/agent-insight-jiuwen-test/agent/workspace/sub_agents/ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588/outputs/49528727ccbf49eba95f047f28b91936.md\"},\"timed_out\":false},\"include_extracted_content_only_once\":false}",
+                  "timing": {
+                    "started_at": 1794119804556,
+                    "completed_at": 1794119804557
+                  }
+                }
+              ],
+              "usage": {
+                "input": 26622,
+                "output": 111,
+                "total": 26733,
+                "reasoning": 0,
+                "cache": {
+                  "read": 26368
+                }
+              },
+              "modelID": "example-model",
+              "timeInfo": {
+                "created": 1794119803481,
+                "completed": 1794119804554
+              }
+            },
+            {
+              "role": "subagent",
+              "agent": "statusline-setup",
+              "content": "结果=2",
+              "tool_calls": [],
+              "usage": {
+                "input": 4015,
+                "output": 73,
+                "total": 4088,
+                "reasoning": 69,
+                "cache": {
+                  "read": 0
+                }
+              },
+              "modelID": "example-model",
+              "timeInfo": {
+                "created": 1794119803501,
+                "completed": 1794119804501
+              },
+              "parts": [
+                {
+                  "type": "reasoning",
+                  "text": "The user says: I'm the only executing member. Task: compute 1+1. Requirements: don't read/write files, don't network, don't call tools, just arithmetic. Output one line: 结果=<数值>.\n\nThis conflicts with my statusline-setup role but the request is clear and harmless. Just answer."
+                }
+              ],
+              "subagent_name": "statusline-setup",
+              "subagent_session_id": "ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588"
+            },
+            {
+              "role": "assistant",
+              "agent": "main_agent",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call_00_bdVLuUTBGM78t44lPTme7235",
+                  "type": "function",
+                  "function": {
+                    "name": "subagent_close",
+                    "arguments": "{\"subagent_id\": \"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\"}"
+                  },
+                  "state": "success",
+                  "output": "{\"success\":true,\"data\":{\"subagent_id\":\"ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588\",\"previous_status\":\"completed\"},\"include_extracted_content_only_once\":false}",
+                  "timing": {
+                    "started_at": 1794119806048,
+                    "completed_at": 1794119806064
+                  }
+                }
+              ],
+              "usage": {
+                "input": 26815,
+                "output": 174,
+                "total": 26989,
+                "reasoning": 89,
+                "cache": {
+                  "read": 26624
+                }
+              },
+              "modelID": "example-model",
+              "timeInfo": {
+                "created": 1794119804571,
+                "completed": 1794119806045
+              },
+              "parts": [
+                {
+                  "type": "reasoning",
+                  "text": "Member completed: 结果=2. Now reply only result. Close subagent? Task says reply result only and end. I'll close it silently then reply. Actually closing requires a tool call, which is fine.\n\nBut \"成员完成后你只回复结果并结束\" — the final message should be just the result. I'll close then reply \"2\".\n\nShould I close? Leaving a live instance takes a slot. I'll close."
+                }
+              ]
+            },
+            {
+              "role": "assistant",
+              "agent": "main_agent",
+              "content": "2",
+              "tool_calls": [],
+              "usage": {
+                "input": 27007,
+                "output": 2,
+                "total": 27009,
+                "reasoning": 0,
+                "cache": {
+                  "read": 26752
+                }
+              },
+              "modelID": "example-model",
+              "timeInfo": {
+                "created": 1794119806084,
+                "completed": 1794119806619
+              }
+            }
+          ],
+          "model": "example-model"
+        }
+      },
+      "children": [
+        {
+          "execution": {
+            "id": "jiuwen-f2f25ceff55028faa26e1b68038731f6__sub__ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588",
+            "taskId": "ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588",
+            "query": "你是本次团队中唯一的执行成员。任务：计算 1+1。要求：不要读写任何文件，不要联网，不要调用任何工具，只做算术。完成后仅用一行输出结果，格式为：结果=<数值>",
+            "framework": "jiuwenswarm",
+            "tokens": 4088,
+            "cost": null,
+            "latency": 1000,
+            "toolCallCount": 0,
+            "llmCallCount": 1,
+            "inputTokens": 4015,
+            "outputTokens": 73,
+            "toolCallErrorCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "maxSingleCallTokens": null,
+            "reasoningTokens": 69,
+            "timestamp": "2026-11-08T06:36:43.457Z",
+            "model": "example-model",
+            "endpoint": null,
+            "agentName": "statusline-setup",
+            "finalResult": "结果=2",
+            "skill": null,
+            "skills": [],
+            "invokedSkills": [],
+            "skillVersion": null,
+            "label": null,
+            "observedAgents": [
+              "statusline-setup"
+            ],
+            "parentExecutionId": "jiuwen-f2f25ceff55028faa26e1b68038731f6",
+            "rootExecutionId": "jiuwen-f2f25ceff55028faa26e1b68038731f6",
+            "agentSessionId": "ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588",
+            "subagentType": "statusline-setup",
+            "subagentName": "statusline-setup",
+            "isSubagent": true
+          },
+          "session": {
+            "taskId": "ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588",
+            "label": "statusline-setup",
+            "query": "你是本次团队中唯一的执行成员。任务：计算 1+1。要求：不要读写任何文件，不要联网，不要调用任何工具，只做算术。完成后仅用一行输出结果，格式为：结果=<数值>",
+            "startTime": "2026-11-08T06:36:43.457Z",
+            "endTime": "2026-11-08T06:36:44.501Z",
+            "interactions": [
+              {
+                "role": "subagent",
+                "agent": "statusline-setup",
+                "content": "结果=2",
+                "tool_calls": [],
+                "usage": {
+                  "input": 4015,
+                  "output": 73,
+                  "total": 4088,
+                  "reasoning": 69,
+                  "cache": {
+                    "read": 0
+                  }
+                },
+                "modelID": "example-model",
+                "timeInfo": {
+                  "created": 1794119803501,
+                  "completed": 1794119804501
+                },
+                "parts": [
+                  {
+                    "type": "reasoning",
+                    "text": "The user says: I'm the only executing member. Task: compute 1+1. Requirements: don't read/write files, don't network, don't call tools, just arithmetic. Output one line: 结果=<数值>.\n\nThis conflicts with my statusline-setup role but the request is clear and harmless. Just answer."
+                  }
+                ],
+                "subagent_name": "statusline-setup",
+                "subagent_session_id": "ai-013y-fixed-team-20261108_sub_statusline-setup_1c410588"
+              }
+            ],
+            "model": null
+          }
+        }
+      ],
+      "session_default_clock": "2026-11-08T06:36:37.178Z"
+    },
+    {
+      "name": "langfuse-nodes-raw",
+      "input": {
+        "task_id": "collector-lf-session",
+        "query": "full input",
+        "framework": "langfuse-langgraph",
+        "model": "fixture-model",
+        "tokens": 5,
+        "latency": 1000,
+        "final_result": "done",
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:01.000Z",
+        "force_query_update": true,
+        "session_merge_strategy": "snapshot-replace",
+        "label": "langfuse-langgraph",
+        "user": "collector-golden-owner",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "full input",
+            "agent": "AssistantService.chat",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "timeInfo": {
+              "created": "2026-11-16T12:00:00.000Z"
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "LF complete content 中文\nvalue",
+            "agent": "AssistantService.chat",
+            "model": "fixture-model",
+            "usage": {
+              "input": 0,
+              "output": 5,
+              "total": 5
+            },
+            "spanId": "generation",
+            "parentSpanId": "graph",
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "name": "ChatDeepSeek",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "timeInfo": {
+              "created": "2026-11-16T12:00:00.000Z",
+              "completed": "2026-11-16T12:00:00.300Z"
+            },
+            "requestMessages": [
+              {
+                "role": "user",
+                "content": "full input"
+              }
+            ]
+          }
+        ],
+        "langfuseTraceNodes": [
+          {
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "spanId": "root",
+            "parentSpanId": null,
+            "sourceParentSpanId": null,
+            "displayParentSpanId": null,
+            "name": "AssistantService.chat",
+            "kind": "chain",
+            "startedAt": 1794830400000,
+            "completedAt": 1794830401000,
+            "durationMs": 1000,
+            "input": {
+              "query": "LF original question"
+            },
+            "output": {
+              "final_output": "done"
+            },
+            "status": "success",
+            "visibility": "visible"
+          },
+          {
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "spanId": "graph",
+            "parentSpanId": "root",
+            "sourceParentSpanId": "root",
+            "displayParentSpanId": "root",
+            "name": "LangGraph",
+            "kind": "chain",
+            "startedAt": 1794830400000,
+            "completedAt": 1794830400900,
+            "durationMs": 900,
+            "status": "success",
+            "visibility": "collapsed",
+            "collapseReason": "langgraph-framework-wrapper"
+          },
+          {
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "spanId": "generation",
+            "parentSpanId": "graph",
+            "sourceParentSpanId": "graph",
+            "displayParentSpanId": "root",
+            "name": "ChatDeepSeek",
+            "kind": "llm",
+            "startedAt": 1794830400000,
+            "completedAt": 1794830400300,
+            "durationMs": 300,
+            "input": {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "full input"
+                }
+              ]
+            },
+            "output": "LF complete content 中文\nvalue",
+            "status": "success",
+            "model": "fixture-model",
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 5,
+              "totalTokens": 5
+            },
+            "visibility": "visible"
+          },
+          {
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "spanId": "tool",
+            "parentSpanId": "graph",
+            "sourceParentSpanId": "graph",
+            "displayParentSpanId": "root",
+            "name": "knowledge_retrieve",
+            "kind": "tool",
+            "startedAt": 1794830400000,
+            "completedAt": 1794830400000,
+            "durationMs": 0,
+            "input": {
+              "query": "hello"
+            },
+            "output": {
+              "documents": [
+                {
+                  "text": "完整原文"
+                }
+              ]
+            },
+            "status": "success",
+            "visibility": "visible",
+            "toolCallId": "lf-call",
+            "orphanTool": true
+          }
+        ],
+        "invokedSkills": [],
+        "skills": [],
+        "agent": "AssistantService.chat",
+        "agentName": "AssistantService.chat",
+        "llm_call_count": 1,
+        "tool_call_count": 1,
+        "tool_call_error_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "subagentCount": 0
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-lf-session",
+          "taskId": "collector-lf-session",
+          "query": "full input",
+          "framework": "langfuse-langgraph",
+          "tokens": 5,
+          "cost": null,
+          "latency": 1000,
+          "toolCallCount": 1,
+          "llmCallCount": 1,
+          "inputTokens": 0,
+          "outputTokens": 5,
+          "toolCallErrorCount": 0,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": "fixture-model",
+          "endpoint": null,
+          "agentName": "AssistantService.chat",
+          "finalResult": "done",
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "langfuse-langgraph",
+          "observedAgents": [
+            "AssistantService.chat"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-lf-session",
+          "label": "langfuse-langgraph",
+          "query": "full input",
+          "startTime": "2026-11-17T04:32:35.033Z",
+          "endTime": "2026-11-16T12:00:01.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "full input",
+              "agent": "AssistantService.chat",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "timeInfo": {
+                "created": "2026-11-16T12:00:00.000Z"
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "LF complete content 中文\nvalue",
+              "agent": "AssistantService.chat",
+              "model": "fixture-model",
+              "usage": {
+                "input": 0,
+                "output": 5,
+                "total": 5
+              },
+              "spanId": "generation",
+              "parentSpanId": "graph",
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "name": "ChatDeepSeek",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "timeInfo": {
+                "created": "2026-11-16T12:00:00.000Z",
+                "completed": "2026-11-16T12:00:00.300Z"
+              },
+              "requestMessages": [
+                {
+                  "role": "user",
+                  "content": "full input"
+                }
+              ]
+            }
+          ],
+          "langfuseTraceNodes": [
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "generation",
+              "parentSpanId": "graph",
+              "sourceParentSpanId": "graph",
+              "displayParentSpanId": "root",
+              "name": "ChatDeepSeek",
+              "kind": "llm",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830400300,
+              "durationMs": 300,
+              "input": {
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "full input"
+                  }
+                ]
+              },
+              "output": "LF complete content 中文\nvalue",
+              "status": "success",
+              "model": "fixture-model",
+              "usage": {
+                "inputTokens": 0,
+                "outputTokens": 5,
+                "totalTokens": 5
+              },
+              "visibility": "visible"
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "graph",
+              "parentSpanId": "root",
+              "sourceParentSpanId": "root",
+              "displayParentSpanId": "root",
+              "name": "LangGraph",
+              "kind": "chain",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830400900,
+              "durationMs": 900,
+              "status": "success",
+              "visibility": "collapsed",
+              "collapseReason": "langgraph-framework-wrapper"
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "root",
+              "parentSpanId": null,
+              "sourceParentSpanId": null,
+              "displayParentSpanId": null,
+              "name": "AssistantService.chat",
+              "kind": "chain",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830401000,
+              "durationMs": 1000,
+              "input": {
+                "query": "LF original question"
+              },
+              "output": {
+                "final_output": "done"
+              },
+              "status": "success",
+              "visibility": "visible"
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "tool",
+              "parentSpanId": "graph",
+              "sourceParentSpanId": "graph",
+              "displayParentSpanId": "root",
+              "name": "knowledge_retrieve",
+              "kind": "tool",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830400000,
+              "durationMs": 0,
+              "input": {
+                "query": "hello"
+              },
+              "output": {
+                "documents": [
+                  {
+                    "text": "完整原文"
+                  }
+                ]
+              },
+              "status": "success",
+              "visibility": "visible",
+              "toolCallId": "lf-call",
+              "orphanTool": true
+            }
+          ],
+          "model": "fixture-model"
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-17T04:32:35.033Z"
+    },
+    {
+      "name": "langfuse-nodes-monotonic",
+      "input": {
+        "task_id": "collector-lf-session",
+        "query": "full input",
+        "framework": "langfuse-langgraph",
+        "model": "fixture-model",
+        "tokens": 5,
+        "latency": 1000,
+        "final_result": "done",
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:01.000Z",
+        "force_query_update": true,
+        "session_merge_strategy": "snapshot-replace",
+        "label": "langfuse-langgraph",
+        "user": "collector-golden-owner",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "full input",
+            "agent": "AssistantService.chat",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "timeInfo": {
+              "created": "2026-11-16T12:00:00.000Z"
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "LF complete content 中文\nvalue",
+            "agent": "AssistantService.chat",
+            "model": "fixture-model",
+            "usage": {
+              "input": 0,
+              "output": 5,
+              "total": 5
+            },
+            "spanId": "generation",
+            "parentSpanId": "graph",
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "name": "ChatDeepSeek",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "timeInfo": {
+              "created": "2026-11-16T12:00:00.000Z",
+              "completed": "2026-11-16T12:00:00.600Z"
+            },
+            "requestMessages": [
+              {
+                "role": "user",
+                "content": "full input"
+              }
+            ]
+          }
+        ],
+        "langfuseTraceNodes": [
+          {
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "spanId": "root",
+            "parentSpanId": null,
+            "sourceParentSpanId": null,
+            "displayParentSpanId": null,
+            "name": "AssistantService.chat",
+            "kind": "chain",
+            "startedAt": 1794830400000,
+            "completedAt": 1794830401000,
+            "durationMs": 1000,
+            "input": {
+              "query": "LF original question"
+            },
+            "output": {
+              "final_output": "done"
+            },
+            "status": "success",
+            "visibility": "visible"
+          },
+          {
+            "traceId": "0123456789abcdef0123456789abcdef",
+            "spanId": "generation",
+            "parentSpanId": "graph",
+            "sourceParentSpanId": "graph",
+            "displayParentSpanId": null,
+            "name": "ChatDeepSeek",
+            "kind": "llm",
+            "startedAt": 1794830400000,
+            "completedAt": 1794830400600,
+            "durationMs": 600,
+            "input": {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "full input"
+                }
+              ]
+            },
+            "output": "LF complete content 中文\nvalue",
+            "status": "success",
+            "model": "fixture-model",
+            "usage": {
+              "inputTokens": 0,
+              "outputTokens": 5,
+              "totalTokens": 5
+            },
+            "visibility": "visible"
+          }
+        ],
+        "invokedSkills": [],
+        "skills": [],
+        "agent": "AssistantService.chat",
+        "agentName": "AssistantService.chat",
+        "llm_call_count": 1,
+        "tool_call_count": 0,
+        "tool_call_error_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "subagentCount": 0
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-lf-session",
+          "taskId": "collector-lf-session",
+          "query": "full input",
+          "framework": "langfuse-langgraph",
+          "tokens": 5,
+          "cost": null,
+          "latency": 1000,
+          "toolCallCount": 0,
+          "llmCallCount": 1,
+          "inputTokens": 0,
+          "outputTokens": 5,
+          "toolCallErrorCount": 0,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": "fixture-model",
+          "endpoint": null,
+          "agentName": "AssistantService.chat",
+          "finalResult": "done",
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "langfuse-langgraph",
+          "observedAgents": [
+            "AssistantService.chat"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-lf-session",
+          "label": "langfuse-langgraph",
+          "query": "full input",
+          "startTime": "2026-11-17T04:32:35.033Z",
+          "endTime": "2026-11-16T12:00:01.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "full input",
+              "agent": "AssistantService.chat",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "timeInfo": {
+                "created": "2026-11-16T12:00:00.000Z"
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "LF complete content 中文\nvalue",
+              "agent": "AssistantService.chat",
+              "model": "fixture-model",
+              "usage": {
+                "input": 0,
+                "output": 5,
+                "total": 5
+              },
+              "spanId": "generation",
+              "parentSpanId": "graph",
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "name": "ChatDeepSeek",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "timeInfo": {
+                "created": "2026-11-16T12:00:00.000Z",
+                "completed": "2026-11-16T12:00:00.600Z"
+              },
+              "requestMessages": [
+                {
+                  "role": "user",
+                  "content": "full input"
+                }
+              ]
+            }
+          ],
+          "langfuseTraceNodes": [
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "generation",
+              "parentSpanId": "graph",
+              "sourceParentSpanId": "graph",
+              "displayParentSpanId": null,
+              "name": "ChatDeepSeek",
+              "kind": "llm",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830400600,
+              "durationMs": 600,
+              "input": {
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "full input"
+                  }
+                ]
+              },
+              "output": "LF complete content 中文\nvalue",
+              "status": "success",
+              "model": "fixture-model",
+              "usage": {
+                "inputTokens": 0,
+                "outputTokens": 5,
+                "totalTokens": 5
+              },
+              "visibility": "visible"
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "graph",
+              "parentSpanId": "root",
+              "sourceParentSpanId": "root",
+              "displayParentSpanId": "root",
+              "name": "LangGraph",
+              "kind": "chain",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830400900,
+              "durationMs": 900,
+              "status": "success",
+              "visibility": "collapsed",
+              "collapseReason": "langgraph-framework-wrapper"
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "root",
+              "parentSpanId": null,
+              "sourceParentSpanId": null,
+              "displayParentSpanId": null,
+              "name": "AssistantService.chat",
+              "kind": "chain",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830401000,
+              "durationMs": 1000,
+              "input": {
+                "query": "LF original question"
+              },
+              "output": {
+                "final_output": "done"
+              },
+              "status": "success",
+              "visibility": "visible"
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "tool",
+              "parentSpanId": "graph",
+              "sourceParentSpanId": "graph",
+              "displayParentSpanId": "root",
+              "name": "knowledge_retrieve",
+              "kind": "tool",
+              "startedAt": 1794830400000,
+              "completedAt": 1794830400000,
+              "durationMs": 0,
+              "input": {
+                "query": "hello"
+              },
+              "output": {
+                "documents": [
+                  {
+                    "text": "完整原文"
+                  }
+                ]
+              },
+              "status": "success",
+              "visibility": "visible",
+              "toolCallId": "lf-call",
+              "orphanTool": true
+            }
+          ],
+          "model": "fixture-model"
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-17T04:32:35.033Z"
+    },
+    {
+      "name": "codex-thread-first",
+      "input": {
+        "framework": "codex",
+        "query": "thread first turn",
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "user": "collector-golden-owner",
+        "sourceKind": "codex-turn",
+        "sourceExecutionId": "turn-one",
+        "task_id": "collector-thread-one",
+        "upload_id": "collector-thread-one",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          }
+        ],
+        "traceThread": {
+          "sourceThreadId": "collector-thread",
+          "sourceKind": "codex-session",
+          "startedAt": "2026-11-16T12:00:00.000Z",
+          "updatedAt": "2026-11-16T12:00:03.000Z",
+          "metadata": {
+            "extension": 0,
+            "nullable": null
+          },
+          "events": [
+            {
+              "eventKey": "event-one",
+              "kind": "turn",
+              "status": "done",
+              "sourceTurnId": "turn-one",
+              "startedAt": "2026-11-16T12:00:00.000Z",
+              "completedAt": "2026-11-16T12:00:02.000Z",
+              "relatedSourceTurnId": "turn-two",
+              "payload": {
+                "complete": "原线程正文",
+                "n": 0
+              }
+            }
+          ]
+        }
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-thread-one",
+          "taskId": "collector-thread-one",
+          "query": "thread first turn",
+          "framework": "codex",
+          "tokens": null,
+          "cost": null,
+          "latency": null,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "codex",
+          "finalResult": null,
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "without-skill",
+          "observedAgents": [
+            "codex"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-thread-one",
+          "label": "without-skill",
+          "query": "thread first turn",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": null,
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            }
+          ],
+          "model": null
+        }
+      },
+      "thread": {
+        "id": "cmwk74wyy000y35f6b6mbdu7n",
+        "framework": "codex",
+        "sourceThreadId": "collector-thread",
+        "sourceKind": "codex-session",
+        "user": "collector-golden-owner",
+        "startedAt": "2026-11-16T12:00:00.000Z",
+        "updatedAt": "2026-11-16T12:00:03.000Z",
+        "metadataJson": "{\"extension\":0,\"nullable\":null}"
+      },
+      "threadEvents": [
+        {
+          "id": "cmwk74wyz001035f60lut8v4l",
+          "eventKey": "trace-thread:d4b700955e456b97cb61e223:event-one",
+          "traceThreadId": "cmwk74wyy000y35f6b6mbdu7n",
+          "executionId": "collector-thread-one",
+          "relatedExecutionId": null,
+          "kind": "turn",
+          "status": "done",
+          "sourceTurnId": "turn-one",
+          "phaseId": null,
+          "startedAt": "2026-11-16T12:00:00.000Z",
+          "completedAt": "2026-11-16T12:00:02.000Z",
+          "payloadJson": "{\"complete\":\"原线程正文\",\"n\":0,\"relatedSourceExecutionId\":\"turn-two\"}"
+        }
+      ],
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "codex-thread-second-reconciled",
+      "input": {
+        "framework": "codex",
+        "query": "thread second turn",
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "user": "collector-golden-owner",
+        "sourceKind": "codex-turn",
+        "sourceExecutionId": "turn-two",
+        "task_id": "collector-thread-two",
+        "upload_id": "collector-thread-two",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          }
+        ],
+        "traceThread": {
+          "sourceThreadId": "collector-thread",
+          "sourceKind": "codex-session",
+          "startedAt": "2026-11-16T12:00:00.000Z",
+          "updatedAt": "2026-11-16T12:00:03.000Z",
+          "metadata": {
+            "extension": 0,
+            "nullable": null
+          },
+          "events": [
+            {
+              "eventKey": "event-one",
+              "kind": "turn",
+              "status": "done",
+              "sourceTurnId": "turn-one",
+              "startedAt": "2026-11-16T12:00:00.000Z",
+              "completedAt": "2026-11-16T12:00:02.000Z",
+              "relatedSourceTurnId": "turn-two",
+              "payload": {
+                "complete": "原线程正文",
+                "n": 0
+              }
+            },
+            {
+              "eventKey": "event-two",
+              "kind": "turn",
+              "status": "done",
+              "sourceTurnId": "turn-two",
+              "startedAt": "2026-11-16T12:00:01.000Z",
+              "payload": {
+                "previousSourceExecutionId": "turn-one"
+              }
+            }
+          ]
+        }
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-thread-two",
+          "taskId": "collector-thread-two",
+          "query": "thread second turn",
+          "framework": "codex",
+          "tokens": null,
+          "cost": null,
+          "latency": null,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "codex",
+          "finalResult": null,
+          "skill": null,
+          "skills": [],
+          "invokedSkills": [],
+          "skillVersion": null,
+          "label": "without-skill",
+          "observedAgents": [
+            "codex"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-thread-two",
+          "label": "without-skill",
+          "query": "thread second turn",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": null,
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            }
+          ],
+          "model": null
+        }
+      },
+      "thread": {
+        "id": "cmwk74wyy000y35f6b6mbdu7n",
+        "framework": "codex",
+        "sourceThreadId": "collector-thread",
+        "sourceKind": "codex-session",
+        "user": "collector-golden-owner",
+        "startedAt": "2026-11-16T12:00:00.000Z",
+        "updatedAt": "2026-11-16T12:00:03.000Z",
+        "metadataJson": "{\"extension\":0,\"nullable\":null}"
+      },
+      "threadEvents": [
+        {
+          "id": "cmwk74wyz001035f60lut8v4l",
+          "eventKey": "trace-thread:d4b700955e456b97cb61e223:event-one",
+          "traceThreadId": "cmwk74wyy000y35f6b6mbdu7n",
+          "executionId": "collector-thread-one",
+          "relatedExecutionId": "collector-thread-two",
+          "kind": "turn",
+          "status": "done",
+          "sourceTurnId": "turn-one",
+          "phaseId": null,
+          "startedAt": "2026-11-16T12:00:00.000Z",
+          "completedAt": "2026-11-16T12:00:02.000Z",
+          "payloadJson": "{\"complete\":\"原线程正文\",\"n\":0,\"relatedSourceExecutionId\":\"turn-two\"}"
+        },
+        {
+          "id": "cmwk74wze001835f6o5oui4p0",
+          "eventKey": "trace-thread:d4b700955e456b97cb61e223:event-two",
+          "traceThreadId": "cmwk74wyy000y35f6b6mbdu7n",
+          "executionId": "collector-thread-two",
+          "relatedExecutionId": null,
+          "kind": "turn",
+          "status": "done",
+          "sourceTurnId": "turn-two",
+          "phaseId": null,
+          "startedAt": "2026-11-16T12:00:01.000Z",
+          "completedAt": null,
+          "payloadJson": "{\"previousSourceExecutionId\":\"turn-one\"}"
+        }
+      ],
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z"
+    },
+    {
+      "name": "routing-outcome-config-v0",
+      "input": {
+        "task_id": "collector-config-task",
+        "upload_id": "collector-config-exec",
+        "framework": "pi-agent",
+        "user": "forged",
+        "query": "route fixture",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:03.000Z",
+        "tokens": 0,
+        "cost": 0,
+        "latency": 0,
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "second turn",
+            "timestamp": "2026-11-16T12:00:01.000Z"
+          },
+          {
+            "role": "assistant",
+            "content": "second response",
+            "timestamp": "2026-11-16T12:00:02.000Z"
+          }
+        ],
+        "session_merge_strategy": "snapshot-replace",
+        "complete_session_snapshot": true,
+        "extension": {
+          "n": 0,
+          "nullable": null
+        },
+        "label": "collector-golden-skill-v0"
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-config-exec",
+          "taskId": "collector-config-task",
+          "query": "route fixture",
+          "framework": "pi-agent",
+          "tokens": 0,
+          "cost": 0,
+          "latency": 0,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "pi-agent",
+          "finalResult": null,
+          "skill": "collector-golden-skill",
+          "skills": [
+            "collector-golden-skill"
+          ],
+          "invokedSkills": [
+            {
+              "name": "collector-golden-skill",
+              "version": 0
+            }
+          ],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [
+            "pi-agent"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-config-task",
+          "label": "collector-golden-skill-v0",
+          "query": "route fixture",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": "2026-11-16T12:00:03.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "second turn",
+              "timestamp": "2026-11-16T12:00:01.000Z"
+            },
+            {
+              "role": "assistant",
+              "content": "second response",
+              "timestamp": "2026-11-16T12:00:02.000Z"
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z",
+      "configs": [
+        {
+          "id": "collector-outcome-config",
+          "query": "route fixture",
+          "skill": "collector-golden-skill",
+          "skillVersion": 0,
+          "datasetType": "outcome",
+          "routingIntent": null,
+          "routingAnchors": null,
+          "expectedSkills": null,
+          "standardAnswer": "Expected complete answer",
+          "rootCauses": "[{\"content\":\"expected cause\",\"weight\":1}]",
+          "keyActions": "[{\"content\":\"Read full fixture\",\"weight\":1},{\"content\":\"Return original result\",\"weight\":1}]",
+          "extractedKeyActions": "[{\"id\":\"ka-one\",\"content\":\"Read full fixture\",\"weight\":1,\"controlFlowType\":\"required\",\"skillSource\":\"collector-golden-skill\"},{\"id\":\"ka-two\",\"content\":\"Return original result\",\"weight\":1,\"controlFlowType\":\"required\",\"skillSource\":\"collector-golden-skill\"}]",
+          "user": "collector-golden-owner",
+          "parseStatus": "completed"
+        },
+        {
+          "id": "collector-routing-config",
+          "query": "route fixture",
+          "skill": "collector-golden-skill",
+          "skillVersion": 0,
+          "datasetType": "routing",
+          "routingIntent": "route fixture",
+          "routingAnchors": "[\"route fixture\"]",
+          "expectedSkills": "[{\"skill\":\"collector-golden-skill\",\"version\":0}]",
+          "standardAnswer": "",
+          "rootCauses": null,
+          "keyActions": null,
+          "extractedKeyActions": null,
+          "user": "collector-golden-owner",
+          "parseStatus": "completed"
+        }
+      ],
+      "parsedFlows": [
+        {
+          "id": "collector-static-flow",
+          "skillId": "cmwk7wkok0002xpy8tggw5ipl",
+          "version": 0,
+          "user": "collector-golden-owner",
+          "flowJson": "{\"steps\":[{\"id\":\"ka-one\",\"name\":\"Read full fixture\",\"description\":\"retain complete body\",\"type\":\"action\"},{\"id\":\"ka-two\",\"name\":\"Return original result\",\"description\":\"original second action\",\"type\":\"action\"}],\"branches\":[]}",
+          "mermaidCode": null,
+          "parsedAt": "2026-11-17T04:54:05.685Z"
+        }
+      ],
+      "expected_fields": {
+        "isSkillCorrect": true,
+        "isAnswerCorrect": false,
+        "answerScore": null,
+        "skillScore": null,
+        "judgmentReason": "结果评估中...",
+        "skillTriggerRate": 1
+      }
+    },
+    {
+      "name": "routing-explicit-label-v2-query-protected",
+      "input": {
+        "task_id": "collector-config-task",
+        "upload_id": "ignored-config-execution",
+        "framework": "pi-agent",
+        "user": "forged",
+        "query": "blocked incoming query",
+        "skill": "collector-golden-skill",
+        "skill_version": 2,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:03.000Z",
+        "tokens": 0,
+        "cost": 0,
+        "latency": 0,
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "second turn",
+            "timestamp": "2026-11-16T12:00:01.000Z"
+          },
+          {
+            "role": "assistant",
+            "content": "second response",
+            "timestamp": "2026-11-16T12:00:02.000Z"
+          }
+        ],
+        "session_merge_strategy": "snapshot-replace",
+        "complete_session_snapshot": true,
+        "extension": {
+          "n": 0,
+          "nullable": null
+        },
+        "label": "collector-golden-skill-v2"
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-config-exec",
+          "taskId": "collector-config-task",
+          "query": "route fixture",
+          "framework": "pi-agent",
+          "tokens": 0,
+          "cost": 0,
+          "latency": 0,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "pi-agent",
+          "finalResult": null,
+          "skill": "collector-golden-skill",
+          "skills": [
+            "collector-golden-skill"
+          ],
+          "invokedSkills": [
+            {
+              "name": "collector-golden-skill",
+              "version": 2
+            }
+          ],
+          "skillVersion": 2,
+          "label": "collector-golden-skill-v2",
+          "observedAgents": [
+            "pi-agent"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-config-task",
+          "label": "collector-golden-skill-v2",
+          "query": "route fixture",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": "2026-11-16T12:00:03.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "second turn",
+              "timestamp": "2026-11-16T12:00:01.000Z"
+            },
+            {
+              "role": "assistant",
+              "content": "second response",
+              "timestamp": "2026-11-16T12:00:02.000Z"
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z",
+      "configs": [
+        {
+          "id": "collector-outcome-config",
+          "query": "route fixture",
+          "skill": "collector-golden-skill",
+          "skillVersion": 0,
+          "datasetType": "outcome",
+          "routingIntent": null,
+          "routingAnchors": null,
+          "expectedSkills": null,
+          "standardAnswer": "Expected complete answer",
+          "rootCauses": "[{\"content\":\"expected cause\",\"weight\":1}]",
+          "keyActions": "[{\"content\":\"Read full fixture\",\"weight\":1},{\"content\":\"Return original result\",\"weight\":1}]",
+          "extractedKeyActions": "[{\"id\":\"ka-one\",\"content\":\"Read full fixture\",\"weight\":1,\"controlFlowType\":\"required\",\"skillSource\":\"collector-golden-skill\"},{\"id\":\"ka-two\",\"content\":\"Return original result\",\"weight\":1,\"controlFlowType\":\"required\",\"skillSource\":\"collector-golden-skill\"}]",
+          "user": "collector-golden-owner",
+          "parseStatus": "completed"
+        },
+        {
+          "id": "collector-routing-config",
+          "query": "route fixture",
+          "skill": "collector-golden-skill",
+          "skillVersion": 0,
+          "datasetType": "routing",
+          "routingIntent": "route fixture",
+          "routingAnchors": "[\"route fixture\"]",
+          "expectedSkills": "[{\"skill\":\"collector-golden-skill\",\"version\":0}]",
+          "standardAnswer": "",
+          "rootCauses": null,
+          "keyActions": null,
+          "extractedKeyActions": null,
+          "user": "collector-golden-owner",
+          "parseStatus": "completed"
+        }
+      ],
+      "parsedFlows": [
+        {
+          "id": "collector-static-flow",
+          "skillId": "cmwk7wkok0002xpy8tggw5ipl",
+          "version": 0,
+          "user": "collector-golden-owner",
+          "flowJson": "{\"steps\":[{\"id\":\"ka-one\",\"name\":\"Read full fixture\",\"description\":\"retain complete body\",\"type\":\"action\"},{\"id\":\"ka-two\",\"name\":\"Return original result\",\"description\":\"original second action\",\"type\":\"action\"}],\"branches\":[]}",
+          "mermaidCode": null,
+          "parsedAt": "2026-11-17T04:54:05.685Z"
+        }
+      ],
+      "expected_fields": {
+        "isSkillCorrect": false,
+        "isAnswerCorrect": false,
+        "answerScore": null,
+        "skillScore": null,
+        "judgmentReason": "结果评估中...",
+        "skillTriggerRate": 0
+      }
+    },
+    {
+      "name": "routing-force-query-no-match",
+      "input": {
+        "task_id": "collector-config-task",
+        "upload_id": "collector-config-exec",
+        "framework": "pi-agent",
+        "user": "forged",
+        "query": "unmatched forced question",
+        "skill": "collector-golden-skill",
+        "skill_version": 0,
+        "timestamp": "2026-11-16T12:00:00.000Z",
+        "trace_started_at": "2026-11-16T12:00:00.000Z",
+        "trace_completed_at": "2026-11-16T12:00:03.000Z",
+        "tokens": 0,
+        "cost": 0,
+        "latency": 0,
+        "interactions": [
+          {
+            "role": "user",
+            "content": "真实原文 中文\nread fixture",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "extension": {
+              "n": 0,
+              "nullable": null
+            }
+          },
+          {
+            "role": "assistant",
+            "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+            "timestamp": "2026-11-16T12:00:00.000Z",
+            "tool_calls": [
+              {
+                "id": "read-1",
+                "name": "read",
+                "arguments": "{\"path\":\"fixture.json\"}",
+                "output": "full tool\noutput 中文",
+                "status": "success"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "second turn",
+            "timestamp": "2026-11-16T12:00:01.000Z"
+          },
+          {
+            "role": "assistant",
+            "content": "second response",
+            "timestamp": "2026-11-16T12:00:02.000Z"
+          }
+        ],
+        "session_merge_strategy": "snapshot-replace",
+        "complete_session_snapshot": true,
+        "extension": {
+          "n": 0,
+          "nullable": null
+        },
+        "label": "collector-golden-skill-v0",
+        "force_query_update": true
+      },
+      "snapshot": {
+        "execution": {
+          "id": "collector-config-exec",
+          "taskId": "collector-config-task",
+          "query": "unmatched forced question",
+          "framework": "pi-agent",
+          "tokens": 0,
+          "cost": 0,
+          "latency": 0,
+          "toolCallCount": null,
+          "llmCallCount": null,
+          "inputTokens": null,
+          "outputTokens": null,
+          "toolCallErrorCount": null,
+          "cacheReadInputTokens": null,
+          "cacheCreationInputTokens": null,
+          "maxSingleCallTokens": null,
+          "reasoningTokens": null,
+          "timestamp": "2026-11-16T12:00:00.000Z",
+          "model": null,
+          "endpoint": null,
+          "agentName": "pi-agent",
+          "finalResult": null,
+          "skill": "collector-golden-skill",
+          "skills": [
+            "collector-golden-skill"
+          ],
+          "invokedSkills": [
+            {
+              "name": "collector-golden-skill",
+              "version": 0
+            }
+          ],
+          "skillVersion": 0,
+          "label": "collector-golden-skill-v0",
+          "observedAgents": [
+            "pi-agent"
+          ],
+          "parentExecutionId": null,
+          "rootExecutionId": null,
+          "agentSessionId": null,
+          "subagentType": null,
+          "subagentName": null,
+          "isSubagent": false
+        },
+        "session": {
+          "taskId": "collector-config-task",
+          "label": "collector-golden-skill-v0",
+          "query": "unmatched forced question",
+          "startTime": "2026-11-16T12:00:00.000Z",
+          "endTime": "2026-11-16T12:00:03.000Z",
+          "interactions": [
+            {
+              "role": "user",
+              "content": "真实原文 中文\nread fixture",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "extension": {
+                "n": 0,
+                "nullable": null
+              }
+            },
+            {
+              "role": "assistant",
+              "content": "complete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete outputcomplete output",
+              "timestamp": "2026-11-16T12:00:00.000Z",
+              "tool_calls": [
+                {
+                  "id": "read-1",
+                  "name": "read",
+                  "arguments": "{\"path\":\"fixture.json\"}",
+                  "output": "full tool\noutput 中文",
+                  "status": "success"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "second turn",
+              "timestamp": "2026-11-16T12:00:01.000Z"
+            },
+            {
+              "role": "assistant",
+              "content": "second response",
+              "timestamp": "2026-11-16T12:00:02.000Z"
+            }
+          ],
+          "model": null
+        }
+      },
+      "children": [],
+      "session_default_clock": "2026-11-16T12:00:00.000Z",
+      "configs": [
+        {
+          "id": "collector-outcome-config",
+          "query": "route fixture",
+          "skill": "collector-golden-skill",
+          "skillVersion": 0,
+          "datasetType": "outcome",
+          "routingIntent": null,
+          "routingAnchors": null,
+          "expectedSkills": null,
+          "standardAnswer": "Expected complete answer",
+          "rootCauses": "[{\"content\":\"expected cause\",\"weight\":1}]",
+          "keyActions": "[{\"content\":\"Read full fixture\",\"weight\":1},{\"content\":\"Return original result\",\"weight\":1}]",
+          "extractedKeyActions": "[{\"id\":\"ka-one\",\"content\":\"Read full fixture\",\"weight\":1,\"controlFlowType\":\"required\",\"skillSource\":\"collector-golden-skill\"},{\"id\":\"ka-two\",\"content\":\"Return original result\",\"weight\":1,\"controlFlowType\":\"required\",\"skillSource\":\"collector-golden-skill\"}]",
+          "user": "collector-golden-owner",
+          "parseStatus": "completed"
+        },
+        {
+          "id": "collector-routing-config",
+          "query": "route fixture",
+          "skill": "collector-golden-skill",
+          "skillVersion": 0,
+          "datasetType": "routing",
+          "routingIntent": "route fixture",
+          "routingAnchors": "[\"route fixture\"]",
+          "expectedSkills": "[{\"skill\":\"collector-golden-skill\",\"version\":0}]",
+          "standardAnswer": "",
+          "rootCauses": null,
+          "keyActions": null,
+          "extractedKeyActions": null,
+          "user": "collector-golden-owner",
+          "parseStatus": "completed"
+        }
+      ],
+      "parsedFlows": [
+        {
+          "id": "collector-static-flow",
+          "skillId": "cmwk7wkok0002xpy8tggw5ipl",
+          "version": 0,
+          "user": "collector-golden-owner",
+          "flowJson": "{\"steps\":[{\"id\":\"ka-one\",\"name\":\"Read full fixture\",\"description\":\"retain complete body\",\"type\":\"action\"},{\"id\":\"ka-two\",\"name\":\"Return original result\",\"description\":\"original second action\",\"type\":\"action\"}],\"branches\":[]}",
+          "mermaidCode": null,
+          "parsedAt": "2026-11-17T04:54:05.685Z"
+        }
+      ],
+      "expected_fields": {
+        "isSkillCorrect": false,
+        "isAnswerCorrect": false,
+        "answerScore": null,
+        "skillScore": null,
+        "judgmentReason": "结果评估中...",
+        "skillTriggerRate": null
+      }
+    }
+  ],
+  "config_evidence_sha256": "4400491bc45bd0b9763c5148c55c58282cf734e468320662fb4e5005e146ebea"
+}
