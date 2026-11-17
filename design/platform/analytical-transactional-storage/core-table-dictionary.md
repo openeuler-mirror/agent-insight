@@ -2955,3 +2955,10 @@ erDiagram
     infra_sources ||--o{ session_infra_links : source
     infra_sources ||--o{ infra_metric_samples_CH : scoped_samples
 ```
+
+
+## RAS/FI领域兼容约束
+
+不新增物理表。RAS删除沿用deletion_requests(resource_kind=ras_task, resource_id=SHA256([owner_principal_id,task_id]), incarnation=1)持久屏障，保留ras_event_receipts及CH原事实；关联Trace仍使用原trace删除屏障。FI的三个固定kind由019 platform_control_records保存原scalar/parent/unique，领域动作在同事务执行状态与owner/lease约束，注册workerId不作为授权凭证。
+
+FI首个claim摘要保存于inbox_receipts(workspace_id, source_id=fi-first-lease:<owner>, event_id=FI内部record_id, content_hash=首claim摘要)。claim摘要绑定record_id/workerId/claimedAt，不以hostname授权；后续无token回执只接受仍为首lease的原客户端，已重领返回409。Session-only删除依据collector_source_v1的原session表示计1，不伪造Execution。

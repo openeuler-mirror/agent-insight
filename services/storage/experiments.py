@@ -255,7 +255,18 @@ class ExperimentStore:
         data['traceAttempts']=[a for c in data['cases'] for a in c['traceAttempts']]
         if len(_json(data).encode())+len(_json(executions).encode())+len(_json(sessions).encode())+len(_json(readiness).encode())>MAX_BYTES:raise ExperimentTooLarge('Experiment frozen source response exceeds budget')
         supplementary={'cancellations':data['cancellations'],'sessions':sessions,'local_executions':[],'business_trace_readiness':readiness}
-        if not any(c.get('fiRunId') for c in data['cases']):supplementary['fi_runs']=[]
+        fi_keys={c['fiRunId'] for c in data['cases'] if c.get('fiRunId')}
+        supplementary['fi_runs']=[]
+        if fi_keys:
+            from .platform_controls import PlatformControls
+            controls=PlatformControls(self.control)
+            public={'id','runId','fiTaskId','itemId','user','platform','agent','fault','submode','status','stopRequested','sessionTaskId','error','createdAt','updatedAt','queuedAt','claimedAt','faultActivated','faultActivatedAt','injectionMethod','outcome','faultContainmentStatus','judgeReason','judgedAt'}
+            rows=con.execute("SELECT * FROM platform_control_records WHERE workspace_id=? AND kind='faultInjectionRun' AND owner_principal_id=? AND state='active'",(ws,head['created_by'])).fetchall()
+            if len(rows)>20000:raise ExperimentTooLarge('FI progress exceeds control budget')
+            for row in rows:
+                metadata=json.loads(row['metadata_json'])
+                if metadata.get('id') in fi_keys or metadata.get('runId') in fi_keys:
+                    source=controls._data(dict(row));supplementary['fi_runs'].append({key:value for key,value in source.items() if key in public})
         if not any(c.get('traceGenerationCommandId') or any(a.get('commandId') for a in c['traceAttempts']) for c in data['cases']):supplementary['commands']=[]
         if head['scope']!='benchmark':supplementary['benchmark_runs']=[]
         if head['scope'] not in {'skill-workbench','skill-case-analysis','grayscale-ab'}:supplementary['grayscale_tasks']=[]
@@ -1619,6 +1630,10 @@ class ExperimentStore:
         head,cp,attempt,slot=self._active(con,token,ws,body);payload=self._load(cp['payload_hash'],cp['payload_ref'])
         if payload['phase']!='execute':raise Conflict('Attempt is not an execution phase')
         self._verify_evidence(con,token,ws,evidence);self._indexed_trace(con,ws,evidence)
+        if body.get('fi_run_id'):
+            from .fault_injection import FaultInjection
+            source=FaultInjection(self.control).assert_completion(con,ws,head['created_by'],identifier(body['fi_run_id']),body.get('fi_task_id'),evidence['execution']['taskId'],payload['checkpoint'])
+            if body.get('fault_injection_type') is not None and source['fault']!=body['fault_injection_type']:raise Conflict('FI fault differs from the execution source')
         case=self._case(con,ws,head['experiment_id'],cp['case_id']);raw=self._load(case['payload_hash'],case['payload_ref']);_,parent=self._plan(con,ws,head['experiment_id'],cp['run_id'])
         raw.update(taskId=evidence['execution']['taskId'],executionId=evidence['execution']['id'],actualOutput=evidence['execution'].get('finalResult') or '',traceGenerationError=None)
         for source,target in [('fi_run_id','fiRunId'),('fi_task_id','fiTaskId'),('fault_injection_type','faultInjectionType')]:

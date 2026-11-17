@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {listCoreFiWorkers,coreFiOwner} from '@/lib/storage-core/fault-injection'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -108,7 +110,7 @@ export async function listLegacyWorkerClients(
   opts?: { status?: string; keyword?: string },
 ): Promise<LegacyWorkerClient[]> {
   const cutoff = new Date(Date.now() - workerOnlineMs())
-  const workers = await prisma.faultInjectionWorker.findMany({
+  const workers = isStorageCoreEnabled() ? (coreFiOwner(user),await listCoreFiWorkers()) : await prisma.faultInjectionWorker.findMany({
     where: { user },
     orderBy: { lastSeenAt: 'desc' },
   })

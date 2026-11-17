@@ -284,7 +284,11 @@ export function startCoreAnalyticsBackground() {
   state.timer=setInterval(()=>{if(!state.active)void poll();},30_000);state.timer.unref();void poll();
 }
 export async function ingestCoreRas(request:Request,events:Record<string,unknown>[],options:CompatibilityOptions={}) {
-  const actor=await compatibilityContext(request,options);
+  let actor:Awaited<ReturnType<typeof compatibilityContext>>;
+  if(!request.headers.has('authorization')&&!request.headers.has('x-witty-api-key')) {
+    const username=process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER?.trim();if(!username)fail('Explicit RAS ingestion identity required',401);
+    const {configuredCoreBackgroundActorForUser}=await import('./compat');actor=await configuredCoreBackgroundActorForUser(username,options);
+  }else actor=await compatibilityContext(request,options);
   if(!actor.token.startsWith('api_'))fail('Collector API credential required',403);
   return rpc(actor,'ras_ingest',{events},options,true);
 }
@@ -313,4 +317,8 @@ export async function readCoreRasMetadata(request:Request,limit:number,options:C
   });
   const validate=async()=>{const check=await rpc(actor,'validate_ras_read',{read_token:value.read_token},options);if(check.scope_fingerprint!==value.scope_fingerprint)fail('RAS authorization changed',403);};
   return {actor,rows,validate};
+}
+
+export async function deleteCoreRas(request:Request,taskIds:string[],options:CompatibilityOptions={}){
+ const actor=await compatibilityContext(request,options);return rpc(actor,'ras_delete',{task_ids:taskIds},options,true);
 }

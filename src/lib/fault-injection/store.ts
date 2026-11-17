@@ -22,6 +22,9 @@ import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/
 import { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
 
+import {coreFiRpc,coreFiOwner,newCoreFiId,refreshCoreFiProgress} from '@/lib/storage-core/fault-injection'
+import type {FaultInjectionTask,FaultInjectionRun} from '@prisma/client'
+
 export function newTaskKey(): string {
   return `task-${randomBytes(4).toString('hex')}`
 }
@@ -47,6 +50,18 @@ export async function createTaskWithRuns(input: {
   if (stable && (!/^task-[a-f0-9]{8,64}$/.test(stable.taskKey) || stable.runIds.length !== input.items.length || new Set(stable.runIds).size !== stable.runIds.length || stable.runIds.some(value => !/^ras-\d{8}T[0-9A-Za-z_-]+$/.test(value)))) throw new Error('FI stable identity is invalid')
   const stableCatalog = stable ? await listFaultsViaPython(input.platform) : undefined
   const stableHash = stable ? createHash('sha256').update(JSON.stringify({user: input.user, name: input.name || '', platform: input.platform, agent: input.agent, prompt: input.prompt, workspace: input.workspace, model: input.model || null, timeoutSeconds: input.timeoutSeconds ?? null, targetWorkerId: input.targetWorkerId || null, items: input.items, runIds: stable.runIds})).digest('hex') : undefined
+  if (isStorageCoreEnabled()) {
+    const user = coreFiOwner(input.user), taskKey = stable?.taskKey || newTaskKey(), id = newCoreFiId()
+    const items = input.items.map((item,index) => ({item_id:`item-${index+1}`,fault:item.fault,submode:item.submode||null,run_id:stable?.runIds[index]||newRunId(),status:'queued',phase:'queued',error:null as string|null,result:null as Record<string,unknown>|null}))
+    const catalog = (stableCatalog || await listFaultsViaPython(input.platform)) as Array<{id?:string;name?:string;skillName?:string;skill_name?:string;submodes?:Array<{id:string;name:string}>}>
+    const byFault = new Map(catalog.map(row => [String(row.id||row.name||''),row]))
+    const task = {id,taskKey,name:input.name||`注入任务 ${taskKey}`,status:input.initialStatus||'queued',platform:input.platform,agent:input.agent,prompt:input.prompt,workspace:input.workspace,model:input.model||null,requestJson:JSON.stringify({timeoutSeconds:input.timeoutSeconds??null,...(stableHash?{coreRequestHash:stableHash}:{})}),itemsJson:JSON.stringify(items),progressJson:JSON.stringify({total:items.length,queued:items.length,running:0,completed:0,failed:0,judge_skipped:0,stopped:0}),user,startedAt:input.initialStatus==='running'?new Date():null}
+    const runs = items.map(item => {
+      const meta=byFault.get(item.fault),prompt=composeFaultPrompt({skillName:meta?.skillName||meta?.skill_name||item.fault,basePrompt:input.prompt,submode:findSubmode(meta?.submodes||[],item.submode)})
+      return {id:newCoreFiId(),runId:item.run_id,fiTaskId:id,itemId:item.item_id,user,platform:input.platform,agent:input.agent,fault:item.fault,submode:item.submode,status:'queued',queuedAt:new Date(),requestJson:JSON.stringify({prompt,workspace:input.workspace,model:input.model||null,timeoutSeconds:input.timeoutSeconds??null,targetWorkerId:input.targetWorkerId||null})}
+    })
+    return coreFiRpc<{task:FaultInjectionTask;runs:FaultInjectionRun[];items:typeof items}>('create',{task,runs})
+  }
   const create = async (store: Pick<typeof prisma, 'faultInjectionTask' | 'faultInjectionRun'>) => {
   if (stable) {
     const previous = await store.faultInjectionTask.findUnique({where: {taskKey: stable.taskKey}, include: {runs: true}})
@@ -182,6 +197,8 @@ export async function persistFiCollectIngress(input: {
   user: string | null
   payload: CollectPayload
   stopped?: boolean
+  workerId?: string
+  claimToken?: string
 }) {
   const rawTaskId =
     typeof input.payload.taskId === 'string' ? input.payload.taskId.trim() : ''
@@ -189,6 +206,11 @@ export async function persistFiCollectIngress(input: {
     input.payload.sessionAligned !== false && isPlatformSessionId(rawTaskId)
   const sessionTaskId = sessionAligned ? rawTaskId : null
 
+  if (isStorageCoreEnabled()) {
+    coreFiOwner(input.user)
+    const {run}=await coreFiRpc<{run:FaultInjectionRun}>('collect',{runId:input.runId,workerId:input.workerId,claimToken:input.claimToken,data:{status:input.stopped?'stopped':sessionAligned?'completed':'failed',error:input.stopped?'stopped by user':sessionAligned?null:'session_unaligned: missing platform session id (FI runId is not a RAS join key)',sessionTaskId,faultActivated:Boolean(input.payload.faultActivated),faultActivatedAt:input.payload.faultActivatedAt!=null?new Date(input.payload.faultActivatedAt):null,injectionMethod:input.payload.injectionMethod||null,markersJson:JSON.stringify((input.payload.markers||[]).filter(marker=>!marker||typeof marker!=='object'||(marker as {kind?:unknown}).kind!=='evaluation'))}})
+    return run
+  }
   const updated = await prisma.faultInjectionRun.update({
     where: { runId: input.runId },
     data: {
@@ -252,6 +274,7 @@ async function loadBusinessSession(sessionTaskId: string, identity: FiTraceIdent
 }
 
 export async function refreshTaskProgress(taskId: string) {
+  if (isStorageCoreEnabled()) return refreshCoreFiProgress(taskId)
   const task = await prisma.faultInjectionTask.findUnique({ where: { id: taskId } })
   if (!task) return null
   const runs = await prisma.faultInjectionRun.findMany({ where: { fiTaskId: taskId } })

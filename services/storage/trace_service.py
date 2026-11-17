@@ -460,7 +460,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body(max_bytes=4*1024*1024)
                 if error:self.reply(error,{'error':'Bounded analytics JSON required'});return
                 action=value.get('action')
-                if action in {'prepare','publish','ras_ingest','prepare_sources'}:
+                if action in {'prepare','publish','ras_ingest','ras_delete','prepare_sources'}:
                     principal=runtime.iam.scope(token).principal_id
                     if not verify_controller_proof(runtime.controller_key_file,'trace-analytics/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private analytics controller attestation required')
                 result=TraceAnalytics(runtime.queries,runtime.authorized).dispatch(action,token,workspace,value)
@@ -763,6 +763,25 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                     device=supplied[0]
                 result=BenchmarkStore(runtime.control,controller_key_file=runtime.controller_key_file,definitions_verifier=(lambda *_:True) if verified else None,device_verifier=(lambda client,_:client==device) if device else None,evidence=TraceEvidence(runtime.queries,runtime.authorized),facts=runtime.facts).callback(action,capabilities[0],value,verified_device_client_id=device)
                 self.reply(200,{'value':result},max_bytes=128*1024*1024);return
+            if self.command=='POST' and pieces==['v1','compat','fault-injection']:
+                from .controller_protocol import verify_controller_proof
+                from .fault_injection import FaultInjection
+                value,error=self.body(max_bytes=16*1024*1024)
+                if error:self.reply(error,{'error':'Bounded FI JSON required'});return
+                if set(value)-{'action','payload','username','capability'}:raise ValueError('Fixed FI request required')
+                capability=value.get('capability');service=FaultInjection(runtime.control)
+                if capability:
+                    if not isinstance(capability,dict) or set(capability)-{'type','credential_hash','client_id'} or capability.get('type')!='device' or not re.fullmatch('[a-f0-9]{64}',capability.get('credential_hash','')):raise Forbidden('Actual device capability required')
+                    service.records.capability=capability
+                    with runtime.control.read_transaction() as con:
+                        scope,row=service.records._capability_scope(con);workspace=row['workspace_id'];username=row['legacy_username']
+                    principal='device:'+capability['credential_hash'];token='internal-fi-device'
+                    if params.get('workspace_id') and params['workspace_id']!=workspace:raise Forbidden('Device workspace differs')
+                else:
+                    token=self.token();workspace=runtime.workspace(token,params.get('workspace_id'),None);scope=runtime.iam.scope(token);principal=scope.principal_id;username=value.get('username')
+                if not verify_controller_proof(runtime.controller_key_file,'fault-injection/v1',principal,workspace if not capability or value.get('action')!='identity' else 'device',self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private FI controller attestation required')
+                result=service.dispatch(token,workspace,value.get('action'),value.get('payload',{}),username=username,capability=capability)
+                self.reply(200,{'value':result},max_bytes=16*1024*1024);return
             token=self.token()
             if pieces[:2]==['v1','compat']:
                 self.dispatch_compat(token,pieces,params);return

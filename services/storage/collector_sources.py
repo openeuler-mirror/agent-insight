@@ -308,6 +308,8 @@ class CollectorSources:
     def _reserve(self,con,token,workspace,value):
         identifier(workspace);body,task,execution,framework,started,completed=self._input(value);digest=_hash({key:item for key,item in body.items() if key!='verified_client_id'});slot=_hash(body['operation_key'])
         scope=self._scope(con,token,workspace);task=task or execution or str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,scope.principal_id,slot,'missing-task'])))
+        from .trace_analytics import ras_task_deleted
+        if ras_task_deleted(con,workspace,scope.principal_id,task):raise Conflict('Collector task has been deleted')
         alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(workspace,task)).fetchone()
         if alias:trace=alias[0];route,scope,state=self._owned(con,token,workspace,trace)
         else:

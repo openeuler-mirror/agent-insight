@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
-import { ingestCoreRas, analyticsFailure } from '@/lib/storage-core/analytics';
+import { ingestCoreRas, deleteCoreRas, analyticsFailure } from '@/lib/storage-core/analytics';
 import { handleCoreRasGet } from '@/lib/storage-core/ras';
 import { compatibilityFailure } from '@/lib/storage-core/compat';
 
@@ -143,7 +143,8 @@ export async function GET(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const { username: user } = await resolveUser(req)
+    const core=isStorageCoreEnabled()
+    const user=core ? true : (await resolveUser(req)).username
     if (!user) {
       return NextResponse.json(
         { error: "unauthorized", detail: "valid x-witty-api-key required" },
@@ -169,9 +170,10 @@ export async function DELETE(req: Request) {
       )
     }
 
-    const result = await deleteReliabilityTraces({ taskIds, user })
+    const result = core ? await deleteCoreRas(req,taskIds) : await deleteReliabilityTraces({ taskIds, user: user as string })
     return NextResponse.json({ status: "ok", ...result })
   } catch (err: unknown) {
+    if (isStorageCoreEnabled()) return analyticsFailure(err)
     const message = err instanceof Error ? err.message : String(err)
     console.error("[RAS ingest] DELETE error:", message)
     return NextResponse.json({ status: "error", message }, { status: 500 })

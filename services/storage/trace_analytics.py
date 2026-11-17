@@ -35,6 +35,14 @@ def _json(value):
 def _hash(value):return hashlib.sha256(_json(value).encode('utf-8')).hexdigest()
 
 
+def ras_task_barrier(owner,task):return hashlib.sha256(json.dumps([owner,task],separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+
+
+def ras_task_deleted(con,workspace,owner,task):
+    if con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='ras_task' AND resource_id=?",(workspace,ras_task_barrier(owner,task))).fetchone():return True
+    return bool(con.execute("SELECT 1 FROM trace_locators t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_kind='trace' AND a.resource_id=t.trace_id WHERE t.workspace_id=? AND a.owner_principal_id=? AND t.state<>'active' AND (t.trace_id=? OR EXISTS(SELECT 1 FROM trace_legacy_ids l WHERE l.workspace_id=t.workspace_id AND l.trace_id=t.trace_id AND l.alias_kind='task' AND l.alias_id=?))",(workspace,owner,task,task)).fetchone())
+
+
 def _digest(value):
     if not isinstance(value,str) or not re.fullmatch('[0-9a-f]{64}',value):raise ValueError('Invalid analytics digest')
     return value
@@ -268,6 +276,7 @@ class TraceAnalytics:
             frames[trace]={'owner':owner,'task':task,'incarnation':source['route']['incarnation'],'route_epoch':source['route']['route_epoch']}
             if (owner,task) in seen:continue
             seen.add((owner,task))
+            if ras_task_deleted(con,workspace,owner,task):continue
             rows=con.execute('SELECT * FROM ras_event_receipts WHERE workspace_id=? AND owner_principal_id=? AND task_id=? ORDER BY occurred_at_ms,event_id LIMIT ?',(workspace,owner,task,MAX_RAS_EVENTS+1)).fetchall()
             receipts.extend(dict(row) for row in rows)
             if len(receipts)>MAX_RAS_EVENTS:raise AnalyticsTooLarge('RAS event page exceeds 10000; narrow the Trace selection')
@@ -386,7 +395,7 @@ class TraceAnalytics:
         direction=selection['order'].upper()
         sql+=' ORDER BY r.occurred_at_ms '+direction+',r.event_id '+direction+',r.owner_principal_id'
         rows=con.execute(sql+' LIMIT ?',(*args,selection['scan_limit'])).fetchall() if selection['limit'] else []
-        receipts=[dict(row) for row in rows]
+        receipts=[dict(row) for row in rows if not ras_task_deleted(con,workspace,row['owner_principal_id'],row['task_id'])]
         links={}
         for row in receipts:
             key=(row['owner_principal_id'],row['task_id'])
@@ -461,6 +470,7 @@ class TraceAnalytics:
                 if not isinstance(event,dict) or set(event)-{'id','type','taskId','deliveryId','rasSessionKey','framework','platform','anomalyKind','severity','summary','actionTypes','payloadJson','ts'}:raise ValueError('Unknown RAS event fields')
                 for key in ('id','taskId','type'):identifier(event.get(key))
                 event_key=event.get('deliveryId') or event['id'];identifier(event_key)
+                if ras_task_deleted(con,workspace,scope.principal_id,event['taskId']):raise Conflict('RAS task has been deleted')
                 identity=(workspace,scope.principal_id,event['taskId'],event_key)
                 if identity in keys:raise ValueError('Duplicate RAS event identity in one batch')
                 keys.add(identity)
@@ -486,12 +496,58 @@ class TraceAnalytics:
             current=self.iam._scope(con,token);self.iam._workspace(current,workspace,'write')
             if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed during RAS ingestion')
             for row in prepared:
+                if ras_task_deleted(con,workspace,scope.principal_id,row['value']['taskId']):raise Conflict('RAS task was deleted during ingestion')
                 old=con.execute('SELECT * FROM ras_event_receipts WHERE workspace_id=? AND owner_principal_id=? AND task_id=? AND event_key=?',row['identity']).fetchone()
                 if old and old['content_hash']==row['hash']:continue
                 if (dict(old) if old else None)!=row['old']:raise Conflict('Concurrent RAS update; retry with the same normalized event')
                 if old:con.execute('UPDATE ras_event_receipts SET content_hash=?,revision=revision+1,occurred_at_ms=? WHERE workspace_id=? AND owner_principal_id=? AND task_id=? AND event_key=?',(row['hash'],row['stamp'],*row['identity']))
                 else:con.execute('INSERT INTO ras_event_receipts VALUES(?,?,?,?,?,?,?,?,?)',(*row['identity'],row['value']['id'],row['hash'],1,row['stamp'],self.control.clock()))
         return {'accepted':len(prepared),'ids':[row['value']['id'] for row in prepared]}
+
+    def ras_delete(self,token,workspace,tasks):
+        import uuid
+        from .trace_metadata import TraceMetadata
+        identifier(workspace)
+        if not isinstance(tasks,list) or len(tasks)>200:raise ValueError('Bounded RAS task identities required')
+        tasks=list(dict.fromkeys(identifier(task) for task in tasks));deleted={'ras':0,'executions':0,'sessions':0};owned=[]
+        with self.control.transaction() as con:
+            scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'delete');metadata=TraceMetadata(self.control)
+            for task in tasks:
+                if con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='ras_task' AND resource_id=?",(workspace,ras_task_barrier(scope.principal_id,task))).fetchone():continue
+                rows=con.execute("SELECT DISTINCT t.* FROM trace_locators t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_kind='trace' AND a.resource_id=t.trace_id WHERE t.workspace_id=? AND a.owner_principal_id=? AND t.state='active' AND (t.trace_id=? OR EXISTS(SELECT 1 FROM trace_legacy_ids l WHERE l.workspace_id=t.workspace_id AND l.trace_id=t.trace_id AND l.alias_kind='task' AND l.alias_id=?))",(workspace,scope.principal_id,task,task)).fetchall()
+                ras=con.execute('SELECT COUNT(*) FROM ras_event_receipts WHERE workspace_id=? AND owner_principal_id=? AND task_id=?',(workspace,scope.principal_id,task)).fetchone()[0]
+                if not rows and not ras:continue
+                owned.append(task);deleted['ras']+=ras;has_session=False
+                for row in rows:
+                    trace=row['trace_id'];self.iam._authorize_scope(con,scope,workspace,'delete','trace',trace)
+                    executions,sessions=self._ras_delete_counts(con,workspace,dict(row))
+                    deleted['executions']+=executions;has_session=has_session or sessions
+                    metadata._delete(con,token,workspace,trace)
+                deleted['sessions']+=int(has_session)
+                now=self.control.clock()
+                con.execute('INSERT INTO deletion_requests VALUES(?,?,?,?,?,?,?, ?,?,?)',(workspace,str(uuid.uuid4()),'ras_task',ras_task_barrier(scope.principal_id,task),1,1,'requested',scope.principal_id,now,now))
+        return {'taskIds':owned,'deleted':deleted}
+
+    def _ras_delete_counts(self,con,workspace,route):
+        from .observations import ObservationIngest
+        from .collector_sources import CollectorSources
+        load=ObservationIngest(self.control,None)._load
+        if route['source_namespace']=='collector.source.v1':
+            _,_,state=CollectorSources(self.control,ObservationIngest(self.control,None))._state(con,workspace,route['trace_id'])
+            snapshot=load(state['snapshot_ref']) if state and state.get('snapshot_ref') else None
+            from .collector_preparations import CollectorPreparations
+            session_text,_=CollectorPreparations(self.control,ObservationIngest(self.control,None))._prior_session(state)
+            return (int(bool(snapshot and snapshot.get('execution') and not state.get('execution_retired'))),json.loads(session_text) is not None)
+        capsule=None;has_head=False;session=True
+        for head in con.execute("SELECT artifact_ref FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='span'",(workspace,route['trace_id'])):
+            source=load(head[0])
+            if source.get('row',{}).get('is_deleted'):continue
+            has_head=True;sections=source.get('sections',{})
+            if 'legacy_trace' in sections:capsule=json.loads(sections['legacy_trace'])
+            attributes=source.get('row',{}).get('attributes_json')
+            attributes=json.loads(attributes) if isinstance(attributes,str) else attributes or {}
+            if attributes.get('legacy.transfer_has_session') is False:session=False
+        return int(has_head and (capsule is None or bool(capsule.get('execution')))),bool(has_head and (capsule.get('session') is not None if capsule else session))
 
     def validate(self,token,workspace,items):
         if not isinstance(items,list) or len(items)>200:raise ValueError('Analytics validation requires at most 200 sources')
@@ -803,6 +859,7 @@ class TraceAnalytics:
         if action=='publish':return self.publish(token,workspace,value.get('trace_id'),value.get('boundary'),value.get('projection'))
         if action=='ras_read':return self.ras_read(token,workspace,value.get('task_ids'),value.get('selection'))
         if action=='validate_ras_read':return self.validate_ras_read(token,workspace,value.get('read_token'))
+        if action=='ras_delete':return self.ras_delete(token,workspace,value.get('task_ids'))
         if action=='ras_ingest':return self.ras_ingest(token,workspace,value.get('events'))
         if action=='validate':return self.validate(token,workspace,value.get('items'))
         if action=='agent_metadata':return self.agent_metadata(token,workspace,value.get('items'))

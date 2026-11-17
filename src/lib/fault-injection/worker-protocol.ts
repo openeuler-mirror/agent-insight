@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {coreFiRpc,coreFiOwner,listCoreFiWorkers} from '@/lib/storage-core/fault-injection'
 import type { FaultInjectionWorker } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 import { refreshTaskProgress } from '@/lib/fault-injection/store'
@@ -31,6 +33,7 @@ export function workerOnlineMs(): number {
 
 /** Requeue or stop stale collecting leases. Call at heartbeat/claim entry. */
 export async function sweepStaleClaims(user: string | null) {
+  if (isStorageCoreEnabled()) {coreFiOwner(user);return (await coreFiRpc<{reclaimed:number}>('sweep',{claimTimeoutMs:claimTimeoutMs()})).reclaimed}
   const cutoff = new Date(Date.now() - claimTimeoutMs())
   const whereUser = user ? { user } : {}
   const stale = await prisma.faultInjectionRun.findMany({
@@ -96,6 +99,7 @@ export type ClaimedRunPayload = {
   workspaceLogical: string
   timeoutSeconds: number | null
   stopRequested: boolean
+  claimToken?: string
 }
 
 export function runCanBeClaimedByWorker(
@@ -116,6 +120,7 @@ export async function claimQueuedRuns(input: {
   workerId: string
   limit: number
 }): Promise<ClaimedRunPayload[]> {
+  if (isStorageCoreEnabled()) {coreFiOwner(input.user);return (await coreFiRpc<{runs:ClaimedRunPayload[]}>('claim',{workerId:input.workerId,limit:input.limit})).runs}
   const limit = Math.max(1, Math.min(input.limit, 8))
   const claimed: ClaimedRunPayload[] = []
 
@@ -209,6 +214,7 @@ export async function upsertWorkerHeartbeat(input: {
   busySlots?: number
   partial?: boolean
 }) {
+  if (isStorageCoreEnabled()) {coreFiOwner(input.user);return (await coreFiRpc<{worker:FaultInjectionWorker}>('heartbeat',input)).worker}
   if (input.partial) {
     for (let attempt = 0; attempt < 5; attempt++) {
       const previous = await prisma.faultInjectionWorker.findUnique({ where: { workerId: input.workerId } })
@@ -268,6 +274,7 @@ export function mergeWorkerInventory(previous: string | null | undefined, patch:
 }
 
 export async function listStopCommandsForWorker(user: string, workerId: string) {
+  if (isStorageCoreEnabled()) {coreFiOwner(user);return (await coreFiRpc<{commands:Array<{type:'stop';runId:string}>}>('commands',{workerId})).commands}
   const runs = await prisma.faultInjectionRun.findMany({
     where: {
       user,
@@ -283,7 +290,7 @@ export async function listStopCommandsForWorker(user: string, workerId: string) 
 export async function getLatestWorkerInventory(user: string | null, platform: string) {
   if (!user) return null
   const cutoff = new Date(Date.now() - workerOnlineMs())
-  const worker = await prisma.faultInjectionWorker.findFirst({
+  const worker = isStorageCoreEnabled() ? (coreFiOwner(user), (await listCoreFiWorkers(cutoff.getTime()))[0]) : await prisma.faultInjectionWorker.findFirst({
     where: { user, lastSeenAt: { gte: cutoff } },
     orderBy: { lastSeenAt: 'desc' },
   })
@@ -394,12 +401,13 @@ export async function listWorkerExecutionTargets(user: string | null): Promise<W
   const cutoff = new Date(Date.now() - workerOnlineMs())
   let workers: FaultInjectionWorker[]
   try {
-    workers = await prisma.faultInjectionWorker.findMany({
+    workers = isStorageCoreEnabled() ? (coreFiOwner(user),await listCoreFiWorkers(cutoff.getTime())) : await prisma.faultInjectionWorker.findMany({
       where: { user, lastSeenAt: { gte: cutoff } },
       orderBy: { lastSeenAt: 'desc' },
       take: 100,
     })
-  } catch {
+  } catch (error) {
+    if (isStorageCoreEnabled()) throw error
     return []
   }
   const out: WorkerExecutionTarget[] = []
@@ -417,7 +425,7 @@ export async function listPlatformsFromWorkers(user: string | null): Promise<{
 }> {
   const cutoff = new Date(Date.now() - workerOnlineMs())
   const workers = user
-    ? await prisma.faultInjectionWorker.findMany({
+    ? isStorageCoreEnabled() ? (coreFiOwner(user),(await listCoreFiWorkers(cutoff.getTime())).slice(0,5)) : await prisma.faultInjectionWorker.findMany({
         where: { user, lastSeenAt: { gte: cutoff } },
         orderBy: { lastSeenAt: 'desc' },
         take: 5,

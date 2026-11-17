@@ -1,3 +1,5 @@
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -23,7 +25,7 @@ import {
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   try {
     const caller = await resolveWorkerCaller(req)
     if (!caller) {
@@ -41,7 +43,12 @@ export async function GET(req: Request) {
     const commands = await listStopCommandsForWorker(username, workerId)
     return NextResponse.json({ commands })
   } catch (err: unknown) {
+    if (isStorageCoreEnabled()) throw err
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
+}
+
+export async function GET(req: Request) {
+  return withCoreFiRequest(req,()=>handleGET(req))
 }

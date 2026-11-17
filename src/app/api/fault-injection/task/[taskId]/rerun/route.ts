@@ -1,3 +1,6 @@
+import {findCoreFiTask} from '@/lib/storage-core/fault-injection'
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,14 +18,14 @@
  */
 
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
 import { prisma } from '@/lib/storage/prisma'
 import { createTaskWithRuns, refreshTaskProgress } from '@/lib/fault-injection/store'
 import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(
+async function handlePOST(
   req: Request,
   ctx: { params: Promise<{ taskId: string }> },
 ) {
@@ -32,7 +35,7 @@ export async function POST(
     const decoded = decodeURIComponent(taskId)
     const body = await req.json().catch(() => ({}))
 
-    const source = await prisma.faultInjectionTask.findFirst({
+    const source = isStorageCoreEnabled() ? await findCoreFiTask(decoded) : await prisma.faultInjectionTask.findFirst({
       where: {
         OR: [{ taskKey: decoded }, { id: decoded }],
         ...(username ? { user: username } : {}),
@@ -75,7 +78,14 @@ export async function POST(
       needsWorker: true,
     })
   } catch (err: unknown) {
+    if (isStorageCoreEnabled()) throw err
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
+}
+
+export async function POST(
+  req: Request,
+  ctx: { params: Promise<{ taskId: string }> },) {
+  return withCoreFiRequest(req,()=>handlePOST(req,ctx))
 }

@@ -1,3 +1,4 @@
+import {findCoreFiRun,coreFiRpc,coreFiOwner} from '@/lib/storage-core/fault-injection'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -186,6 +187,7 @@ function sleep(ms: number): Promise<void> {
 
 /** 按业务 runId 或历史误写入的 Prisma id 查找 FI Run。 */
 export async function findFiRunByKey(runKey: string) {
+  if (isStorageCoreEnabled()) return findCoreFiRun(runKey)
   return prisma.faultInjectionRun.findFirst({
     where: { OR: [{ runId: runKey }, { id: runKey }] },
     select: {
@@ -393,6 +395,12 @@ export async function createFiCaseTask(req: FiOrchestrateRequest, item: FiOrches
 }
 
 export async function cancelFiExecution(user: string, runId: string): Promise<void> {
+  if (isStorageCoreEnabled()) {
+    coreFiOwner(user);await coreFiRpc('cancel',{runId})
+    const deadline=Date.now()+30000
+    do {const current=await findCoreFiRun(runId);if(!current||['completed','judge_skipped','failed','stopped'].includes(current.status))return;await sleep(250)} while(Date.now()<deadline)
+    throw Object.assign(new Error('FI进程停止尚未确认，已禁止重试'),{code:'EVALUATION_CLEANUP_UNCONFIRMED',status:409})
+  }
   const run = await prisma.faultInjectionRun.findFirst({where: {runId, user}})
   if (!run) return
   await prisma.faultInjectionRun.updateMany({where: {id: run.id, user, status: 'queued'}, data: {status: 'stopped', stopRequested: true, error: 'stopped by user'}})

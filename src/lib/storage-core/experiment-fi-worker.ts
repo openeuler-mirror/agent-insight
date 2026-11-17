@@ -99,6 +99,7 @@ export async function runCoreFiWork(original: ExperimentWorkHandle, context: Cor
             const run = await findFiRunByKey(runId);
             if (!run || run.user !== context.actor.username)
                 throw Error('FI execution identity is unavailable');
+            if (run.stopRequested || ['failed','stopped'].includes(run.status)) throw Object.assign(new Error(run.error || 'FI执行已停止或失败'),{code:'FI_TRACE_UNAVAILABLE'});
             if (run.sessionTaskId) {
                 if (observedTrace !== run.sessionTaskId) {
                     const waiting = await mutation('checkpoint', { expected_revision: handle.checkpoint_revision, command_id: `fi:${runId}`, stage: 'waiting_trace', checkpoint: { command_id: `fi:${runId}`, fi_run_id: runId, fi_task_key: taskKey, observed_trace_id: run.sessionTaskId, status: 'waiting_trace' } }) as ExperimentWorkHandle;

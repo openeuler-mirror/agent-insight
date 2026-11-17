@@ -424,3 +424,8 @@ Session 页面仍调用原 Node 的 Claude/subagent/OpenCode/Dify/Goal/collabora
 core后台poller只使用私有身份映射中显式配置的各owner，并检查read/write；不会以管理员身份为他人拉取入库。无凭据metrics只有明确DEFAULT_INGEST_USER及其唯一私有映射可写；未配置或无法授权时仍保持原best-effort accepted/attachedTo:null且不写。该ACK不是durable/indexed证明；实际accept先同事务记录inbox/outbox和私有样本，worker完成CH发布后才是indexed，同次重试不重复样本，不同接收不按时间/内容合并。
 
 Infra关联补读当前授权Trace boundary内的真实endpoint元数据，兼容旧已发布但无endpoint字段的v1统计投影，不改旧publication/parser版本，不将root endpoint猜给虚拟子Agent。SQL018与CH003及本批逻辑尚待最终集中三库/真实CH/全量/原界面及迁移演练；已做的快速专项不代表生产可切换。
+
+
+RAS 删除保留历史事实并以 owner/task 删除屏障阻止迟到复活；关联 Trace 按当前 delete 权限退休。FI 使用019三个固定控制kind及私有领域动作，claim、停止和collect绑定实际owner、worker与当前lease，业务Session始终来自独立采集器。独立rejudge接口继续返回410，评测使用原实验评估器。
+
+FI claim响应附加claimToken，新业务客户端将其透传collect；既有字段和UI不变。旧客户端首次当前lease可继续无token回调，重领后的不明旧回执返回409。独立Session即使无Execution也按原表示计数并随Trace删除屏障隐藏，RAS-only任务删除后首次迟到采集也被拒绝。所有逻辑接入后的三库、ClickHouse、完整测试、浏览器与迁移演练仍统一执行。

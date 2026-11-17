@@ -1,3 +1,5 @@
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,12 +17,12 @@
  */
 
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
 import { listPlatformsFromWorkers } from '@/lib/fault-injection/worker-protocol'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   const { username } = await resolveUser(req)
   const { platforms, ok, workers } = await listPlatformsFromWorkers(username)
   return NextResponse.json({
@@ -29,4 +31,8 @@ export async function GET(req: Request) {
     needsWorker: true,
     workers,
   })
+}
+
+export async function GET(req: Request) {
+  return withCoreFiRequest(req,()=>handleGET(req))
 }

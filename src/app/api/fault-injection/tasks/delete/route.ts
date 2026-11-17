@@ -1,3 +1,6 @@
+import {coreFiRpc} from '@/lib/storage-core/fault-injection'
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,12 +18,12 @@
  */
 
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
 import { prisma } from '@/lib/storage/prisma'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   try {
     const { username } = await resolveUser(req)
     const body = await req.json()
@@ -28,6 +31,8 @@ export async function POST(req: Request) {
     if (!taskIds.length) {
       return NextResponse.json({ error: 'taskIds required' }, { status: 400 })
     }
+
+    if (isStorageCoreEnabled()) return NextResponse.json(await coreFiRpc('delete',{taskIds}))
 
     const tasks = await prisma.faultInjectionTask.findMany({
       where: {
@@ -46,7 +51,12 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, deleted })
   } catch (err: unknown) {
+    if (isStorageCoreEnabled()) throw err
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
+}
+
+export async function POST(req: Request) {
+  return withCoreFiRequest(req,()=>handlePOST(req))
 }

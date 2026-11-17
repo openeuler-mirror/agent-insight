@@ -500,3 +500,12 @@ source 按 workspace+owner+active endpoint 唯一，保存原 endpoint/scrapeUrl
 人工 links 使用准确 root Trace、source ID、nullable model 和创建顺序；同事务整体替换，包含 null 的重复项应用层去重，空集合恢复自动推断。读取 source 前及 CH 返回前复核当前 IAM。后台 poller 逐明确映射 owner 执行，keyless metrics 只有显式 DEFAULT_INGEST_USER 私有映射才可写，无配置保持原 accepted/attachedTo:null 且不写。
 
 采样 ts_ms 为 Float64，保存0及小数；四个原 JSON分区以原字符串保存，Infinity 桶界继续由现 serialize/deserialize 以null往返。每次独立接收新 sampleID，同次 operation 重试复用；inbox 唯一接收摘要，outbox/lease 负责发布和重试，CH ReplacingMergeTree 以 sampleID 去重重投。不得以时间/model或内容hash去重独立样本。原 push 单合并样本、pull 按model分样本、best-effort ACK 及查询/诊断/导出算法不变；accepted 不是 indexed 证明。完整三库/CH/UI验收按用户新节奏在全部逻辑接完后集中进行。
+
+
+### 第一版 RAS 删除与 FI 控制接入
+
+RAS 保留015事件接收和摘要投影，DELETE按当前owner+delete权限协调Trace退休、Session隐藏和RAS当前回执隐藏。RAS-only任务使用deletion_requests的ras_task种类，resource_id为workspace内owner/task确定摘要；保留receipt和CH历史，所有读取和迟到写入均检查屏障，不认领旧无owner数据。明确配置AGENT_INSIGHT_DEFAULT_INGEST_USER仅可匹配可信私有身份映射，不采用请求body.user。
+
+FI复用019的faultInjectionTask/Run/Worker原字段，新增私有领域RPC fault-injection/v1，限定任务创建/进度/停止/删除、worker注册/claim/心跳/commands、collect动作。领域事务校验当前IAM、actual owner、execute或delete、worker/client绑定、queued CAS和claim lease；collect绑定当前claim，停止或已删除/换代的run不得被迟到结果覆盖。原prompt/marker/业务Trace readiness与实验typed桥接沿用，独立rejudge仍返回410，不新增模型调用。设备只可处理本client的worker动作，不能成为通用execute主体。原UI和响应字段保留，legacy分支保留。
+
+FI claim保持原响应并附加claimToken；新旧业务客户端最小回传该token与workerId。旧客户端首次当前lease无token仍可回调；同worker重领后不能证明当前lease的旧回执返回409，不猜成功。首次lease摘要复用inbox_receipts，未新增字段或新状态表。关联Experiment在派发、收集、结果发布时复核当前attempt/slot/lease/lifecycle、owner及真实FI run/session，stop、supersede、delete不允许迟到完成覆盖。

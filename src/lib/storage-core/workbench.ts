@@ -26,7 +26,7 @@ export async function readWorkbenchFrozenDataset(user:string,experimentId:string
 export async function workbenchControlReadSource(user:string,experimentId?:string){
  const view=await workbenchReadSource(prismaRaw,user,experimentId);if(!isStorageCoreEnabled())return view;
  const reads=new Set(['findUnique','findUniqueOrThrow','findFirst','findFirstOrThrow','findMany','count','aggregate','groupBy']);
- const control=new Set(['grayscaleTask','reliabilityCommand','faultInjectionRun']);
+ const control=new Set(['grayscaleTask','reliabilityCommand']);
  return new Proxy(view,{get(target,key){
   if(typeof key!=='string'||!control.has(key))return Reflect.get(target,key);
   const model=Reflect.get(prismaRaw,key);

@@ -109,18 +109,20 @@ class TraceMetadata:
             return self._patch(con,token,ws,trace_id,changes,expected_revision)
 
     def delete(self,token,ws,trace_id):
-        with self.control.transaction() as con:
-            scope,locator=self._trace(con,token,ws,trace_id,'delete',allow_retired=True)
-            if locator['state']!='active':return False
-            if locator['source_namespace']=='collector.source.v1':
-                from .collector_graphs import cancel_reserved_graph
-                cancel_reserved_graph(self.control,con,ws,trace_id)
-            last=con.execute('SELECT MAX(revision) FROM obs_entity_heads WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone()[0] or 0
-            barrier=revision(max(last,locator['route_epoch'])+1);now=self.control.clock()
-            con.execute("UPDATE trace_locators SET state='deleting',route_epoch=?,updated_at_ms=? WHERE workspace_id=? AND trace_id=?",(revision(locator['route_epoch']+1),max(now,locator['updated_at_ms']),ws,trace_id))
-            existing=con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=?",(ws,trace_id,locator['incarnation'])).fetchone()
-            if not existing:con.execute('INSERT INTO deletion_requests VALUES(?,?,?,?,?,?,\'requested\',?,?,?)',(ws,str(uuid.uuid4()),'trace',trace_id,locator['incarnation'],barrier,scope.principal_id,now,now))
-            return True
+        with self.control.transaction() as con:return self._delete(con,token,ws,trace_id)
+
+    def _delete(self,con,token,ws,trace_id):
+        scope,locator=self._trace(con,token,ws,trace_id,'delete',allow_retired=True)
+        if locator['state']!='active':return False
+        if locator['source_namespace']=='collector.source.v1':
+            from .collector_graphs import cancel_reserved_graph
+            cancel_reserved_graph(self.control,con,ws,trace_id)
+        last=con.execute('SELECT MAX(revision) FROM obs_entity_heads WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone()[0] or 0
+        barrier=revision(max(last,locator['route_epoch'])+1);now=self.control.clock()
+        con.execute("UPDATE trace_locators SET state='deleting',route_epoch=?,updated_at_ms=? WHERE workspace_id=? AND trace_id=?",(revision(locator['route_epoch']+1),max(now,locator['updated_at_ms']),ws,trace_id))
+        existing=con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=?",(ws,trace_id,locator['incarnation'])).fetchone()
+        if not existing:con.execute('INSERT INTO deletion_requests VALUES(?,?,?,?,?,?,\'requested\',?,?,?)',(ws,str(uuid.uuid4()),'trace',trace_id,locator['incarnation'],barrier,scope.principal_id,now,now))
+        return True
 
     def _scope(self,con,token,ws,capability='read'):
         identifier(ws);scope=self.iam._scope(con,token);grant=self.iam._workspace(scope,ws,capability)

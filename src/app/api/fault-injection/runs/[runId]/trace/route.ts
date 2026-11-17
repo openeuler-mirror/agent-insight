@@ -1,3 +1,6 @@
+import {findCoreFiRun,findCoreFiTask,coreFiOwner} from '@/lib/storage-core/fault-injection'
+import {requireCoreControlContext} from '@/lib/storage-core/control-context'
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,10 +18,9 @@
  */
 
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
-import { prisma, prismaRaw } from '@/lib/storage/prisma'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
+import { prisma } from '@/lib/storage/prisma'
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
-import { compatibilityContext } from '@/lib/storage-core/compat'
 import { readTraceEvidence } from '@/lib/storage-core/evidence'
 import { readCoreRasEvents, analyticsFailure } from '@/lib/storage-core/analytics'
 import {
@@ -115,17 +117,17 @@ async function platformDefaultModel(
   return null
 }
 
-export async function GET(
+async function handleGET(
   req: Request,
   ctx: { params: Promise<{ runId: string }> },
 ) {
   try {
   const core = isStorageCoreEnabled()
-  const actor = core ? await compatibilityContext(req) : null
-  const username = actor ? actor.username : (await resolveUser(req)).username
+  const sourceRequest=core ? requireCoreControlContext().request || req : req
+  const username = core ? coreFiOwner() : (await resolveUser(req)).username
   if (core && !username) throw Object.assign(new Error('Verified FI owner required'), {status: 403})
   const { runId } = await ctx.params
-  const run = core ? await prismaRaw.faultInjectionRun.findFirst({where: {runId, user: username}}) : await prisma.faultInjectionRun.findUnique({ where: { runId } })
+  const run = core ? await findCoreFiRun(runId) : await prisma.faultInjectionRun.findUnique({ where: { runId } })
   if (!run) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   let interactions: unknown[] = []
@@ -134,7 +136,8 @@ export async function GET(
   if (run.sessionTaskId) {
     if (core) {
       try {
-        const {evidence} = await readTraceEvidence(req, {taskId: run.sessionTaskId})
+        const {evidence} = await readTraceEvidence(sourceRequest, {taskId: run.sessionTaskId})
+        if(evidence.execution.user!==run.user)throw Object.assign(new Error('FI business Trace owner differs'),{status:403})
         interactions = evidence.session.interactions
         sessionModel = asNonEmptyString(evidence.session.model)
         sourceSnapshot = evidence.snapshot_hash
@@ -158,7 +161,7 @@ export async function GET(
   let taskKey: string | null = null
   let taskName: string | null = null
   if (run.fiTaskId) {
-    const task = core ? await prismaRaw.faultInjectionTask.findFirst({where: {id: run.fiTaskId, user: username}}) : await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
+    const task = core ? await findCoreFiTask(run.fiTaskId) : await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
     model = asNonEmptyString(task?.model)
     taskKey = task?.taskKey || null
     taskName = task?.name || null
@@ -182,7 +185,7 @@ export async function GET(
   let rasMarkers: ReturnType<typeof buildRasTraceMarkers> = []
   let rasSelection: Awaited<ReturnType<typeof readCoreRasEvents>> | null = null
   if (run.sessionTaskId) {
-    rasSelection = core ? await readCoreRasEvents(req, [run.sessionTaskId], {limit: 200}) : null
+    rasSelection = core ? await readCoreRasEvents(sourceRequest, [run.sessionTaskId], {limit: 200}) : null
     const rasRows = core ? rasSelection!.events : await listRasEventsByTaskIds({
       taskIds: [run.sessionTaskId],
       user: run.user || undefined,
@@ -209,7 +212,7 @@ export async function GET(
   }
 
   if (sourceSnapshot && run.sessionTaskId) {
-    const {evidence} = await readTraceEvidence(req, {taskId: run.sessionTaskId})
+    const {evidence} = await readTraceEvidence(sourceRequest, {taskId: run.sessionTaskId})
     if (evidence.snapshot_hash !== sourceSnapshot) throw Object.assign(new Error('FI Trace source changed'), {status: 409})
   }
   if (rasSelection) await rasSelection.validate()
@@ -241,4 +244,10 @@ export async function GET(
     if (isStorageCoreEnabled()) return analyticsFailure(error)
     throw error
   }
+}
+
+export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ runId: string }> },) {
+  return withCoreFiRequest(req,()=>handleGET(req,ctx))
 }
