@@ -15,7 +15,7 @@ from .compatibility import LegacyTraceReads, TraceNotFound
 from .control import Conflict, StorageError
 from .contracts import identifier
 from .iam import Forbidden, Unauthorized
-from .observations import _payload_revision, _section_text, _legacy_value, _source_projection
+from .observations import _payload_revision, _section_text, _legacy_value, _source_projection, summary_status
 
 MAX_EVIDENCE_BYTES=16*1024*1024
 MAX_SPANS=100000
@@ -256,7 +256,8 @@ class TraceEvidence:
     def _read(self,token,workspace,begin):
         route=begin['route'];trace=route['trace_id'];heads=begin['heads']
         trace_heads=[h for h in heads if h['entity_kind']=='trace' and h['entity_id']==trace]
-        expected_heads={h['entity_id']:h for h in heads if h['entity_kind']=='span'}
+        from .collector_sources import active_heads, order_rows
+        expected_heads={head['entity_id']:head for head in active_heads(self.control,begin,self._artifact)}
         if len(trace_heads)!=1 or not expected_heads:raise EvidenceUnavailable('Trace has no prepared evidence')
         summary=self.queries.summary(token,workspace,trace).get('trace')
         if not summary or not _same(summary.get('revision'),trace_heads[0]['revision']):raise EvidenceUnavailable('Trace summary has not reached evidence boundary')
@@ -279,7 +280,7 @@ class TraceEvidence:
         state=self._artifact(trace_heads[0])
         for field in ('span_count','llm_call_count','tool_call_count','started_at_ms','ended_at_ms','agent_name','framework'):
             if not _same(summary.get(field),state.get(field)):raise EvidenceUnavailable('Trace summary differs from source state')
-        status='failed' if state['error_count'] else ('running' if state['running_count'] else 'done')
+        status=summary_status(state)
         if summary.get('execution_status')!=status:raise EvidenceUnavailable('Trace lifecycle differs from source state')
         summary_attrs=_parse(summary['attributes_json'])
         for key in ('error_count','running_count','input_missing_count','output_missing_count'):
@@ -304,6 +305,7 @@ class TraceEvidence:
             if self.analytics_fields:expected[row['span_id']]['verified_source_sections']=sections
             priority=3 if 'legacy_trace' in sections else (1 if row.get('parent_span_id') else 2)
             for key,value in self._fields(source,analytics_fields=self.analytics_fields).items():candidates.setdefault(key,[]).append((priority,row['span_id'],value))
+        rows=order_rows(begin,rows)
         frozen=_FrozenReads(self,token,workspace,route,{**summary,'owner_username':begin['owner']['normalized_login_name']},rows,expected)
         for row in rows:
             if 'legacy_trace' not in expected[row['span_id']]['sections']:continue

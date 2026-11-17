@@ -69,6 +69,15 @@ class LegacyTraceReads:
         self.authorized=authorized
 
     def _spans(self,token,workspace,route):
+        if route.get('source_namespace')=='collector.source.v1':
+            from .collector_sources import current_rows
+            rows=list(self._scan_spans(token,workspace,route))
+            if _bytes(rows)>MAX_STRUCTURE_BYTES:raise CompatibilityLimitError('Collector structure exceeds16MiB')
+            yield from current_rows(self.queries.control,token,workspace,route,rows)
+            return
+        yield from self._scan_spans(token,workspace,route)
+
+    def _scan_spans(self,token,workspace,route):
         after='';count=0
         while True:
             rows=self.authorized.read_spans(token,workspace,route['trace_bucket'],route['trace_id'],after_span_id=after,limit=200)
@@ -284,7 +293,11 @@ class LegacyTraceReads:
         if not route:raise TraceNotFound('Trace is not available')
         summary=self.queries.summary(token,workspace_id,trace_id).get('trace')
         if summary is None:raise TraceNotFound('Trace has no indexed facts')
-        if route.get('source_namespace','').startswith('trace.bundle.') and route['source_namespace'].endswith('.lf'):
+        source_langfuse=False
+        if route.get('source_namespace')=='collector.source.v1' and getattr(self.queries,'control',None) is not None:
+            from .collector_sources import primary_kind
+            source_langfuse=primary_kind(self.queries.control,token,workspace_id,route)=='langfuse_node'
+        if source_langfuse or route.get('source_namespace','').startswith('trace.bundle.') and route['source_namespace'].endswith('.lf'):
             return self._langfuse_session(token,workspace_id,route,summary,view,index)
         input_tokens=_integer(summary.get('input_tokens'));output_tokens=_integer(summary.get('output_tokens'))
         start=_integer(summary.get('started_at_ms'));end=_integer(summary.get('ended_at_ms'))
@@ -294,8 +307,24 @@ class LegacyTraceReads:
             'cost':None,'timestamp':_iso(start)}
         base={'taskId':trace_id,'label':summary.get('label'),'query':summary.get('query'),'user':self._owner(summary),
               'startTime':start,'interactionCount':0,'interactions':[],'execution':execution}
+        source_rows=None
+        if route.get('source_namespace')=='collector.source.v1':
+            from .collector_sources import CollectorSourcePending, _ms as source_ms
+            source_rows=list(self._spans(token,workspace_id,route));capsule=None
+            for source_row in source_rows:
+                text=self._section(token,workspace_id,route,source_row,'legacy_trace')
+                if text is not None:
+                    if capsule is not None:raise CollectorSourcePending('Collector Session metadata is ambiguous')
+                    capsule=_object(text)
+            if capsule is None:raise CollectorSourcePending('Collector Session metadata is unavailable')
+            captured=capsule.get('session');original=capsule.get('execution')
+            if captured is None:raise TraceNotFound('Original Session is unavailable')
+            if not isinstance(captured,dict) or not isinstance(original,dict):raise CollectorSourcePending('Collector Session metadata differs')
+            base.update(taskId=captured['taskId'],label=captured.get('label'),query=captured.get('query'),startTime=source_ms(captured['startTime']))
+            for field in ('framework','tokens','latency','cost','timestamp'):
+                if field in original:execution[field]=copy.deepcopy(original[field])
         rows=[];tools={};size=_bytes(base);position=-1;selected=None
-        for row in self._spans(token,workspace_id,route):
+        for row in source_rows if source_rows is not None else self._spans(token,workspace_id,route):
             attrs=_object(row.get('attributes_json'));attrs={**attrs,**_object(attrs.get('span'))}
             if attrs.get('legacy.tool_structure_oversized') and view=='structure':
                 raise CompatibilityLimitError('Tool structure exceeds compact budget; use complete Trace view')
@@ -313,7 +342,7 @@ class LegacyTraceReads:
             position+=1
             metadata=self._metadata(row,position,summary)
             for field,source in [('query','legacy.session_query'),('label','legacy.session_label')]:
-                if base.get(field) is None and attrs.get(source) is not None:base[field]=attrs[source]
+                if source_rows is None and base.get(field) is None and attrs.get(source) is not None:base[field]=attrs[source]
             if view=='interaction' and position==index:selected=(row,metadata)
             size+=_bytes(metadata)+1
             if size>MAX_STRUCTURE_BYTES:raise CompatibilityLimitError('Trace structure exceeds16MiB compatibility response budget')

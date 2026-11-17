@@ -299,3 +299,30 @@ Node helper保留原上传双凭据规则：API凭据与实际authenticateDevice
 首片验证至少包含：真实read-only API即使成员为writer仍403、撤权与viewer拒绝；别名/登录名不同、设备有效/撤销/clientId冲突；双有效同/异主体与workspace、双向坏一份、无映射及多映射；伪造body/品牌范围、重新核验后归属变化、sidecar503不降级401。默认数据不触碰，独立schema/临时注册库，后续再做真实公共API到原页面与CH全链验收。
 
 身份片最终验证：Node6097项（6075通过、22跳过、0失败/取消），后端1146项（967通过、179可选引擎跳过、0失败）；PG和原生openGauss真实HTTP各5/5，5个自有schema清理后回查0。实际Node helper→真实sidecar及真实注册/撤销设备的21次请求通过，65张事务表在预检前后完整行哈希不变。Spec与Quality独立通过；Quality另验证两次授权检查间角色降为viewer时403、真实HTTP重定向未向第二origin发送请求。3105个冻结来源与当前代码一致，原公共handler、277个TSX/CSS及DDL未变。证据为exclude/storage-core-collector/20261117-i_wpbhkw；本片不接管快照/completion，也不代表公共采集indexed ACK完成。
+
+
+### 公共 source 持久链路：A/B/C 实施切片
+
+A为sidecar公共source账本与可信投影：以 `collector-source/v1` 私有controller proof覆盖主体、空间和精确请求正文，扩展既有collector-source RPC的准备/读取前态、CAS提交、completion和状态；每次实际事务核验API write、私有来源归属、当前locator/别名与删除屏障。scope预检仍不要求proof、不写数据。write-only采集Key可使用持有私有proof的服务端操作；不得向任意只有write Key的调用者开放先前快照原文。新私有 `collector-source-plan/v1` 编码只能由已经提交且严格绑定账本operation/actor/source的batch驱动现观察worker，不接受通用OTLP自报删除、内部context或私有计划。沿现有locator/alias/annotation/artifact/batch/outbox/head模型，无新增DDL。
+
+同一source保留原输入hash/操作、首次选择的默认时间/身份、基准与新revision、标准化完整快照/投影计划工件、分包和indexed回执。重试先查旧operation再选择新静态配置/时间；变更同key输入409。前一操作pending先恢复，后续CAS不能越过；只在全部分包indexed后返回上传2xx。annotation中仅有有界状态、hash和工件引用，不存API/device/controller credential。普通OTLP即使自报相同namespace/native ID，也不能凭namespace冒充受信source；已有route无正确私有账本或别名/owner不匹配仍冲突。
+
+completion先到以首次选择的完成时间创建空意图、locator、私有ACL和别名，不制造任何交互/LLM/tool/CH事实。**locator bucket在首次创建即固定**：先completion则按该首次时间选桶，后到跨日真实消息仍用同桶，原始started_at照常保留；先snapshot则按真实启动时间定桶，后续completion继承。不能更改001的trace_identity_stable保护或把分区日期当业务时间。对已有事实的完成状态变更需真实indexed确认；无事实的空意图可按durable控制回执确认。
+
+允许缩小的snapshot-replace保留原语义。消失实体写更高revision的CH墓碑并从当前汇总扣除，旧head和制品不删除，再出现沿稳定ID及更高revision。完整head向量继续作为来源fence；Evidence、Generation及其他当前读取只排除经过私有来源/工件hash确认的retired实体，不能采信请求体skiplist或放松通用OTLP完整性。元数据carrier不伪装真实LLM/工具调用。
+
+B复用/提取原TS准备与静态选择：adapter.normalizeForStorage、monotonic合并的原顺序、query保护/强制改写、label版本绑定/历史版本不漂移、各框架允许缩小、Opencode/Langfuse派生字段及配置匹配保持。分离实际前态读取与纯计算，绑定源revision并封存后提交；不把原算法重写成Python通用CRUD。nested子Agent、Thread/traceThread与原后置处理属于upload等价范围，不能接通主记录后把它们隐藏成“其他功能”。
+
+C在A/B独立验收后才一起激活原upload与completion，并把processUploadAsync的保存、流程图及失败分析接到source revision fence与已有真实typed writer，避免返回成功后再写旧Session/Execution。原内部AgentRecorder及core-recorded抑制重复uploader路径继续复用；SkillGenerator bridge仍有真实spool→upload依赖，不能把所有内部tag上传当重复删除。tag/persistedSession本身不授予跨主体写权限，需实际授权的接收身份及服务端验证的生成run/session绑定，或原运行入口向uploader传递可核验的专属身份；缺证明保持pending并留存原spool，不靠任务ID猜owner、不越权转归属。该部分须在C激活前完成实际桥接验证。
+
+A首轮先验证真实事务/内存facts及私有原HTTP：同操作/改包冲突、写入CAS、completion先到/跨日/默认时间重放、分包失败pending和重启恢复、所有当前读取与允许缩小/再出现、撤权/删除/外来alias/伪造计划拒绝。随后真实CH、PG/原生OG与完整门禁；B/C另行补原handler/原算法对照和原浏览器采集验收。A存在不表示原上传已切换，原公共入口暂保持原实现。
+
+
+A补充实现约束：原包接收与Source commit的重放hash先于后来completion/新快照选择，旧commit只返回原回执，不重写当前事实。只有尚未commit、无任何ingest batch的reserved意图可由持有私有proof且当前有权限的服务端执行reject_preparation，绑定精确input_hash及有限枚举的确定性输入/尺寸错误；原输入和failed回执保留，准确清除本意图pending并阻止迟到commit。RPC/CH暂不可用、模型/配置缺失或撤权不能冒充确定性预处理失败。旧失败重放不清除新pending。
+
+设备绑定为signed verified_client_id，首次只能来自真实品牌身份；已有受信clientId遵循原resolveTraceClientSnapshot的existing优先，后续API-only或其他设备不能重写历史绑定。允许在同一实际owner下恢复之前已持久捕获的原device来源历史，但这不替代当前写入权限。只要新操作仍reserved，旧indexed事实仍可读；commit后所有分包indexed以前，当前列表/详情/证据都以pending拒绝，不返回部分计数或伪空成功。证据fullhead向量包含退休实体作为来源fence。
+
+原TS无framework时允许Generic adapter，原nullable framework不能因存储重构被改成硬错误或虚构业务框架名；CH内部规范化可用显式fallback，原capsule保留null，绑定首次真实框架后拒绝冲突。合法0时间仅在受信collector纯规范化依赖中允许，普通OTLP/旧bundle校验默认不变，不通过伪造1ns表示。原会话未结束即使已有消息全部完成也仍running；会话completion改变后需真实CH投影再确认，不能制造伪LLM/工具Span来驱动状态。
+
+
+A已完成最终隔离验收：6098项应用测试（6076通过、22跳过）及1192项后端测试（1013通过、179可选跳过），零失败；PG/原生openGauss各43/43、自有schema残留0。真实SQLite+CH的48次私有HTTP验证快照/墓碑/完成与分包pending；修复缺失摘要误返空结果后，另16次真实HTTP确认缺失503、合法筛选空结果及旧快照精确导出，65事务表/15CH表逻辑内容前后一致。Spec→Quality均通过，原公共handler、277个TSX/CSS及DDL未改。B/C尚未激活；私有Session含规范化传输字段，公共DTO等价必须在C复用原Node payload projection验证。完整证据与未完成边界见implementation-status.md。

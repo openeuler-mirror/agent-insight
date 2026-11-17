@@ -311,6 +311,10 @@ class TraceAnalytics:
         if not rows:return None
         result=dict(rows[0])
         annotation=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(workspace,result['trace_id'])).fetchone()
+        source_route=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,result['trace_id'])).fetchone()
+        if source_route['source_namespace']=='collector.source.v1':
+            from .collector_sources import indexed_boundary
+            indexed_boundary(self.control,workspace,[dict(source_route)])
         result['annotation_hash']=_hash(dict(annotation)) if annotation else None
         head=con.execute("SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='trace' AND entity_id=?",(workspace,result['trace_id'],result['trace_id'])).fetchone()
         if head is None:result['execution_id']=None
@@ -320,8 +324,12 @@ class TraceAnalytics:
             state=reader._artifact(dict(head));flag=state.get('legacy_projection',{}).get('is_subagent')
             if flag is None:
                 candidates=[];capsule=None
-                for span in con.execute("SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='span' ORDER BY entity_id",(workspace,result['trace_id'])):
-                    source=reader._artifact(dict(span));sections=source['sections']
+                heads=[dict(span) for span in con.execute("SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='span' ORDER BY entity_id",(workspace,result['trace_id']))]
+                if source_route['source_namespace']=='collector.source.v1':
+                    from .collector_sources import active_heads
+                    heads=active_heads(self.control,{'route':dict(source_route),'annotation':dict(annotation) if annotation else None,'owner':{'owner_principal_id':result['owner_principal_id']},'heads':heads},reader._artifact)
+                for span in heads:
+                    source=reader._artifact(span);sections=source['sections']
                     if 'legacy_trace' in sections:
                         if capsule is not None:raise AnalyticsUnavailable('RAS original execution metadata is ambiguous')
                         capsule=json.loads(sections['legacy_trace']);flag=capsule.get('execution',{}).get('isSubagent',False)

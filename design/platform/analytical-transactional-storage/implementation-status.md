@@ -553,3 +553,22 @@ apiFetch 仅为这两个 Batch POST 动作保存有界请求签名/UUID（最多
 证据：`exclude/storage-core-collector/20261117-i_wpbhkw/` 的 `final-code-verification.json`、`candidate-v1-{result,python-report}.json`、`candidate-v1-native/`、`identity-real-http/report.json`、`identity-real-http/preflight-no-mutation.json`、`spec-identity-v1-report.json`和`quality-identity-v1-report.json`。初次原生PG启动因之前/tmp测试连接配置缺失而失败；从同一个已核验loopback PG15测试容器私下恢复配置，未改服务或重置数据，失败日志保留，后续各5项实测通过。初始临时bundle模块路径与stdin退出均为验收harness修正，不影响产品源或全量门禁。
 
 快照接收、completion、原upload/proxy/日志indexed确认尚未启用；下一片继续source幂等回执、completion先到及原快照合并/缩小语义。身份预检不是最终持久接收证明，实际接收事务仍需当前IAM复核；不切生产、不处理无映射旧spool，不将本片当公共采集全功能完成。
+
+
+## 2026-11-17 公共 Source 快照与完成意图的私有存储基础
+
+A完成：公共source专属账本、原输入/静态前态工件、CAS快照/丢ACK回放、completion先到、固定bucket、稳定实体/缩小墓碑与全部indexed屏障。新增私有collector-source/v1证明及collector-source-plan/v1编码，复用65事务表/15CH和现有worker，无DDL。公共upload/completion/proxy/logs未激活，277个TSX/CSS未改；缺interactions后completion创建空Session、子Agent/线程、原异步分析及原公共DTO/ACK留待B/C，不能称采集全链完成。
+
+| 验证 | 结果与边界 |
+|---|---|
+| 完整应用 | 最终v2：6098项，6076通过、22跳过、0失败/取消，613.68秒；原glob/collector类型预检、Node24、独立HOME/SQLite，3108个代码来源与最终源一致 |
+| 完整后端 | 1192项，1013通过、179可选引擎跳过、0失败，659.10秒；ResourceWarning为error，163个来源稳定 |
+| PG / 原生openGauss | 各43/43，370.256/341.378秒，各43个自有schema清理后残留0；167个来源稳定。MemoryFacts专项，不称完整三库×CH矩阵 |
+| 原语义基线 | 原冻结Next handler+实际Prisma九组golden，覆盖Pi缩小、OpenCode单调合并/query保护、完成先到/跨日、nullable framework、缺interactions与后续空Session；出网fetch为0，保留供B/C逐字段对照 |
+| 真实私有HTTP/CH | 48请求、0模型调用：五组原portable完整快照逐字段相同、旧commit ACK不回退新快照、300消息两包仅一包indexed时503、同属/只读/签名边界通过。私有Session有额外规范化Span字段，原公共DTO/UI等价不在A声明范围 |
+| v2缺摘要故障与保留 | 另16次真实HTTP读已有v1数据；真实CH响应层暂时隐藏摘要行时summary/list/filtered list返回503，合法CH筛选仍为空，恢复后正常四条Source。未删除物理数据；65事务表及15CH表逻辑哈希前后一致，integrity ok |
+| 独立审查 | v1 Quality发现已indexed但缺摘要被当空结果的P1；v2增加有界存在性查询，Spec独立46+2、Quality46+8及3Node全部通过。来源/别名/桶/修订校验与读后权限复核保留 |
+
+证据位于 `exclude/storage-core-collector/20261117-i_wpbhkw/`：`source-a-v2-final-code-verification.json`、`source-a-v2-final-{result,python-report}.json`、`source-a-v2-final-native/`、`spec-source-a-v2-report.json`、`quality-source-a-v2-report.json`、`original-upload-golden-v3/report.json`、`source-a-real-http-v2/report.json`及`source-a-v2-readback/report.json`。首次真实harness错误将私有投影当公共DTO，随后UInt64字符串比较错误，均保留原失败日志并以新独立夹具验证，未覆盖失败证据。自有两套临时HTTP进程在pending清零后停止，数据保留；原58488验收环境及模型服务未刷新，默认数据库/spool/生产未操作。
+
+后续按B原准备算法与静态选择、C原upload/completion/子Agent线程及异步分析和indexed ACK继续；再接proxy/logs/consumer、Infra必要模型和其他控制域，最后显式映射旧96模型/旧spool。当前仍非全产品迁移完成，未切生产，也未做第二版容量验收。

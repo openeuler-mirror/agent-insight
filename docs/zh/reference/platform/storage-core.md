@@ -343,8 +343,27 @@ Set DELETE 保留原行为：只删测试集版本，已有 Run/Evaluation/Skill
 
 `resolveCoreCollectorIdentity` 验证实际 API 凭证或 OpenCode 注册设备凭证，生成只在服务端有效的冻结身份。请求正文的 user、authenticatedUser 或 clientId 声明不授予权限。现有私有映射保留旧用户名与 IAM 主体名称的区别；设备归属须唯一映射到当前 principal/workspace，匹配归属的映射凭证全部核验，其他归属的撤销不影响本次身份。每归属至多16个不同映射凭证，超额明确失败。直接 core API 未提供可信旧别名时保留 IAM 用户名。
 
-`POST /v1/compat/collector-source?workspace_id=…` 当前只接受不超过4096字节的 `{action:"scope", operation:"snapshot"|"complete"}`。服务端校验 API 类型、当前凭证 capability 与 workspace 角色均允许 write，返回对应主体/空间/操作的授权声明；不写 source/Trace/receipt，也不接收工作或诊断上下文。仅查看 `/auth/me` 的角色不能证明 API 有写权限。
+`POST /v1/compat/collector-source?workspace_id=…` 的 `scope` 动作仍只接受不超过4096字节的 `{action:"scope", operation:"snapshot"|"complete"}`。服务端校验 API 类型、当前凭证 capability 与 workspace 角色均允许 write，返回对应主体/空间/操作的授权声明；不写 source/Trace/receipt，也不接收工作或诊断上下文。仅查看 `/auth/me` 的角色不能证明 API 有写权限。
 
 API 与设备均有效时须指向同一主体/空间，旧别名允许不同，实际 token 仍由 API 提供，旧静态归属取已核验设备映射。无效 API 的401可由有效设备补足；已认证 API 的403不借其他凭证绕过。无效设备可由有效 API 补足，但不绑定其 clientId；已核验设备的旧别名映射缺失、歧义或不可用则拒绝。上游不可用不降格成无效凭证。proxy 调用方须显式使用 `authorizationKind:"provider"` 将供应商 Authorization 排除于用户鉴权之外，另以 x-witty-api-key 表达采集身份。
 
-身份通过品牌检查，复制对象不能充当可信身份；token 只保存在私有闭包，不出现在身份 JSON。`withCoreCollectorIdentity(identity, (actor, options) => …)` 的私有调用方须将第二参数的固定 origin `options.fetcher` 用于后续 RPC；接收端仍在真正写入事务内重新检查 IAM，预检不是持久授权。`revalidate()` 与私有回调入口在接受数据前重查原凭证、设备撤销、映射和当前 write 权限，主体/空间/别名/绑定变化拒绝，配置的 core origin 变化也在每次实际请求边界拒绝，避免跨实例发送旧凭证。本片未修改原 upload、completion、proxy 或 logs handler；快照幂等、indexed ACK、旧 spool 身份清点与迁移继续见[实施计划](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)。
+身份通过品牌检查，复制对象不能充当可信身份；token 只保存在私有闭包，不出现在身份 JSON。`withCoreCollectorIdentity(identity, (actor, options) => …)` 的私有调用方须将第二参数的固定 origin `options.fetcher` 用于后续 RPC；接收端仍在真正写入事务内重新检查 IAM，预检不是持久授权。`revalidate()` 与私有回调入口在接受数据前重查原凭证、设备撤销、映射和当前 write 权限，主体/空间/别名/绑定变化拒绝，配置的 core origin 变化也在每次实际请求边界拒绝，避免跨实例发送旧凭证。本片未修改原 upload、completion、proxy 或 logs handler；原上传入口的幂等/成功 ACK 闭环、旧 spool 身份清点与迁移继续见[实施计划](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)。
+
+
+### 公共 Source 快照与完成意图（私有基础，尚未启用原上传入口）
+
+同一私有端口新增 `reserve / commit / complete / status / reject_preparation`，均要求实际 API write 能力，以及绑定请求原始字节、实际 principal/workspace 的 `collector-source/v1` 控制器证明；普通 OTLP 不能声明保留的 `collector.source.v1` namespace。没有新增表或通用 OTLP 删除属性。原 upload、completion、proxy、logs handler 与前端保持原状，本片不代表这些用户入口已接管。
+
+- `reserve` 封存原请求、默认接收/完成时间、基准 Source revision 和独立 task/首个 canonical execution 别名；已有 task 的新 upload ID 不替换 canonical execution。相同 key 的原请求变化409；当前设备凭证变化不改变既有意图，私有响应返回第一次封存的设备/账号来源，当前 IAM 仍重查。较新请求可先恢复同 owner/source 的旧持久意图，不追溯授权旧 spool。
+- `commit` 接受原 portable `{execution, session}`，按准确 revision CAS 保存快照、实际分包及 Outbox；快照零值、nullable framework、完整原消息和扩展字段保留。先按原 commit 请求哈希识别重放，再读取当前完成状态，因此旧 ACK 重试不改写新快照。设备绑定只来自首次封存证明或先前可信绑定；已有设备保留原先优先规则。工作/诊断上下文和特权来源不能由公共快照声明。
+- 完成通知先到时仅持久化 locator/ACL/别名和固定时间，不创建伪 LLM、Tool 或 CH 交互。bucket 一次确定，后到跨日快照复用。已有 Session 的完成变化仍需实际分包 indexed；缺失 interactions 与已有 Execution 无 Session 时的原空 Session 创建/default clock 语义，仍由后续公共适配闭环补齐。
+- 私有回执会区分 reserved/accepted/prepared/indexed/failed。公共上传适配尚未启用，未来必须等所有分包 indexed 才返回原成功 ACK，不能把私有 RPC 200 或空 completion 意图的 durable 状态当作普通消息已入库。
+- 允许缩小的快照使用更高 revision 的 source 专属墓碑，保留旧 head/工件。当前 Evidence、生成、RAS 和兼容读取只排除经过私有 ledger、head hash 及不可变 `is_deleted` 来源核验的退役实体；完整 head vector 继续作为来源变化 fence。稳定实体 ID 与当前消息顺序分开，原 index 校验后排序；缺失/重复顺序不回退猜测。原 Langfuse 次要交互、主节点及原 portable 导出保留，导出采用实际校验过的 capsule/原条目并尊重人工覆盖，不从 compact 摘要补造原值。
+- 完成消息不意味着会话结束：Source Session endTime 为空时保留 running 状态，完成通知索引后再变更。缩小后重新计算当前计数、边界和元数据 provider，移除旧模型/技能/错误来源；元数据与真实工具 carrier 不冒充额外主交互。多包未全量 indexed 的当前摘要/读取返回503，实际来源在读期间变化409；仅 reserved 的下一意图不遮蔽旧已索引视图。通用 OTLP 流式读取保持原规则。
+- `reject_preparation` 只终止尚无提交/分包的 reserved 意图，要求原封存 input hash 与 `INVALID_SOURCE_INPUT` 或 `SOURCE_BUDGET_EXCEEDED` 枚举，保留原文/失败回执并 fence 迟到提交。模型/配置暂不可用、网络/CH 故障及权限失败不能借此丢弃意图；旧失败重放不能清除新 pending。
+
+输入/单快照为16MiB、私有计划64MiB、每包256实体、每 Source 最多100000个保留实体及4096操作回执；超限明确拒绝，不剪裁正文。它们是当前正确性边界，不是容量认证。原业务静态选择、消息合并/派生子 Agent/线程、异步分析 fencing 及原入口 ACK，继续按[迁移计划](../../../../design/platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)实施，旧数据和生产未切换。
+
+已发布且具有非空 head 的 Source 必须存在匹配的真实 CH 摘要。合法 status/agent/search 筛选可能排除该行：只对缺失的已知 Source ID 做一次有界、去掉这些筛选的存在性查询，校验空间、namespace、native ID、bucket 与 revision，并在查询后再次核对来源边界。真实摘要缺失返回503，不能伪装 accepted 或空列表；存在性查询的行不加入筛选结果。没有 head 的空 completion/未提交意图仍允许没有摘要。
+
+当前私有 Session 读取会带规范化 Span 传输字段，不能据此称原公共 Session DTO 等价。原 portable 导出保留完整原快照；公共适配仍须复用原 Node 的 payload version 与结构交互投影，在启用前逐字段验证原 DTO、缓存与原界面。

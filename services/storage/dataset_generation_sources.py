@@ -10,7 +10,7 @@ from pathlib import Path
 from .control import Conflict
 from .iam import Forbidden
 from .trace_evidence import TraceEvidence, EvidenceUnavailable, EvidenceTooLarge, _hash, _size, _same
-from .observations import _legacy_value, _payload_revision, _section_text
+from .observations import _legacy_value, _payload_revision, _section_text, summary_status
 
 MAX_SOURCE_BYTES=64*1024*1024
 MAX_EVENT_BYTES=16*1024*1024
@@ -142,14 +142,15 @@ class GenerationSources(TraceEvidence):
     def _boundary(self,token,ws,trace):
         self.deadline=__import__('time').monotonic()+60
         begin=self._capture(token,ws,None,None,trace)
-        heads={head['entity_id']:head for head in begin['heads'] if head['entity_kind']=='span'}
+        from .collector_sources import active_heads, order_rows
+        heads={head['entity_id']:head for head in active_heads(self.control,begin,self._artifact)}
         tracehead=next((head for head in begin['heads'] if head['entity_kind']=='trace'),None)
         summary=self.queries.summary(token,ws,trace).get('trace')
         if not tracehead or not summary or not _same(summary.get('revision'),tracehead['revision']):raise EvidenceUnavailable('Generation source summary is not indexed')
         state=self._artifact(tracehead)
         for key in ('span_count','started_at_ms','ended_at_ms','framework','agent_name'):
             if not _same(summary.get(key),state.get(key)):raise EvidenceUnavailable('Generation source summary differs')
-        expected_status='failed' if state['error_count'] else 'running' if state['running_count'] else 'done'
+        expected_status=summary_status(state)
         if summary.get('execution_status')!=expected_status:raise EvidenceUnavailable('Generation source lifecycle differs')
         rows=[];after='';size=0
         while True:
@@ -164,7 +165,7 @@ class GenerationSources(TraceEvidence):
                 after=sid;rows.append(row)
             if len(page)<200:break
         if len(rows)!=len(heads):raise EvidenceUnavailable('Generation Span set incomplete')
-        return begin,summary,rows,heads,state
+        return begin,summary,order_rows(begin,rows),heads,state
 
     def _source(self,row,head):
         source=self._artifact(head)
@@ -183,7 +184,7 @@ class GenerationSources(TraceEvidence):
             if 'legacy_trace' in sections:
                 capsule=json.loads(sections['legacy_trace']);execution=capsule.get('execution',{});session=capsule.get('session');break
             # Ordinary OTLP root attributes are the authoritative identity metadata.
-            if not begin['route']['source_namespace'].startswith(('trace.bundle.','agent.record.')):break
+            if not begin['route']['source_namespace'].startswith(('trace.bundle.','agent.record.','collector.source.v1')):break
         if not isinstance(execution,dict):raise EvidenceUnavailable('Invalid generation execution metadata')
         identity={'framework':execution.get('framework') or summary.get('framework') or '',
                   'agentId':execution.get('agentId') or fields.get('agent.id') or None,

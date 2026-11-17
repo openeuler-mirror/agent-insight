@@ -148,7 +148,7 @@ def _legacy_sections(span,resource_attrs,attrs):
     return resource,clean,slim,extras,raw is not None
 
 
-def _normalize(body, workspace_id):
+def _normalize(body, workspace_id, *, timestamp_minimum=1):
     if not isinstance(body,dict) or not isinstance(body.get('resourceSpans'),list): raise ValueError('resourceSpans required')
     result=[];seen=set();normalized_bytes=0
     for resource_span in body['resourceSpans']:
@@ -173,7 +173,7 @@ def _normalize(body, workspace_id):
                 seen.add(identity)
                 attrs=_attributes(span.get('attributes',[]))
                 source_rev=revision(_integer(attrs.get('agent_insight.revision',1),1,2**63-1))
-                start=_integer(span.get('startTimeUnixNano'),1)
+                start=_integer(span.get('startTimeUnixNano'),timestamp_minimum)
                 end=_integer(span.get('endTimeUnixNano'),start)
                 start_ms=start//1000000;end_ms=end//1000000
                 bucket_date=datetime.datetime.fromtimestamp(start_ms/1000,datetime.timezone.utc).date()
@@ -458,6 +458,10 @@ def _merge_projection(state,source,fields):
     state['legacy_projection']=bounded;state['legacy_projection_sources']=retained
 
 
+def summary_status(state):
+    return 'failed' if state['error_count'] else 'running' if state['running_count'] or state.get('collector_session_running') else 'done'
+
+
 class ObservationIngest:
     def __init__(self,control,facts):
         self.control=control;self.facts=facts;self.iam=IAMStore(control)
@@ -494,6 +498,7 @@ class ObservationIngest:
             if len(data)>max_packet_bytes: raise ValueError('packet exceeds bounded ingress size')
             spans=_normalize(body,workspace_id)
         except (TypeError,OverflowError,UnicodeError,RecursionError) as exc: raise ValueError('invalid bounded OTLP JSON') from exc
+        if any(span['row']['source_namespace']=='collector.source.v1' for span in spans):raise Forbidden('Private collector source attestation required')
         packet_hash=hashlib.sha256(data).hexdigest()
         receipt_key=packet_hash if receipt_key is None else identifier(receipt_key)
         _,packet_ref=self.control.persist_artifact({'encoding':'otlp-json/v1','json':raw})
@@ -608,9 +613,14 @@ class ObservationIngest:
                     raise _RouteRetired('Trace route no longer active')
             if batch['plan_ref']: return self._load(batch['plan_ref'])
             packet=self._load(batch['packet_ref'])
-            if packet.get('encoding')!='otlp-json/v1': raise IngestConflict('invalid packet encoding')
-            if hashlib.sha256(packet['json'].encode('utf-8')).hexdigest()!=batch['packet_hash']: raise IngestConflict('packet checksum mismatch')
-            spans=_normalize(json.loads(packet['json']),ws)
+            collector=packet.get('encoding')=='collector-source-plan/v1'
+            if collector:
+                from .collector_sources import CollectorSources
+                spans=CollectorSources(self.control,self).verified_packet(con,event,batch,packet)
+            else:
+                if packet.get('encoding')!='otlp-json/v1': raise IngestConflict('invalid packet encoding')
+                if hashlib.sha256(packet['json'].encode('utf-8')).hexdigest()!=batch['packet_hash']: raise IngestConflict('packet checksum mismatch')
+                spans=_normalize(json.loads(packet['json']),ws)
             plan={'spans':[],'payloads':[],'summaries':[]};traces={}
             for source in spans:
                 row=source['row'];trace=row['trace_id'];span=row['span_id']
@@ -642,8 +652,8 @@ class ObservationIngest:
                     if ((previous['started_at_ms']==state['started_at_ms'] and row['started_at_ms']>previous['started_at_ms']) or
                             (previous['ended_at_ms']==state['ended_at_ms'] and row['ended_at_ms']<previous['ended_at_ms'])):
                         state['_recompute_bounds']=True
-                    self._delta(state,previous,-1)
-                self._delta(state,row,1)
+                    if not previous.get('is_deleted'):self._delta(state,previous,-1)
+                if not row.get('is_deleted'):self._delta(state,row,1)
                 state['started_at_ms']=min(state.get('started_at_ms',row['started_at_ms']),row['started_at_ms'])
                 state['ended_at_ms']=max(state.get('ended_at_ms',row['ended_at_ms']),row['ended_at_ms'])
                 version=revision(head['revision']+1 if head else 1)
@@ -651,6 +661,9 @@ class ObservationIngest:
                 plan['payloads'].append({'workspace_id':ws,'trace_bucket':row['trace_bucket'],'trace_id':trace,'span_id':span,'sections':source['sections'],'payload_revision':row['payload_revision']})
                 plan['spans'].append(dict(row,attributes_json=canonical_json(compact),revision=version))
             for trace,(head,state,source,locator) in traces.items():
+                if collector:
+                    from .collector_sources import rebuild_summary
+                    state=rebuild_summary(self,con,ws,trace,locator)
                 if state.pop('_recompute_bounds',False):
                     starts=[];ends=[]
                     for current in con.execute("SELECT artifact_ref FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='span'",(ws,trace)):
@@ -666,7 +679,7 @@ class ObservationIngest:
                 summary={'workspace_id':ws,'trace_bucket':locator['trace_bucket'],'trace_id':trace,'source_namespace':source['row']['source_namespace'],
                     'native_trace_id':source['native_trace_id'],'agent_name':state['agent_name'],'framework':state['framework'],
                     'started_at_ms':state['started_at_ms'],'ended_at_ms':state['ended_at_ms'],'last_activity_at_ms':state['ended_at_ms'],
-                    'execution_status':'failed' if state['error_count'] else ('running' if state['running_count'] else 'done'),
+                    'execution_status':summary_status(state),
                     'span_count':state['span_count'],'llm_call_count':state['llm_call_count'],'tool_call_count':state['tool_call_count'],
                     'input_tokens':None if state['input_missing_count'] else state['input_known_sum'],
                     'output_tokens':None if state['output_missing_count'] else state['output_known_sum'],

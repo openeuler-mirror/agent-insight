@@ -65,16 +65,17 @@ def _ms(value):
     except (ValueError,TypeError,OverflowError):raise TraceBundleValidationError('Invalid or unsupported Trace timestamp') from None
 
 
-def _validate(value):
+def _validate(value,*,timestamp_ms=None):
+    parse_ms=timestamp_ms or _ms
     try:
         if len(_json(value).encode())>MAX_BUNDLE_BYTES:raise TraceBundleLimitError('Trace bundle exceeds50MiB')
         if not isinstance(value,dict) or value.get('format')!=FORMAT or type(value.get('version')) is not int or value['version']!=1:raise TraceBundleValidationError('Unsupported Trace bundle format/version')
-        _ms(value.get('exportedAt'));root=_id(value.get('rootExecutionId'));nodes=value.get('executions')
+        parse_ms(value.get('exportedAt'));root=_id(value.get('rootExecutionId'));nodes=value.get('executions')
         if not isinstance(nodes,list) or not 1<=len(nodes)<=MAX_BUNDLE_EXECUTIONS:raise TraceBundleValidationError('Trace bundle requires1..500 execution nodes')
         ids=set();tasks=set();parents={}
         for node in nodes:
             if not isinstance(node,dict) or not isinstance(node.get('execution'),dict):raise TraceBundleValidationError('Execution node required')
-            execution=node['execution'];identity=_id(execution.get('id'));_ms(execution.get('timestamp'))
+            execution=node['execution'];identity=_id(execution.get('id'));parse_ms(execution.get('timestamp'))
             if identity in ids:raise TraceBundleValidationError('Duplicate execution identity')
             ids.add(identity)
             if type(execution.get('isSubagent')) is not bool or not all(isinstance(execution.get(k),list) for k in ('skills','invokedSkills','observedAgents')):raise TraceBundleValidationError('Invalid portable execution fields')
@@ -86,8 +87,8 @@ def _validate(value):
             session=node.get('session')
             if session is not None:
                 if not isinstance(session,dict) or session.get('taskId')!=task or not isinstance(session.get('interactions'),list):raise TraceBundleValidationError('Invalid portable Session')
-                _id(session['taskId']);_ms(session.get('startTime'))
-                if session.get('endTime') is not None:_ms(session['endTime'])
+                _id(session['taskId']);parse_ms(session.get('startTime'))
+                if session.get('endTime') is not None:parse_ms(session['endTime'])
                 if session.get('langfuseTraceNodes') is not None and not isinstance(session['langfuseTraceNodes'],list):raise TraceBundleValidationError('Invalid Langfuse node array')
             parent=execution.get('parentExecutionId');parents[identity]=parent
             if identity==root:
@@ -151,7 +152,8 @@ class LegacyTraceTransfer:
         trace=str(uuid.uuid5(uuid.NAMESPACE_URL,canonical_json([workspace,namespace,native,1])))
         return namespace,native,trace
 
-    def _packets(self,workspace,bundle,operation):
+    def _packets(self,workspace,bundle,operation,*,timestamp_ms=None,normalizer=None):
+        parse_ms=timestamp_ms or _ms
         resources=[];routes=[]
         for position,node in enumerate(bundle['executions']):
             execution=node['execution'];session=node.get('session');namespace,native,trace=self._trace_id(workspace,operation,node)
@@ -162,14 +164,15 @@ class LegacyTraceTransfer:
             if session_meta is not None:session_meta.pop('langfuseTraceNodes' if lf else 'interactions',None)
             capsule={'format':NODE_FORMAT,'version':1,'node_index':position,'primary':kind,'primary_count':len(primary),
                      'execution':execution,'session':session_meta}
-            spans=[];start_anchor=_ms(session['startTime'] if session else execution['timestamp'])
+            spans=[];start_anchor=parse_ms(session['startTime'] if session else execution['timestamp'])
             source_ids={item.get('spanId'):f'{i+1:016x}' for i,item in enumerate(primary) if isinstance(item,dict) and isinstance(item.get('spanId'),str)}
             for index,item in enumerate(items):
                 source=item if isinstance(item,dict) else {};time_info=source.get('timeInfo') if isinstance(source.get('timeInfo'),dict) else {}
                 raw_start=source.get('startedAt') if lf else (time_info.get('created') or source.get('timestamp'))
+                if timestamp_ms is not None and not lf and time_info.get('created') is not None:raw_start=time_info['created']
                 raw_end=source.get('completedAt') if lf else time_info.get('completed')
-                start=_ms(raw_start) if raw_start is not None else start_anchor
-                end=_ms(raw_end) if raw_end is not None else start
+                start=parse_ms(raw_start) if raw_start is not None else start_anchor
+                end=parse_ms(raw_end) if raw_end is not None else start
                 if end<start:raise TraceBundleValidationError('Span ends before its start')
                 role=source.get('role');attrs={}
                 if isinstance(role,str):attrs['legacy.role']=role
@@ -220,7 +223,7 @@ class LegacyTraceTransfer:
             if len(_json({'resourceSpans':current}).encode())>128*1024*1024:raise TraceBundleLimitError('Imported packet exceeds128MiB')
         if current:packets.append({'resourceSpans':current})
         from .observations import normalize_import
-        for packet in packets:normalize_import(packet,workspace)
+        for packet in packets:(normalizer or normalize_import)(packet,workspace)
         return packets,routes
 
     def _taken(self,con,workspace,value):
@@ -334,10 +337,47 @@ class LegacyTraceTransfer:
         self.reads._postflight(token,ws,route)
         return meta['node_index'],node
 
+    def _export_collector_node(self,token,ws,trace):
+        from .trace_evidence import TraceEvidence, EvidenceUnavailable
+        from .collector_sources import active_heads, _ms as collector_ms, _iso as collector_iso
+        reader=TraceEvidence(self.queries,self.authorized,max_bytes=MAX_BUNDLE_BYTES,allow_missing_session=True)
+        begin=reader._capture(token,ws,None,None,trace);evidence=reader._read(token,ws,begin)
+        capsule=None;items=[]
+        for head in active_heads(self.control,begin,reader._artifact):
+            source=reader._artifact(head);sections=source['sections']
+            if 'legacy_trace' in sections:
+                if capsule is not None:raise EvidenceUnavailable('Collector export has duplicate metadata')
+                capsule=json.loads(sections['legacy_trace'])
+            if 'legacy_interaction' in sections:
+                item=json.loads(sections['legacy_interaction'])
+                if item.get('kind') in ('interaction','langfuse_node'):items.append(item)
+        if not isinstance(capsule,dict):raise EvidenceUnavailable('Collector export has no original metadata')
+        items.sort(key=lambda item:item.get('index',-1))
+        if [item.get('index') for item in items]!=list(range(capsule['primary_count'])) or any(item.get('kind')!=capsule['primary'] for item in items):raise EvidenceUnavailable('Collector export primary items differ')
+        execution=evidence['execution'];keys=(*EXECUTION_NULLS,'id','taskId','timestamp','skills','invokedSkills','observedAgents','parentExecutionId','rootExecutionId','isSubagent')
+        portable={key:copy.deepcopy(execution.get(key)) for key in keys}
+        portable['timestamp']=collector_iso(collector_ms(execution['timestamp']))
+        for key in ('skills','invokedSkills','observedAgents'):portable[key]=copy.deepcopy(execution.get(key) or [])
+        session=evidence['session']
+        if session is not None:
+            session={key:copy.deepcopy(session.get(key)) for key in ('taskId','label','query','startTime','endTime','model')}
+            original=capsule['session'];session['interactions']=copy.deepcopy(original['interactions']) if capsule['primary']=='langfuse_node' else [copy.deepcopy(item['value']) for item in items]
+            if capsule['primary']=='langfuse_node':session['langfuseTraceNodes']=[copy.deepcopy(item['value']) for item in items]
+            elif isinstance(original.get('langfuseTraceNodes'),list) and original['langfuseTraceNodes']:session['langfuseTraceNodes']=copy.deepcopy(original['langfuseTraceNodes'])
+            session['startTime']=collector_iso(collector_ms(session['startTime']))
+            if session['endTime'] is not None:session['endTime']=collector_iso(collector_ms(session['endTime']))
+        reader._verify_end(token,ws,None,None,begin,trace)
+        return {'execution':portable,'session':session}
+
     def _export_native(self,token,ws,selected):
         summary=self.queries.summary(token,ws,selected['trace_id']).get('trace')
         if summary is None:raise TraceTransferPending([])
         details=json.loads(summary.get('attributes_json') or '{}')
+        selected_route=self.queries.route(token,ws,selected['trace_id'])
+        if selected_route['source_namespace']=='collector.source.v1':
+            from .collector_sources import relations
+            graph=relations(self.control,token,ws,selected_route)
+            details.update(is_subagent=graph['isSubagent'],root_execution_id=graph.get('rootExecutionId'))
         if details.get('is_subagent'):
             reference=details.get('root_execution_id')
             if not reference:raise TraceBundleValidationError('Native child has no captured root identity')
@@ -353,6 +393,10 @@ class LegacyTraceTransfer:
                 scanned+=1
                 if scanned>10000:raise TraceBundleLimitError('Native execution tree lookup exceeds10000 authorized Traces')
                 projection=json.loads(row.get('attributes_json') or '{}')
+                if row.get('source_namespace')=='collector.source.v1':
+                    from .collector_sources import relations
+                    graph=relations(self.control,token,ws,self.queries.route(token,ws,row['trace_id']))
+                    projection.update(is_subagent=graph['isSubagent'],root_execution_id=graph.get('rootExecutionId'))
                 if projection.get('is_subagent') and projection.get('root_execution_id') in aliases:
                     candidates[row['trace_id']]=self.metadata.resolve(token,ws,row['trace_id'],'execution')
             cursor=page['next_cursor']
@@ -360,6 +404,8 @@ class LegacyTraceTransfer:
         if len(candidates)>MAX_BUNDLE_EXECUTIONS:raise TraceBundleLimitError('Trace tree exceeds500 executions')
         nodes=[]
         for trace,identity in candidates.items():
+            if self.queries.route(token,ws,trace)['source_namespace']=='collector.source.v1':
+                nodes.append(self._export_collector_node(token,ws,trace));continue
             current=self.queries.summary(token,ws,trace).get('trace')
             if current is None:raise TraceTransferPending([])
             projection=json.loads(current.get('attributes_json') or '{}')
@@ -424,4 +470,7 @@ class LegacyTraceTransfer:
         else:
             result=self._export_native(token,ws,resolved)
         if len(_json(result).encode())>MAX_BUNDLE_BYTES:raise TraceBundleLimitError('Exported Trace bundle exceeds50MiB')
+        if route['source_namespace']=='collector.source.v1':
+            from .collector_sources import _ms as collector_ms
+            return _validate(result,timestamp_ms=collector_ms)
         return _validate(result)

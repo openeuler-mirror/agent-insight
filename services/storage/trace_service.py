@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .contracts import canonical_json, content_hash, identifier
-from .control import StorageError
+from .control import StorageError, Conflict
 from .iam import IAMStore, Forbidden
 
 
@@ -78,6 +78,8 @@ class TraceQueries:
     def _trace_rows(self, workspace_id, candidates, *, status, agent, search):
         if not candidates:
             return {}
+        from .collector_sources import indexed_boundary, CollectorSourcePending
+        source_boundary=indexed_boundary(self.control,workspace_id,candidates)
         params={'workspace_id':workspace_id}
         pairs=[]
         for i,row in enumerate(candidates):
@@ -97,6 +99,30 @@ class TraceQueries:
         sql='SELECT * FROM obs_trace_current FINAL WHERE '+' AND '.join(predicates)+' FORMAT JSONEachRow'
         raw=self.facts._request(sql,parameters=params)
         rows=[json.loads(line) for line in raw.splitlines() if line]
+        if indexed_boundary(self.control,workspace_id,candidates)!=source_boundary:raise Conflict('Collector source changed during query')
+        expected_ids={trace for trace,value in source_boundary.items() if value['revision'] is not None}
+        missing=expected_ids-{row.get('trace_id') for row in rows}
+        verified=[]
+        if missing and (status or agent or search):
+            presence_params={'workspace_id':workspace_id};presence_pairs=[]
+            for index,candidate in enumerate(candidates):
+                if candidate['trace_id'] not in missing:continue
+                presence_params['trace_'+str(index)]=candidate['trace_id'];presence_params['bucket_'+str(index)]=candidate['trace_bucket'];presence_pairs.append(pairs[index])
+            presence_sql='SELECT * FROM obs_trace_current FINAL WHERE workspace_id={workspace_id:String} AND is_deleted=0 AND ('+' OR '.join(presence_pairs)+') FORMAT JSONEachRow'
+            raw=self.facts._request(presence_sql,parameters=presence_params)
+            verified=[json.loads(line) for line in raw.splitlines() if line]
+            if indexed_boundary(self.control,workspace_id,candidates)!=source_boundary:raise Conflict('Collector source changed during presence verification')
+        selected={candidate['trace_id']:candidate for candidate in candidates}
+        for group,allowed in ((rows,set(selected)),(verified,missing)):
+            for row in group:
+                if source_boundary and row.get('trace_id') not in allowed:raise CollectorSourcePending('Collector summary escaped its selected source query')
+                expected=source_boundary.get(row.get('trace_id'))
+                if expected:
+                    candidate=selected[row['trace_id']]
+                    if (expected['revision'] is None or str(row.get('revision'))!=expected['revision'] or row.get('workspace_id')!=workspace_id
+                            or row.get('trace_bucket')!=expected['bucket'] or row.get('source_namespace')!=candidate['source_namespace']
+                            or row.get('native_trace_id')!=candidate['native_trace_id']):raise CollectorSourcePending('Collector summary is not at its indexed source revision')
+        if expected_ids-{row.get('trace_id') for row in rows+verified}:raise CollectorSourcePending('Indexed collector summary is unavailable')
         return {(r['trace_bucket'],r['trace_id']):r for r in rows if r['workspace_id']==workspace_id}
 
     def list_traces(self, credential, workspace_id, *, limit=50, cursor=None, status=None, agent=None, search=None):
@@ -333,16 +359,27 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             if compat_path==['collector-source']:
                 if self.command!='POST':self.reply(404,{'error':'Unknown collector route'});return
                 if not token.startswith('api_'):raise Forbidden('Collector API credential required')
-                value,error=self.body(max_bytes=4096)
-                if error:self.reply(error,{'error':'Bounded collector scope JSON required'});return
-                if set(value)!={'action','operation'} or value['action']!='scope' or value['operation'] not in ('snapshot','complete'):
-                    raise ValueError('Invalid collector scope request')
+                from .collector_sources import CollectorSources, MAX_INPUT_BYTES
+                value,error=self.body(max_bytes=MAX_INPUT_BYTES)
+                if error:self.reply(error,{'error':'Bounded collector JSON required'});return
+                action=value.get('action')
+                if action=='scope':
+                    if int(self.headers['Content-Length'])>4096:self.reply(413,{'error':'Bounded collector scope JSON required'});return
+                    if set(value)!={'action','operation'} or value['operation'] not in ('snapshot','complete'):raise ValueError('Invalid collector scope request')
+                    workspace=runtime.workspace(token,params.get('workspace_id'),'write')
+                    with runtime.control.read_transaction() as con:
+                        scope=runtime.iam._scope(con,token)
+                        runtime.iam._workspace(scope,workspace,'write')
+                        response={'authorized':True,'operation':value['operation'],'principal_id':scope.principal_id,'workspace_id':workspace}
+                    self.reply(200,{'value':response});return
+                if action not in ('reserve','commit','complete','status','reject_preparation'):raise ValueError('Invalid collector source action')
                 workspace=runtime.workspace(token,params.get('workspace_id'),'write')
-                with runtime.control.read_transaction() as con:
-                    scope=runtime.iam._scope(con,token)
-                    runtime.iam._workspace(scope,workspace,'write')
-                    response={'authorized':True,'operation':value['operation'],'principal_id':scope.principal_id,'workspace_id':workspace}
-                self.reply(200,{'value':response});return
+                from .controller_protocol import verify_controller_proof
+                principal=runtime.iam.scope(token).principal_id
+                if not verify_controller_proof(runtime.controller_key_file,'collector-source/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Private collector source attestation required')
+                payload={key:item for key,item in value.items() if key!='action'}
+                response=getattr(CollectorSources(runtime.control,runtime.ingest),action)(token,workspace,payload)
+                self.reply(200,{'value':response},max_bytes=MAX_INPUT_BYTES*3+4096);return
             report_path=compat_path[:2]==['observe','reports']
             dataset_path=compat_path[:1] in (['datasets'],['experiments'],['evaluators'],['diagnosis-runs'],['benchmarks'],['analytics'])
             deleting_root=self.command=='DELETE' and (report_path or compat_path==['observe','data'] or (len(compat_path)==2 and compat_path[0]=='tags'))
