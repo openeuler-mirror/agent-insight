@@ -94,7 +94,7 @@ Return to **Observability → Traces (运行观测 → 链路追踪)** and locat
 
 ![Trace details showing the call timeline and message content](../../../images/example_trace.png)
 
-Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
+Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. To review the conversation, open the Span list filters and select both **User** and **LLM**; click **All** to restore every type. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
 
 To locate a specific window, choose **Time → Custom time range**, enter a start and/or end date and time in the displayed browser time zone, and select **Apply**. Bounds include the selected second and apply to both the list and statistics. Cancel discards edits; choosing a preset clears the custom bounds. See the [Trace filtering guide (Chinese)](../../../zh/how-to/observability/view-traces.md#2-筛选区).
 
