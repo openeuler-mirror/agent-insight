@@ -209,6 +209,117 @@ describe("Gateway HTTP transport and call ownership", () => {
       assert.equal(record.state, 'timeout'); assert.equal(record.response_id, undefined);
   });
 
+  test('gateway keeps the model service X-Request-Id separate from its own call ID', async t => {
+      const f = await fixture(t, (_req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'X-Request-Id': 'service-request-42' });
+          res.end('{"id":"body-response"}');
+      });
+      // The forged inbound header must not be treated as the service value.
+      const response = await post(f.url); await response.text();
+      const callId = response.headers.get('x-request-id')!;
+      assert.equal(callId, response.headers.get('x-agent-insight-call-id'));
+      assert.notEqual(callId, 'service-request-42');
+      assert.notEqual(callId, 'forged');
+      assert.equal(response.headers.get('x-agent-insight-upstream-request-id'), 'service-request-42');
+      const [record] = records(f.dir);
+      assert.equal(record.call_id, callId);
+      assert.equal(record.upstream_request_id, 'service-request-42');
+      assert.equal(record.upstream_request_id_header, 'x-request-id');
+      assert.equal(record.response_id, 'body-response');
+  });
+
+  test('gateway reports a missing service header instead of inventing one', async t => {
+      const f = await fixture(t, (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":"body-response"}'); });
+      const response = await post(f.url); await response.text();
+      assert.equal(response.headers.get('x-agent-insight-upstream-request-id'), null);
+      const [record] = records(f.dir);
+      assert.equal(record.upstream_request_id, undefined);
+      assert.equal(record.response_id, 'body-response');
+  });
+
+  test('gateway retains service header IDs from error and cancelled streaming responses', async t => {
+      let closed!: () => void;
+      let count = 0;
+      const upstreamClosed = new Promise<void>(resolve => closed = resolve);
+      const f = await fixture(t, (_req, res) => {
+          if (count++ === 0) {
+              res.writeHead(503, { 'content-type': 'application/json', 'x-request-id': 'service-error' });
+              res.end('{"error":{}}');
+              return;
+          }
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'x-request-id': 'service-stream' });
+          res.write('data: {"id":"stream-response"}\n\n');
+          res.on('close', closed);
+      });
+      const failed = await post(f.url); await failed.text();
+      assert.equal(failed.status, 503);
+      const controller = new AbortController();
+      const streamed = await post(f.url, { signal: controller.signal });
+      await streamed.body!.getReader().read(); controller.abort();
+      await Promise.race([upstreamClosed, new Promise((_, reject) => setTimeout(() => reject(new Error('upstream was not cancelled')), 1000).unref())]);
+      const journal = records(f.dir);
+      assert.deepEqual(journal.map(record => record.upstream_request_id).sort(), ['service-error', 'service-stream']);
+      assert.deepEqual(journal.map(record => record.state).sort(), ['cancelled', 'completed']);
+  });
+
+  test('gateway collapses identical repeated service headers and rejects conflicting ones', async t => {
+      let index = 0;
+      const f = await fixture(t, (_req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'x-request-id': index++ ? ['same-id', 'same-id'] : ['first-id', 'second-id'] });
+          res.end('{"id":"body"}');
+      });
+      const conflicting = await post(f.url); await conflicting.text();
+      const repeated = await post(f.url); await repeated.text();
+      assert.equal(conflicting.headers.get('x-agent-insight-upstream-request-id'), null);
+      assert.equal(repeated.headers.get('x-agent-insight-upstream-request-id'), 'same-id');
+      const journal = records(f.dir);
+      assert.deepEqual(journal.map(record => record.upstream_request_id).filter(Boolean), ['same-id']);
+      assert.equal(journal.filter(record => !record.upstream_request_id).length, 1);
+  });
+
+  test('OpenCode carries gateway service request IDs into the owning LLM node', async t => {
+      const f = await fixture(t, (_req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'x-request-id': 'service-owned' });
+          res.end('{"id":"ok"}');
+      }, { agent: 'opencode' });
+      process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = '1';
+      const uploader = await import('../scripts/opencode_uploader_client.js');
+      const info = { id: 'msg-service', sessionID: 'ses_service', role: 'assistant' };
+      const state = uploader.buildState([{ kind: 'event', payload: { type: 'message.updated', event: { properties: { info } } } }]);
+      const requestId = 'oc_' + crypto.createHash('sha256').update(JSON.stringify(['ses_service', 'msg-service'])).digest('hex').slice(0, 32);
+      const response = await post(f.url, { headers: { 'x-agent-insight-session-id': 'ses_service', 'x-agent-insight-message-id': 'msg-service', 'x-agent-insight-request-id': requestId, 'x-agent-insight-attempt-id': 'attempt-service' } });
+      await response.text();
+      const callId = response.headers.get('x-request-id')!;
+      uploader.applyInferenceGatewayRecords(state, f.dir, '');
+      const messages: any[] = uploader.mergeGraph(state, 'ses_service');
+      assert.deepEqual(messages[0].inference_upstream_request_ids, [{ call_id: callId, request_id: 'service-owned', source: 'model-response-header' }]);
+      const target = inferenceAnalysisTarget({ framework: 'opencode', scope: 'llm', interaction: messages[0] });
+      assert.equal(target.calls?.[0].upstreamRequestId, 'service-owned');
+      assert.equal(target.calls?.[0].callId, callId);
+  });
+
+  test('Qoder carries the service response header to the owned LLM node', async t => {
+      const f = await fixture(t, (_req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'X-Request-Id': 'service-qoder' });
+          res.end('{"id":"response-qoder"}');
+      });
+      const response = await post(f.url, { headers: { 'session-id': 'session' } }); await response.text();
+      const callId = response.headers.get('x-request-id')!;
+      const transcript = path.join(f.dir, 'session.jsonl');
+      fs.writeFileSync(transcript, [
+          { type: 'user', sessionId: 'session', timestamp: new Date(Date.now() - 5000).toISOString(), message: { content: 'start' } },
+          { type: 'assistant', sessionId: 'session', timestamp: new Date().toISOString(), message: { id: 'response-qoder', model: 'probe', content: [{ type: 'text', text: 'ok' }] } },
+      ].map(row => JSON.stringify(row)).join('\n'));
+      const result = await collectQoderHook({ hook_event_name: 'Stop', session_id: 'session', transcript_path: transcript }, { insightDir: f.dir, disableUploadKick: true, env: { AGENT_INSIGHT_API_KEY: '' } });
+      const record = aggregateOtelTraceEvents('session', normalizeOtlpTraces(JSON.parse(fs.readFileSync(result.pendingFile!, 'utf8'))))!;
+      const interaction = (record.interactions as any[]).find(item => item.messageID === 'response-qoder');
+      assert.deepEqual(interaction.inference_call_ids, [callId]);
+      assert.deepEqual(interaction.inference_upstream_request_ids, [{ call_id: callId, request_id: 'service-qoder', source: 'model-response-header' }]);
+      const target = inferenceAnalysisTarget({ framework: 'qoder', scope: 'llm', interaction });
+      assert.equal(target.calls?.[0].upstreamRequestId, 'service-qoder');
+      assert.equal(target.calls?.[0].callId, callId);
+  });
+
   test('Qoder duplicate service response IDs stay unassigned instead of binding two attempts to one LLM', async t => {
       const f = await fixture(t, (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":"duplicate"}'); });
       for (let i = 0; i < 2; i++) await (await post(f.url)).text();

@@ -26,9 +26,26 @@ import { fileURLToPath } from 'node:url'
 
 const CALL_HEADER = 'x-request-id'
 const LEGACY_CALL_HEADER = 'x-agent-insight-call-id'
+// Local relay of the model service's own response header. It must never be
+// mistaken for the gateway-generated call ID above.
+const UPSTREAM_REQUEST_HEADER = 'x-agent-insight-upstream-request-id'
 const hash = value => crypto.createHash('sha256').update(value).digest('hex')
 const text = value => typeof value === 'string' && value.length <= 512 ? value : undefined
 const hopHeaders = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
+
+/**
+ * Reads only the agreed request-id response header. `headersDistinct` keeps
+ * repeated header lines separate from commas inside a single value; identical
+ * repeats collapse to one value, conflicting repeats stay unavailable instead
+ * of guessing which ID belongs to the call.
+ */
+function responseRequestId(headers, distinct) {
+  const raw = distinct?.[CALL_HEADER]
+  const values = Array.isArray(raw) ? raw : typeof headers?.[CALL_HEADER] === 'string' ? [headers[CALL_HEADER]] : []
+  const unique = [...new Set(values.map(value => value.trim()).filter(Boolean))]
+  if (unique.length !== 1) return undefined
+  return text(unique[0])
+}
 
 function forwardHeaders(source) {
   const excluded = new Set([...hopHeaders, ...String(source.connection || '').toLowerCase().split(',').map(s => s.trim())])
@@ -151,9 +168,19 @@ export function createInferenceGateway(config, options = {}) {
     const out = (upstream.protocol === 'https:' ? https : http).request(upstream, { method: req.method, headers }, incoming => {
       responseStream = incoming
       record.status_code = incoming.statusCode
+      const upstreamRequestId = responseRequestId(incoming.headers, incoming.headersDistinct)
+      if (upstreamRequestId) {
+        record.upstream_request_id = upstreamRequestId
+        record.upstream_request_id_header = CALL_HEADER
+        // Persist as soon as headers arrive so streaming, cancellation and
+        // timeouts keep the real service ID even before the body ends.
+        try { persist() } catch {}
+      }
       parser = responseIdentity(incoming.headers['content-type'], route.protocol)
       const responseHeaders = forwardHeaders(incoming.headers)
+      for (const key of Object.keys(responseHeaders)) if (key.startsWith('x-agent-insight-')) delete responseHeaders[key]
       Object.assign(responseHeaders, callResponseHeaders)
+      if (upstreamRequestId) responseHeaders[UPSTREAM_REQUEST_HEADER] = upstreamRequestId
       // Withhold redirects: following one would bypass the fixed upstream and its call ID.
       delete responseHeaders.location
       res.writeHead(incoming.statusCode, responseHeaders)
