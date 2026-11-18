@@ -63,6 +63,11 @@ class DiagnosisRuns:
             if payload.get('phase')!='execute':continue
             progress=payload.get('checkpoint',{})
             dto['traceAttempts'].append({'id':cp['attempt_id'],'attemptNo':cp['attempt_no'],'traceId':cp['trace_id'],'status':progress.get('status',cp['attempt_status']),'finishedAt':_iso(cp['finished_at_ms']) if cp['finished_at_ms'] is not None else None})
+        from .legacy_import_diagnosis import DiagnosisHistory
+        historical = DiagnosisHistory.verified_attempts(self.experiments, con, ws, head, case)
+        if historical:
+            if dto['traceAttempts']:raise Conflict('Historical and live execution attempts cannot be mixed')
+            dto['traceAttempts'] = historical
         _size(dto,MAX_BYTES);return metadata,dto
 
     def _source_tx(self,con,token,ws,source):
@@ -98,6 +103,7 @@ class DiagnosisRuns:
                 if review is None:raise Conflict('Selected human review unavailable')
                 reviews.append(dict(review))
             vector={'head':{k:head[k] for k in ('experiment_id','lifecycle_revision','created_by')},'definition':{k:metadata.get(k) for k in ('name','configSnapshotJson','evaluatorConfigsJson','evaluatorIdsJson')},'case':{k:case[k] for k in ('experiment_id','case_id','payload_hash','lifecycle_revision','trace_id')},'slots':[{k:slot[k] for k in ('result_id','evaluator_id','selected_result_id','review_id')} for slot in slots],'reviews':reviews,'receipts':[{k:r[k] for k in ('result_id','run_id','content_hash')} for r in receipts], 'plans':[{'run_id':p['run_id'],'plan_hash':p['plan_hash'],'inputs':p['inputs']} for p in plans]}
+            if is_historical_control(con,ws,'experiment',exp):vector['historical_attempts']=case_dto['traceAttempts']
             selected=[v for v in case_dto['results'] if v['id'] in ids]
             if len(selected)!=len(ids):raise Conflict('Completed results unavailable')
             return {'kind':kind,'scope':scope.fingerprint,'vector':vector,'experiment':metadata,'case':case_dto,'results':selected,'plans':plans,'trace_args':{'task_id':case_dto.get('taskId'),'execution_id':case_dto.get('executionId')}}

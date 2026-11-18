@@ -318,7 +318,7 @@ class LegacyImportTests(unittest.TestCase):
         self.assertTrue(value['historical_inert'])
         with self.assertRaises(Conflict): service.dispatch('claim', self.token, 'w', {'diagnosis_id': 'diagnosis', 'worker_id': 'worker'})
 
-    def test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(self):
+    def test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(self, with_attempt=False, source_change=None):
         from services.storage.tests.test_collector_sources import CurrentFacts
         from services.storage.observations import ObservationIngest
         from services.storage.trace_service import TraceQueries
@@ -359,11 +359,16 @@ class LegacyImportTests(unittest.TestCase):
         self.legacy_rows('ExperimentEvalResult', [{'id': 'result', 'experimentId': 'experiment', 'caseId': 'case',
             'evaluatorId': 'judge', 'status': 'done', 'score': 82.0, 'attempts': 1,
             'createdAt': 1700000000000, 'updatedAt': 1700000001000}])
+        if with_attempt:
+            self.legacy_rows('ExperimentTraceAttempt', [{'id': 'attempt-1', 'experimentId': 'experiment', 'caseId': 'case',
+                'attemptNo': 1, 'workerId': 'old-client', 'platform': 'opencode', 'agent': 'build', 'timeoutSeconds': 180,
+                'traceId': 'task', 'status': 'ready', 'startedAt': 1700000000000, 'finishedAt': 1700000000500,
+                'createdAt': 1700000000000, 'updatedAt': 1700000000500}])
         export = self.root / 'seed-export'; export_database(self.source, export)
-        def import_to(control, token, directory):
+        def import_to(control, token, directory, selected_models=None):
             facts = Facts(); ingest = ObservationIngest(control, facts)
             tool = self.Importer(control, directory, source_id='deployment-1', bindings=self.bindings,
-                actors={'old-alice': token}, ingest=ingest)
+                actors={'old-alice': token}, ingest=ingest, selected_models=selected_models)
             tool.apply(migration_id='history')
             for _ in range(30):
                 if not ingest.work_once('fixture'): break
@@ -379,11 +384,41 @@ class LegacyImportTests(unittest.TestCase):
                 'executionId': 'execution', 'requestKey': 'old-request', 'inputHash': 'b'*64,
                 'inputSnapshotJson': json.dumps(preview['snapshot']), 'generatorVersion': 'old-generator', 'status': 'done',
                 'createdAt': 1700000000000, 'completedAt': 1700000001000}])
+            if source_change and source_change not in {'head', 'unimported'}:
+                with sqlite3.connect(self.source) as con:
+                    if source_change == 'superseded':
+                        con.row_factory = sqlite3.Row
+                        newer = dict(con.execute('SELECT * FROM ExperimentTraceAttempt').fetchone())
+                        newer.update(id='attempt-2', attemptNo=2, startedAt=1700000000500, finishedAt=1700000000800,
+                            createdAt=1700000000500, updatedAt=1700000000800)
+                        con.execute('INSERT INTO ExperimentTraceAttempt(' + ','.join(newer) + ') VALUES(' + ','.join('?' for _ in newer) + ')', tuple(newer.values()))
+                    elif source_change == 'missing': con.execute('DELETE FROM ExperimentTraceAttempt')
+                    else: con.execute("UPDATE ExperimentTraceAttempt SET status='failed'")
             final = self.root / 'final-export'; export_database(self.source, final)
             target = SQLiteControlStore(self.root / 'retest-target.db'); target.initialize(); iam = IAMStore(target)
             iam.create_principal('alice', 'alice', 'Alice'); target.create_workspace('w', 'Workspace'); iam.bind_workspace('w', principal_id='alice')
             token = iam.issue_session_for_provisioning('alice')
-            service, tool = import_to(target, token, final)
+            from services.storage.legacy_import import supported_legacy_models
+            selection = sorted(supported_legacy_models() - {'ExperimentTraceAttempt'}) if source_change == 'unimported' else None
+            service, tool = import_to(target, token, final, selection)
+            if source_change == 'head':
+                with target.transaction() as con: con.execute("UPDATE experiment_heads SET revision=revision+1 WHERE experiment_id='experiment'")
+            if source_change:
+                with self.assertRaises(Conflict): service.dispatch('verify_source', token, 'w', {'diagnosis_id': 'diagnosis'})
+                return
+            if with_attempt:
+                self.assertEqual(service.dispatch('read', token, 'w', {'diagnosis_id': 'diagnosis'})['snapshot']['attempt'],
+                    {'id': 'attempt-1', 'attemptNo': 1, 'traceId': 'task'})
+                for changed, restored, parameters in [
+                    ("UPDATE migration_checkpoints SET state='running' WHERE source_table LIKE 'ExperimentTraceAttempt:%'", "UPDATE migration_checkpoints SET state='verified' WHERE source_table LIKE 'ExperimentTraceAttempt:%'", ()),
+                ]:
+                    with target.transaction() as con: con.execute(changed, parameters)
+                    try:
+                        with self.assertRaises((Conflict, LookupError)): service.dispatch('verify_source', token, 'w', {'diagnosis_id': 'diagnosis'})
+                    finally:
+                        with target.transaction() as con: con.execute(restored, parameters)
+                with target.read_transaction() as con:
+                    self.assertEqual(con.execute("SELECT COUNT(*) FROM work_items WHERE phase!='migrate'").fetchone()[0], 0)
             verified = service.dispatch('verify_source', token, 'w', {'diagnosis_id': 'diagnosis'})
             self.assertTrue(verified['valid']); self.assertTrue(verified['historical_origin'])
             self.assertFalse(verified['source_model_selection_consistent'])
@@ -392,6 +427,24 @@ class LegacyImportTests(unittest.TestCase):
             with target.transaction() as con:
                 con.execute("UPDATE dataset_compat_heads SET revision=revision+1 WHERE dataset_id='dataset'")
             with self.assertRaises(Conflict): service.dispatch('verify_source', token, 'w', {'diagnosis_id': 'diagnosis'})
+
+    def test_verified_historical_trace_attempt_retest_preserves_identity_and_rejects_receipt_drift(self):
+        self.test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(with_attempt=True)
+
+    def test_unimported_historical_attempt_receipt_retest_is_rejected(self):
+        self.test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(with_attempt=True, source_change='unimported')
+
+    def test_changed_historical_attempt_head_retest_is_rejected(self):
+        self.test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(with_attempt=True, source_change='head')
+
+    def test_superseded_historical_trace_attempt_retest_is_rejected(self):
+        self.test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(with_attempt=True, source_change='superseded')
+
+    def test_non_ready_historical_trace_attempt_retest_is_rejected(self):
+        self.test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(with_attempt=True, source_change='failed')
+
+    def test_missing_historical_trace_attempt_retest_is_rejected(self):
+        self.test_completed_history_retest_checks_real_receipts_trace_and_asset_bytes(with_attempt=True, source_change='missing')
 
     def test_semantic_and_usage_history_uses_fixed_helper_without_recounting_daily(self):
         self.legacy_rows('GoalPlusSource', [{'id': 'source', 'user': 'old-alice', 'sourceId': 'native-source',

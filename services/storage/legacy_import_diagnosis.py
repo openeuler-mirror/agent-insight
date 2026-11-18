@@ -127,6 +127,17 @@ class DiagnosisHistory:
         for execution in executions: add('Session', ['taskId'], [execution['data'].get('taskId')])
         experiments = add('Experiment', ['id'], [data.get('experimentId')])
         add('ExperimentCase', ['id'], [data.get('caseId')])
+        attempt = snapshot.get('attempt')
+        if attempt is not None:
+            if not isinstance(attempt, dict): missing.append('invalid_attempt')
+            else:
+                attempts = add('ExperimentTraceAttempt', ['id'], [attempt.get('id')])
+                for item in attempts:
+                    value = item['data']
+                    if value.get('experimentId') != data.get('experimentId') or value.get('caseId') != data.get('caseId') or value.get('status') != 'ready' or any(value.get(key) != attempt.get(key) for key in ('attemptNo', 'traceId')):
+                        missing.append('attempt_source_differs')
+                for item in self.importer.lookup_rows('ExperimentTraceAttempt', ['experimentId', 'caseId'], [data.get('experimentId'), data.get('caseId')]):
+                    if self.importer._owner(item) == self.importer._owner(row): selected[item['entity_key']] = item
         results = snapshot.get('results')
         if not isinstance(results, list) or not results: missing.append('completed_results')
         for result in results if isinstance(results, list) else []:
@@ -145,6 +156,58 @@ class DiagnosisHistory:
             for parent in add('Skill', ['name'], [skill.get('name')]):
                 add('SkillVersion', ['skillId', 'version'], [parent['data']['id'], skill.get('version')])
         return list(selected.values()), sorted(set(missing))
+
+    @staticmethod
+    def verified_attempts(store, con, workspace, head, case):
+        from .legacy_import_experiments import _views, _view_source, _historical_plan, ExperimentHistory
+        from .legacy_import import INBOX, VERSION, _decode, _iso
+        from .legacy_plan import load_catalog
+        from types import SimpleNamespace
+        views = [value for value in _views(store, con, workspace, head, ['ExperimentTraceAttempt']) if value['data'].get('caseId') == case['case_id']]
+        if not views: return []
+        plan = _historical_plan(store, con, workspace, head)
+        if not plan: raise Conflict('Historical attempt source plan is unavailable')
+        checkpoints = con.execute("SELECT * FROM migration_checkpoints WHERE workspace_id=? AND source_table LIKE 'ExperimentTraceAttempt:%' LIMIT 10001", (workspace,)).fetchall()
+        if len(checkpoints) > 10000: raise Conflict('Historical attempt verification exceeds its response budget')
+        catalog = next(value for value in load_catalog()['models'] if value['model'] == 'ExperimentTraceAttempt')
+        columns = {value['column']: value for value in catalog['columns']}
+        importer = SimpleNamespace(control=store.control, facts=None,
+            bindings={'history': {'principal_id': head['created_by'], 'workspace_id': workspace}}, _owner=lambda row: 'history')
+        verifier = ExperimentHistory(importer); result = []
+        for view in views:
+            data = view['data']; candidates = []
+            for checkpoint in checkpoints:
+                proof = json.loads(checkpoint['target_watermark'])
+                source = _view_source(head['experiment_id'], 'ExperimentTraceAttempt')
+                if any(target.get('table') == 'inbox_receipts' and target.get('keys') == {'workspace_id': workspace, 'source_id': source, 'event_id': data['id']} for target in proof.get('targets', [])):
+                    candidates.append((checkpoint, proof))
+            if len(candidates) != 1: raise Conflict('Historical attempt migration receipt is missing or ambiguous')
+            checkpoint, proof = candidates[0]
+            key = proof.get('source_entity_key'); digest = proof.get('source_content_hash')
+            receipt = con.execute('SELECT content_hash FROM inbox_receipts WHERE workspace_id=? AND source_id=? AND event_id=?', (workspace, INBOX, key)).fetchone()
+            if checkpoint['state'] != 'verified' or not receipt or receipt[0] != digest or checkpoint['source_table'] != catalog['table'] + ':' + str(key):
+                raise Conflict('Historical attempt migration is not verified')
+            ref = proof.get('source_ref')
+            if not isinstance(ref, str): raise Conflict('Historical attempt raw source is missing')
+            store.control._verify_artifact(Path(ref).name, ref); raw = json.loads(Path(ref).read_text())
+            if raw.get('format') != VERSION or raw.get('table') != catalog['table'] or raw.get('source_id') != plan['legacy_import']['source_id'] or raw.get('entity_key') != key or _hash(raw.get('values')) != digest:
+                raise Conflict('Historical attempt raw source differs')
+            original = {}
+            for column, value in zip(raw['columns'], map(_decode, raw['values'])):
+                spec = columns.get(column)
+                if spec is None: raise Conflict('Historical attempt source columns differ')
+                original[spec['field']] = _iso(value) if value is not None and spec['prisma_type'] == 'DateTime' else value
+            if original != data or data.get('experimentId') != head['experiment_id'] or data.get('caseId') != case['case_id']:
+                raise Conflict('Historical attempt source relationship differs')
+            row = {'entity_key': key, 'content_hash': digest}
+            if not verifier.verify(con, row, workspace, proof): raise Conflict('Historical attempt target is unavailable')
+            if data.get('traceId'):
+                trace = verifier._trace(con, workspace, {'taskId': data['traceId']}, head['created_by'])
+                locator = con.execute('SELECT state FROM trace_locators WHERE workspace_id=? AND trace_id=?', (workspace, trace)).fetchone()
+                if not locator or locator[0] != 'active': raise Conflict('Historical attempt Trace is not active')
+            result.append(data)
+        if len({value['attemptNo'] for value in result}) != len(result): raise Conflict('Historical attempt order is ambiguous')
+        return sorted(result, key=lambda value: (value['attemptNo'], value.get('createdAt', ''), value['id']))
 
     @staticmethod
     def verify_retest_baselines(control, con, token, workspace, principal, history, facts):
