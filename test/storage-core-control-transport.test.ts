@@ -11,6 +11,9 @@ test('original controls carry current credentials without altering SSE, FormData
  const response=await api.apiFetch('/api/skill-generator/chat',{method:'POST',body:form,signal:abort.signal});
  assert.equal(calls[0].options.body,form);assert.equal(calls[0].options.signal,abort.signal);assert.equal(new Headers(calls[0].options.headers).get('content-type'),null);assert.equal(new Headers(calls[0].options.headers).get('x-witty-api-key'),'current-owner');assert.equal(response.bodyUsed,false);assert.equal(await response.text(),'data: first\n\ndata: done\n\n');
  key='next-owner';assert.equal(api.browserApiIdentityHeaders('/api/skill-generator/chat')['x-witty-api-key'],'next-owner');assert.deepEqual(Object.keys(api.browserApiIdentityHeaders('https://example.invalid/api/skills')),[]);
+ for(const url of ['/api/settings?user=spoofed','/api/settings/test']){await api.apiFetch(url);assert.equal(new Headers(calls.at(-1)!.options.headers).get('x-witty-api-key'),'next-owner');}
+ for(const url of ['/api/settings-other','/api/settings/test/extra']){await api.apiFetch(url);assert.equal(new Headers(calls.at(-1)!.options.headers).get('x-witty-api-key'),null);}
+ await api.apiFetch('/api/settings',{headers:{authorization:'Bearer readonly'}});assert.equal(new Headers(calls.at(-1)!.options.headers).get('x-witty-api-key'),null);
  await api.apiFetch('/api/skills',{headers:{authorization:'Bearer readonly'}});assert.equal(new Headers(calls.at(-1)!.options.headers).get('x-witty-api-key'),null);
  await api.apiFetch('https://example.invalid/api/skills');assert.equal(new Headers(calls.at(-1)!.options.headers).get('x-witty-api-key'),null);
 });
