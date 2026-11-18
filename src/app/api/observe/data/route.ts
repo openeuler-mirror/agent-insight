@@ -372,9 +372,32 @@ export async function GET(request: Request) {
     }
 
     const authenticatedUser = (await resolveUser(request)).username;
+    const adminListOwner = showAllUsers && !taskId && !taskIds.length && !parentExecutionId
+        ? viewer
+        : undefined;
+    const ownBuiltinTraces = adminListOwner
+        ? await prisma.execution.findMany({
+            where: { user: adminListOwner, taskId: { startsWith: 'builtin_msg_' } },
+            orderBy: { id: 'asc' },
+            take: 3,
+            select: { id: true },
+        })
+        : [];
+    const fallbackBuiltinTraces = adminListOwner && ownBuiltinTraces.length < 3
+        ? await prisma.execution.findMany({
+            where: { user: { not: adminListOwner }, taskId: { startsWith: 'builtin_msg_' } },
+            orderBy: [{ user: 'asc' }, { id: 'asc' }],
+            take: 3 - ownBuiltinTraces.length,
+            select: { id: true },
+        })
+        : [];
+    const visibleBuiltinTraceIds = adminListOwner
+        ? [...ownBuiltinTraces, ...fallbackBuiltinTraces].map(trace => trace.id)
+        : undefined;
     const hiddenCollaborationChildren = authenticatedUser && authenticatedUser === user && !taskId && !taskIds.length && !parentExecutionId && !includeSubagents && !onlySubagents
         ? (await collaborationTraceProjection.plan(authenticatedUser)).hiddenChildren : [];
     const recordFilters = {
+        visibleBuiltinTraceIds,
         showAllUsers,
         excludedTaskIds: hiddenCollaborationChildren,
         query,

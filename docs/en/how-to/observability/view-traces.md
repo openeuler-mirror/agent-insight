@@ -6,6 +6,8 @@
 
 The trace list supports filtering by agent, framework, user tags, and keywords. Click a row to open the trace detail; browser back returns to the list with the previous filters and page preserved. After a successful import, the same back/forward behavior applies to the imported trace's detail page.
 
+New accounts no longer receive built-in example traces, and startup removes examples injected by older versions. If any remain, an administrator's all-user list shows at most three, preferring the administrator's own records. Other users' real traces remain visible. Selecting a specific user or opening a trace directly still shows that user's complete records.
+
 ## Batch importing traces
 
 Use **Import Trace** in the top-right corner of the trace list. You can select multiple JSON files exported from Agent Insight, or drag and drop them onto the import window. Limits: 50 MB and 500 execution nodes per file.

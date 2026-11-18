@@ -242,4 +242,42 @@ test('administrator Trace reads and dashboard aggregates share the global scope'
         const detail = await json(agent, '/api/fleet/agent?name=shared-worker&window=24h', 'admin');
         assert.equal(detail.stats.traces, 2);
     });
+
+    await context.test('global list keeps one builtin example set while owner and direct reads stay complete', async () => {
+        const fullListUrl = listUrl + '&pageSize=100';
+        const initialTotal = (await json(data, fullListUrl + '&listPart=stats', 'admin')).stats.total;
+        for (const owner of ['alice', 'bob']) {
+            await prismaRaw.execution.createMany({ data: [1, 2, 3].map(index => ({
+                id: `${owner}-builtin-${index}`,
+                taskId: `builtin_msg_${owner}_${index}`,
+                user: owner,
+                timestamp,
+                framework: 'opencode',
+                agentName: 'messages-log-analyzer',
+            })) });
+        }
+        const fallback = await json(data, fullListUrl, 'admin');
+        assert.deepEqual(fallback.records.filter((row: { task_id: string }) => row.task_id?.startsWith('builtin_msg_'))
+            .map((row: { user: string }) => row.user), ['alice', 'alice', 'alice']);
+        assert.equal(fallback.stats.total, initialTotal + 3);
+        assert.equal((await json(data, fullListUrl + '&listPart=stats', 'admin')).stats.total, initialTotal + 3);
+        assert.equal((await json(data, fullListUrl + '&traceUser=bob', 'admin')).records
+            .filter((row: { task_id: string }) => row.task_id?.startsWith('builtin_msg_')).length, 3);
+        assert.equal((await json(data, fullListUrl, 'alice')).records
+            .filter((row: { task_id: string }) => row.task_id?.startsWith('builtin_msg_')).length, 3);
+        assert.equal((await json(data, '/api/observe/data?taskId=builtin_msg_bob_1&fields=light', 'admin')).length, 1);
+
+        await prismaRaw.execution.createMany({ data: [1, 2, 3].map(index => ({
+            id: `admin-builtin-${index}`,
+            taskId: `builtin_msg_admin_${index}`,
+            user: 'admin',
+            timestamp,
+            framework: 'opencode',
+            agentName: 'messages-log-analyzer',
+        })) });
+        const own = await json(data, fullListUrl, 'admin');
+        assert.deepEqual(own.records.filter((row: { task_id: string }) => row.task_id?.startsWith('builtin_msg_'))
+            .map((row: { user: string }) => row.user), ['admin', 'admin', 'admin']);
+        assert.equal(own.stats.total, initialTotal + 3);
+    });
 });

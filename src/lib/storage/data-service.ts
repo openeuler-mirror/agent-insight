@@ -1325,6 +1325,7 @@ interface ReadRecordFilters {
     skill?: string;
     skillVersion?: number;
     showAllUsers?: boolean;
+    visibleBuiltinTraceIds?: string[];
     /** 显式 true 才会把 sub-agent execution 行也返回（默认不返回，保持主列表干净） */
     includeSubagents?: boolean;
     /** 只返回 sub-agent 行（不含 root），与 includeSubagents 互斥；优先级高于 includeSubagents */
@@ -1993,6 +1994,15 @@ async function readRecordsInternal(
         // 严格按 owner 隔离：用户只看见 user=自己的记录；无主(user=null)记录不可见。
         // 全看(ownership=all / admin)走 showAllUsers ⇒ 不加 user 过滤、返回全部。
         where.user = user;
+    }
+    if (filters?.showAllUsers && filters.visibleBuiltinTraceIds) {
+        where.AND = [...(where.AND ?? []), {
+            OR: [
+                { id: { in: filters.visibleBuiltinTraceIds } },
+                { taskId: null },
+                { NOT: { taskId: { startsWith: 'builtin_msg_' } } },
+            ],
+        }];
     }
 
     const subagentFilter = resolveExecutionSubagentFilter(filters);
