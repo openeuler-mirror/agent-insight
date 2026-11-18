@@ -1,3 +1,4 @@
+import {controlVmFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
@@ -27,8 +28,8 @@ test('a real empty trigger frontier hides older typed issues without inventing r
  const history=await api.aggregateSkillIssues({prisma,skillId:'skill',version:1,user:'owner',includeResolved:true});assert.equal(history.issues.length,1);assert.equal(history.issues[0].resolvedAt,null);assert.equal(trigger.resolvedAt,null);
 });
 for(const [file,method] of [['src/app/api/skill-opt/plan/route.ts','POST'],['src/app/api/skills/by-name/[name]/optimization-points/route.ts','GET']])test(`original ${file} establishes trusted core scope before reading control state`,async()=>{
- let context:unknown;let wrappers=0;
- const api=load(file,{'next/server':{NextResponse:Response},'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},'@/lib/storage-core/experiments':{getCoreExperimentContext:()=>context,coreExperimentFailure:()=>Response.json({error:'scope'},{status:503})},'@/lib/storage-core/workbench':{withCoreWorkbenchRoute:async(request:Request,next:(input:Request)=>Promise<Response>)=>{wrappers++;context={actor:{username:'owner'}};return next(request);}},'@/lib/auth/auth':{resolveUser:async()=>({username:'owner'})},'@/lib/storage/prisma':{db:{findSkills:async()=>[]}}});
+ let context:unknown;let wrappers=0;const control=controlVmFixture({actor:{token:'fixture',workspace:'w',principal:'p',username:'owner'}});
+ const api=load(file,{'@/lib/storage-core/control-route':control.route,'next/server':{NextResponse:Response},'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},'@/lib/storage-core/experiments':{getCoreExperimentContext:()=>context,coreExperimentFailure:()=>Response.json({error:'scope'},{status:503})},'@/lib/storage-core/workbench':{withCoreWorkbenchRoute:async(request:Request,next:(input:Request)=>Promise<Response>)=>{control.assertScoped();wrappers++;context={actor:{username:'owner'}};return next(request);}},'@/lib/auth/auth':{resolveUser:async()=>({username:'owner'})},'@/lib/storage/prisma':{db:{findSkills:async()=>[]}}});
  const response=await api[method](new Request('http://localhost/api/skill-opt/plan',{method,...(method==='POST'?{body:'{}',headers:{'content-type':'application/json'}}:{})}),{params:Promise.resolve({name:'skill'})});
  assert.equal(wrappers,1);assert.ok([400,404].includes(response.status));
 });

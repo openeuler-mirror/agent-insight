@@ -1,3 +1,4 @@
+import {controlVmFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -8,7 +9,9 @@ const nativeRequire=createRequire(import.meta.url);
 function harness(fail?:string){
  const calls:string[]=[];const attempts:Record<string,number>={};let runCount=0;const exports:Record<string,unknown>={};
  const turn={session:{id:'chat'},messages:[],turn:{request_key:'req',fence:'2',lease_owner:'worker',revision:'1',state:'streaming'},trace_id:'canonical',opencode_session_id:null,duplicate:false,is_first_user_message:true,workspace_key:'diagnosis-'+'a'.repeat(64)};
+ const control=controlVmFixture({actor:{token:'private',workspace:'ws',username:'trusted-user',principal:'p'}});
  const deps:Record<string,unknown>={
+  './control-context':control.context,
   './compat':{compatibilityContext:async()=>({token:'private',workspace:'ws',username:'trusted-user',principal:'p'}),compatibilityFailure:(e:{status?:number})=>Response.json({error:'failed'},{status:e.status??503}),compatibleRequest:async()=>Response.json({session:null,messages:[]})},
   './evidence':{readTraceEvidence:async()=>({username:'trusted-user',evidence:{snapshot_hash:'a'.repeat(64),manifest:{trace_id:'canonical',workspace_id:'ws'},execution:{id:'original',taskId:'original-task',framework:'opencode',query:'frozen'},session:{interactions:[{content:'exact'}]}}})},
   './server':{readCoreBytes:async(body:ReadableStream<Uint8Array>|null)=>new Uint8Array(await new Response(body).arrayBuffer()),requestCore:async(url:string,options:{body?:string})=>{

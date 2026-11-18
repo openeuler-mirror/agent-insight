@@ -1,3 +1,4 @@
+import {controlVmFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -13,11 +14,13 @@ const metadata=[{trace_id:'t',boundary:'b',executionId:'e',taskId:'task',agentId
 function route(core:boolean,failure?:number,records=metadata,principalUsername='alice'){
  let oldReads=0;let oldAuth=0;let validated=0;let ensured=0;const created:Record<string,unknown>[]=[];
  const registrations=[{id:'registered',name:'A',platform:'opencode',agentType:'main',agentOwnership:'user',user:'alice',description:'original',createdAt:new Date(now-1000)}];
+ const control=controlVmFixture({actor:{token:'fixture',workspace:'w',principal:'alice',username:'alice',principalUsername},enabled:core,authenticate:async()=>{if(failure)throw Object.assign(Error('unavailable'),{status:failure});return {token:'fixture',workspace:'w',principal:'alice',username:'alice',principalUsername};}});
  const source={username:'alice',actor:{principalUsername},validate:async()=>{validated++;}};
  const deps:Record<string,unknown>={
+  '@/lib/storage-core/control-route':control.route,'@/lib/storage-core/control-repository':control.repository,
   'next/server':{NextResponse:Response},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},
-  '@/lib/storage-core/analytics':{readCoreAnalytics:async()=>{if(failure)throw Object.assign(Error('unavailable'),{status:failure});return source;},readCoreAgentMetadata:async()=>records,analyticsFailure:(error:{status:number})=>Response.json({error:'storage'},{status:error.status})},
+  '@/lib/storage-core/analytics':{readCoreAnalytics:async()=>{control.assertScoped();if(failure)throw Object.assign(Error('unavailable'),{status:failure});return source;},readCoreAgentMetadata:async()=>records,analyticsFailure:(error:{status:number})=>Response.json({error:'storage'},{status:error.status})},
   '@/lib/system-agents':{ensureAllSystemAgents:async()=>{ensured++;}},
   '@/lib/system-agent-names':{isInternalSystemAgentTrace:()=>false},
   '@/lib/storage/prisma':{prismaRaw:{

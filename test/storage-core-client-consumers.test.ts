@@ -16,6 +16,7 @@ for(const [path,method] of [['/api/modelconfig/pricing?user=forged','GET'],['/ap
  c.key(null);await c.send(path,{method});assert.equal(c.calls.at(-1)!.headers.has('x-witty-api-key'),false);
  c.key('current');await c.send(path,{method,headers:{'x-witty-api-key':'explicit'}});assert.equal(c.calls.at(-1)!.headers.get('x-witty-api-key'),'explicit');
 });
+test('Skill control mutations transport the current actor without granting an unrelated API path',async()=>{const c=client();await c.send('/api/skills/by-name/checking/optimization-points/resolve-other',{method:'PATCH'});assert.equal(c.calls.at(-1)!.headers.get('x-witty-api-key'),'alice-key');await c.send('/api/skills-other',{method:'PATCH'});assert.equal(c.calls.at(-1)!.headers.has('x-witty-api-key'),false);});
 test('the new authentication transport does not broaden configuration PUT or unrelated paths',async()=>{
- const c=client();for(const [path,method] of [['/api/modelconfig/pricing','PUT'],['/api/modelconfig/pricing-other','GET'],['https://example.com/api/modelconfig/pricing','GET'],['/api/skills/by-name/checking/optimization-points/resolve-other','PATCH']]){await c.send(path,{method});assert.equal(c.calls.at(-1)!.headers.has('x-witty-api-key'),false);}
+ const c=client();for(const [path,method] of [['/api/modelconfig/pricing','PUT'],['/api/modelconfig/pricing-other','GET'],['https://example.com/api/modelconfig/pricing','GET']]){await c.send(path,{method});assert.equal(c.calls.at(-1)!.headers.has('x-witty-api-key'),false);}
 });

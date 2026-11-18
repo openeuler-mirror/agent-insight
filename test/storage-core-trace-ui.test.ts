@@ -25,10 +25,12 @@ function frontendSources(directory: URL): URL[] {
     });
 }
 
-test('product frontend has no storage-core UI, auth or runtime mode branch', () => {
+test('product frontend has no alternate storage UI or client runtime mode branch', () => {
     for (const root of ['src/app/(main)/', 'src/app/login/', 'src/components/', 'src/lib/auth/', 'src/lib/client/']) {
         for (const file of frontendSources(new URL('../' + root, import.meta.url))) {
-            assert.doesNotMatch(readFileSync(file, 'utf8'), /StorageCoreTracePage|storage-core-trace-model|useCoreAuthHook|use-core-auth|CoreAuthProvider|CoreLoginForm|core-login-form|isStorageCoreEnabled|NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE/, file.pathname);
+            const source=readFileSync(file,'utf8');
+            if(file.pathname.endsWith('.tsx')||root==='src/lib/client/')assert.doesNotMatch(source,/isStorageCoreEnabled|NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE/,file.pathname);
+            assert.doesNotMatch(source, /StorageCoreTracePage|storage-core-trace-model|useCoreAuthHook|use-core-auth|CoreAuthProvider|CoreLoginForm|core-login-form/, file.pathname);
         }
     }
 });

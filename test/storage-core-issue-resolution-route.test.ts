@@ -1,3 +1,4 @@
+import {controlVmFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
@@ -38,8 +39,8 @@ test('explicit operation replay and fresh repeat retain core receipt and old upd
 });
 
 test('the original PATCH entry delegates before legacy body parsing or SkillIssue reads',async()=>{
- let delegated=0;
- const api=load('src/app/api/skills/by-name/[name]/optimization-points/resolve/route.ts',{'next/server':{NextResponse:Response},'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},'@/lib/storage-core/issue-resolution-route':{handleCoreIssueResolution:async(_request:Request,name:string)=>{assert.equal(name,'skill');delegated++;return Response.json({resolvedCount:1});}},'@/lib/storage/prisma':{prismaRaw:new Proxy({},{get(){throw Error('legacy read');}})}});
+ let delegated=0;const control=controlVmFixture({actor:{token:'fixture',workspace:'w',principal:'p',username:'owner'}});
+ const api=load('src/app/api/skills/by-name/[name]/optimization-points/resolve/route.ts',{'@/lib/storage-core/control-route':control.route,'next/server':{NextResponse:Response},'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},'@/lib/storage-core/issue-resolution-route':{handleCoreIssueResolution:async(_request:Request,name:string)=>{control.assertScoped();assert.equal(name,'skill');delegated++;return Response.json({resolvedCount:1});}},'@/lib/storage/prisma':{prismaRaw:new Proxy({},{get(){throw Error('legacy read');}})}});
  const response=await (api.PATCH as (request:Request,props:unknown)=>Promise<Response>)(new Request('http://localhost/api/skills/by-name/skill/optimization-points/resolve',{method:'PATCH',body:'{}'}),{params:Promise.resolve({name:'skill'})});assert.equal(response.status,200);assert.deepEqual(await response.json(),{resolvedCount:1});assert.equal(delegated,1);
 });
 

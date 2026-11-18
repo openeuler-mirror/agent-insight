@@ -1,3 +1,4 @@
+import {controlVmFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -34,10 +35,12 @@ test('evidence helper rejects missing evidence, mismatched scope and backend fai
 
 function route(core:boolean,result:unknown={evidence,username:'alice'},failure?:number){
  const exports:Record<string,unknown>={};let oldReads=0;let usage=0;let normalizations=0;
+ const control=controlVmFixture({actor:{token,workspace:'w',principal:'alice',username:'alice'},enabled:core});
  const dependencies:Record<string,unknown>={
+  '@/lib/storage-core/control-context':control.context,
   'next/server':{NextResponse:Response},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>isStorageCoreEnabled({AGENT_INSIGHT_TRACE_STORAGE:core?'core':'legacy'})},
-  '@/lib/storage-core/evidence':{TRACE_EVIDENCE_BYTES:16*1024*1024,readTraceEvidence:async()=>{if(failure)throw Object.assign(new Error('private'),{status:failure});return result;}},
+  '@/lib/storage-core/evidence':{TRACE_EVIDENCE_BYTES:16*1024*1024,readTraceEvidence:async()=>{control.assertScoped();if(failure)throw Object.assign(new Error('private'),{status:failure});return result;}},
   '@/lib/storage-core/compat':{compatibilityFailure:(error:{status?:number})=>Response.json({error:'Storage request failed'},{status:error.status||503})},
   '@/lib/storage-core/server':{readCoreBytes:async(body:ReadableStream<Uint8Array>|null,limit:number)=>{const raw=new Uint8Array(await new Response(body).arrayBuffer());if(raw.length>limit)throw Object.assign(new Error('large'),{status:413});return raw;}},
   '@/lib/usage-analytics/collector':{recordUsageEvent:(event:{user:string})=>{assert.equal(event.user,'alice');usage++;}},

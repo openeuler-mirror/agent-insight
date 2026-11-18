@@ -29,7 +29,7 @@ for(const scenario of ['ready','logout','abort','bound','other-503'])test('origi
 });
 
 
-test('Skill and Agent read consumers transport the current key without changing mutation requests',async()=>{
+test('Skill and Agent consumers transport the current key for reads and control mutations',async()=>{
   const calls:{url:string;key:string|null}[]=[];
   const sandboxModule={exports:{}};
   const source=ts.transpileModule(fs.readFileSync(new URL('../src/lib/client/api.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -39,7 +39,7 @@ test('Skill and Agent read consumers transport the current key without changing 
   assert.ok(calls.every(call=>call.key==='current-key'));
   assert.ok(calls.every(call=>call.url.startsWith('/insight/api/')));
   await api('/api/skills',{method:'DELETE'});
-  assert.equal(calls.at(-1)?.key,null);
+  assert.equal(calls.at(-1)?.key,'current-key');
   await api('/api/skills',{headers:{'x-witty-api-key':'explicit-key'}});
   assert.equal(calls.at(-1)?.key,'explicit-key');
 });

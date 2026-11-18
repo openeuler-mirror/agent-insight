@@ -10,7 +10,7 @@ const database=createIsolatedDatabase();
 import {prisma} from '@/lib/storage/prisma';
 test.after(async()=>{await prisma.$disconnect();database.dispose();});
 function loadStore(catalog:()=>Promise<unknown>){
- const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync('src/lib/fault-injection/store.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(id:string)=>({crypto,'@/lib/storage/prisma':{prisma},'@/lib/fault-injection/engine':{listFaultsViaPython:catalog},'@/lib/fault-injection/compose-prompt':{composeFaultPrompt:({basePrompt}:{basePrompt:string})=>basePrompt,findSubmode:()=>null}}[id]??{}),console});return module.exports as {createTaskWithRuns:Function};
+ const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync('src/lib/fault-injection/store.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(id:string)=>({crypto,'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>false},'@/lib/storage/prisma':{prisma},'@/lib/fault-injection/engine':{listFaultsViaPython:catalog},'@/lib/fault-injection/compose-prompt':{composeFaultPrompt:({basePrompt}:{basePrompt:string})=>basePrompt,findSubmode:()=>null}}[id]??{}),console});return module.exports as {createTaskWithRuns:Function};
 }
 const input={user:'core-owner',platform:'opencode',agent:'build',prompt:'public task',workspace:'sandbox',model:'model',items:[{fault:'network',submode:null}]};
 const stable={taskKey:'task-01234567',runIds:['ras-20261114T010101-01234567']};

@@ -9,10 +9,11 @@ import ts from 'typescript';
 function load(file:string,dependencies:Record<string,unknown>){const module={exports:{}};const code=ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;vm.runInNewContext(code,{module,exports:module.exports,require:(name:string)=>{if(!(name in dependencies))throw Error('Unexpected dependency '+name);return dependencies[name];},process,Request,Response,URL,URLSearchParams,Buffer,Map,Set,Date,JSON,Promise,structuredClone,setTimeout,clearTimeout,setInterval,clearInterval,setImmediate,console:{warn:()=>{},error:()=>{},log:()=>{}}});return module.exports as Record<string,Function>;}
 
 function startupFixture(core:boolean){
- const legacy:string[]=[];let starts=0;let analyticsStarts=0;const noop=async()=>{};
+ const legacy:string[]=[];let starts=0;let analyticsStarts=0;let collectorStarts=0;let logStarts=0;const noop=async()=>{};
  const api=load('src/instrumentation-node.ts',{
   'node:fs':{existsSync:()=>false},'node:path':path,'child_process':{spawn:()=>{throw Error('unexpected subprocess');}},'@/lib/env':{getAgentInsightHome:()=>'/isolated'},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},'@/lib/storage-core/experiment-background':{startCoreExperimentBackground:()=>{starts++;}},
+  '@/lib/storage-core/collector-worker':{startCoreCollectorWorker:()=>{collectorStarts++;}},'@/lib/storage-core/collector-logs':{startCoreCollectorLogs:()=>{logStarts++;}},
   '@/lib/storage-core/analytics':{startCoreAnalyticsBackground:()=>{analyticsStarts++;}},
   '@/lib/engine/experiment/cancellation-service':{startExperimentCancellationWatchdog:()=>legacy.push('cancel-watchdog')},
   '@/lib/system-agents':{ensureAllSystemAgents:noop},'@/server/builtin-example/ensure-example-file':{ensureExampleMessagesFile:()=>''},
@@ -25,22 +26,23 @@ function startupFixture(core:boolean){
   '@/lib/ingest/otel-consumer/consumer':{startOtelSpoolConsumer:()=>{}},'@/lib/infra/poller':{startInfraPoller:()=>{}},
   '@/lib/engine/experiment/experiment-watch':{startExperimentWatcher:()=>legacy.push('experiment-watch')},'@/server/trace-datasets/manager':{startTraceDatasetManager:()=>{}},
  });
- return {api,legacy,get starts(){return starts;},get analyticsStarts(){return analyticsStarts;}};
+ return {api,legacy,get starts(){return starts;},get analyticsStarts(){return analyticsStarts;},get collectorStarts(){return collectorStarts;},get logStarts(){return logStarts;}};
 }
 
-test('core startup preserves old evaluation, grayscale and benchmark data without starting their legacy reapers',async()=>{const fixture=startupFixture(true);await fixture.api.setupNodeRuntime();assert.deepEqual(fixture.legacy,[]);assert.equal(fixture.starts,1);assert.equal(fixture.analyticsStarts,1);});
+test('core startup preserves old evaluation, grayscale and benchmark data without starting their legacy reapers',async()=>{const fixture=startupFixture(true);await fixture.api.setupNodeRuntime();assert.deepEqual(fixture.legacy,[]);assert.equal(fixture.starts,1);assert.equal(fixture.analyticsStarts,1);assert.equal(fixture.collectorStarts,1);assert.equal(fixture.logStarts,1);});
 
-test('legacy startup retains its original reapers, resumers and watchers',async()=>{const fixture=startupFixture(false);await fixture.api.setupNodeRuntime();assert.equal(fixture.starts,0);assert.equal(fixture.analyticsStarts,0);for(const name of ['cancel-watchdog','trajectoryEvalResult','skillTriggerEvalRun','grayscale','benchmark-watchdog','benchmark-reap','benchmark-resume','benchmark-eval-watchdog','benchmark-eval-reap','benchmark-eval-resume','benchmark-eval-continue','experiment-watch'])assert.ok(fixture.legacy.includes(name),name);});
+test('legacy startup retains its original reapers, resumers and watchers',async()=>{const fixture=startupFixture(false);await fixture.api.setupNodeRuntime();assert.equal(fixture.starts,0);assert.equal(fixture.analyticsStarts,0);assert.equal(fixture.collectorStarts,0);assert.equal(fixture.logStarts,0);for(const name of ['cancel-watchdog','trajectoryEvalResult','skillTriggerEvalRun','grayscale','benchmark-watchdog','benchmark-reap','benchmark-resume','benchmark-eval-watchdog','benchmark-eval-reap','benchmark-eval-resume','benchmark-eval-continue','experiment-watch'])assert.ok(fixture.legacy.includes(name),name);});
 
 test('restart identity loading authenticates configured credentials and keeps the legacy model owner separate',async()=>{
  const {configuredCoreBackgroundActors}=await import('@/lib/storage-core/compat');
  const root=mkdtempSync(path.join(os.tmpdir(),'core-background-'));const file=path.join(root,'actors.json');const token='api_'+'A'.repeat(43),revoked='api_'+'B'.repeat(43);
- const previous={file:process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE,url:process.env.AGENT_INSIGHT_STORAGE_CORE_URL};
+ const previous={file:process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE,url:process.env.AGENT_INSIGHT_STORAGE_CORE_URL,controller:process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE};
+ process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(root,'controller-key');writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'a'.repeat(64),{mode:0o600});
  process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=file;process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19000';
  writeFileSync(file,JSON.stringify({version:1,core_origin:'http://127.0.0.1:19000',bindings:[{legacy_username:'old-model-owner',legacy_api_key_sha256:'a'.repeat(64),principal_id:'p',workspace_id:'w',credential:token},{legacy_username:'revoked',legacy_api_key_sha256:'b'.repeat(64),principal_id:'revoked',workspace_id:'w',credential:revoked}]}),{mode:0o600});
- let requests=0;const fetcher:typeof fetch=async(_url,options)=>{requests++;if(new Headers(options?.headers).get('authorization')==='Bearer '+revoked)return Response.json({error:'Unauthorized'},{status:401});return Response.json({principal_id:'p',username:'core-owner',workspaces:[{workspace_id:'w'}]});};
- try{const result=await configuredCoreBackgroundActors({fetcher});assert.equal(requests,2);assert.equal(result.actors.length,1);assert.equal(result.actors[0].username,'old-model-owner');assert.equal(result.actors[0].principalUsername,'core-owner');assert.deepEqual(result.failures,[401]);chmodSync(file,0o644);await assert.rejects(configuredCoreBackgroundActors({fetcher}),error=>(error as {status:number}).status===503);}
- finally{if(previous.file===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=previous.file;if(previous.url===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous.url;rmSync(root,{recursive:true,force:true});}
+ let requests=0;const fetcher:typeof fetch=async(_url,options)=>{requests++;if(new URL(String(_url)).pathname==='/v1/compat/platform-control-bootstrap')return Response.json({value:{actors:[],failures:[]}});if(new Headers(options?.headers).get('authorization')==='Bearer '+revoked)return Response.json({error:'Unauthorized'},{status:401});return Response.json({principal_id:'p',username:'core-owner',workspaces:[{workspace_id:'w'}]});};
+ try{const result=await configuredCoreBackgroundActors({fetcher});assert.equal(requests,3);assert.equal(result.actors.length,1);assert.equal(result.actors[0].username,'old-model-owner');assert.equal(result.actors[0].principalUsername,'core-owner');assert.deepEqual(result.failures,[401]);chmodSync(file,0o644);await assert.rejects(configuredCoreBackgroundActors({fetcher}),error=>(error as {status:number}).status===503);}
+ finally{if(previous.file===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=previous.file;if(previous.url===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous.url;if(previous.controller===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=previous.controller;rmSync(root,{recursive:true,force:true});}
 });
 
 function backgroundFixture(){

@@ -7,9 +7,10 @@ import {createIsolatedDatabase} from './helpers/isolated-database';
 
 const database=createIsolatedDatabase();
 const token='api_'+'A'.repeat(43),otherToken='api_'+'B'.repeat(43),readOnly='api_'+'R'.repeat(43);
-const previous={origin:process.env.AGENT_INSIGHT_STORAGE_CORE_URL,mapping:process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE};
+const previous={origin:process.env.AGENT_INSIGHT_STORAGE_CORE_URL,mapping:process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE,controller:process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE};
 process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19000';
 process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=path.join(database.home,'collector-identity.json');
+process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(database.home,'controller-key');writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'a'.repeat(64),{mode:0o600});
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const binding=(username='legacy-owner',credential=token,principal='principal-a',workspace='w')=>({legacy_username:username,legacy_api_key_sha256:hash('legacy-key'),principal_id:principal,workspace_id:workspace,credential});
 const mapping=(bindings= [binding()])=>writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE!,JSON.stringify({version:1,core_origin:'http://127.0.0.1:19000',bindings}),{mode:0o600});
@@ -18,6 +19,7 @@ const status=(expected:number)=>(error:unknown)=>(error as {status?:number}).sta
 let enabled=true,canWrite=true;const requests:string[]=[];
 const fetcher:typeof fetch=async(url,options)=>{
  const parsed=new URL(String(url)),credential=new Headers(options?.headers).get('authorization');requests.push(parsed.pathname);
+ if(parsed.pathname==='/v1/compat/platform-control-bootstrap'){assert.ok(new Headers(options?.headers).has('x-storage-controller-proof'));return Response.json({value:{actors:[],failures:[]}});}
  if(!enabled)return Response.json({error:'revoked'},{status:401});
  if(parsed.pathname==='/v1/auth/me')return Response.json({principal_id:credential==='Bearer '+otherToken?'principal-b':'principal-a',username:'core-owner',workspace_id:'w',workspaces:[{workspace_id:'w',role:'member'},{workspace_id:'other',role:'member'}]});
  assert.equal(parsed.pathname,'/v1/compat/collector-source');
@@ -35,7 +37,7 @@ async function device(user='legacy-owner'){
  return registerClient({installToken,hostname:'isolated-fixture',machineId:null});
 }
 test.beforeEach(()=>{mapping();enabled=true;canWrite=true;requests.length=0;});
-test.after(async()=>{const {prismaRaw}=await import('@/lib/storage/prisma');await prismaRaw.$disconnect();if(previous.origin===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous.origin;if(previous.mapping===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=previous.mapping;database.dispose();});
+test.after(async()=>{const {prismaRaw}=await import('@/lib/storage/prisma');await prismaRaw.$disconnect();if(previous.origin===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous.origin;if(previous.mapping===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=previous.mapping;if(previous.controller===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=previous.controller;database.dispose();});
 
 test('body identity and boolean auth stamps cannot create a collector scope',async()=>{const a=await api();await assert.rejects(a.resolveCoreCollectorIdentity(request(),{framework:'opencode',operation:'snapshot'},options),status(401));assert.equal(requests.length,0);});
 test('mapped collector uses actual principal and preserves the separate legacy owner without serializing secrets',async()=>{

@@ -278,6 +278,7 @@ async function collectorTestIdentity(user:string){
  const fetcher:typeof fetch=async(input)=>{
   calls++;const url=new URL(String(input));assert.equal(url.origin,'http://127.0.0.1:58763');
   if(url.pathname==='/v1/auth/me')return Response.json({principal_id:'collector-principal',username:user,workspace_id:'collector-workspace',workspaces:[{workspace_id:'collector-workspace'}]});
+  if(url.pathname==='/v1/compat/experiments')return Response.json({value:{match:null,attribution:null}});
   assert.equal(url.pathname,'/v1/compat/collector-source');return Response.json({value:{authorized:true,operation:'snapshot',principal_id:'collector-principal',workspace_id:'collector-workspace'}});
  };
  try{

@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createIsolatedDatabase } from './helpers/isolated-database'
+import { startIsolatedFiCore } from './helpers/isolated-fi-core'
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma']
 let collect: typeof import('@/app/api/fault-injection/runs/[runId]/collect-result/route')['POST']
@@ -71,18 +72,53 @@ function upload(runId: string, body: Record<string, unknown>) {
   }), { params: Promise.resolve({ runId }) })
 }
 
-test('core collect callback preserves a historical Case sharing the FI run and never synthesizes Trace evidence',async()=>{
-  const data=await fixture();const before=await prisma.experimentCase.findUniqueOrThrow({where:{id:data.row.id}});
-  const previous=process.env.AGENT_INSIGHT_TRACE_STORAGE;process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
-  const realFetch=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;throw Error('Collection callback must not impersonate an IAM actor');};
-  try{
-    const response=await upload(data.run.runId,{taskId:data.sessionId,sessionAligned:true,interactions:[{role:'assistant',content:'untrusted'}]});
-    assert.equal(response.status,200,await response.clone().text());const run=await prisma.faultInjectionRun.findUniqueOrThrow({where:{id:data.run.id}});
-    assert.equal(run.sessionTaskId,data.sessionId);assert.equal(run.status,'completed');assert.equal(requests,0);
-    assert.deepEqual(await prisma.experimentCase.findUniqueOrThrow({where:{id:data.row.id}}),before);
-    assert.equal(await prisma.session.count({where:{taskId:data.sessionId}}),0);assert.equal(await prisma.execution.count({where:{taskId:data.sessionId}}),0);
-  }finally{globalThis.fetch=realFetch;if(previous===undefined)delete process.env.AGENT_INSIGHT_TRACE_STORAGE;else process.env.AGENT_INSIGHT_TRACE_STORAGE=previous;}
-});
+test('core collect callback preserves a historical Case sharing the FI run and never synthesizes Trace evidence', async () => {
+  const data = await fixture()
+  const before = await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })
+  const core = await startIsolatedFiCore(user, apiKey, data.run.runId)
+  const realFetch = globalThis.fetch
+  const requests: string[] = []
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
+    assert.equal(url.origin, core.origin, 'FI collection must not call a model or another service')
+    assert.ok(['/v1/auth/me', '/v1/compat/fault-injection'].includes(url.pathname))
+    requests.push(url.pathname)
+    return realFetch(input, init)
+  }
+  try {
+    const response = await upload(data.run.runId, {
+      taskId: data.sessionId, sessionAligned: true, workerId: 'core-worker', claimToken: core.claimToken,
+      interactions: [{ role: 'assistant', content: 'untrusted' }],
+    })
+    assert.equal(response.status, 200, await response.clone().text())
+    assert.equal((await response.json()).status, 'completed')
+    assert.ok(requests.includes('/v1/auth/me'))
+    assert.equal(requests.filter(url => url === '/v1/compat/fault-injection').length, 2)
+    const { withCoreFiRequest, findCoreFiRun } = await import('@/lib/storage-core/fault-injection')
+    const viewed = await withCoreFiRequest(new Request('http://localhost/core-fi', {
+      headers: { 'x-witty-api-key': apiKey },
+    }), async () => {
+      const run = await findCoreFiRun(data.run.runId)
+      assert.equal(run?.sessionTaskId, data.sessionId)
+      assert.equal(run?.status, 'completed')
+      assert.equal(run?.user, user)
+      return Response.json({ ok: true })
+    })
+    assert.equal(viewed.status, 200, await viewed.text())
+    assert.deepEqual(await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } }), before)
+    assert.deepEqual(await prisma.faultInjectionRun.findUniqueOrThrow({ where: { id: data.run.id } }), data.run)
+    assert.equal(await prisma.session.count({ where: { taskId: data.sessionId } }), 0)
+    assert.equal(await prisma.execution.count({ where: { taskId: data.sessionId } }), 0)
+    const traces = await realFetch(core.origin + '/v1/compat/observe/data?workspace_id=fi-w', {
+      headers: { authorization: 'Bearer ' + core.token },
+    })
+    assert.equal(traces.status, 200, await traces.clone().text())
+    assert.deepEqual((await traces.json()).value, [])
+  } finally {
+    globalThis.fetch = realFetch
+    await core.dispose()
+  }
+})
 
 for (const faultActivated of [true, false]) {
   test('collection finishes without model requests or waiting for late Trace; activated=' + faultActivated, async () => {

@@ -1,3 +1,4 @@
+import {controlVmFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createRequire} from 'node:module';
@@ -8,11 +9,12 @@ import test from 'node:test';
 const require=createRequire(import.meta.url);
 function modules(file:string){
  const shared={};
+ const control=controlVmFixture({actor:{token:'fixture',principal:'alice',workspace:'w',username:'alice'}}).context;
  function load(){
   const exports:Record<string,any>={};
   const code=ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   const context=vm.createContext({exports,globalThis:shared,Symbol,AsyncLocalStorage,Request,URL,Headers,Map,structuredClone,fetch,process,
-   require:(name:string)=>name==='./compat'?{compatibilityContext:async(request:Request)=>({token:'fixture',principal:request.headers.get('x-test-user')||'alice',workspace:'w',username:request.headers.get('x-test-user')||'alice'})}:name==='./mode'?{isStorageCoreEnabled:()=>true}:name==='./server'||name==='./evidence'?{}:require(name)});
+   require:(name:string)=>name==='./control-context'?control:name==='./compat'?{compatibilityContext:async(request:Request)=>({token:'fixture',principal:request.headers.get('x-test-user')||'alice',workspace:'w',username:request.headers.get('x-test-user')||'alice'})}:name==='./mode'?{isStorageCoreEnabled:()=>true}:name==='./server'||name==='./evidence'?{}:require(name)});
   new vm.Script(code,{filename:file}).runInContext(context);return exports;
  }
  return [load(),load()];

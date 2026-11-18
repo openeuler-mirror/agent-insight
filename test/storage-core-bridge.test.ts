@@ -69,7 +69,7 @@ test('core ingest bounds actual request bytes, decoded gzip, and serialized inte
 
 test('mode-off routes keep legacy entrypoints and core mode branches before identity resolution',async()=>{
  const {isStorageCoreEnabled}=await import('../src/lib/storage-core/mode');assert.equal(isStorageCoreEnabled({}),false);assert.equal(isStorageCoreEnabled({NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE:'core'}),true);
- for(const file of ['observe/data','observe/session','ingest/otel/v1/traces']) {const text=fs.readFileSync(new URL('../src/app/api/'+file+'/route.ts',import.meta.url),'utf8');assert.match(text,/isStorageCoreEnabled\(\)/);assert.match(text,/handleCompatible/);}
+ for(const file of ['observe/data','observe/session','ingest/otel/v1/traces']) {const text=fs.readFileSync(new URL('../src/app/api/'+file+'/route.ts',import.meta.url),'utf8');assert.match(text,/isStorageCoreEnabled\(\)/);assert.match(text,file==='ingest/otel/v1/traces'?/handleCoreCollectorTraces/:/handleCompatible/);assert.ok(text.indexOf('if (isStorageCoreEnabled())')<text.indexOf('await resolveUser(')||!text.includes('await resolveUser('));}
 });
 
 test('auth responses whitelist profile fields and never expose nested credential fields',async()=>{
