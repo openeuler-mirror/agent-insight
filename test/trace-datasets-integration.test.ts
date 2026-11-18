@@ -267,7 +267,10 @@ test('manager admission, FIFO, restart, stale messages, clock rollback and orpha
   execFileSync('node', ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: { ...process.env, DATABASE_URL: url }, stdio: 'pipe' });
   const workerFile = path.join(dir, 'worker.cjs');
   await writeFile(workerFile, `const {parentPort: p, workerData: w} = require('node:worker_threads');
-    p.on('message', m => { if (m.type === 'cancel') p.postMessage({...m, type:'done'}); });
+    p.on('message', m => {
+      if (m.type === 'cancel') p.postMessage({...m, type:'done'});
+      if (m.type === 'shutdown') { p.postMessage({type:'closed', incarnationId:w.incarnationId}); p.close(); }
+    });
     p.postMessage({type:'ready', incarnationId:w.incarnationId});`);
   const { TraceDatasetManager } = await import('../src/server/trace-datasets/manager');
   const { generationOptions } = await import('../src/server/trace-datasets/catalog');

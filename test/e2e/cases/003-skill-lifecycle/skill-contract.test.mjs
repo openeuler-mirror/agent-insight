@@ -11,7 +11,7 @@ test('fixed reference calculates real log facts and reports missing files withou
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-contract-'));
   try {
     const file = path.join(root, 'count.py');fs.writeFileSync(file, contract.referenceScript);
-    const input = path.resolve('public/example/messages');const original = fs.readFileSync(input);
+    const input = path.resolve('test/e2e/fixtures/messages');const original = fs.readFileSync(input);
     const run = spawnSync(process.env.E2E_PYTHON || '/opt/homebrew/bin/python3', [file, input], { encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);const stats = JSON.parse(run.stdout);
     assert.equal(stats.root_ssh_failures, 351);assert.equal(stats.top_source, '150.183.249.110');assert.equal(stats.top_source_failures, 80);assert.ok(stats.evidence[0].includes('authentication failure;'));
@@ -38,16 +38,16 @@ test('static assessment completion is separate from advisory quality and does no
 });
 test('optimization permits changed implementation only when independent log facts remain correct and input is unchanged',()=>{
  const files={'SKILL.md':'---\nname: example\n---\nE2E-SUMMARY', 'scripts/count_root_ssh.py':contract.referenceScript.replace('"root_ssh_failures": sum(counts.values()),','"root_ssh_failures": sum(counts.values()),\n        "diagnostic": len(evidence),')};
- assert.equal(typeof contract.assertOptimizedSnapshot,'function');const evidence=contract.assertOptimizedSnapshot(files,'example',path.resolve('public/example/messages'));assert.equal(evidence.original.root_ssh_failures,351);assert.equal(evidence.doubled.root_ssh_failures,702);
- assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':`print('{"root_ssh_failures":351,"top_source":"150.183.249.110","top_source_failures":80,"evidence":[]}')`},'example',path.resolve('public/example/messages')));
- assert.throws(()=>contract.assertOptimizedSnapshot({...files,'SKILL.md':'---\nname: example\n---\nNo summary'},'example',path.resolve('public/example/messages')));
+ assert.equal(typeof contract.assertOptimizedSnapshot,'function');const evidence=contract.assertOptimizedSnapshot(files,'example',path.resolve('test/e2e/fixtures/messages'));assert.equal(evidence.original.root_ssh_failures,351);assert.equal(evidence.doubled.root_ssh_failures,702);
+ assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':`print('{"root_ssh_failures":351,"top_source":"150.183.249.110","top_source_failures":80,"evidence":[]}')`},'example',path.resolve('test/e2e/fixtures/messages')));
+ assert.throws(()=>contract.assertOptimizedSnapshot({...files,'SKILL.md':'---\nname: example\n---\nNo summary'},'example',path.resolve('test/e2e/fixtures/messages')));
 });
 test('structured evidence must identify the actual input file, line number and exact log text',()=>{
  const expression='"evidence": [line for host, line in evidence if host == address][:3],';
  const script=contract.referenceScript.replace(expression,'"evidence": [{"file":filename,"line":list(open(filename,encoding="utf-8")).index(line+"\\n")+1,"text":line} for host,line in evidence if host==address][:3],');
- const files={'SKILL.md':'---\nname: example\n---\nE2E-SUMMARY','scripts/count_root_ssh.py':script};assert.doesNotThrow(()=>contract.assertOptimizedSnapshot(files,'example',path.resolve('public/example/messages')));
- assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':script.replace('"file":filename','"file":"invented.log"')},'example',path.resolve('public/example/messages')));
- assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':contract.referenceScript.replace('"root_ssh_failures": sum(counts.values()),','"root_ssh_failures": 351,')},'example',path.resolve('public/example/messages')),e=>e.actual===351&&e.expected===702);
+ const files={'SKILL.md':'---\nname: example\n---\nE2E-SUMMARY','scripts/count_root_ssh.py':script};assert.doesNotThrow(()=>contract.assertOptimizedSnapshot(files,'example',path.resolve('test/e2e/fixtures/messages')));
+ assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':script.replace('"file":filename','"file":"invented.log"')},'example',path.resolve('test/e2e/fixtures/messages')));
+ assert.throws(()=>contract.assertOptimizedSnapshot({...files,'scripts/count_root_ssh.py':contract.referenceScript.replace('"root_ssh_failures": sum(counts.values()),','"root_ssh_failures": 351,')},'example',path.resolve('test/e2e/fixtures/messages')),e=>e.actual===351&&e.expected===702);
 });
 test('generation follows the generator root-layout contract without asking for a second Skill directory',()=>{
  const prompt=contract.generationPrompt('example','count.py');assert.match(prompt,/工作区根目录/);assert.match(prompt,/只生成两个文件/);assert.doesNotMatch(prompt,/在单独的 example\/ 目录/);

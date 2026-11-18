@@ -21,6 +21,7 @@ import { ExternalLink, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { copyText } from '@/lib/copy-text';
 import { useLocale } from '@/lib/client/locale-context';
 import { useInferenceAnalysisConfig, useInferenceAnalysisAvailable } from '@/lib/client/inference-analysis-context';
 import { buildInferenceAnalysisUrl, type InferenceAnalysisConfig } from '@/lib/trace/inference-analysis-link';
@@ -35,12 +36,20 @@ export function InferenceAnalysisDetails({ target, locale, config = { status: 'u
         response: zh ? '未采集到推理服务响应 ID，无法定位单次推理。失败尝试或本地错误消息可能没有此 ID。' : 'No inference response ID was collected. Failed attempts and local errors may not have one.',
         request: zh ? '未采集到发送给推理服务的请求 ID，无法定位单次推理。' : 'No request ID sent to the inference service was collected.',
     };
+    const upstreamRequestIds = [...new Set(calls.map(call => call.upstreamRequestId).filter((id): id is string => !!id))];
     const rows = [
         { label: zh ? '关联会话' : 'Sessions', values: target.sessionIds },
         { label: zh ? '响应 ID' : 'Response ID', values: target.responseId ? [target.responseId] : [] },
         { label: zh ? '本地逻辑请求 ID' : 'Local logical request ID', values: target.requestId ? [target.requestId] : [] },
+        { label: zh ? '推理服务 Request ID' : 'Inference service Request ID', values: upstreamRequestIds },
         { label: zh ? '尝试 ID' : 'Attempt IDs', values: target.attemptIds ?? [] },
     ].filter(row => row.values.length);
+    const copyId = async (value: string) => {
+        try {
+            await copyText(value);
+            toast.success(zh ? 'Request ID 已复制' : 'Request ID copied');
+        } catch { toast.error(zh ? '复制失败，请手动选择 ID 复制' : 'Copy failed. Select the ID and copy it manually.'); }
+    };
     return <div className="space-y-4">
         <p className="text-sm text-foreground-secondary">
             {target.unavailableReason ? reasons[target.unavailableReason] : calls.length
@@ -50,6 +59,7 @@ export function InferenceAnalysisDetails({ target, locale, config = { status: 'u
         {calls.length > 0 && <div className="max-h-72 space-y-2 overflow-y-auto">
             {calls.map((call, index) => {
                 const href = buildInferenceAnalysisUrl(config, call.callId);
+                const serviceHref = call.upstreamRequestId ? buildInferenceAnalysisUrl(config, call.upstreamRequestId) : undefined;
                 const stateLabels: Record<string, string> = {
                     started: zh ? '请求进行中' : 'In progress',
                     completed: zh ? '响应已结束' : 'Response ended',
@@ -71,6 +81,18 @@ export function InferenceAnalysisDetails({ target, locale, config = { status: 'u
                         </Button>}
                     </div>
                     <div className="mt-2 break-all font-mono text-xs text-foreground select-all">{call.callId}</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-foreground-muted">{zh ? '推理服务 Request ID' : 'Inference service Request ID'}</span>
+                        {call.upstreamRequestId ? <>
+                            <span className="break-all font-mono text-foreground select-all">{call.upstreamRequestId}</span>
+                            <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1.5 text-xs" onClick={() => void copyId(call.upstreamRequestId!)}>
+                                <Copy className="size-3" />{zh ? '复制' : 'Copy'}
+                            </Button>
+                            {serviceHref && <a className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline" href={serviceHref} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="size-3" />{zh ? '按服务 ID 查询' : 'Open by service ID'}
+                            </a>}
+                        </> : <span className="text-foreground-muted">{zh ? '未提供（服务未返回或不可获取）' : 'Not provided (service did not return it or it is unavailable)'}</span>}
+                    </div>
                     {call.unassigned && <p className="mt-1 text-xs text-foreground-muted">{zh ? '未确定所属 LLM，仅关联整条链路。' : 'LLM ownership unknown; associated with this trace only.'}</p>}
                 </div>;
             })}
@@ -104,7 +126,8 @@ export function InferenceAnalysisButton({ target }: { target: InferenceAnalysisT
         : (zh ? '本次模型调用的推理分析' : 'Model call inference analysis');
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(JSON.stringify({ scope: target.scope, call_ids: target.callIds, unassigned_call_ids: target.unassignedCallIds, session_ids: target.sessionIds, response_id: target.responseId, request_id: target.requestId, attempt_ids: target.attemptIds }, null, 2));
+            const upstreamRequestIds = [...new Set((target.calls ?? []).map(call => call.upstreamRequestId).filter((id): id is string => !!id))];
+            await copyText(JSON.stringify({ scope: target.scope, call_ids: target.callIds, unassigned_call_ids: target.unassignedCallIds, session_ids: target.sessionIds, response_id: target.responseId, request_id: target.requestId, upstream_request_ids: upstreamRequestIds, attempt_ids: target.attemptIds }, null, 2));
             toast.success(zh ? '关联标识已复制' : 'Correlation IDs copied');
         } catch { toast.error(zh ? '复制失败，请手动选择标识复制' : 'Copy failed. Select the IDs and copy them manually.'); }
     };

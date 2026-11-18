@@ -183,9 +183,9 @@ Codex 通过公开 Hook 与原生 OTel Logs **双通道采集**，使用 loopbac
 
 通常不建议。更推荐：先生成初稿，确认结构与边界，进入分析页看效果，再进入优化形成更稳定版本。
 
-### Q30. 新用户首次登录注册后，平台会自动注入哪些内置示例？
+### Q30. 新用户首次登录注册后，平台会自动注入演示数据吗？
 
-会自动注入一套内置示例：`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`，**无需接入真实 Agent**即可照着内置示例端到端走查跑通"智能诊断 → Skill 生成 → 评测 → 优化"全流程。
+不会。平台不内置、也不会自动注入演示数据，注册只创建账号本身；升级后启动时会按固定标识清理旧版本曾自动注入的示例 Agent、Skill、数据集和 Trace，用户自己创建的数据不受影响。请从[5 分钟上手](../../tutorial/platform/01-quick-start.md)开始接入真实 Agent 并产生第一条 Trace。
 
 ## 评测中心
 

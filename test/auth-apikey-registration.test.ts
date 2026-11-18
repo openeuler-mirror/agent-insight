@@ -79,11 +79,12 @@ test.after(async () => {
   fs.rmSync(testHome, { recursive: true, force: true });
 });
 
-test('首次注册会注入 Agent、Skill、数据集和 3 条 Trace 示例', async () => {
+test('首次注册只创建账号，不注入内置示例数据', async () => {
   const response = await register(usernames.seed);
   assert.equal(response.status, 200);
 
-  const [agents, skills, versions, datasets, sessions, executions] = await Promise.all([
+  const [users, agents, skills, versions, datasets, sessions, executions] = await Promise.all([
+    prisma.user.count({ where: { username: usernames.seed } }),
     prisma.registeredAgent.count({ where: { user: usernames.seed } }),
     prisma.skill.count({ where: { user: usernames.seed } }),
     prisma.skillVersion.count({ where: { Skill: { user: usernames.seed } } }),
@@ -93,8 +94,8 @@ test('首次注册会注入 Agent、Skill、数据集和 3 条 Trace 示例', as
   ]);
 
   assert.deepEqual(
-    { agents, skills, versions, datasets, sessions, executions },
-    { agents: 1, skills: 1, versions: 1, datasets: 2, sessions: 3, executions: 3 },
+    { users, agents, skills, versions, datasets, sessions, executions },
+    { users: 1, agents: 0, skills: 0, versions: 0, datasets: 0, sessions: 0, executions: 0 },
   );
 });
 
