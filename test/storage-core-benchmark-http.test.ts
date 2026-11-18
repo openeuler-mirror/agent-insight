@@ -13,7 +13,7 @@ const selected=process.env.AGENT_INSIGHT_BENCHMARK_HTTP_CASE;
 if(selected===undefined){
  for(const [index,variant] of variants.entries())test(variantName(variant),{concurrency:false},async(t)=>{
   const home=await mkdtemp(path.join(os.tmpdir(),'benchmark-http-case-'));
-  const environment={...isolatedHomeEnv(home),AGENT_INSIGHT_BENCHMARK_HTTP_CASE:String(index)};delete environment.NODE_TEST_CONTEXT;
+  const environment:NodeJS.ProcessEnv={...isolatedHomeEnv(home),AGENT_INSIGHT_BENCHMARK_HTTP_CASE:String(index)};delete environment.NODE_TEST_CONTEXT;
   const child=spawn(process.execPath,['--import','tsx','--test','--test-reporter=spec',fileURLToPath(import.meta.url)],{cwd:process.cwd(),env:environment,stdio:['ignore','pipe','pipe']});
   let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',value=>{output=(output+String(value)).slice(-120000);});
   const abort=()=>child.kill('SIGTERM');t.signal.addEventListener('abort',abort,{once:true});
