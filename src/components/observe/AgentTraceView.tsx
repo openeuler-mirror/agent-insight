@@ -35,7 +35,7 @@ import { useTheme } from '@/lib/client/theme-context';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
-import { apiFetch } from '@/lib/client/api';
+import { apiFetch, apiFetch as fetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import {
     resolveEventRenderCount,
