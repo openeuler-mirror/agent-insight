@@ -30,6 +30,11 @@ class CollectorAnonymousAgentTests(unittest.TestCase):
                 else:self.assertEqual((row['agent'],row['agentName']),(agent,agent))
                 exported=self.transfer.export(self.fixture.token,'w',key)['executions'][0]['execution']
                 self.assertEqual(exported.get('agentName'),value['execution'].get('agentName'))
+    def test_agent_summary_keeps_named_values_and_omits_anonymous_collector_names(self):
+        for index,agent in enumerate((...,None,'','named-agent','unknown','collector')):self.upload('summary-'+str(index),agent)
+        self.assertEqual(self.list.read(self.fixture.token,'w',{'summary':'agents','databasePagination':'1'}),{'agents':['collector','named-agent','unknown']})
+        self.assertEqual(self.list.read(self.fixture.token,'w',{'summary':'agents','taskIds':'summary-0,summary-1,summary-2'}),{'agents':[]})
+
     def test_old_prepared_receipt_replays_without_rewrite_then_new_snapshot_advances_consistently(self):
         f=self.fixture;value=f.snapshot(framework='generic',agentName=None,rootExecutionId=None)
         original=_normalize

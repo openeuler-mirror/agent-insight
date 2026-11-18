@@ -271,7 +271,7 @@ class LegacyTraceList:
             if sort in ('latency','tokens','cost'):value=_number(value)
             return (value is not None,value if value is not None else 0,row['task_id'])
         selected.sort(key=order,reverse=direction=='desc')
-        if params.get('summary')=='agents':return {'agents':sorted({r['agentName'] for r in selected if r['agentName']})}
+        if params.get('summary')=='agents':return {'agents':sorted({r['agentName'] for r in selected if r.get('agentName')})}
         if params.get('summary')=='traceIds':return {'traceIds':list(dict.fromkeys(r['task_id'] for r in selected))}
         latencies=[r['latency'] for r in selected if r['latency'] is not None]
         calls=sum(int(r.get('tool_call_count') or 0) for r in selected);errors=sum(int(r.get('tool_call_error_count') or 0) for r in selected)
