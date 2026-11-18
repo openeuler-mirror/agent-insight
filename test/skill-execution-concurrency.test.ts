@@ -105,6 +105,7 @@ let query=''; process.stdin.on('data', data => query += data); process.stdin.on(
  send('ready'); send('session'); send('model', {model:'fixture/model'});
  console.log(JSON.stringify({type:'step_start',sessionID:sessionId,part:{type:'step-start'}}));
  fs.writeFileSync(${JSON.stringify(root)}+'/'+query+'.json', JSON.stringify({cwd:process.cwd(),snapshot:fs.readFileSync('.opencode/skills/test-skill/SKILL.md','utf8')}));
+ fs.writeFileSync(${JSON.stringify(root)}+'/'+query+'.ready', '');
  const timer=setInterval(()=>{
   if (!fs.existsSync(${JSON.stringify(root)}+'/'+query+'.release')) return;
   clearInterval(timer);
@@ -134,7 +135,7 @@ let query=''; process.stdin.on('data', data => query += data); process.stdin.on(
   const first = start('first', 1), second = start('second', 2);
   try {
     const deadline = Date.now() + 10000;
-    while (!['first', 'second'].every(name => fs.existsSync(path.join(root, name + '.json')))) {
+    while (!['first', 'second'].every(name => fs.existsSync(path.join(root, name + '.ready')))) {
       assert.ok(Date.now() < deadline, JSON.stringify([...statuses]));
       await new Promise(resolve => setTimeout(resolve, 10));
     }
