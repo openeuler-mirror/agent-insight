@@ -13,7 +13,8 @@ function setup(core:boolean,failure?:number,missing=false,changed?:number|'snaps
  const deps:Record<string,unknown>={
   'next/server':{NextResponse:Response},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},
-  '@/lib/storage-core/evidence':{readTraceExecution:async()=>{evidenceReads++;if(failure)throw Object.assign(Error('storage'),{status:failure});if(missing)throw Object.assign(Error('missing'),{status:404});if(evidenceReads>1&&typeof changed==='number')throw Object.assign(Error('source changed'),{status:changed});return{evidence:{execution,snapshot_hash:evidenceReads>1&&changed==='snapshot'?'changed':'original'}};}},
+  '@/lib/storage-core/read-retry':{withCoreReadRetry:async(_req:Request,read:()=>Promise<Response>)=>read(),coreReadChanged:(message:string)=>Object.assign(Error(message),{status:409,code:'TRACE_READ_CHANGED'})},
+  '@/lib/storage-core/evidence':{readTraceExecution:async()=>{evidenceReads++;if(failure)throw Object.assign(Error('storage'),{status:failure});if(missing)throw Object.assign(Error('missing'),{status:404});if(evidenceReads>1&&typeof changed==='number')throw Object.assign(Error('source changed'),{status:changed});return{evidence:{execution,manifest:{},snapshot_hash:evidenceReads>1&&changed==='snapshot'?'changed':'original'}};}},
   '@/lib/storage-core/analytics':{readCoreRasEvents:async(_req:Request,tasks:string[],selection:{limit:number;order:string})=>{assert.equal(JSON.stringify(tasks),'["task"]');assert.equal(selection.order,'asc');assert.equal(selection.limit,200);return{events:all.slice(0,200),validate:async()=>{validated++;}};},analyticsFailure:(error:{status?:number})=>Response.json({error:'storage'},{status:error.status||503})},
   '@/lib/storage/prisma':{prisma:{execution:{findUnique:async()=>{oldReads++;if(core)throw Error('old Execution read');return execution;}},rasAnomalyEvent:{findMany:async()=>{oldReads++;if(core)throw Error('old RAS read');return missing?[]:all.slice(0,200);}}}},
  };
