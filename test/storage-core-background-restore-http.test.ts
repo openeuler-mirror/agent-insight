@@ -1,0 +1,57 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {activateIsolatedHome} from './helpers/isolated-home';
+const fixture=String.raw`
+import json,os,signal,sys,threading,time
+from pathlib import Path
+from services.storage.tests.test_collector_sources import CollectorSourceTests
+from services.storage.trace_service import TraceRuntime,create_server
+from services.storage.platform_controls import PlatformControls
+from services.storage.iam import IAMStore
+case=CollectorSourceTests('runTest');case.setUp()
+try:
+    case.control.clock=lambda:int(time.time()*1000)
+    iam=IAMStore(case.control);user=PlatformControls(case.control).bootstrap_login({'action':'login','mode':'standalone','username':'New.Restore.Owner'})
+    scope=iam.scope(user['apiKey']);workspace=scope.allowed_workspace_ids[0];session=iam.issue_session_for_provisioning(scope.principal_id)
+    write=iam.issue_api_credential(session,workspace,['write']);readonly=iam.issue_api_credential(session,workspace,['read'])
+    key=Path(case.tmp.name)/'controller';key.write_text('b'*64);key.chmod(0o600)
+    runtime=TraceRuntime(case.control,case.facts,cursor_secret=b'background-restore-isolated-cursor',controller_key_file=key)
+    server=create_server(runtime,port=0);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start();runtime.start_worker()
+    with os.fdopen(os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'w') as out:json.dump({'origin':'http://127.0.0.1:'+str(server.server_port),'controller':str(key),'owner':user['apiKey'],'write':write,'readonly':readonly,'session':session,'workspace':workspace},out)
+    stopped=threading.Event();signal.signal(signal.SIGTERM,lambda *_:stopped.set());stopped.wait();server.shutdown();server.server_close();thread.join();runtime.close()
+finally:case.doCleanups()
+`;
+const restarted=String.raw`
+const original=globalThis.fetch;globalThis.fetch=(input,init)=>{const url=new URL(input instanceof Request?input.url:String(input));if(!['127.0.0.1','localhost','[::1]'].includes(url.hostname))throw Error('External model/network disabled');return original(input,init);};
+const worker=await import('./src/lib/storage-core/collector-worker.ts');
+try{for(let turn=0;turn<40;turn++){await worker.drainCoreCollectorWork();await new Promise(resolve=>setTimeout(resolve,150));}console.log('RESTORED_WORKER_DONE');}
+finally{worker.stopCoreCollectorWorker();const {stopCoreCollectorLogs}=await import('./src/lib/storage-core/collector-logs.ts');stopCoreCollectorLogs();const {prismaRaw}=await import('./src/lib/storage/prisma.ts');await prismaRaw.$disconnect();}
+`;
+test('new local User survives process restart and write-only upload is analyzed by its real owner executor', {timeout:60000},async()=>{
+ const directory=await mkdtemp(path.join(os.tmpdir(),'background-restore-http-'));const restore=activateIsolatedHome(directory);const config=path.join(directory,'fixture.json');const transport=globalThis.fetch;let blockDiscovery=true,modelCalls=0;const rpcFailures:string[]=[];
+ const mock=createServer(async(req,res)=>{try{let text='';for await(const chunk of req)text+=chunk;assert.equal(req.headers.authorization,'Bearer isolated-model-key');assert.ok(JSON.parse(text).messages);modelCalls++;res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'mock-'+modelCalls,object:'chat.completion',created:1,model:'isolated-model',choices:[{index:0,message:{role:'assistant',content:JSON.stringify({failures:[],skill_issues:[],nodes:[],edges:[],query:'original question',final_result:'original answer'})},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}));}catch(error){res.statusCode=500;res.end(String(error));}});await new Promise<void>(resolve=>mock.listen(0,'127.0.0.1',resolve));const modelPort=(mock.address() as {port:number}).port;
+ const child=spawn(process.env.PYTHON||'python3',['-u','-c',fixture,config],{cwd:process.cwd(),stdio:['ignore','ignore','pipe']});let stderr='';child.stderr.on('data',data=>{stderr=(stderr+String(data)).slice(-6000);});const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));
+ try{
+  let settings:any;const deadline=Date.now()+15000;while(!settings){try{settings=JSON.parse(await readFile(config,'utf8'));}catch{if(child.exitCode!==null)throw Error(stderr);assert.ok(Date.now()<deadline,'isolated core startup');await new Promise(resolve=>setTimeout(resolve,20));}}
+  process.env.AGENT_INSIGHT_TRACE_STORAGE='core';process.env.AGENT_INSIGHT_STORAGE_CORE_URL=settings.origin;process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=settings.controller;process.env.UPLOAD_ASYNC_DEBOUNCE_MS='1';delete process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;delete process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER;
+  globalThis.fetch=async(input,init)=>{const url=new URL(input instanceof Request?input.url:String(input));assert.ok(['127.0.0.1','localhost','[::1]'].includes(url.hostname),'external network disabled');const body=typeof init?.body==='string'?JSON.parse(init.body):null;if(blockDiscovery&&url.pathname==='/v1/compat/platform-control-bootstrap'&&body?.action==='background_actors')return Response.json({error:'simulated prior resolver outage'},{status:503});const result=await transport(input,init);if(!result.ok)rpcFailures.push(url.pathname+':'+String(body?.action||'')+':'+result.status);return result;};
+  const {withCoreControlRequest}=await import('../src/lib/storage-core/control-context');const {saveUserSettings}=await import('../src/lib/storage/server-config');
+  await withCoreControlRequest(new Request('http://localhost/settings',{headers:{authorization:'Bearer '+settings.owner}}),()=>saveUserSettings('New.Restore.Owner',{activeConfigId:'mock',configs:[{id:'mock',name:'isolated',provider:'custom',model:'isolated-model',baseUrl:'http://127.0.0.1:'+modelPort+'/v1',apiKey:'isolated-model-key'}]}));
+  const {POST:upload}=await import('../src/app/api/ingest/upload/route');const {stopCoreCollectorWorker}=await import('../src/lib/storage-core/collector-worker');const {resolveCollectorRequest,collectorPrivate,runCoreSessionModel}=await import('../src/lib/storage-core/collector-entry');
+  const request=(token:string)=>new Request('http://localhost/api/ingest/upload',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({task_id:'restore-task',framework:'generic',query:'original question',skip_internal_judgment:true,interactions:[{role:'user',content:'original question'},{role:'assistant',content:'original answer'}]})});
+  const response=await upload(request(settings.write));assert.equal(response.status,200,JSON.stringify(await response.clone().json())+' '+rpcFailures.join(',')+' '+stderr);const accepted=await response.json();assert.equal(accepted.background_analysis,true);assert.equal(JSON.stringify(accepted).includes('isolated-model-key'),false);stopCoreCollectorWorker();assert.equal(modelCalls,0);
+  const writer=await resolveCollectorRequest(request(settings.write),'snapshot');assert.deepEqual(await collectorPrivate(writer,'collector_jobs',{job_action:'claim',value:{worker_id:'write-only-first'}}),[]);await assert.rejects(collectorPrivate(writer,'model_scope',{task_id:'restore-task'}),(error:any)=>error.status===403);
+  const owner=await resolveCollectorRequest(request(settings.owner),'snapshot');let queued:any[]=[];for(let turn=0;turn<15&&!queued.length;turn++){queued=await collectorPrivate(owner,'collector_jobs',{job_action:'claim',value:{worker_id:'verify-pending'}});if(!queued.length)await new Promise(resolve=>setTimeout(resolve,100));}assert.equal(queued.length,1,'write-only scan retained the model task');const handle=queued[0].handle;await collectorPrivate(owner,'collector_jobs',{job_action:'finish',value:{...handle,retry:true}});
+  blockDiscovery=false;
+  const restartedChild=spawn(process.execPath,['--import','tsx','--input-type=module','-e',restarted],{cwd:process.cwd(),env:{...process.env},stdio:['ignore','pipe','pipe']});let output='';for(const stream of [restartedChild.stdout,restartedChild.stderr])stream.on('data',data=>{output=(output+String(data)).slice(-12000);});const code=await new Promise<number|null>(resolve=>restartedChild.once('exit',resolve));assert.equal(code,0,output);assert.ok(output.includes('RESTORED_WORKER_DONE'));assert.ok(modelCalls>0,'restored owner actually called the local Mock model: '+output);
+  const result=await collectorPrivate(owner,'collector_jobs',{job_action:'result',value:{event_id:handle.event_id}});assert.equal(result.state,'sent',output);
+  const {withCoreSessionRead}=await import('../src/lib/storage-core/session-source');const sessionRequest=new Request('http://localhost/api/observe/session?taskId=restore-task',{headers:{authorization:'Bearer '+settings.session}});let lazy=0;await withCoreSessionRead(sessionRequest,()=>runCoreSessionModel(sessionRequest,'restore-task',async()=>{lazy++;}));assert.equal(lazy,1,'session-based lazy model resolves the durable native owner');
+  const readonlyRequest=new Request('http://localhost/api/observe/session?taskId=restore-task',{headers:{authorization:'Bearer '+settings.readonly}});await assert.rejects(withCoreSessionRead(readonlyRequest,()=>runCoreSessionModel(readonlyRequest,'restore-task',async()=>{lazy++;})),(error:any)=>error.status===403);assert.equal(lazy,1);
+  const denied=await transport(settings.origin+'/v1/compat/platform-control-bootstrap',{method:'POST',headers:{authorization:'Bearer '+settings.readonly,'content-type':'application/json'},body:JSON.stringify({action:'background_actors'})});assert.equal(denied.status,403);assert.equal((await denied.text()).includes(settings.owner),false);
+ }finally{globalThis.fetch=transport;const {stopCoreCollectorWorker}=await import('../src/lib/storage-core/collector-worker');stopCoreCollectorWorker();const {stopCoreCollectorLogs}=await import('../src/lib/storage-core/collector-logs');stopCoreCollectorLogs();const {prismaRaw}=await import('../src/lib/storage/prisma');await prismaRaw.$disconnect();if(child.exitCode===null)child.kill('SIGTERM');await exited;await new Promise<void>(resolve=>mock.close(()=>resolve()));restore();await rm(directory,{recursive:true,force:true});}
+});

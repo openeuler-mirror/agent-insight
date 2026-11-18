@@ -529,3 +529,12 @@ CH004显式建立semantic_immutable_facts、usage_event_facts和usage_daily_fact
 Usage继续实现既有UsageStorage接口。每个入队事件在已验证的请求/后台范围内以私有WeakMap绑定actor/workspace/凭据；混合用户按真实主体分批写，不从body.user恢复权限，不在全局storage缓存首用户。永久usage_event_receipts先做同批/跨批去重，usage_daily_heads在owner事务锁内更新count/first/last/revision，CH分别保留原事件和当前日报事实。物理原始事件清理只限实际owner及截止日期，保留永久去重回执和日报；重放已清理eventID不重新累计。队列容量、202 accepted/dropped、一次重试与日期/指标算法沿用原逻辑；关闭统计时不新增认证/存储要求。管理接口按当前组管理范围读，普通成员没有管理面权限。
 
 离线迁移可在显式隔离manifest事务中调用SemanticUsageStore.import_history_row；原12模型ID和字段保留，先父后子，Trace关联要求已迁真实alias，所有事实仅导入历史，不触发采集、模型或任务。PlatformUsageEvent只导原事实/去重凭据，不累加日报；PlatformUsageDaily直接导原聚合值，避免历史raw与daily双计。未知owner、缺父/Trace映射、同ID不同内容明确阻断。默认数据库、生产服务和旧spool不在本批自动迁移；完整三库、真实CH、全量、原UI与旧数据演练统一验收。
+
+
+### 原生User后台恢复（019既有表，无新增DDL）
+
+后台来源不再限定私有identity映射。新增的真实User已把其API凭据保存在owner私有工件；controller通过既有`/v1/compat/platform-control-bootstrap`的固定`background_actors`/`background_actor` action恢复，不签发、复制或替换凭据。请求以现`platform-control-bootstrap/v1`目的和`platform-background`主体签名；普通API key、session、用户名或body.user不能调用枚举。服务端逐条校验User工件hash、id/username/lookup hash、active状态/历史marker、真实IAM API凭据的owner/workspace/有效期/撤销、当前write，execute目的另验execute。无效行只返回状态码，不暴露其key；超过1000条明确失败，不截断。
+
+Node每次重新读持久User与显式映射，不缓存首次用户。私有映射的legacy_username和IAM principalUsername分别保留；同scope多alias、同用户名多scope均拒绝猜测，重复真实凭据合并。品牌WeakMap保存origin与来源引用；持久User按精确record/owner/workspace/原key hash重验，映射按当前私有文件重验。Collector重启可恢复snapshot/hooks主体；模型仍须同owner的当前execute和原model_scope/job lease检查。只读或write-only不能取得模型执行能力，管理员Trace可见性不转化为其他owner模型权限。GET Session懒模型同样仅在实际owner当前can_execute通过后恢复执行主体。旧映射继续可用。
+
+原upload的generator agent tag fallback使用`collector_agent_tag`固定私有投影：已品牌collector、actual write及controller-preparation，只按明确opencodeSessionId查当前owner，返回agentName/agentTraceSkill/user三个轻量字段；不开放会话正文/文件/全列表，不扩PREPARATION_KINDS。原标签覆盖/校验算法保留。后台claim原有write-only回pending规则不改，完整回归和真实引擎/UI验收统一后置。

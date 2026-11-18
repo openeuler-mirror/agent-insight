@@ -105,7 +105,12 @@ export async function drainCoreCollectorWork(){
  const current=state();if(current.running)return;current.running=true;
  try{
   const actors=new Map<string,CoreBackgroundActor>();
-  if(process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE){const configured=await configuredCoreBackgroundActors({},true);for(const actor of configured.actors){const key=actor.workspace+'\0'+actor.principal;const identity=await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'});if(!current.identities.has(key))current.identities.set(key,identity);if(!actors.has(key)){try{await collectorPrivate(identity,'model_scope');actors.set(key,actor);current.identities.set(key,identity);}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}}}
+  const configured=await configuredCoreBackgroundActors({},true);
+  for(const actor of configured.actors){try{
+   const key=actor.workspace+'\0'+actor.principal,identity=await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'});
+   if(!current.identities.has(key))current.identities.set(key,identity);
+   if(!actors.has(key)){try{await collectorPrivate(identity,'model_scope');actors.set(key,actor);current.identities.set(key,identity);}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}
+  }catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}
   for(const [key,identity] of current.identities){try{const jobs=await collectorPrivate(identity,'collector_jobs',{job_action:'claim',value:{worker_id:current.worker}});for(const job of jobs)await withCoreCollectorIdentity(identity,()=>runJob(identity,job,actors.get(key)));}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;current.identities.delete(key);}}
  }finally{current.running=false;}
 }

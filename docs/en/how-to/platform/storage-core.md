@@ -146,3 +146,10 @@ Explicitly upgrade the isolated target to019, then use the original login and sc
 Skill versions/files, configuration, clients, Workbench/optimization/generator sessions and debug results now use the control repository. Consolidated acceptance must cover list/detail/file/save, installation/heartbeat/command ACK/configuration and deployment receipts, session SSE/candidate/retest/publish, and Agent deletion with Trace/diagnosis source lifecycle. Four TSX files only add transport imports, with dynamic runtime headers; visible layout, wording, interactions and existing features remain unchanged. Focused checks and types are not full acceptance.
 
 Keep the original database and files. Import historical terminal/static records explicitly under their real owner. Active tasks, unconsumed installation tokens and usable device credentials cannot be activated silently; report and block them until an explicit inert-migration contract exists. Do not disguise them as deleted or completed. Production remains unchanged.
+
+
+### No extra background mapping for native users
+
+Create the native User and configure its personal model in the original screens. Background work restores the durable User and its actual current API credential after restart without a handwritten identity file. Migrated wi credentials still use the existing private mapping; malformed or ambiguous mappings are never guessed or silently replaced. Keep the existing private core controller file configured; no browser key-disclosure workaround is required.
+
+The uploader still needs write only. Background analysis separately checks the same owner's current execute capability. Readonly, revoked or expired credentials and administrators merely viewing another user's Trace cannot use that user's model. Validate this workflow in isolated state; the original UI and production data remain unchanged.

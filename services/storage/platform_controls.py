@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import json
 import math
+import re
 import secrets
 from pathlib import Path
 import uuid
@@ -13,7 +14,7 @@ from dataclasses import replace
 
 from .control import Conflict, StorageError
 from .contracts import identifier
-from .iam import IAMStore, Forbidden
+from .iam import IAMStore, Forbidden, Unauthorized
 from .legacy_history import assert_control_live, is_historical_control
 
 MODELS=json.loads((Path(__file__).parent/'schema/platform-control-models.json').read_text())['models']
@@ -362,6 +363,16 @@ class PlatformControls:
                     if capability not in ('read','write','execute'):raise ValueError('Invalid control capability')
                     scope,_=self._scope(con,token,workspace,capability)
                 return {'authorized':True,'principal_id':scope.principal_id,'workspace_id':workspace}
+        if action=='collector_agent_tag':
+            if not trusted or not preparation or self.capability:raise Forbidden('Private collector tag projection required')
+            if set(body)!={'opencode_session_id'}:raise ValueError('Selected collector session required')
+            session=identifier(body['opencode_session_id'])
+            with self.control.read_transaction() as con:
+                scope,_=self._scope(con,token,workspace,'write')
+                rows=con.execute("SELECT metadata_json FROM platform_control_records WHERE workspace_id=? AND owner_principal_id=? AND kind='skillGeneratorSession' AND state='active' ORDER BY sort_ms,record_id LIMIT ?",(workspace,scope.principal_id,MAX_RECORDS+1)).fetchall()
+                if len(rows)>MAX_RECORDS:raise StorageError('Collector tag lookup exceeds scope budget')
+                selected=next((data for row in rows if (data:=json.loads(row[0])).get('opencodeSessionId')==session),None)
+                return {'tag':{field:selected.get(field) for field in ('agentName','agentTraceSkill','user')} if selected else None}
         if action=='agent_delete':
             if not trusted or preparation or write_prior or self.capability:raise Forbidden('Verified Agent deletion producer required')
             if set(body)!={'agent_id','trace_ids'} or not isinstance(body['trace_ids'],list) or len(body['trace_ids'])>MAX_RECORDS:raise ValueError('Bounded Agent deletion required')
@@ -422,6 +433,46 @@ class PlatformControls:
             con.execute('INSERT INTO platform_control_records(workspace_id,kind,record_id,owner_principal_id,legacy_username,sort_ms,metadata_json,payload_hash,payload_ref,state,revision,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(workspace,'_receipt',receipt_id,scope.principal_id,username,now,_json({'operation_hash':digest}),result_hash,result_ref,'active',1,now,now))
             con.execute('INSERT INTO inbox_receipts VALUES(?,?,?,?,?)',(workspace,source,receipt_id,digest,now))
             return saved
+
+    def _background_actor(self,con,row,capability):
+        row=dict(row)
+        if is_historical_control(con,row['workspace_id'],'user',row['record_id']):raise Forbidden('Historical user background binding is inactive')
+        data=self._data(row)
+        if not isinstance(data,dict) or data.get('id')!=row['record_id'] or data.get('username')!=row['legacy_username'] or row['unique_key']!=_hash([data.get('username')]):raise Forbidden('Background user binding differs')
+        token=data.get('apiKey')
+        if not isinstance(token,str) or not re.fullmatch(r'api_[A-Za-z0-9_-]{43}',token) or hashlib.sha256(token.encode()).hexdigest()!=row['lookup_hash']:raise Forbidden('Verified user API credential required')
+        scope=self.iam._scope(con,token)
+        if scope.principal_id!=row['owner_principal_id']:raise Forbidden('Background credential owner differs')
+        self.iam._workspace(scope,row['workspace_id'],'write')
+        if capability=='execute':self.iam._workspace(scope,row['workspace_id'],'execute')
+        principal=con.execute("SELECT normalized_login_name FROM iam_principals WHERE principal_id=? AND status='active'",(scope.principal_id,)).fetchone()
+        if not principal:raise Forbidden('Background principal unavailable')
+        return {'user_record_id':row['record_id'],'principal':scope.principal_id,'workspace':row['workspace_id'],'username':data['username'],'principalUsername':principal[0],'token':token}
+
+    def background_actors(self,body):
+        if not isinstance(body,dict):raise ValueError('Fixed background action required')
+        action=body.get('action');capability=body.get('capability','write')
+        if capability not in {'write','execute'}:raise ValueError('Background write or execute purpose required')
+        with self.control.read_transaction() as con:
+            if not con.execute('SELECT 1 FROM schema_meta WHERE version=19').fetchone():raise StorageError('Explicit019 control migration required')
+            if action=='background_actor':
+                fields={'action','capability','user_record_id','principal_id','workspace_id','username','credential_sha256'}
+                if set(body)-fields or not fields-{'capability'}<=set(body):raise ValueError('Exact background user reference required')
+                for field in fields-{'action','capability'}:identifier(body[field])
+                if not re.fullmatch(r'[a-f0-9]{64}',body['credential_sha256']):raise ValueError('Background credential hash required')
+                row=self._row(con,body['workspace_id'],'user',body['user_record_id'])
+                if not row or row['owner_principal_id']!=body['principal_id'] or row['legacy_username']!=body['username'] or row['lookup_hash']!=body['credential_sha256']:raise Forbidden('Background user reference changed')
+                return self._background_actor(con,row,capability)
+            if action!='background_actors' or set(body)-{'action','capability'}:raise ValueError('Fixed background enumeration required')
+            rows=con.execute("SELECT * FROM platform_control_records WHERE kind='user' AND state='active' ORDER BY workspace_id,owner_principal_id,record_id LIMIT 1001").fetchall()
+            if len(rows)>1000:raise StorageError('Background user enumeration exceeds budget')
+            actors=[];failures=[]
+            for row in rows:
+                try:actors.append(self._background_actor(con,row,capability))
+                except Unauthorized:failures.append(401)
+                except (Forbidden,ValueError):failures.append(403)
+                except StorageError:failures.append(503)
+            return {'actors':actors,'failures':failures}
 
     def bootstrap_login(self,body):
         from .iam import _login_name, ROLE_CAPABILITIES

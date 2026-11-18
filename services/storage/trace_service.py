@@ -776,8 +776,12 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 from .platform_controls import PlatformControls
                 value,error=self.body(max_bytes=16384)
                 if error:self.reply(error,{'error':'Bounded login assertion required'});return
-                if not verify_controller_proof(runtime.controller_key_file,'platform-control-bootstrap/v1','platform-login','platform-login',self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Verified legacy login producer required')
-                self.reply(200,{'value':PlatformControls(runtime.control).bootstrap_login(value)});return
+                if not isinstance(value,dict):raise ValueError('Fixed private control action required')
+                background=value.get('action') in {'background_actors','background_actor'}
+                producer='platform-background' if background else 'platform-login'
+                if not verify_controller_proof(runtime.controller_key_file,'platform-control-bootstrap/v1',producer,producer,self.request_body_hash,self.headers.get('x-storage-controller-proof')):raise Forbidden('Verified private control producer required')
+                controls=PlatformControls(runtime.control);result=controls.background_actors(value) if background else controls.bootstrap_login(value)
+                self.reply(200,{'value':result},max_bytes=4*1024*1024);return
             if self.command=='POST' and pieces==['v1','auth','login']:
                 body,error=self.body()
                 if error:self.reply(error,{'error':'JSON body required or body too large'});return

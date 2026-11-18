@@ -3821,3 +3821,10 @@ Skill文件包完整保存base64字节与mode，正文/文件引用封存于内�
 | CH semantic_immutable_facts / usage_event_facts / usage_daily_facts | workspace_id/owner_principal_id/kind/record_id/content_hash/body_json String；retry_version UInt64 DEFAULT1 | 各自ReplacingMergeTree(retry_version)；ORDER BY(workspace,owner,kind,id,hash)；hash64、retry>0；只返回当前OLTP目录所证明的hash，不把跨库回滚孤儿视为已接收 |
 
 事务表使用同一参数化SQL契约；PG/openGauss BIGINT，SQLite INTEGER；business Float/Boolean/DateTime按固定catalog校验，并保留原DTO。source fingerprint、快照/事件正文和Session binding不可覆盖。Execution link不再FK旧库，必须解析真实Trace alias并复核owner/当前授权/删除屏障；原Session-only pending绑定保持待解析。
+
+
+### 019 User后台主体恢复契约
+
+不新增表或字段。`platform_control_records(kind=user)`的record_id/owner_principal_id/workspace_id/legacy_username/lookup_hash与私有User DTO共同绑定真实IAM key；后台恢复必须验证User工件hash，DTO.id=record_id、DTO.username=legacy_username、lookup_hash=SHA256(DTO.apiKey)，并重验active principal、实际API key owner/workspace、期限、撤销、当前write及必要历史marker。execute目的另验execute，User中任意token或旧wi key不构成凭据。
+
+既有私有bootstrap路由仅接受controller签名的固定后台枚举/精确重验，返回owner actor，不提供公开用户名换key。重验引用为user_record_id+principal_id+workspace_id+username+credential_sha256；不能切换到新key或另一个owner。Node品牌携带来源和core origin，重启由持久记录重建；显式mapping和User来源按真实scope/credential消歧。普通只读或采集端不能借该私有端口扩execute，个人模型读取仍按其真实owner。原generator tag只有当前owner、指定opencodeSessionId和三个非秘密字段的私有投影，不读取会话正文。

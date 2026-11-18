@@ -35,7 +35,7 @@ export function coreExperimentFailure(cause:unknown):Response {
 export async function withCoreExperiments<T>(request:Request,action:()=>Promise<T>,options:CompatibilityOptions={},configuredActor?:CoreBackgroundActor):Promise<T>{
  if(!options.fetcher&&!options.resolveIdentity&&getCoreExperimentContext())options=getCoreExperimentContext()!.options;
  const identity=await compatibilityContext(request,options);if(!identity.username)throw Object.assign(new Error('Verified Experiment identity required'),{status:403});
- if(configuredActor){if(!isVerifiedCoreBackgroundActor(configuredActor)||identity.principal!==configuredActor.principal||identity.workspace!==configuredActor.workspace||identity.token!==configuredActor.token||identity.username!==configuredActor.principalUsername)throw Object.assign(new Error('Configured background identity changed'),{status:403});identity.username=configuredActor.username;}
+ if(configuredActor){if(!isVerifiedCoreBackgroundActor(configuredActor)||identity.principal!==configuredActor.principal||identity.workspace!==configuredActor.workspace||identity.token!==configuredActor.token||identity.principalUsername!==configuredActor.principalUsername)throw Object.assign(new Error('Configured background identity changed'),{status:403});identity.username=configuredActor.username;}
  const actor=Object.freeze({...identity,username:identity.username});let body:Record<string,unknown>={};
  if(request.body){
   const raw=await readCoreBytes(request.clone().body,LIMIT);
@@ -68,6 +68,7 @@ export async function withCoreExperiments<T>(request:Request,action:()=>Promise<
 
 export async function withCoreConfiguredExperiments<T>(actor:CoreBackgroundActor,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
  if(!isVerifiedCoreBackgroundActor(actor))throw Object.assign(new Error('Verified private background identity required'),{status:403});
+ await (await import('./compat')).revalidateConfiguredCoreBackgroundActor(actor,options);
  const request=new Request('http://localhost/internal/storage-core/experiments?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}});
  return withCoreExperiments(request,action,options,actor);
 }

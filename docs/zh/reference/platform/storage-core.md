@@ -451,3 +451,12 @@ Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型
 用量队列保留原容量、丢弃、202和重试语义。每条事件携带认证时的私有主体范围，混合用户分开写；body.user不参与授权。永久eventID回执防止同批、跨批、原始事件清理后的重放重复计数；清理只删除原始事实，不删除日报或去重凭据。管理员统计按当前组范围，普通成员不能访问管理接口；关闭统计保持原有无需存储操作的响应。
 
 旧数据迁移需显式manifest映射实际owner，先父后子并保留原ID/JSON/日期。历史raw事件与原日报分别导入，raw不再次累计daily；不会从历史状态启动任务或模型。该批已完成开发接线，完整测试、原生三库、真实CH、原界面和迁移演练留待统一验收，当前未切生产。
+
+
+### 原生User后台恢复
+
+新建原生User无需再手写identity映射才能自动分析。后台通过现私有bootstrap controller枚举/精确重验真实User/API凭据，核对工件hash、record/legacy username/lookup hash、实际active principal/workspace/owner、当前权限、有效期、撤销及历史marker；不签发新key，不采用记录中任意token或旧迁移key。接口只接受`platform-control-bootstrap/v1`签名和固定`platform-background`主体，普通SDK/API/session不能枚举。
+
+显式私有映射继续支持旧凭据与legacy用户名；IAM principalUsername单独保存。Node每次恢复并按来源重验，品牌对象记录origin与User引用，复制对象无效，不靠进程内remember维持重启。Collector snapshot/hooks仍要求write；自动分析仍要求真实同owner actor当前execute、原model_scope及每次job检查。write-only上报不能自升execute，read-only或已撤销/过期/错owner不能充当执行者，管理员Trace权限不扩大个人模型权限。Session GET懒模型恢复仍先验证请求者自身owner/can_execute。
+
+原upload中的generator tag查询已改为已品牌collector下的私有投影，仅当前owner+明确opencodeSessionId，返回agentName/agentTraceSkill/user，不读取Session正文或全部列表。无新增DDL、前端、cookie或模型协议。当前验证限隔离SQLite+内存facts及loopback Mock模型，完整/真实引擎/CH/UI验证集中进行。

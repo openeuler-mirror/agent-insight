@@ -64,7 +64,7 @@ async function consume(identity:CoreCollectorIdentity,work:Row){
  }catch{try{await rpc('retry');}catch{}}finally{clearInterval(renew);}
 }
 export async function drainCoreCollectorLogs(){const current=state();if(current.running)return;current.running=true;try{
- if(process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE){const configured=await configuredCoreBackgroundActors();for(const actor of configured.actors)current.identities.set(actor.workspace+'\0'+actor.principal,await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'}));}
+ {const configured=await configuredCoreBackgroundActors({},true);for(const actor of configured.actors){try{current.identities.set(actor.workspace+'\0'+actor.principal,await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'}));}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}}
  for(const identity of current.identities.values()){try{const work=await collectorPrivate(identity,'collector_logs',{log_action:'claim',value:{worker_id:current.worker}});for(const item of work)await withCoreCollectorIdentity(identity,()=>consume(identity,item));}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}
  }finally{current.running=false;}}
 export function kickCoreCollectorLogs(identity?:CoreCollectorIdentity){if(!isStorageCoreEnabled())return;const current=state();if(identity)current.identities.set(identity.workspace+'\0'+identity.principal,identity);if(!current.timer){current.timer=setInterval(()=>{void drainCoreCollectorLogs().catch(()=>{});},1000);current.timer.unref();}void drainCoreCollectorLogs().catch(()=>{});}

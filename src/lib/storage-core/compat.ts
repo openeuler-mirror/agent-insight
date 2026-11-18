@@ -1,3 +1,4 @@
+import {controllerHeaders} from './controller';
 import {recordVerifiedCoreUsage} from './usage';
 import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
@@ -44,24 +45,62 @@ const backgroundActorsKey=Symbol.for('agent-insight.storage-core.verified-backgr
 const backgroundGlobals=globalThis as unknown as Record<symbol,WeakSet<object>>;
 const verifiedBackgroundActors=backgroundGlobals[backgroundActorsKey] ||= new WeakSet<object>();
 export function isVerifiedCoreBackgroundActor(value:unknown):value is CoreBackgroundActor{return !!value&&typeof value==='object'&&verifiedBackgroundActors.has(value);}
-export async function configuredCoreBackgroundActors(options:CompatibilityOptions={},allCredentials=false):Promise<{actors:CoreBackgroundActor[];failures:number[]}>{
- if(typeof window!=='undefined')throw new CompatibilityError(503,'Background identity is server only');
- const config=await identityMapping();const declared=new Map<string,string>();
- for(const row of config.bindings){
-  if(!row||!/^api_[A-Za-z0-9_-]{43}$/.test(row.credential)||![row.legacy_username,row.principal_id,row.workspace_id].every(value=>typeof value==='string'&&value.trim()&&value.length<=512&&!/[\u0000-\u001f\u007f-\u009f]/.test(value)))throw new CompatibilityError(503,'Invalid background identity mapping');
+type UserBackgroundActor=CoreBackgroundActor & {user_record_id:string};
+type BackgroundSource={origin:string;kind:'mapping'}|{origin:string;kind:'user';reference:Record<string,string>};
+const backgroundSourcesKey=Symbol.for('agent-insight.storage-core.background-actor-sources');
+const sourceGlobals=globalThis as unknown as Record<symbol,WeakMap<object,BackgroundSource>>;
+const backgroundSources=sourceGlobals[backgroundSourcesKey] ||= new WeakMap<object,BackgroundSource>();
+function brandBackgroundActor(actor:CoreBackgroundActor,source:BackgroundSource):CoreBackgroundActor{const verified=Object.freeze({...actor});verifiedBackgroundActors.add(verified);backgroundSources.set(verified,source);return verified;}
+function backgroundOptions(options:CompatibilityOptions){
+ const origin=coreServiceOrigin(),transport=options.fetcher||fetch;
+ return {origin,options:{...options,fetcher:async(input:RequestInfo|URL,init?:RequestInit)=>{
+  if(coreServiceOrigin()!==origin||new URL(input instanceof Request?input.url:String(input)).origin!==origin)throw new CompatibilityError(503,'Background storage origin changed');
+  const result=await transport(input,init);if(coreServiceOrigin()!==origin){void result.body?.cancel();throw new CompatibilityError(503,'Background storage origin changed');}return result;
+ }} satisfies CompatibilityOptions};
+}
+async function backgroundRpc(body:Record<string,string>,options:CompatibilityOptions):Promise<any>{
+ const serialized=JSON.stringify(body);const headers=await controllerHeaders({principal:'platform-background',workspace:'platform-background'},serialized,'platform-control-bootstrap/v1');
+ const {data}=await requestCore('/v1/compat/platform-control-bootstrap',{method:'POST',body:serialized,headers,responseLimit:4*1024*1024},options.fetcher||fetch);
+ if(!data.value||typeof data.value!=='object'||Array.isArray(data.value))throw new CompatibilityError(502,'Invalid background credential response');return data.value;
+}
+function backgroundReference(actor:UserBackgroundActor):Record<string,string>{return {action:'background_actor',user_record_id:actor.user_record_id,principal_id:actor.principal,workspace_id:actor.workspace,username:actor.username,credential_sha256:createHash('sha256').update(actor.token).digest('hex')};}
+function checkedBackgroundUser(value:unknown):UserBackgroundActor{
+ const actor=value as UserBackgroundActor;
+ if(!actor||typeof actor!=='object'||!/^api_[A-Za-z0-9_-]{43}$/.test(actor.token)||![actor.principal,actor.workspace,actor.username,actor.principalUsername,actor.user_record_id].every(item=>typeof item==='string'&&item.trim()&&item.length<=512&&!/[\u0000-\u001f\u007f-\u009f]/.test(item)))throw new CompatibilityError(503,'Invalid durable background user');return actor;
+}
+function validateBackgroundBindings(bindings:Binding[]){
+ const declared=new Map<string,string>();
+ for(const row of bindings){
+  if(!row||!/^api_[A-Za-z0-9_-]{43}$/.test(row.credential)||!/^[a-f0-9]{64}$/.test(row.legacy_api_key_sha256)||![row.legacy_username,row.principal_id,row.workspace_id].every(value=>typeof value==='string'&&value.trim()&&value.length<=512&&!/[\u0000-\u001f\u007f-\u009f]/.test(value)))throw new CompatibilityError(503,'Invalid background identity mapping');
   const key=row.principal_id+'\0'+row.workspace_id;const prior=declared.get(key);if(prior&&prior!==row.legacy_username)throw new CompatibilityError(503,'Ambiguous background model owner');declared.set(key,row.legacy_username);
  }
- const actors=new Map<string,CoreBackgroundActor>();const failures:number[]=[];
- for(const row of config.bindings){
-  try{
-   const request=new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:row.workspace_id}),{headers:{authorization:'Bearer '+row.credential}});
-   const actor=await context(request,options);
-   if(actor.principal!==row.principal_id||actor.workspace!==row.workspace_id||!actor.username)throw new CompatibilityError(403,'Background principal differs');
-   const verified=Object.freeze({...actor,username:row.legacy_username,principalUsername:actor.principalUsername || actor.username});verifiedBackgroundActors.add(verified);
-   actors.set(actor.principal+'\0'+actor.workspace+(allCredentials?'\0'+createHash('sha256').update(actor.token).digest('hex'):''),verified);
-  }catch(error){const status=error&&typeof error==='object'&&'status'in error?Number(error.status):503;failures.push([401,403,503].includes(status)?status:503);}
- }
- return {actors:[...actors.values()],failures};
+ return declared;
+}
+export async function configuredCoreBackgroundActors(options:CompatibilityOptions={},allCredentials=false):Promise<{actors:CoreBackgroundActor[];failures:number[]}>{
+ if(typeof window!=='undefined')throw new CompatibilityError(503,'Background identity is server only');
+ const pinned=backgroundOptions(options);const bindings=process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE?(await identityMapping()).bindings:[];const declared=validateBackgroundBindings(bindings);
+ const actors=new Map<string,CoreBackgroundActor>(),failures:number[]=[];
+ const keyOf=(actor:CoreBackgroundActor)=>actor.principal+'\0'+actor.workspace+'\0'+createHash('sha256').update(actor.token).digest('hex');
+ for(const row of bindings){try{
+  const actor=await context(new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:row.workspace_id}),{headers:{authorization:'Bearer '+row.credential}}),pinned.options);
+  if(actor.principal!==row.principal_id||actor.workspace!==row.workspace_id||!actor.username||!actor.principalUsername)throw new CompatibilityError(403,'Background principal differs');
+  const verified=brandBackgroundActor({...actor,username:row.legacy_username,principalUsername:actor.principalUsername},{kind:'mapping',origin:pinned.origin});actors.set(keyOf(verified),verified);
+ }catch(error){const status=Number((error as {status?:number})?.status)||503;failures.push([401,403,503].includes(status)?status:503);}}
+ try{
+  const restored=await backgroundRpc({action:'background_actors'},pinned.options);
+  if(!Array.isArray(restored.actors)||!Array.isArray(restored.failures)||restored.actors.length>1000||restored.failures.some((value:unknown)=>![401,403,503].includes(Number(value))))throw new CompatibilityError(503,'Invalid durable background directory');
+  failures.push(...restored.failures);
+  const names=new Map<string,Set<string>>();for(const value of restored.actors){const row=checkedBackgroundUser(value),key=row.principal+'\0'+row.workspace;const labels=names.get(key)||new Set<string>();labels.add(row.username);names.set(key,labels);}
+  for(const value of restored.actors){try{
+   const row=checkedBackgroundUser(value),scope=row.principal+'\0'+row.workspace;if(names.get(scope)!.size!==1)throw new CompatibilityError(403,'Ambiguous durable background owner');
+   const actor=await context(new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:row.workspace}),{headers:{authorization:'Bearer '+row.token}}),pinned.options);
+   if(actor.principal!==row.principal||actor.workspace!==row.workspace||actor.principalUsername!==row.principalUsername)throw new CompatibilityError(403,'Durable background principal differs');
+   if(actors.has(keyOf(row)))continue;
+   const verified=brandBackgroundActor({token:row.token,principal:row.principal,workspace:row.workspace,principalUsername:row.principalUsername,username:declared.get(scope)||row.username},{kind:'user',origin:pinned.origin,reference:backgroundReference(row)});actors.set(keyOf(verified),verified);
+  }catch(error){const status=Number((error as {status?:number})?.status)||503;failures.push([401,403,503].includes(status)?status:503);}}
+ }catch(error){const status=Number((error as {status?:number})?.status)||503;failures.push([401,403,503].includes(status)?status:503);if(!actors.size&&status!==401&&status!==403)throw error;}
+ if(allCredentials)return {actors:[...actors.values()],failures};
+ const scopes=new Map<string,CoreBackgroundActor>();for(const actor of actors.values())scopes.set(actor.principal+'\0'+actor.workspace,actor);return {actors:[...scopes.values()],failures};
 }
 
 async function context(request:Request,options:CompatibilityOptions={}) {
@@ -167,24 +206,10 @@ export { context as compatibilityContext, failure as compatibilityFailure };
 
 export async function configuredCoreBackgroundActorForUser(username:string,options:CompatibilityOptions={}):Promise<CoreBackgroundActor>{
  if(typeof window!=='undefined')throw new CompatibilityError(503,'Background identity is server only');
- const config=await identityMapping();
- for(const row of config.bindings){
-  if(!row||!/^api_[A-Za-z0-9_-]{43}$/.test(row.credential)||!/^([a-f0-9]{64})$/.test(row.legacy_api_key_sha256)||![row.legacy_username,row.principal_id,row.workspace_id].every(value=>typeof value==='string'&&value.trim()&&value.length<=512&&!/[\u0000-\u001f\u007f-\u009f]/.test(value)))throw new CompatibilityError(503,'Invalid background identity mapping');
- }
- const candidates=config.bindings.filter(row=>row.legacy_username===username);
- const scopes=new Set(candidates.map(row=>row.principal_id+'\0'+row.workspace_id));
- if(scopes.size!==1)throw new CompatibilityError(403,'Device owner requires one mapped principal and workspace');
- const credentials=new Map(candidates.map(row=>[row.credential,row]));
- if(credentials.size>16)throw new CompatibilityError(503,'Device owner mapping exceeds credential budget');
- let selected:CoreBackgroundActor|undefined;
- for(const row of credentials.values()){
-  const request=new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:row.workspace_id}),{headers:{authorization:'Bearer '+row.credential}});
-  const actor=await context(request,options);
-  if(actor.principal!==row.principal_id||actor.workspace!==row.workspace_id||!actor.username)throw new CompatibilityError(403,'Background principal differs');
-  const verified=Object.freeze({...actor,username:row.legacy_username,principalUsername:actor.principalUsername||actor.username});verifiedBackgroundActors.add(verified);
-  selected ||= verified;
- }
- return selected!;
+ const {actors}=await configuredCoreBackgroundActors(options,true);const candidates=actors.filter(actor=>actor.username===username),scopes=new Set(candidates.map(actor=>actor.principal+'\0'+actor.workspace));
+ if(scopes.size!==1)throw new CompatibilityError(403,'Background owner requires one verified principal and workspace');
+ if(candidates.length>16)throw new CompatibilityError(503,'Background owner exceeds credential budget');
+ return candidates.find(actor=>backgroundSources.get(actor)?.kind==='user')||candidates[0];
 }
 
 export async function coreCollectorModelUsername(actor:{principal:string;workspace:string;username:string|null}):Promise<string|null>{
@@ -196,10 +221,16 @@ export async function coreCollectorModelUsername(actor:{principal:string;workspa
 
 export async function revalidateConfiguredCoreBackgroundActor(actor:CoreBackgroundActor,options:CompatibilityOptions={}){
  if(!isVerifiedCoreBackgroundActor(actor))throw new CompatibilityError(403,'Verified background actor required');
- const config=await identityMapping();const rows=config.bindings.filter(row=>row.legacy_username===actor.username);
- if(!rows.some(row=>row.principal_id===actor.principal&&row.workspace_id===actor.workspace&&row.credential===actor.token)||rows.some(row=>row.principal_id!==actor.principal||row.workspace_id!==actor.workspace))throw new CompatibilityError(403,'Background actor mapping changed');
- const current=await context(new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}}),options);
- if(current.principal!==actor.principal||current.workspace!==actor.workspace)throw new CompatibilityError(403,'Background actor scope changed');
+ const source=backgroundSources.get(actor),pinned=backgroundOptions(options);if(!source||source.origin!==pinned.origin)throw new CompatibilityError(403,'Background actor origin changed');
+ if(source.kind==='mapping'){
+  const config=await identityMapping();validateBackgroundBindings(config.bindings);const rows=config.bindings.filter(row=>row.legacy_username===actor.username);
+  if(!rows.some(row=>row.principal_id===actor.principal&&row.workspace_id===actor.workspace&&row.credential===actor.token)||rows.some(row=>row.principal_id!==actor.principal||row.workspace_id!==actor.workspace))throw new CompatibilityError(403,'Background actor mapping changed');
+ }else{
+  const row=checkedBackgroundUser(await backgroundRpc(source.reference,pinned.options));
+  if(row.token!==actor.token||row.principal!==actor.principal||row.workspace!==actor.workspace||row.principalUsername!==actor.principalUsername||await coreCollectorModelUsername(row)!==actor.username)throw new CompatibilityError(403,'Durable background owner changed');
+ }
+ const current=await context(new Request('http://localhost/internal/storage-background?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}}),pinned.options);
+ if(current.principal!==actor.principal||current.workspace!==actor.workspace||current.principalUsername!==actor.principalUsername)throw new CompatibilityError(403,'Background actor scope changed');
 }
 
 export async function verifiedCoreLoginBinding(username:string){

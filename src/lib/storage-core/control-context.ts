@@ -24,10 +24,11 @@ export async function withCoreControlRequest<T>(request:Request,action:()=>Promi
 }
 export async function withVerifiedCoreControlActor<T>(actor:CoreBackgroundActor,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
  if(!isVerifiedCoreBackgroundActor(actor))throw failure(403,'Verified background control actor required');
+ await (await import('./compat')).revalidateConfiguredCoreBackgroundActor(actor,options);
  const request=new Request('http://localhost/internal/control?'+new URLSearchParams({workspace_id:actor.workspace}),{headers:{authorization:'Bearer '+actor.token}});
  return withCoreControlRequest(request,async()=>{const current=requireCoreControlContext().actor;
-  if(current.principal!==actor.principal||current.workspace!==actor.workspace||current.token!==actor.token||current.principalUsername!==actor.principalUsername||current.username!==actor.username)throw failure(403,'Background control actor changed');
-  return action();
+  if(current.principal!==actor.principal||current.workspace!==actor.workspace||current.token!==actor.token||current.principalUsername!==actor.principalUsername)throw failure(403,'Background control actor changed');
+  requireCoreControlContext().actor=Object.freeze({...current,username:actor.username});return action();
  },options);
 }
 

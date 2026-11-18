@@ -116,7 +116,7 @@ export async function handleCoreCollectorUpload(request:Request){
   if(data.endpoint)data.endpoint=normalizeEndpointUrl(data.endpoint)??undefined;
   if(data.framework==='opencode'){const metadata=normalizeTraceClientMetadata(data);Object.assign(data,metadata,{clientId:identity.clientId,observedIp:clientIpFromRequest(request,{allowDirectConnection:true,clientHostName:metadata.hostName})});}
   if(data.task_id){const {getInternalAgentTag}=await import('@/lib/internal-agent-tag');let tag=getInternalAgentTag(String(data.task_id)) as Row|undefined;
-   if(!tag){const {prismaRaw}=await import('@/lib/storage/prisma');const row=await prismaRaw.skillGeneratorSession.findFirst({where:{opencodeSessionId:String(data.task_id),user:identity.username},select:{agentName:true,agentTraceSkill:true,user:true}});if(row?.agentName)tag={agentName:row.agentName,skill:row.agentTraceSkill,user:row.user};}
+   if(!tag){const row=await withCoreCollectorIdentity(identity,async()=>{const {controlRepositoryRequest}=await import('./control-repository');return (await controlRepositoryRequest('collector_agent_tag',{opencode_session_id:String(data.task_id)})).tag;});if(row?.agentName)tag={agentName:row.agentName,skill:row.agentTraceSkill,user:row.user};}
    if(tag?.user&&tag.user!==identity.username)throw fail(403,'Internal collector owner differs');
    if(tag&&(!tag.user||tag.user===identity.username)){data.agentName=tag.agentName;if(tag.agentId)data.agentId=tag.agentId;if(tag.skill)data.skill=tag.skill;if(tag.displayQuery)data.query=tag.displayQuery;}
   }
@@ -133,7 +133,7 @@ export async function runCoreSessionModel<T>(request:Request,taskId:string,actio
  let identity:CoreCollectorIdentity;
  try{identity=await resolveCollectorRequest(request,'snapshot');}catch(error){
   if(!/^Bearer session_/.test(request.headers.get('authorization')||''))throw error;
-  let selected:CoreCollectorIdentity|undefined;const configured=await configuredCoreBackgroundActors({},true);for(const actor of configured.actors){if(actor.username!==source.session!.user||actor.principal!==scope.actor.principal||actor.workspace!==scope.actor.workspace)continue;const candidate=await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'});try{await collectorPrivate(candidate,'model_scope',{task_id:taskId});selected=candidate;break;}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}if(!selected)throw fail(403,'Configured Session owner executor required');identity=selected;
+  let selected:CoreCollectorIdentity|undefined;const configured=await configuredCoreBackgroundActors({},true);for(const actor of configured.actors){if(actor.username!==source.session!.user||actor.principal!==scope.actor.principal||actor.workspace!==scope.actor.workspace)continue;try{const candidate=await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'});await collectorPrivate(candidate,'model_scope',{task_id:taskId});selected=candidate;break;}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}if(!selected)throw fail(403,'Verified Session owner executor required');identity=selected;
  }
  return withCoreCollectorIdentity(identity,async()=>{await collectorPrivate(identity,'model_scope',{task_id:taskId});return action();});
 }
