@@ -36,7 +36,7 @@ test('historical pending cancellation stays readable and creates no pollable com
  const child=spawn(process.env.PYTHON||'python3',['-u','-c',fixture,file],{cwd:process.cwd(),stdio:['ignore','ignore','pipe']});let stderr='';child.stderr.on('data',value=>stderr=(stderr+String(value)).slice(-6000));const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));
  try{
   let config:any;const deadline=Date.now()+20000;while(!config){try{config=JSON.parse(await readFile(file,'utf8'));}catch{if(child.exitCode!==null)throw Error(stderr);assert.ok(Date.now()<deadline,'fixture startup');await new Promise(resolve=>setTimeout(resolve,20));}}
-  assert.equal(config.fenceVersion,0);process.env.AGENT_INSIGHT_TRACE_STORAGE='core';process.env.AGENT_INSIGHT_STORAGE_CORE_URL=config.origin;process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=config.controller;
+  assert.equal(config.fenceVersion,1);process.env.AGENT_INSIGHT_TRACE_STORAGE='core';process.env.AGENT_INSIGHT_STORAGE_CORE_URL=config.origin;process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=config.controller;
   const {withCoreExperiments,requireCoreExperimentContext}=await import('@/lib/storage-core/experiments');const {reconcileCoreCancellation,registerCoreCancellationContext,sweepCoreCancellations}=await import('@/lib/storage-core/experiment-cancellation');const {controlClient}=await import('@/lib/storage-core/control-repository');
   await withCoreExperiments(new Request('http://localhost/cancellations',{headers:{authorization:'Bearer '+config.token}}),async()=>{
    const context=requireCoreExperimentContext();await assert.rejects(reconcileCoreCancellation(context,'cancel-historical'),(error:any)=>error.status===409);
