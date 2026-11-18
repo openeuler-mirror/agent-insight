@@ -100,6 +100,8 @@ class LegacyTraceList:
                         'anomaly_status':properties.get('anomaly_status',metadata.get('anomaly_status','unknown')),
                         'userTags':tags,'_trace_id':row['trace_id'],
                     }
+                    if row.get('source_namespace')=='collector.source.v1' and not row.get('agent_name'):
+                        record.pop('agentName',None);record.pop('agent',None)
                     metrics=metadata.get('legacy_execution_metrics',{})
                     if not isinstance(metrics,dict):raise ValueError('invalid captured execution metrics')
                     for key in ('cost','latency','tool_call_count','tool_call_error_count'):

@@ -561,3 +561,6 @@ Node每次重新读持久User与显式映射，不缓存首次用户。私有映
 ### 第一版历史导入运行门禁启用
 
 运行门禁版本1在原状态可读的前提下允许显式离线导入；所有运行保护独立按历史marker执行。普通取消在产生命令前拒绝旧实验，历史InfraSource在接收新样本前拒绝，专用离线样本导入仍可保留旧事实。未带运行保护的旧版本继续在plan中阻断历史运行记录。版本1不表示任意客户库可直接迁移：未知owner、缺附件、来源漂移及目标碰撞仍阻断，production_cutover_ready仍为false。
+
+
+collector.source.v1适配原上传协议时，不为未提供、null或空agentName合成service.name；其列表DTO按原readRecords省略agent和agentName。明确给定的名称（包括collector、unknown）原样保留。该缺省处理只针对collector命名空间，原生OTLP的真实service.name、agent.name优先级及既有未知值行为不变。原Execution导出的null/字段缺省不改。已捕获的prepared计划及同operation回执继续重放原内容，不自动重写旧行；明确的新快照按既有source revision/hash协议接续，此后相同实体不重复递增，旧回执重放不会回退当前数据。

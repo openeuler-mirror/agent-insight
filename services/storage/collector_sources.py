@@ -425,7 +425,8 @@ class CollectorSources:
                         'agent_insight_legacy_interaction':{'format':'agent-insight.trace-item','version':1,'kind':'carrier','value':copy.deepcopy(call)}}
                     all_spans.append((key,tool,None))
         changed=[];seen=set()
-        resource={'attributes':[_attribute('agent_insight.source_namespace',NAMESPACE),_attribute('service.name',snapshot['execution'].get('agentName') or 'collector'),_attribute('telemetry.sdk.name',snapshot['execution'].get('framework') or state.get('framework') or 'legacy')]}
+        resource={'attributes':[_attribute('agent_insight.source_namespace',NAMESPACE),_attribute('telemetry.sdk.name',snapshot['execution'].get('framework') or state.get('framework') or 'legacy')]}
+        if snapshot['execution'].get('agentName'):resource['attributes'].append(_attribute('service.name',snapshot['execution']['agentName']))
         for key,span,index in all_spans:
             if key in seen:raise Conflict('Collector source entity identity differs')
             seen.add(key);body={'resourceSpans':[{'resource':resource,'scopeSpans':[{'spans':[span]}]}]};source=_normalize(body,workspace,timestamp_minimum=0)[0];source['row']['trace_bucket']=route['trace_bucket'];semantic=_hash(source);old=previous.get(key)
