@@ -125,12 +125,23 @@ export interface RawInteraction {
     inference_request_id?: string;
     inference_session_id?: string;
     inference_call_ids?: string[];
+    /**
+     * Model-service response header IDs bound to a proven call. The gateway's
+     * own call ID stays in `inference_call_ids`; these are the upstream value
+     * and the response layer that produced it.
+     */
+    inference_upstream_request_ids?: Array<{
+        call_id: string;
+        request_id: string;
+        source?: string;
+    }>;
     inference_unassigned_calls?: Array<{
         call_id: string;
         status_code?: number;
         state?: string;
         started_at?: string;
         completed_at?: string;
+        upstream_request_id?: string;
         reason?: string;
     }>;
     inference_attempts?: Array<{
@@ -141,6 +152,8 @@ export interface RawInteraction {
         status_code?: number;
         error_type?: string;
         state?: string;
+        upstream_request_id?: string;
+        upstream_request_id_source?: string;
     }>;
     trace_kind?: 'chain' | string;
     trace_name?: string;

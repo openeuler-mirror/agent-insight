@@ -58,6 +58,10 @@ AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN=http://192.0.2.20:8080
 
 只填协议、主机和端口，修改后重启平台；无需重建前端。未配置时仍可查看关联 ID。打开「链路追踪」详情中的「推理分析」可查看整条 Trace 的请求列表；LLM 节点详情中的同名按钮只列出该节点的已确认请求。每个链接传递单个 ID：`/model-performance?GlobalTrackNO=<X-Request-Id>`，重试分别保留。
 
-Qoder CLI 的成功响应通过会话及唯一服务响应 ID 回填 LLM；失败、缺失或重复响应 ID 无法证明节点归属时，仅列入整条 Trace，不按时间猜测。OpenCode 用原生会话、消息及 HTTP attempt 证据关联，缺失或冲突证据同样只保留 Trace 关联。历史无网关 ID 的 Trace 不会补造 ID。
+网关会读取模型服务响应头中的 `X-Request-Id`（大小写不敏感），作为**服务请求 ID**单独保存，不会替换网关为每次尝试生成的调用 ID。LLM 节点详情在只有一条服务 ID 时直接展示并可复制，多条时引导到「推理分析」逐次查看；「推理分析」同时提供服务 ID 的查询链接。该链接使用同一 `AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN` 和 `/model-performance?GlobalTrackNO=<服务 ID>` 格式，ID 会进行 URL 编码。服务未返回、响应头不可见或值冲突时不生成链接，并明确显示“未提供”。
+
+流式调用在收到响应头后立即记录；之后即使 4xx/5xx、超时或取消，只要响应头已到达就保留真实服务 ID。已接入的 OpenCode 1.x/2.x 与 Qoder CN CLI 经本地网关时支持该能力；OpenCode 直连仅在 SDK/fetch 能看到响应头且归属可证明时记录；Qoder Desktop/JetBrains 与 OTLP/日志型采集器当前不支持，详见[支持路径](../../reference/observability/inference-correlation.md#支持路径)。
+
+Qoder CLI 的成功响应通过会话及唯一服务响应 ID 回填 LLM；失败、缺失或重复响应 ID 无法证明节点归属时，仅列入整条 Trace，不按时间猜测。无法归属的模型服务响应 ID 同样只保留在 Trace 级未分配调用中。OpenCode 用原生会话、消息及 HTTP attempt 证据关联，缺失或冲突证据同样只保留 Trace 关联。历史无网关 ID 的 Trace 不会补造 ID。
 
 推理服务接收方式及失败边界见 [统一推理请求关联契约](../../reference/observability/inference-correlation.md)。

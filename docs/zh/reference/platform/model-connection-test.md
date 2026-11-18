@@ -21,6 +21,26 @@ changefreq: "monthly"
 
 显式 Anthropic 配置的单次评测、诊断等调用由共享传输适配为原生 Messages，保留 system、结构化输出及 token 用量；生成和工具流使用原生 Anthropic 客户端。OpenCode 静态注册每个显式协议连接，连接变化会刷新运行时；同厂商同模型的不同连接相互隔离。无效 JSON 或协议响应归类为 `invalid_response`，不会显示成网络错误。
 
+## 服务端诊断日志
+
+连接探测以 `scope: "ModelConnectionTest"` 输出结构化日志，写入服务端控制台及现有 `agent-insight.log`（目录由 `AGENT_INSIGHT_LOG_DIR` 指定，默认 `/var/log/agent-insight`；不可写时仍保留控制台输出）。失败使用 `error`，默认日志级别即可看到；成功使用 `info`，需配置 `AGENT_INSIGHT_LOG_LEVEL=info` 并重启服务。接口仍返回原有通用错误，不向浏览器透传供应商错误正文。
+
+- `testId/result/elapsedMs/timeoutMs`：每次探测的定位编号、结果和耗时。
+- `attempts`：协议适配后的实际请求路径、方法、头名称，以及 `authorizationPresent/apiKeyHeaderPresent`。只记录头名称和鉴权头是否存在，不记录头值；不记录请求正文或模型输出。
+- `attempts[].proxy`：`mode` 为 `direct/proxy`；`env` 表示生效的代理环境变量，`endpoint` 只保留代理协议、主机和端口。`noProxyConfigured` 表示配置过排除规则，`bypassed` 表示本次实际匹配并绕过代理。日志和传输使用同一份缓存配置及匹配逻辑，不代表每次重新读取环境变量。自定义注入的传输标记为 `custom`。
+- `upstream`：上游 HTTP 状态、Content-Type、Request ID、脱敏后的鉴权挑战及错误原因。兼容 `error.code/type/message`、顶层 `code/message` 和网关 `error_code/error_msg/request_id`；JSON 仅提取诊断字段。纯文本或 HTML 错误保留脱敏文本，移除 HTML 标签。未返回明确原因时仍需结合网关日志排查。
+- `proxyTunnelStatus/causeCodes`：代理拒绝 CONNECT 隧道时记录其状态码；DNS、连接等失败保留底层错误码。隧道拒绝与模型 HTTP 响应分别记录，隧道错误正文不在模型响应中。
+
+上游错误正文最多观察 8192 字节，原因最多输出 2048 字符；超限正文全部省略并标记 `bodyTruncated`，超时或取消导致正文未结束时省略片段并标记 `bodyIncomplete`。采集随 SDK 消费响应流进行，不额外读取、重试或延长截止时间。API Key、自定义头的所有值及 URL 凭据、查询参数值均参与回显脱敏，目标 URL 不记录用户信息和查询参数；Cookie、完整响应头和任意 JSON 附加字段不输出。
+
+客户复现连接测试后，可筛选对应时间段的容器日志：
+
+```bash
+docker logs --since 10m <容器名> 2>&1 | grep '"scope":"ModelConnectionTest"'
+```
+
+结合 `testId`、`attempts[].proxy.mode/bypassed` 和 `upstream.status/errorCode/reason/requestId` 对照成功的 curl。上游 HTTP `401` 仍映射为平台接口 `422`，日志保留真实的上游状态。
+
 实现依据：[当前实现](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/eval/settings/test/route.ts)。
 
 [English](../../../en/reference/platform/model-connection-test.md)

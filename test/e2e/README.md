@@ -19,7 +19,7 @@
 
 当前编号连续为 001～005：原 005 数据集主路径已合入 003，原 006 故障恢复改为 005。新命令、配置和报告采用新编号，旧报告、Trace 和下文历史运行记录保留当时编号；原 006 的既有通过结果不能冒充改号后重新执行。外部可信配置需将 `cases` / `caseModes` 中的 006 改为 005；旧 005 数据集配置改用 003。历史 `core-five` 参数继续兼容原来的排除故障恢复范围（现为 001～004），完整五例请使用默认配置或 `--all`。
 
-专用资源在相应 `cases/*/fixtures/` 下；复用的产品原始日志 `public/example/messages` 和内置 Skill 直接引用产品文件，避免副本漂移。单次临时运行的数据和证据位于 `exclude/core-e2e/<runId>/`，不提交。指定 `--lane pr|daily --state-dir /absolute/private/state` 时，使用固定的 `test_e2e_pr@example.com` 或 `test_e2e_daily@example.com` 账号，应用数据保存在各自独立目录；报告列出本轮新增 Trace，旧 Trace 保留且不计入本轮通过证据。原始日志与浏览器 trace 在受限 `private/`；不要将整个运行目录直接公开。
+专用资源在相应 `cases/*/fixtures/` 下；多个用例复用的日志 `test/e2e/fixtures/messages` 与 003 的 Skill 基线包 `cases/003-skill-lifecycle/fixtures/skill-bundle.json` 集中放置，避免副本漂移。单次临时运行的数据和证据位于 `exclude/core-e2e/<runId>/`，不提交。指定 `--lane pr|daily --state-dir /absolute/private/state` 时，使用固定的 `test_e2e_pr@example.com` 或 `test_e2e_daily@example.com` 账号，应用数据保存在各自独立目录；报告列出本轮新增 Trace，旧 Trace 保留且不计入本轮通过证据。原始日志与浏览器 trace 在受限 `private/`；不要将整个运行目录直接公开。
 
 编号整理验证：222项测试工具检查通过，`--list`与PR/daily配置均为001～005。未重跑产品页面E2E。本机`npm test`未完整通过：观测汇总4746项、4524通过、197失败、23跳过、2取消，`evaluator-scoring-http.test.ts`触发180秒文件超时，计数仅为观测下限；未逐项归因，不能替代此前119隔离UT结果。日志位于`exclude/core-e2e/renumber-20261106/`。
 

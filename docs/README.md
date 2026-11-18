@@ -9,7 +9,7 @@
 
 | 目的 | 入口 |
 | --- | --- |
-| 跟随完整示例入门 | [Tutorial](./zh/tutorial/navigation.md) |
+| 跟随快速上手入门 | [Tutorial](./zh/tutorial/navigation.md) |
 | 完成具体操作 | [How-to](./zh/how-to/navigation.md) |
 | 查接口、参数与协议 | [Reference](./zh/reference/navigation.md) |
 | 理解原理和架构 | [Explanation](./zh/explanation/navigation.md) |

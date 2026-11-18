@@ -342,6 +342,9 @@ async function streamSkillGeneratorOpencodeImpl(
     : null
   );
 
+  // 关闭空闲看门狗，只保留 15 分钟整体截止。桥接层不得自建 AbortController 并把它塞进
+  // chatOptions.signal——执行引擎会把它当成用户取消（EXECUTION_CANCELLED），SDK 收尾或
+  // 长静默就会被误报成失败。终止只允许来自 AGENT_TIMEOUT（明确超时）或模型错误。
   const chatOptions = { idleTimeoutMs: 0, streamTimeoutMs: 15 * 60 * 1000 };
 
   let agentText = '';

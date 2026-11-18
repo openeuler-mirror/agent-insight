@@ -49,6 +49,12 @@ A successful installation, reachable port, or health response alone does not pro
 
 After upgrading to a release with OpenCode data isolation, restart the platform and run both AgentDebug and Skill optimization once. The platform initializes a private OpenCode database and creates new sessions for new runs. The user's CLI continues to use its existing database.
 
+## Built-in example data cleanup
+
+Older releases injected example Agents, Skills, datasets, and Traces when a user first logged in. Current releases no longer inject them and, on each startup, delete leftover records from existing databases using the fixed identifiers written at injection time (Agent name and description, dataset name, Skill name and description, and the `builtin_msg_` taskId prefix). All conditions are exact matches, so user-created data is unaffected, and repeated startups do not delete anything further. A `builtin demo cleanup` line in the startup log reports records removed by that run.
+
+Cleanup only covers database records. Client-local files such as `~/.agent-insight/example/messages` are not removed and can be deleted manually.
+
 ## Rollback
 
 1. Stop the new version and related writers. Preserve upgraded data separately, noting which Traces and experiments were created after the upgrade.

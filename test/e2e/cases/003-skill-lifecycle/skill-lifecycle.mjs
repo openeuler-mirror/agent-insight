@@ -30,7 +30,7 @@ export async function completeSkillLifecycle(ctx) {
   };
   const username = ctx.account.username;
   const marker = `E2E-${runId}-003`;
-  const logFile = path.join(root, 'ordinary/workspace/fixtures/messages');fs.mkdirSync(path.dirname(logFile), { recursive: true });fs.copyFileSync(path.join(project, 'public/example/messages'), logFile);
+  const logFile = path.join(root, 'ordinary/workspace/fixtures/messages');fs.mkdirSync(path.dirname(logFile), { recursive: true });fs.copyFileSync(path.join(project, 'test/e2e/fixtures/messages'), logFile);
   const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const logHash = hash(logFile);assert.equal(logHash, '6d50cefa82380651f910df35fda0995a237a3c788b7b2e3d2d37e51fb9debca9');
   const input = `${marker}：使用 ${generatedName} 分析 ${logFile}。\n请统计 root 账户认证失败的次数，找出次数最多的来源及其次数，并给出日志证据。\n只分析提供的离线日志，不连接远程主机，不读取当前机器的 /var/log，不修改文件。`;

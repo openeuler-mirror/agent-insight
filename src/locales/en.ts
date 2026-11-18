@@ -120,6 +120,7 @@ export const en = {
     modelConfig: 'Model Config',
     modelRegistry: 'Model Registry',
     agentRuntimes: 'Agent Runtimes',
+    agentRuntime: 'Agent Runtime',
     webSearch: 'Web Search',
     versionManagement: 'Version Management',
     modelKeys: 'API Key Management',
@@ -290,6 +291,10 @@ export const en = {
     deleteError: 'Delete error',
   },
   traceTree: {
+    spanList: 'Span list',
+    jumpToBottom: 'Jump to bottom',
+    followingLatest: 'Following updates',
+    newContent: 'New content',
     expandAll: 'Expand',
     collapseAll: 'Collapse',
     expandAllHint: 'Expand child Agents and their descendants.',

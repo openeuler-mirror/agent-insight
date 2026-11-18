@@ -251,13 +251,38 @@ async function persistUserSettings(user: string, settings: UserSettings): Promis
 /**
  * 只更新运行时偏好，避免「模型注册/联网搜索」页提交整份 settings 时
  * 因请求体里没有该字段而把偏好清掉。
+ *
+ * 兼容两种既有调用：执行层传 `AgentRuntimePreference` 对象，配置接口传 runtimeId
+ * （字符串；null 表示清除）。两者都写入 `agentRuntime.defaultRuntimeId`。
  */
-export async function saveAgentRuntimePreference(user: string, preference: AgentRuntimePreference): Promise<void> {
+export async function saveAgentRuntimePreference(user: string, preference: AgentRuntimePreference): Promise<void>;
+export async function saveAgentRuntimePreference(user: string, runtimeId: string | null): Promise<void>;
+export async function saveAgentRuntimePreference(
+    user: string,
+    value: AgentRuntimePreference | string | null,
+): Promise<void> {
+    const preference: AgentRuntimePreference = value !== null && typeof value === 'object'
+        ? value
+        : { defaultRuntimeId: value };
     return writeUserSettings(user, async () => {
         const record = await db.findUserSettings(user);
         const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : { activeConfigId: null, configs: [] };
         await db.upsertUserSettings(user, JSON.stringify({ ...stored, agentRuntime: preference }));
     });
+}
+
+/** 读取用户保存的 Agent 运行时默认值；无记录或未保存时为 null。 */
+export async function getAgentRuntimePreference(user: string | null): Promise<string | null> {
+    if (!user) return null;
+    try {
+        const record = await db.findUserSettings(user);
+        const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : null;
+        const saved = stored?.agentRuntime?.defaultRuntimeId;
+        return typeof saved === 'string' && saved ? saved : null;
+    } catch (error) {
+        console.error('Failed to load Agent runtime preference:', error);
+        return null;
+    }
 }
 
 export async function getRuntimeParameterTemplates(user: string | null): Promise<RuntimeParameterTemplate[]> {

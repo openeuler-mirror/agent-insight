@@ -38,7 +38,7 @@ changefreq: monthly
 
 HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../observability/trace-ingestion.md)、[实验接口](../evaluation/experiments-api.md)、[数据集接口](../evaluation/datasets-api.md)、[Skill 管理接口](../optimization/skills-api.md)、[可靠性客户端与控制接口](../reliability/client-control-api.md)和[独立 Benchmark 协议](../evaluation/benchmark-protocol.md)。本页后续的函数签名是仓内开发接口，不能作为 HTTP 端点调用。
 
-`GET /api/observe/data` 的全用户列表由 API Key 对应的管理员身份启用，`user` 查询参数不能授予全局权限。该列表优先保留管理员自己的 `builtin_msg_` 内置示例 Trace，数量不足三条时从其他账号的现有示例中按用户和 ID 稳定排序补足；其余同类示例在数据库分页和统计前排除。管理员用 `traceUser` 指定某个账号或按 `taskId` / `executionId` 定向读取时保留原始记录；普通用户列表继续按本人隔离。其他账号的真实 Trace 不受影响。
+`GET /api/observe/data` 的全用户列表由 API Key 对应的管理员身份启用，`user` 查询参数不能授予全局权限。新注册账号不再生成 `builtin_msg_` 内置示例 Trace，启动流程会清理旧记录；若旧记录仍存在，全用户列表优先保留管理员自己的示例，不足三条时从其他账号按用户和 ID 稳定排序补足，其余同类示例在数据库分页和统计前排除。管理员用 `traceUser` 指定某个账号或按 `taskId` / `executionId` 定向读取时保留原始记录；普通用户列表继续按本人隔离。其他账号的真实 Trace 不受影响。
 
 ### 实验执行环境准备
 

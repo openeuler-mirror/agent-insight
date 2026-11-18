@@ -18,11 +18,13 @@ import { OpenAI } from 'openai';
 import { resolveModelConnection, type ModelConnectionConfig } from '@/lib/shared/model-connection';
 import { ModelTestValidationError, type ModelTestErrorCode } from '@/lib/shared/model-connection-test';
 import { getModelClientConfig } from './model-client';
+import { createModelTestDiagnostics } from './model-connection-diagnostics';
 
 export async function probeModelConnection(
   config: ModelConnectionConfig,
   options: { timeoutMs: number; signal: AbortSignal; fetch?: typeof fetch },
 ): Promise<void> {
+  const diagnostics = createModelTestDiagnostics(config, options.timeoutMs, options.fetch);
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancel = () => {};
@@ -48,7 +50,7 @@ export async function probeModelConnection(
         throw new ModelTestValidationError('A model name is required. Custom models also require a Base URL.');
       }
       const client = new OpenAI({
-        ...getModelClientConfig(config, options.fetch),
+        ...getModelClientConfig(config, diagnostics.fetch),
         timeout: options.timeoutMs,
         maxRetries: 0,
       });
@@ -64,6 +66,10 @@ export async function probeModelConnection(
         throw new Error('Invalid model response', { cause: 'invalid_response' });
       }
     })()]);
+    diagnostics.finish('success');
+  } catch (error) {
+    diagnostics.finish(classifyModelTestError(error).code, error);
+    throw error;
   } finally {
     clearTimeout(timer);
     options.signal.removeEventListener('abort', cancel);
