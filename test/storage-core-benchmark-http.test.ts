@@ -8,7 +8,7 @@ import {createIsolatedDatabase} from './helpers/isolated-database';const databas
 process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
 const require=createRequire(import.meta.url);
 const {withCoreExperiments,runWithCoreExperimentContext,requireCoreExperimentContext}=require('@/lib/storage-core/experiments');
-const {benchmarkCoreRpc,benchmarkCallbackRpc}=require('@/lib/benchmark/core-store');
+const {benchmarkCoreRpc,benchmarkCallbackRpc}=require('@/lib/benchmark/core-store') as typeof import('@/lib/benchmark/core-store');
 const {completeCoreBenchmarkExecution,completeCoreBenchmarkEvaluation,resumeCoreBenchmarkIntents,importCoreBenchmarkSubmissions}=require('@/lib/benchmark/core-runtime');
 const {registerBenchmarkAdapter}=require('@/lib/benchmark/adapter-registry');
 const {defaultEvaluatorTargetResolver}=require('@/lib/benchmark/evaluator-target');
