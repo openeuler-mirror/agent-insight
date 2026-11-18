@@ -188,6 +188,7 @@
     "test/trace-parent-agent.test.ts",
     "test/trace-render-budget.test.ts",
     "test/trace-session-lazy-load.test.ts",
+    "test/trace-span-scroll.test.ts",
     "test/trace-subagent-facets.test.ts",
     "test/trace-subagent-navigation.test.ts",
     "test/trace-tag-clustering.test.ts",
