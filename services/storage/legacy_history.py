@@ -5,7 +5,7 @@ import json
 from .control import Conflict
 
 INERT_SOURCE = 'legacy-inert-control/v1'
-HISTORY_FENCE_VERSION = 0
+HISTORY_FENCE_VERSION = 1
 INERT_CONTROL_KINDS = frozenset({
     'batchEvalTask', 'grayscaleTask', 'skillWorkbenchTask',
     'reliabilityInstallToken', 'reliabilityClient', 'reliabilityClientCredential',

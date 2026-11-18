@@ -636,15 +636,43 @@ class LegacyImportTests(unittest.TestCase):
         self.assertEqual(a['entity_key'], b['entity_key'])
         self.assertNotEqual(a['content_hash'], b['content_hash'])
 
-    def test_historical_pending_jobs_require_installed_runtime_fences(self):
-        with sqlite3.connect(self.source) as con:
-            con.executescript('CREATE TABLE BatchEvalTask(id TEXT PRIMARY KEY,taskName TEXT NOT NULL,user TEXT,configJson TEXT NOT NULL,caseStatesJson TEXT NOT NULL,traceEvalStatesJson TEXT,createdAt DATETIME NOT NULL,updatedAt DATETIME NOT NULL)')
-            con.execute('INSERT INTO BatchEvalTask VALUES(?,?,?,?,?,?,?,?)', ('task', 'historic', 'old-alice', '{}', '[{"status":"running"}]', None, 1700000000000, 1700000000000))
+    def pending_batch_export(self):
+        self.legacy_rows('BatchEvalTask', [{'id': 'task', 'taskName': 'historic', 'user': 'old-alice',
+            'configJson': '{}', 'caseStatesJson': '[{"status":"running"}]', 'traceEvalStatesJson': '[]',
+            'createdAt': 1700000000000}])
         export = self.root / 'export'
         export_database(self.source, export)
-        plan = self.importer(export).plan()
+        return export
+
+    def test_historical_pending_jobs_require_installed_runtime_fences(self):
+        from unittest.mock import patch
+        export = self.pending_batch_export()
+        with patch('services.storage.legacy_history.HISTORY_FENCE_VERSION', 0):
+            plan = self.importer(export).plan()
         self.assertEqual(plan['issue_counts']['inert_history_guard_required'], 1)
         self.assertFalse(plan['full_migration_ready'])
+
+    def test_reviewed_runtime_fences_allow_explicit_inert_history_import(self):
+        from services.storage.platform_controls import PlatformControls
+        from services.storage.legacy_history import is_historical_control
+        source = self.pending_batch_export()
+        source_hash = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        tool = self.importer(source)
+        self.assertEqual(tool.plan()['blocked'], 0)
+        self.assertEqual(tool.apply(migration_id='reviewed-history')['imported'], 1)
+        self.assertEqual(tool.verify(migration_id='reviewed-history')['verified'], 1)
+        self.assertEqual(tool.apply(migration_id='reviewed-history')['replayed'], 1)
+        controls = PlatformControls(self.control)
+        value = controls.dispatch(self.token, 'w', 'records_read', {'kind': 'batchEvalTask', 'body': True}, trusted=True)
+        self.assertEqual(value['rows'][0]['data']['caseStatesJson'], '[{"status":"running"}]')
+        executable = controls.dispatch(self.token, 'w', 'records_read',
+                                       {'kind': 'batchEvalTask', 'body': True, 'required_capabilities': ['execute']}, trusted=True)
+        self.assertEqual(executable['rows'], [])
+        self.assertIsNone(self.control.claim('w', 'migration-replay-probe'))
+        with self.control.read_transaction() as con:
+            self.assertTrue(is_historical_control(con, 'w', 'batchEvalTask', 'task'))
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM outbox_events').fetchone()[0], 0)
+        self.assertEqual(hashlib.sha256(self.source.read_bytes()).hexdigest(), source_hash)
 
 
 if __name__ == '__main__':

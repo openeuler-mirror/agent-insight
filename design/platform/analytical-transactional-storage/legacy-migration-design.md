@@ -172,7 +172,7 @@ PG/openGauss 必须使用显式 DSN 或连接工厂、隔离 schema 和私有制
 
 Trace 使用实际采集领域和事实流水；保留旧 Execution/Session/子 Agent/Thread/Skill origins/手工字段、原日期与业务 ID。原 Session 字符串及 Node JSON 语义保留，只有 Session 的记录不伪造 Execution。评估器、数据集、Skill 版本进入真实 private/public release、alias 和正文/附件制品。`--files-file` 以实体键提供 base64 字节；`--skill-directories-file` 只读取显式提供的目录并捕获实际字节/模式，不把旧路径当正文；缺文件、软链接、不安全路径或 hash/size 不符拒绝。只有没有外部 assetPath 且文件声明为空或仅根 `SKILL.md` 的纯正文版本可以由真实 SQL content 生成该文件。诊断消息相同时间戳不能推断先后，需 `--message-order-file` 按 sessionId 提供完整 message ID 顺序。
 
-历史 running/pending/busy、控制凭据/命令、基础设施来源、实验、Benchmark job、诊断/报告和生成任务必须 inert：原状态/时间保持，历史租约无执行权，不发模型、worker、采集或外部任务。未整合并验证运行门禁时 `HISTORY_FENCE_VERSION=0`，相关行在 plan 中明确阻断；只有集成验收后才能提升门禁版本。历史 DatasetGenerationJob 存在固定私有历史目录而不进入可领取队列；进度/原 receipt 可以读取，显式删除仍按当前 IAM 作用于真实数据集。Usage raw 仅导原始事件和永久去重收据，Daily 直接导原 count/first/last，不由 raw 二次累计。评测写真实 machine receipt/selected result/human annotation，迁移 work phase=migrate 且终态，不伪造有效评估租约。
+历史 running/pending/busy、控制凭据/命令、基础设施来源、实验、Benchmark job、诊断/报告和生成任务必须 inert：原状态/时间保持，历史租约无执行权，不发模型、worker、采集或外部任务。当前运行门禁版本为 `HISTORY_FENCE_VERSION=1`，允许按显式计划导入惰性历史记录；低于1的旧实现仍以 `inert_history_guard_required` 阻断相关行。该版本不解除当前IAM、来源与附件核验，不恢复任何旧运行。历史 DatasetGenerationJob 存在固定私有历史目录而不进入可领取队列；进度/原 receipt 可以读取，显式删除仍按当前 IAM 作用于真实数据集。Usage raw 仅导原始事件和永久去重收据，Daily 直接导原 count/first/last，不由 raw 二次累计。评测写真实 machine receipt/selected result/human annotation，迁移 work phase=migrate 且终态，不伪造有效评估租约。
 
 旧诊断可只读；显式复测须有 verified 导入收据、原 snapshot 字节、仍一致的真实 Trace/Session、实验/结果、数据集/评估器及 Skill 正文基线，并再次通过当前 IAM。核验从当前真实证据重建快照与旧快照逐项比较；缺证据或来源变化 Conflict，不能臆造旧模型证明。通过后冻结当前真实新模型和新资产，创建全新复测实验/RunPlan，保留历史 diagnosis ID/inputHash origin；绝不恢复旧 lease 或修改旧运行。内部 historical 标志由 Node 消费后剥离，不改变原前端 DTO/界面。
 
