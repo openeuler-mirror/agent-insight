@@ -1,0 +1,40 @@
+// 示例签名可能随项目演进；生成前读取当前类型与基类，按实际合同调整导入和 Hook。
+import type {
+  AgentTaskEnvelope, BenchmarkManifest, BuildAgentTaskInput, JsonValue, SplitCaseResult,
+} from '../../../packages/benchmark-protocol/src/contracts'
+import type {
+  BuildEvaluationRequestInput, EvaluationJob, ValidateSubmissionInput,
+} from '../../../packages/benchmark-protocol/src/evaluation-contracts'
+import type {
+  NormalizeBenchmarkResultInput, NormalizedBenchmarkResult,
+} from '../../../packages/benchmark-protocol/src/evaluator-contracts'
+import { AbstractBenchmarkAdapter } from '../../../src/lib/benchmark/adapter-base'
+
+type RawCase = unknown
+type PublicCase = Record<string, JsonValue>
+type PrivateCase = Record<string, JsonValue>
+type EvaluationPayload = Record<string, JsonValue>
+
+export class BenchmarkOnboardingAdapter extends AbstractBenchmarkAdapter<RawCase, PublicCase, PrivateCase, EvaluationPayload> {
+  constructor(readonly manifest: BenchmarkManifest) { super() }
+
+  protected splitCase(_raw: RawCase): Omit<SplitCaseResult<PublicCase, PrivateCase>, 'publicFingerprint' | 'privateFingerprint'> {
+    throw new Error('ONBOARDING_IMPLEMENTATION_REQUIRED: splitCase')
+  }
+
+  protected createAgentTask(_input: BuildAgentTaskInput<PublicCase>): AgentTaskEnvelope {
+    throw new Error('ONBOARDING_IMPLEMENTATION_REQUIRED: createAgentTask')
+  }
+
+  protected async validateBenchmarkSubmission(_input: ValidateSubmissionInput): Promise<void> {
+    throw new Error('ONBOARDING_IMPLEMENTATION_REQUIRED: validateBenchmarkSubmission')
+  }
+
+  protected createEvaluationRequest(_input: BuildEvaluationRequestInput<PublicCase, PrivateCase>): EvaluationJob<EvaluationPayload> {
+    throw new Error('ONBOARDING_IMPLEMENTATION_REQUIRED: createEvaluationRequest')
+  }
+
+  protected createNormalizedResult(_input: NormalizeBenchmarkResultInput): NormalizedBenchmarkResult {
+    throw new Error('ONBOARDING_IMPLEMENTATION_REQUIRED: createNormalizedResult')
+  }
+}

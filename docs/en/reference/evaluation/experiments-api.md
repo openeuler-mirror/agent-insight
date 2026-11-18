@@ -80,6 +80,11 @@ Sources: [experiment routes](https://gitcode.com/openeuler/agent-insight/blob/ma
 
 [中文权威版本](../../../zh/reference/evaluation/experiments-api.md)
 
+
+## Viewing Benchmark evidence
+
+Benchmark Case details expose the original evaluation files for preview and download. Relative folders and Unicode filenames are retained in the platform; individual downloads use the original basename and do not preserve a directory tree. Source labels distinguish integration-declared official files/API returns, runtime output, platform diagnostics and undeclared historical sources. Labels alone do not prove scoring correctness. Text previews show the stored original content; Markdown files (identified by `text/markdown`, `.md` or `.markdown`) default to a formatted preview with a source toggle, without enabling raw HTML. Downloads always return the original bytes; summaries and scores do not replace attachments. Collection failures must remain explicit rather than being hidden behind a successful score.
+
 ### Diagnosis runs and optimization inputs
 
 Single-group experiment creation computes a dataset Case contentHash on the server from the original input, expected output, values (including evaluator catalogs), and evaluationFocus. Matching may normalize whitespace, but stored inputs and reference answers retain their original text. Diagnosis retests check exact text and fingerprints for new records. Legacy records accept only the original text or its historical trim-and-collapse-whitespace transformation, without rewriting baseline answers. Changes to frozen diagnosis inputs, answers, executions, or scores remain blocking and produce specific errors.

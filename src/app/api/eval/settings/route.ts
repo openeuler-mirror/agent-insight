@@ -16,7 +16,7 @@
 
 import { ModelTestValidationError } from '@/lib/shared/model-connection-test';
 
-import { getUserSettings, saveUserSettings, maskUserSettings, getRuntimeParameterTemplates, saveRuntimeParameterTemplate } from '@/lib/storage/server-config';
+import { getStoredUserSettings, saveUserSettings, maskUserSettings, getRuntimeParameterTemplates, saveRuntimeParameterTemplate } from '@/lib/storage/server-config';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     }
     // Mask model API keys before they reach the browser — the client only needs
     // a masked value for rendering. Real keys never leave the server.
-    return NextResponse.json(maskUserSettings(await getUserSettings(user)));
+    return NextResponse.json(maskUserSettings(await getStoredUserSettings(user)));
 }
 
 export async function POST(request: Request) {
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
             recordUsageEvent({ user, featureKey: 'model-registry', eventKey: 'model.save' });
         }
 
-        return NextResponse.json(maskUserSettings(await getUserSettings(user)));
+        return NextResponse.json(maskUserSettings(await getStoredUserSettings(user)));
     } catch (e: unknown) {
         return NextResponse.json({ error: e instanceof Error ? e.message : '保存设置失败' }, { status: e instanceof ModelTestValidationError || e instanceof TypeError ? 400 : 500 });
     }

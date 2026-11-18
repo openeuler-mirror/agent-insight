@@ -16,13 +16,13 @@
 
 // 对比实验 API 冒烟：POST 创建（type=llm + groups）→ POST 运行（type 分流）→ POST rescan。
 // 覆盖：AC-002 分组落库 / AC-008 空组校验 / AC-017 增量补评 / type 缺省走单组（AC-019）。
-// 可通过 AGENT_INSIGHT_TEST_DATABASE_URL 使用隔离测试数据库。
-import path from 'node:path';
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL
-  ?? `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
+// 使用临时隔离数据库，避免依赖仓库 data 目录是否已初始化。
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { prisma } from '@/lib/storage/prisma';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
@@ -49,6 +49,8 @@ test.after(async () => {
   await prisma.experiment.deleteMany({ where: { user: TEST_USER } }).catch(() => {});
   await prisma.customEvaluatorList.deleteMany({ where: { user: TEST_USER } }).catch(() => {});
   setJudgeLlmCallerForTest(null);
+  await prisma.$disconnect();
+  database.dispose();
 });
 
 function postReq(url: string, body: unknown): Request {

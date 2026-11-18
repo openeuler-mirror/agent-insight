@@ -71,11 +71,18 @@ test('real evaluator source changes still update the package digest, evaluator d
   fs.appendFileSync(path.join(f.root, 'benchmarks/zsoft-l1/evaluator/entrypoint.py'), '\n# changed evaluator source\n')
   const changed = f.snapshot()
   const after: CatalogLock = JSON.parse(changed['catalog-lock.json'])
-  assert.deepEqual(after.packages[0], before.packages[0])
-  assert.notEqual(after.packages[1].digest, before.packages[1].digest)
-  assert.notEqual(after.packages[1].evaluatorDigest, before.packages[1].evaluatorDigest)
+  const beforeZsoft = before.packages.find((item) => item.key === 'zsoft-l1')!
+  const afterZsoft = after.packages.find((item) => item.key === 'zsoft-l1')!
+  for (const key of ['swe-bench']) {
+    assert.deepEqual(
+      after.packages.find((item) => item.key === key),
+      before.packages.find((item) => item.key === key),
+    )
+  }
+  assert.notEqual(afterZsoft.digest, beforeZsoft.digest)
+  assert.notEqual(afterZsoft.evaluatorDigest, beforeZsoft.evaluatorDigest)
   assert.notEqual(changed['evaluators.cjs'], baseline['evaluators.cjs'])
-  assert.ok(changed['evaluators.cjs'].includes(`artifact-${after.packages[1].evaluatorDigest.slice('sha256:'.length)}`))
+  assert.ok(changed['evaluators.cjs'].includes(`artifact-${afterZsoft.evaluatorDigest.slice('sha256:'.length)}`))
 })
 
 test('real dataset source changes update the package digest but not the evaluator digest', t => {
@@ -83,9 +90,16 @@ test('real dataset source changes update the package digest but not the evaluato
   const before = f.lock()
   fs.appendFileSync(path.join(f.root, 'benchmarks/zsoft-l1/dataset/prepare.ts'), '\n// changed dataset source\n')
   const after = f.lock()
-  assert.deepEqual(after.packages[0], before.packages[0])
-  assert.notEqual(after.packages[1].digest, before.packages[1].digest)
-  assert.equal(after.packages[1].evaluatorDigest, before.packages[1].evaluatorDigest)
+  const beforeZsoft = before.packages.find((item) => item.key === 'zsoft-l1')!
+  const afterZsoft = after.packages.find((item) => item.key === 'zsoft-l1')!
+  for (const key of ['swe-bench']) {
+    assert.deepEqual(
+      after.packages.find((item) => item.key === key),
+      before.packages.find((item) => item.key === key),
+    )
+  }
+  assert.notEqual(afterZsoft.digest, beforeZsoft.digest)
+  assert.equal(afterZsoft.evaluatorDigest, beforeZsoft.evaluatorDigest)
 })
 
 test('real shared configuration loader changes still invalidate both Runtime digests', t => {

@@ -8,3 +8,5 @@ changefreq: "monthly"
 # Reference
 
 See [Reference](./navigation.md). The [coverage index](../navigation.md) identifies translated bodies and remaining Chinese-only guides.
+
+[Inference correlation contract](./observability/inference-correlation.md): `X-Request-Id`, retries and Trace/LLM ownership.

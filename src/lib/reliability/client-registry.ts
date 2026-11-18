@@ -32,6 +32,14 @@ export type ClientPlatformCapability = {
   version?: string
   models?: string[]
   agents?: string[]
+  agentCatalog?: Array<{ id: string; label: string; models: string[]; ready: boolean; unavailableReason?: string }>
+  skillDeployment?: {
+    protocolVersion: 1
+    ready: boolean
+    modes: Array<'execution_origin' | 'framework_global'>
+    backup?: 'retained'
+    reload?: 'restart_required'
+  }
   runExperimentCase?: {
     version: number
     returnsTraceId: boolean
@@ -49,6 +57,7 @@ export type ClientPlatformCapability = {
 
 export type ClientCapabilities = {
   executionProfiles?: ExecutionProfileCapability[]
+  executionBindings?: Array<{ benchmarks: string[]; platforms: string[]; profile: string }>
   platforms: ClientPlatformCapability[]
   actions?: string[]
   components?: Record<string, unknown>
@@ -324,6 +333,24 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
             agents: Array.isArray(rec.agents)
               ? rec.agents.map((agent) => String(agent).trim()).filter(Boolean)
               : [],
+            ...(Array.isArray(rec.agentCatalog) ? { agentCatalog: rec.agentCatalog
+              .filter(a => a && typeof a.id === 'string' && rec.agents?.includes(a.id))
+              .map(a => ({ id: a.id, label: String(a.label || a.id).slice(0, 512),
+                models: Array.isArray(a.models) ? a.models.filter(m => typeof m === 'string').slice(0, 200) : [],
+                ready: a.ready === true,
+                ...(typeof a.unavailableReason === 'string' ? { unavailableReason: a.unavailableReason.slice(0, 1000) } : {}),
+              })) } : {}),
+            ...(rec.skillDeployment && rec.skillDeployment.protocolVersion === 1 ? {
+              skillDeployment: {
+                protocolVersion: 1,
+                ready: rec.skillDeployment.ready === true,
+                modes: Array.isArray(rec.skillDeployment.modes)
+                  ? [...new Set(rec.skillDeployment.modes.filter(mode => mode === 'execution_origin' || mode === 'framework_global'))]
+                  : [],
+                ...(rec.skillDeployment.backup === 'retained' ? { backup: 'retained' as const } : {}),
+                ...(rec.skillDeployment.reload === 'restart_required' ? { reload: 'restart_required' as const } : {}),
+              },
+            } : {}),
             runExperimentCase: rec.runExperimentCase
               && typeof rec.runExperimentCase === 'object'
               ? {
@@ -355,6 +382,11 @@ export function normalizeCapabilities(raw: unknown): ClientCapabilities {
   const fi = value.faultInjection
   return {
     platforms,
+    ...(Array.isArray(value.executionBindings) ? { executionBindings: value.executionBindings.map(item => {
+      if (!item || !Array.isArray(item.benchmarks) || !Array.isArray(item.platforms) || typeof item.profile !== 'string'
+        || !/^[a-z][a-z0-9-]{0,63}$/.test(item.profile) || ![...item.benchmarks, ...item.platforms].every(v => typeof v === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(v))) throw new Error('执行 Profile 绑定不合法')
+      return { benchmarks: item.benchmarks, platforms: item.platforms, profile: item.profile }
+    }) } : {}),
     executionProfiles: Array.isArray(value.executionProfiles) ? value.executionProfiles.map(item => ({
       profile: validateProfile(item.profile), benchmarks: Array.isArray(item.benchmarks) ? item.benchmarks.map(String) : [], ready: item.ready === true,
       ...(item.note ? { note: String(item.note) } : {}),
@@ -395,6 +427,7 @@ export function mergeCapabilities(current: ClientCapabilities, patch: ClientCapa
   }
   return normalizeCapabilities({
     ...current, platforms: [...platforms.values()], executionProfiles: [...profiles.values()],
+    ...(patch.executionBindings !== undefined ? { executionBindings: patch.executionBindings } : {}),
     actions: [...new Set([...(current.actions || []), ...(patch.actions || [])])],
     components: { ...current.components, ...patch.components },
     faultInjection: patch.faultInjection || current.faultInjection,

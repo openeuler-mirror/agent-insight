@@ -47,6 +47,8 @@ Docker 源码模式使用镜像预装的依赖。源码依赖变化后必须重�
 
 安装成功、端口可访问或健康检查通过，都不能单独证明历史数据和全部业务功能兼容。
 
+升级到带 OpenCode 数据隔离的版本后，重启平台并分别运行一次智能诊断和 Skill 优化。平台为新的执行初始化独立的 OpenCode 数据库并创建新会话。用户 CLI 继续使用它原来的数据库。
+
 ## 回滚
 
 1. 停止新版本和相关写入进程。把升级后的数据另外保存，记录升级后新增的 Trace、实验等数据范围。
@@ -62,6 +64,8 @@ Docker 源码模式使用镜像预装的依赖。源码依赖变化后必须重�
 
 ### 评测诊断功能的 SQLite 升级
 
+启动时的 `prisma db push` 会为已有 SQLite 库和新库同步 `DiagnosisRun` 表与 `SkillOptPlanItem.sourceRefsJson` 字段，旧记录的字段默认值为 `[]`。需要逐表验证历史数据时，可选用下面的离线迁移流程。
+
 先在与部署一致的隔离副本上演练。核对服务解析出的实际数据库路径，暂停写入和后台任务。为数据库外的 Skill 文件及报告资产创建一致性备份并核对清单。以下路径均为示例，备份目标必须是一个尚不存在且仅管理员可访问的文件。
 
 ```sh
@@ -69,6 +73,6 @@ python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight
 python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight.db --apply --backup /backup/diagnosis-before.db
 ```
 
-第一条执行预检。第二条使用 SQLite backup API 保存副本，在事务内新增 DiagnosisRun、扩展 SkillOptPlanItem，逐表核对原有字段、记录数量、索引与触发器，并检查外键和数据库完整性。保留输出的 JSON 对账记录。已有异常或差异必须先排查。首次建空库可沿用启动流程；已有部署库必须先完成迁移。演练时再用新备份路径重复执行一次，在另一目录恢复首次备份，核验摘要、资产和旧业务，再开放写入。
+第一条执行预检。第二条使用 SQLite backup API 保存副本，在事务内新增 DiagnosisRun、扩展 SkillOptPlanItem，逐表核对原有字段、记录数量、索引与触发器，并检查外键和数据库完整性。保留输出的 JSON 对账记录。已有异常或差异必须先排查。演练时再用新备份路径重复执行一次，在另一目录恢复首次备份，核验摘要、资产和旧业务，再开放写入。
 
 恢复旧版本时确认其启动过程能保留扩展后的表结构。若升级后已有新写入，先冻结写入并备份当前状态，优先前向修复。只有尚未恢复写入的失败升级才能直接用已验证的完整备份和对应资产回退。停服务并关闭所有 SQLite 连接后，在新目录恢复和核验，不单独替换打开的 .db 文件。

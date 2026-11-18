@@ -24,6 +24,7 @@ import {
 } from '@/lib/reliability/client-config-service'
 import { applyCommandStatus } from '@/lib/reliability/command-bus'
 import { ReliabilityError } from '@/lib/reliability/client-registry'
+import { applySkillDeploymentReceipt } from '@/lib/skill-deployment/service'
 
 export type ClientCommandStatus = 'RECEIVED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
 
@@ -45,7 +46,7 @@ export async function handleCommandStatus(input: {
     throw new ReliabilityError('COMMAND_STATUS_INVALID', `非法回执状态: ${input.status}`, 400)
   }
 
-  const { action, payload } = await applyCommandStatus({
+  const { action, payload, applied } = await applyCommandStatus({
     clientId: input.clientId,
     commandId: input.commandId,
     status: input.status,
@@ -57,7 +58,7 @@ export async function handleCommandStatus(input: {
   const isConfigAction = action === 'APPLY_CLIENT_CONFIG' || action === 'PREPARE_EXPERIMENT_CASE'
   const configRef = String(payload.configRef || '')
 
-  if (isConfigAction && configRef) {
+  if (applied && isConfigAction && configRef) {
     if (input.status === 'SUCCEEDED') {
       // 只有客户端明确回 WRITTEN 才推进；缺失 state 视为未确认写入。
       const state = String(input.result?.state || '')
@@ -78,6 +79,16 @@ export async function handleCommandStatus(input: {
         message: input.error?.message,
       })
     }
+  }
+
+  if (applied && action === 'DEPLOY_SKILL_ARTIFACT') {
+    await applySkillDeploymentReceipt({
+      clientId: input.clientId,
+      commandId: input.commandId,
+      status: input.status,
+      result: input.result,
+      error: input.error,
+    })
   }
 
   return { ok: true }

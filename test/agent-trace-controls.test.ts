@@ -22,6 +22,7 @@ import React from 'react';
 import { getAgentActiveDurationMs } from '../src/lib/engine/observability/agent-trace';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
+import { resolveEventRenderCount, TRACE_EVENT_RENDER_BATCH } from '@/lib/client/trace-render-budget';
 
 const source = fs.readFileSync(new URL('../src/components/observe/AgentTraceView.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('AgentTraceView.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -220,7 +221,9 @@ test('opening the current Trace from a nested Agent resets to the root and still
     const defaults = new Set(['root']);
     const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
         useCallback: (callback: unknown) => callback,
-        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([['root', { id: 'root', sessionId: 'parent-task' }]]), defaultExpandedKeys: defaults,
+        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([
+            ['root', { id: 'root', sessionId: 'parent-task' }], ['child', { id: 'child', sessionId: 'child-task' }],
+        ]), defaultExpandedKeys: defaults,
         setSelectedKey: (key: string) => { selected = key; },
         setExpandedKeys: (keys: Set<string>) => { expanded = keys; },
         setActiveDetailTab: (value: string) => { tab = value; },
@@ -234,6 +237,20 @@ test('opening the current Trace from a nested Agent resets to the root and still
     assert.deepEqual(opened, ['parent-task']);
     navigate('child-task');
     assert.deepEqual(opened, ['parent-task', 'child-task']);
+});
+
+test('Jiuwen child Trace links use shared standalone navigation for both children', () => {
+    const opened: string[] = [];
+    const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
+        useCallback: (callback: unknown) => callback,
+        rootSessionId: 'parent-task', tree: { id: 'root' },
+        nodeMap: new Map(['child-1', 'child-2'].map(id => [id, { id, sessionId: id, agentName: 'worker' }])),
+        defaultExpandedKeys: new Set(), setSelectedKey: () => {}, setExpandedKeys: () => {}, setActiveDetailTab: () => {},
+        agentKey: (id: string) => `a:${id}`, onSubagentNavigate: (id: string) => { opened.push(id); },
+    });
+    navigate('child-1');
+    navigate('child-2');
+    assert.deepEqual(opened, ['child-1', 'child-2']);
 });
 
 test('nested Workflow containers survive Tool filtering when their linked Agent contains a matching tool', () => {
@@ -413,7 +430,9 @@ test('duplicate parent spans and missing tool IDs stay flat instead of relying o
 test('the new nesting is expanded by default and collapse/expand still covers the parent model', () => {
     const tree = buildAgentCallTree([{ role: 'assistant', content: '', tool_calls: [responseCall('read-call')], parts: [{ type: 'tool', callID: 'read-call', tool: 'read' }] }])!;
     const defaults = functionValue<any>('buildDefaultExpandedKeys', {
-        buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        getAgentEventTree: functionValue<any>('getAgentEventTree', {
+            eventTreeCache: new WeakMap(), buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        }),
         agentKey: (id: string) => `a:${id}`, eventKey: (id: string, index: number) => `e:${id}:${index}`,
     })(tree);
     assert.ok(defaults.has(`a:${tree.id}`));
@@ -568,4 +587,17 @@ test('reset clears all selected Span types and other filter restrictions', () =>
     assert.deepEqual(state, { treeKindFilter: [], minDurationMs: 0, minTokenK: 0, slowOnly: false });
     assert.equal(variable<boolean>('hasActiveFilters', state), false);
     assert.equal(variable<boolean>('hasActiveFilters', { ...state, treeKindFilter: ['user', 'llm'] }), true);
+});
+
+
+test('empty Span type selection preserves the initial render budget', () => {
+    const indexes = Array.from({ length: 500 }, (_, index) => index);
+    const count = (treeKindFilter: string[]) => resolveEventRenderCount(indexes, TRACE_EVENT_RENDER_BATCH, {
+        revealAll: variable<boolean>('filtersActive', {
+            treeKindFilter, minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '',
+        }),
+    });
+    assert.equal(count([]), TRACE_EVENT_RENDER_BATCH);
+    assert.equal(count(['llm']), 500);
+    assert.equal(count(['user', 'llm']), 500);
 });

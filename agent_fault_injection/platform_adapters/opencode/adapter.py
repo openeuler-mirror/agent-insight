@@ -476,9 +476,7 @@ class OpenCodeAdapter(PlatformAdapter):
 
     @classmethod
     def _load_user_opencode_config(cls) -> dict[str, Any] | None:
-        """Load ~/.config/opencode config (jsonc preferred over json)."""
-
-        config_home = Path.home() / ".config" / "opencode"
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "opencode"
         candidates = (
             config_home / "opencode.jsonc",
             config_home / "opencode.json",
@@ -735,7 +733,6 @@ class OpenCodeAdapter(PlatformAdapter):
         return list_opencode_agents(executable=executable, config=config)
 
     def list_models(self, **kwargs: Any) -> dict[str, Any]:
-        """Enumerate models: config provider.*.models first, else credentialed CLI."""
         from .catalog import list_opencode_models
 
         executable = kwargs.get("executable")

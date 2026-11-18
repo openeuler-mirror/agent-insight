@@ -37,7 +37,8 @@ export async function GET(req: Request) {
     const deadline = Date.now() + waitSeconds * 1000
 
     for (;;) {
-      const frame = await claimNextCommand(clientId)
+      if (req.signal?.aborted || Date.now() >= deadline) break
+      const frame = await claimNextCommand(clientId, { signal: req.signal })
       if (frame) return NextResponse.json(frame)
       if (Date.now() >= deadline) break
       if (req.signal?.aborted) break

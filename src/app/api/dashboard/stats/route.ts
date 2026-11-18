@@ -16,7 +16,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,8 +57,9 @@ function timeAgo(ts: Date, now: Date): string {
 
 export async function GET(req: Request) {
     try {
-        const { username } = await resolveUser(req);
-        const userFilter = username ? { user: username } : {};
+        const { username, user } = await resolveTraceReadScope(req);
+        if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        const userFilter = user ? { user } : {};
 
         const url = new URL(req.url);
         const platformParam = url.searchParams.get('platform') || '';

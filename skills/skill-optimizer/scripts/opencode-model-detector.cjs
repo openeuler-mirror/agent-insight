@@ -355,7 +355,7 @@ class OpenCodeModelDetector {
                 source: 'message-file'
               };
             }
-          } catch (error) {
+          } catch {
             // 跳过无法解析的文件
             continue;
           }

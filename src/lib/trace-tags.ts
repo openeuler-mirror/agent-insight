@@ -140,10 +140,10 @@ export async function ensureTraceTagTables(): Promise<void> {
   await ensureTablesPromise;
 }
 
-export async function listTraceTags(userInput: string, kindInput?: string | null): Promise<TraceTagDto[]> {
+export async function listTraceTags(userInput: string, kindInput?: string | null, options?: { allUsers?: boolean }): Promise<TraceTagDto[]> {
   assertTagsSupported();
   await ensureTraceTagTables();
-  const user = cleanUser(userInput);
+  const user = options?.allUsers ? undefined : cleanUser(userInput);
   const kind = kindInput ? cleanKind(kindInput) : undefined;
   const rows = await (prismaRaw as any).tag.findMany({
     where: { user, ...(kind ? { kind } : {}) },
@@ -307,10 +307,10 @@ export async function removeExecutionTraceTag(ref: string, userInput: string, ta
   return getExecutionTraceTags(execution.id, user);
 }
 
-export async function getTraceTagsByExecutionIds(executionIds: string[], userInput?: string): Promise<Map<string, TraceTagDto[]>> {
-  if (!tagsSupported() || executionIds.length === 0 || !userInput) return new Map();
+export async function getTraceTagsByExecutionIds(executionIds: string[], userInput?: string, options?: { allUsers?: boolean }): Promise<Map<string, TraceTagDto[]>> {
+  if (!tagsSupported() || executionIds.length === 0 || (!userInput && !options?.allUsers)) return new Map();
   await ensureTraceTagTables();
-  const user = cleanUser(userInput);
+  const user = options?.allUsers ? undefined : cleanUser(userInput);
   const rows = await (prismaRaw as any).executionTag.findMany({
     where: { executionId: { in: executionIds }, user },
     include: { tag: true },
@@ -329,10 +329,10 @@ export async function listBusinessTraceTagFacets(userInput: string): Promise<Tra
   return listTraceTags(userInput, 'business');
 }
 
-export async function findExecutionIdsByBusinessTags(userInput: string | undefined, tagIdsInput: string[]): Promise<string[] | null> {
+export async function findExecutionIdsByBusinessTags(userInput: string | undefined, tagIdsInput: string[], options?: { allUsers?: boolean }): Promise<string[] | null> {
   if (!tagsSupported()) return null;
   await ensureTraceTagTables();
-  const user = cleanUser(userInput);
+  const user = options?.allUsers ? undefined : cleanUser(userInput);
   const tagIds = uniqueStrings(tagIdsInput);
   if (tagIds.length === 0) return null;
   const rows = await (prismaRaw as any).executionTag.findMany({
@@ -346,10 +346,10 @@ export async function findExecutionIdsByBusinessTags(userInput: string | undefin
   return Array.from(new Set(rows.map((row: any) => row.executionId)));
 }
 
-export async function findExecutionIdsByUserTags(userInput: string | undefined, tagIdsInput: string[]): Promise<string[] | null> {
+export async function findExecutionIdsByUserTags(userInput: string | undefined, tagIdsInput: string[], options?: { allUsers?: boolean }): Promise<string[] | null> {
   if (!tagsSupported()) return null;
   await ensureTraceTagTables();
-  const user = cleanUser(userInput);
+  const user = options?.allUsers ? undefined : cleanUser(userInput);
   const tagIds = uniqueStrings(tagIdsInput);
   if (tagIds.length === 0) return null;
   const rows = await (prismaRaw as any).executionTag.findMany({

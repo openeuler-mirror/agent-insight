@@ -31,6 +31,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
       skillName: decodeURIComponent(name),
       recordId,
       confirmed: body.confirmed === true,
+      verificationMode: body.verificationMode,
+      activate: body.activate,
     });
     return NextResponse.json({
       ...result,

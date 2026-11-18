@@ -35,6 +35,7 @@ export const TRACE_FILTER_COLUMNS: readonly FilterColumn[] = [
 
   // —— 枚举(精确多选;syncMode=exactOption)——
   { column: 'framework', type: 'stringOptions', label: '框架', description: '采集框架 / 平台', syncMode: 'exactOption', nullable: true },
+  { column: 'sourceKind', type: 'stringOptions', label: '产品来源', description: 'CLI / Desktop / IDE / App Server', syncMode: 'exactOption', nullable: true },
   { column: 'subagentType', type: 'stringOptions', label: '子 Agent 类型', description: 'kuafu / general …', syncMode: 'exactOption', nullable: true },
 
   // —— 数值(可区间)——

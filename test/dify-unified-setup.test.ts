@@ -38,7 +38,7 @@ async function script(auto = false, frameworks = 'dify', platform = 'unix') {
   return response.text();
 }
 
-function fixture(options: { agent?: boolean; ignoreConfig?: boolean; failUp?: boolean; failProbe?: boolean } = {}) {
+function fixture(options: { agent?: boolean; ignoreConfig?: boolean; failUp?: boolean; failProbe?: boolean; legacyCompose?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-dify-setup-'));
   const project = path.join(root, 'dify', 'docker');
   const bin = path.join(root, 'bin');
@@ -55,15 +55,21 @@ const root = process.env.DIFY_FIXTURE_ROOT;
 const envFile = path.join(root, 'dify/docker/.env');
 const values = Object.fromEntries(Object.entries(dotenv.parse(fs.readFileSync(envFile)))
   .map(([k,v]) => [k, v.replace(/\\'/g, "'").replace(/\\\\/g, '\\')]));
+const composeFiles = (process.env.COMPOSE_FILE || values.COMPOSE_FILE || 'docker-compose.yaml').split(':');
+const managedOverride = composeFiles.find(file => file.endsWith('compose.agent-insight.yaml'));
+const overrides = managedOverride && fs.existsSync(path.join(path.dirname(envFile), managedOverride))
+  ? JSON.parse(fs.readFileSync(path.join(path.dirname(envFile), managedOverride), 'utf8')).services : {};
 const names = ['api', 'worker', ${options.agent === false ? '' : "'agent_backend'"}].filter(Boolean);
 const services = Object.fromEntries(names.map(name => [name, {
   image: name === 'agent_backend' ? 'langgenius/dify-agent-backend:1.18.0' : 'langgenius/dify-api:1.18.0',
-  environment: {...values, MODE: name, ${options.ignoreConfig ? "ENABLE_OTEL: 'false'," : ''}},
+  environment: {...values, ...(${options.legacyCompose ? "{ OTEL_EXPORTER_OTLP_TRACES_HEADERS: undefined }" : '{}'}),
+    ...Object.fromEntries(Object.entries(overrides[name]?.environment || {}).map(([k,v]) => [k, v.replace(/\$\{([A-Z_]+)\}/g, (_,key) => values[key] || '')])), MODE: name, ${options.ignoreConfig ? "ENABLE_OTEL: 'false'," : ''}},
 }]));
 if (args[0] === 'info') console.log('Docker Desktop');
+else if (args.includes('--environment')) console.log('COMPOSE_FILE=' + (process.env.COMPOSE_FILE || values.COMPOSE_FILE || '') + '\nCOMPOSE_PATH_SEPARATOR=:');
 else if (args.includes('config')) {
   for (const service of Object.values(services)) {
-    service.environment = Object.fromEntries(Object.entries(service.environment).map(([k,v]) => [k,v.replaceAll('$','$$')]));
+    service.environment = Object.fromEntries(Object.entries(service.environment).filter(([,v]) => v !== undefined).map(([k,v]) => [k,v.replaceAll('$','$$')]));
   }
   console.log(JSON.stringify({services}));
 }
@@ -155,6 +161,75 @@ for (const [name, options] of [
       assert.equal(fs.existsSync(path.join(f.root, 'up.jsonl')), false);
     }
   } finally { f.dispose(); }
+});
+
+test('Dify 1.14 Compose receives authentication through a persistent managed override', async () => {
+  const f = fixture({ agent: false, legacyCompose: true });
+  try {
+    const bash = await script();
+    const result = f.run(bash);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const overridePath = path.join(f.project, 'compose.agent-insight.yaml');
+    const override = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
+    for (const name of ['api', 'worker']) {
+      assert.equal(override.services[name].environment.OTEL_EXPORTER_OTLP_TRACES_HEADERS, '${OTEL_EXPORTER_OTLP_TRACES_HEADERS}');
+    }
+    assert.doesNotMatch(fs.readFileSync(overridePath, 'utf8'), /fake'key/);
+    assert.match(fs.readFileSync(path.join(f.project, '.env'), 'utf8'), /COMPOSE_FILE=.*docker-compose\.yaml:compose\.agent-insight\.yaml/);
+    assert.equal(f.run(bash).status, 0);
+    assert.equal(fs.readFileSync(path.join(f.project, 'docker-compose.yaml'), 'utf8'), 'services: {}\n');
+  } finally { f.dispose(); }
+});
+
+test('Dify 1.14 preserves the existing Compose file order', async () => {
+  const f = fixture({ agent: false, legacyCompose: true });
+  try {
+    fs.appendFileSync(path.join(f.project, '.env'), 'COMPOSE_FILE=docker-compose.yaml:custom.yaml\n');
+    fs.writeFileSync(path.join(f.project, 'custom.yaml'), 'services: {}\n');
+    const result = f.run(await script());
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(fs.readFileSync(path.join(f.project, '.env'), 'utf8'), /COMPOSE_FILE='docker-compose\.yaml:custom\.yaml:compose\.agent-insight\.yaml'/);
+    assert.equal(fs.readFileSync(path.join(f.project, 'custom.yaml'), 'utf8'), 'services: {}\n');
+  } finally { f.dispose(); }
+});
+
+test('Dify 1.14 retains the default Compose override precedence', async () => {
+  const f = fixture({ agent: false, legacyCompose: true });
+  try {
+    for (const name of ['compose.override.yml', 'compose.override.yaml']) {
+      fs.writeFileSync(path.join(f.project, name), 'services: {}\n');
+    }
+    const result = f.run(await script());
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(fs.readFileSync(path.join(f.project, '.env'), 'utf8'), /COMPOSE_FILE='docker-compose\.yaml:compose\.override\.yml:compose\.agent-insight\.yaml'/);
+  } finally { f.dispose(); }
+});
+
+test('Dify 1.14 rolls back the environment and newly created override when configuration fails', async () => {
+  const f = fixture({ agent: false, legacyCompose: true, ignoreConfig: true });
+  try {
+    const result = f.run(await script());
+    assert.notEqual(result.status, 0);
+    assert.equal(fs.readFileSync(path.join(f.project, '.env'), 'utf8'), f.originalEnv);
+    assert.equal(fs.existsSync(path.join(f.project, 'compose.agent-insight.yaml')), false);
+    assert.equal(fs.existsSync(path.join(f.root, 'up.jsonl')), false);
+  } finally { f.dispose(); }
+});
+
+test('Dify setup preserves an unowned override and refuses an exported Compose file list', async () => {
+  for (const exported of [false, true]) {
+    const f = fixture({ agent: false, legacyCompose: true });
+    try {
+      const overridePath = path.join(f.project, 'compose.agent-insight.yaml');
+      if (exported) f.env.COMPOSE_FILE = 'docker-compose.yaml';
+      else fs.writeFileSync(overridePath, 'services: {}\n');
+      const result = f.run(await script());
+      assert.notEqual(result.status, 0);
+      assert.equal(fs.readFileSync(path.join(f.project, '.env'), 'utf8'), f.originalEnv);
+      if (!exported) assert.equal(fs.readFileSync(overridePath, 'utf8'), 'services: {}\n');
+      assert.equal(fs.existsSync(path.join(f.root, 'up.jsonl')), false);
+    } finally { f.dispose(); }
+  }
 });
 
 test('Workflow-only deployments report the missing native Agent pipeline explicitly', async () => {

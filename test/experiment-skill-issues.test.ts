@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import path from 'node:path';
-
-process.env.DATABASE_URL = `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { aggregateSkillIssues } from '@/lib/engine/skill-issues';
 import {
@@ -81,6 +81,8 @@ test.before(async () => {
 test.after(async () => {
   await prismaRaw.experiment.deleteMany({ where: { user: USER } });
   await prismaRaw.skill.deleteMany({ where: { user: USER } });
+  await prismaRaw.$disconnect();
+  database.dispose();
 });
 
 test('用例分析建议幂等写入 dynamic SkillIssue，并按相同建议累计 prevalence', async () => {

@@ -8,8 +8,10 @@ changefreq: "monthly"
 Operational procedures currently available in English:
 
 - [Deploy the server with Docker](./platform/deploy-docker.md)
+- [Deploy the server on OpenShift](./platform/deploy-openshift.md), including Developer Sandbox builds
 - [Upgrade and rollback](./platform/upgrade-and-rollback.md)
 - [Backup and restore](./platform/backup-and-restore.md)
+- [View and batch import traces](./observability/view-traces.md)
 
 Client installation and feature-specific operations remain in Chinese.
 

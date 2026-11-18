@@ -182,7 +182,7 @@ test("OTLP log parser preserves resource, scope, body, and event attributes", ()
   assert.equal(records[0].scope.version, "0.145.0")
 })
 
-test("OTel user_prompt uses length metadata without fabricating content", async () => {
+test("OTel user_prompt with only length metadata does not fabricate a root input", async () => {
   const writer = new MemoryWriter()
   const core = new CodexTraceCore({ writer })
   await core.processOtel(otlpLogs("codex.user_prompt", {
@@ -190,8 +190,10 @@ test("OTel user_prompt uses length metadata without fabricating content", async 
     "turn.id": "prompt-turn",
     prompt_length: 42,
   }))
+  // Bug 63：OTLP 无正文的 prompt（含带长度的占位符）不是用户输入，不建根任务；
+  // 真实用户正文由 hook/rollout 路径提供。
   const root = writer.events.find((event) => event.kind === "agent")
-  assert.equal(root?.input, "[REDACTED prompt length=42]")
+  assert.equal(root, undefined)
 })
 
 test("OTel's exact redaction placeholder does not create a second root turn", async () => {

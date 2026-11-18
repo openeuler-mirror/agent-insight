@@ -2909,7 +2909,7 @@ function SkillDrawer({
             .catch(() => {})
             .finally(() => setVersionsLoading(false));
     };
-    useEffect(() => { loadVersions(); /* eslint-disable-next-line */ }, [skill.id]);
+    useEffect(() => { loadVersions(); }, [skill.id]);
 
     useEffect(() => {
         // 平台后台变更 activeVersion (例如管理员把 v3 设为激活) 时同步徽章显示;
@@ -3216,7 +3216,7 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
         }
     };
 
-    useEffect(() => { fetchSkills(); /* eslint-disable-next-line */ }, [refresh, user]);
+    useEffect(() => { fetchSkills(); }, [refresh, user]);
 
     // Sync selected with latest data
     useEffect(() => {

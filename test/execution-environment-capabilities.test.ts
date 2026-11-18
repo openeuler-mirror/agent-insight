@@ -271,7 +271,7 @@ test('normal preparation and restart recovery complete without full discovery or
     taskRunner.markPreparationReported = async () => { marked++ }
     globalThis.fetch = async (url, options) => {
       reports.push({ url: String(url), body: JSON.parse(String(options?.body)) })
-      return new Response('{}', { status: 200 })
+      return new Response('{"ok":true}', { status: 200 })
     }
     delete require.cache[daemonPath]
     const daemon = require(daemonPath)
@@ -297,10 +297,10 @@ test('normal preparation and restart recovery complete without full discovery or
     globalThis.fetch = workingFetch
 
     const beforeTerminal = marked
-    globalThis.fetch = async (url, options) => String(url).endsWith('/unconfirmed/status') ? new Response('{}', { status: 503 }) : workingFetch(url, options)
+    globalThis.fetch = async (url, options) => String(url).endsWith('/unconfirmed/status') && JSON.parse(String(options?.body)).status !== 'RECEIVED' ? new Response('{}', { status: 503 }) : workingFetch(url, options)
     const wss: string[] = []
     await daemon.handleCommand(daemon.loadConfig(), { commandId: 'unconfirmed', action: 'PREPARE_EXECUTION_ENVIRONMENT', payload: {} }, async (_id: string, status: string) => { wss.push(status) })
-    assert.deepEqual(wss, ['RECEIVED', 'RUNNING'])
+    assert.deepEqual(wss, ['RUNNING'])
     assert.equal(marked, beforeTerminal)
     const spoolFile = path.join(root, 'client/spool.json')
     const spool = fs.existsSync(spoolFile) ? JSON.parse(fs.readFileSync(spoolFile, 'utf8')) : []

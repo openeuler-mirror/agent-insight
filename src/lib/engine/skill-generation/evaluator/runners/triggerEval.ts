@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { mapServerModelConfig } from '@/lib/engine/general-agent/server-model-config';
+
 /**
  * 触发评测 runner（opencode-live 路线）。
  *
@@ -42,7 +44,6 @@ import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/op
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import {
   loadServerModelForUser,
-  inferProviderFromBaseUrl,
   normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
 import { getUserSettings } from '@/lib/storage/server-config';
@@ -485,18 +486,7 @@ async function resolveOpencodeModelForUser(
     const settings = await getUserSettings(user);
     const cfg = settings.configs.find(c => c.id === modelConfigId);
     if (cfg && isModelConnectionReady(cfg)) {
-      const explicitProvider = (cfg as { provider?: string }).provider;
-      const providerID = normalizeProviderID(
-        explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl),
-      );
-      return {
-        providerID,
-        modelID: cfg.model || 'deepseek-chat',
-        apiKey: cfg.apiKey,
-        baseURL: cfg.baseUrl,
-        headers: cfg.headers,
-        source: 'explicit',
-      };
+      return { ...mapServerModelConfig(cfg)!, source: 'explicit' };
     }
     logger.warn('Requested modelConfigId not found or missing apiKey, falling back to active', {
       user,

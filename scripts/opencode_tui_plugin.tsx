@@ -150,21 +150,6 @@ function openUrl(url: string) {
   }
 }
 
-function formatStatsMessage(stats: any, detailsUrl: string) {
-  const latency = formatLatencySeconds(stats?.latency)
-  const tokens = formatNumber(stats?.tokens)
-  const inputTokens = formatNumber(stats?.input_tokens)
-  const outputTokens = formatNumber(stats?.output_tokens)
-  const toolCalls = formatNumber(stats?.tool_call_count)
-  const llmCalls = formatNumber(stats?.llm_call_count)
-  return [
-    `时延: ${latency}`,
-    `Token: ${tokens} (入: ${inputTokens}, 出: ${outputTokens})`,
-    `LLM: ${llmCalls} | 工具: ${toolCalls}`,
-    `详情: ${detailsUrl}`,
-  ].join("\n")
-}
-
 function StatsFooter(props: {
   api: any
   sessionId: string

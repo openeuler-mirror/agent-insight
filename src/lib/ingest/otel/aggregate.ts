@@ -16,6 +16,7 @@
 
 import { getOtelTraceSpoolDir, visitEventsForSession } from './spool';
 import { getOtelTraceAdapter } from './adapter-registry';
+import { shouldReplaceCodexSnapshot } from './adapters/codex';
 import type { OtelTraceAggregationResult, OtelTraceEvent } from './types';
 
 const DEFAULT_MAX_UNIQUE_EVENTS = 50_000;
@@ -84,7 +85,7 @@ export function shouldReplaceOtelSnapshot(
   candidate: OtelTraceEvent,
 ): boolean {
   if (isCodexEvent(existing) || isCodexEvent(candidate)) {
-    return snapshotEndMs(candidate) >= snapshotEndMs(existing);
+    return shouldReplaceCodexSnapshot(existing, candidate);
   }
   // Qwen 会为同一次 Skill 产生 Log 摘要和完整 Tool span。
   // 始终保留包含真实耗时、参数和结果的 Tool span。

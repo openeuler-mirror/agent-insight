@@ -25,7 +25,7 @@ import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { waitForExperimentTasksTerminal } from '@/lib/client/experiment-eval-polling';
-import { isInternalSystemAgentTrace, shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
+import { shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
 import {
     buildFallbackDiagnosis,
     type DiagnosisDimensionKey,
@@ -46,7 +46,6 @@ import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import {
     EvaluationContent,
     SectionShell,
-    FindingsGrouped,
     STATIC_EVAL_STANDARDS,
     computeStaticScore,
     type EvaluationDetail,
@@ -54,7 +53,6 @@ import {
     type FindingGroup,
 } from '@/components/evaluation';
 import { toast } from 'sonner';
-import { Info } from 'lucide-react';
 import { Term } from '@/components/text/Term';
 import './debug.css';
 import './skill-analysis.css';

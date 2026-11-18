@@ -72,7 +72,7 @@ class XGovernorExecutionBackend {
     if (!binding || binding.profile !== spec.profile.key || !local || describeProfile(binding.profile, local).definitionDigest !== spec.profile.definitionDigest) throw error('EXECUTION_PROFILE_CHANGED', '冻结执行环境与本机配置不一致')
     const runtime = local.runtimes[task.agentConfig.platform]
     if (!runtime?.agents.includes(task.agentConfig.agent) || task.agentConfig.agentOptions) throw error('AGENT_OPTIONS_INVALID', 'Runtime 不支持所选 Agent 或参数')
-    if (task.policy.network !== 'deny' || spec.profile.sandbox !== 'docker') throw error('POLICY_UNSUPPORTED', '执行环境要求未被兑现')
+    if (spec.profile.backendKey !== 'xgovernor' || spec.environment.kind !== 'oci-image' || task.policy.network !== 'deny' || spec.profile.network !== 'deny' || !spec.profile.resources || spec.profile.sandbox !== 'docker') throw error('POLICY_UNSUPPORTED', '执行环境要求未被兑现')
     return { local, runtime, spec, config }
   }
   validate(task) {

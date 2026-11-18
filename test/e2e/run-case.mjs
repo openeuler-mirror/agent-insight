@@ -15,11 +15,11 @@ import { scenario003 } from './cases/003-skill-lifecycle/scenario.mjs';
 import { scenario004 } from './cases/004-trace-evaluation/scenario.mjs';
 import { scenario005 } from './cases/005-fault-recovery/scenario.mjs';
 import { assertRunRoot, redact, renderReport, scenarioResult, requiredStagesFor, stageFailureStatus } from './shared/core.mjs';
-import { writePrivate } from './shared/runtime.mjs';
 import { prepareClients, prepareFixtures } from './shared/clients.mjs';
 import { choosePort, startApplication, stopProcesses } from './shared/application.mjs';
 import { command, stopCommands } from './shared/runtime.mjs';
 import {startCoreModelMock} from './shared/model-mock.mjs';
+import {applicationFailureDiagnostics} from './shared/failure-diagnostics.mjs';
 import { startModelMock } from './cases/002-opencode-observation/model-mock.mjs';
 
 process.umask(0o077);
@@ -66,7 +66,11 @@ const stage = async (id, expected, fn) => {
   console.log(`${id}: RUNNING`);
   const warning = setInterval(() => console.log(`${id}: waiting for real dependency (${Math.round((Date.now() - Date.parse(row.startedAt)) / 1000)}s)`), 45000);
   try { row.actual = await fn();row.status = 'PASS';if(lane&&['login','fixture'].includes(id))report.seededTraceIds=newTraceRows(traceRows(),previousTraceIds).map(t=>t.taskId); }
-  catch (error) { row.status = stageFailureStatus(error);row.actual = redact(error.message, secrets);throw error; }
+  catch (error) {
+    row.status = stageFailureStatus(error);row.actual = redact(error.message, secrets);
+    try { const log=path.join(project,'server.log');if(fs.existsSync(log))row.diagnostics=applicationFailureDiagnostics(fs.readFileSync(log,'utf8')); } catch { row.diagnostics={unavailable:true}; }
+    throw error;
+  }
   finally { clearInterval(warning);row.endedAt = new Date().toISOString();Object.assign(current, scenarioResult(current.stages, values.case));persist();console.log(`${id}: ${row.status}`); }
 };
 const port = await choosePort();

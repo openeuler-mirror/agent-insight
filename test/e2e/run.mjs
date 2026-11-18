@@ -54,7 +54,7 @@ const stop=async()=>{if(suiteStopping)return;suiteStopping=true;await stopComman
 process.on('SIGINT',stop);process.on('SIGTERM',stop);
 try{
 fs.mkdirSync(path.dirname(root),{recursive:true});fs.mkdirSync(root,{mode:0o700});fs.mkdirSync(path.join(root,'private'),{mode:0o700});
-const env=Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','SYSTEMROOT','E2E_ISOLATED_CONTAINER','npm_config_cache','npm_config_offline','npm_config_registry','AGENT_INSIGHT_RAS_PYTHON','E2E_PYTHON','E2E_BROWSER_CHANNEL','E2E_NPM_REGISTRY','PLAYWRIGHT_BROWSERS_PATH','E2E_MODEL_BASE_URL','E2E_NPM_OFFLINE','E2E_PREPARED_PLUGIN_DIR','PIP_NO_INDEX','PIP_FIND_LINKS'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
+const env=Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','SYSTEMROOT','E2E_ISOLATED_CONTAINER','npm_config_cache','npm_config_offline','npm_config_registry','AGENT_INSIGHT_RAS_PYTHON','E2E_PYTHON','E2E_BROWSER_CHANNEL','E2E_NPM_REGISTRY','PLAYWRIGHT_BROWSERS_PATH','E2E_MODEL_BASE_URL','E2E_NPM_OFFLINE','E2E_PREPARED_PLUGIN_DIR','E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT','PIP_NO_INDEX','PIP_FIND_LINKS'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
 env.E2E_SUITE_RUN_ID=runId;env.E2E_SUITE_OWNS_LANE='1';env.E2E_EXECUTION_CONFIG=JSON.stringify(config);env.E2E_CONFIG_PROVENANCE=JSON.stringify(executionSnapshot(config));env.E2E_LANE=executionProfile;
 totalDeadline=setTimeout(stop,config.timeouts.runMs);totalDeadline.unref();
 modelKeyFile=path.join(root,'private/model.key');
@@ -64,7 +64,7 @@ env.AGENT_INSIGHT_HOME=path.join(root,'private/ut-data');env.DATABASE_URL='file:
 env.AGENT_INSIGHT_TEST_DATABASE_URL=env.DATABASE_URL;
 const version=await command('git',['rev-parse','HEAD'],{cwd:project,env});
 const dirty=await command('git',['status','--porcelain'],{cwd:project,env});
-const metadata={runId,...(lane?{lane:lane.lane,account:lane.username}:{}),testedSha:version.output.trim(),dirtyWorkingTree:!!dirty.output.trim(),executionOrigin:'local-working-tree',configuration:executionSnapshot(config)};
+const metadata={runId,...(lane?{lane:lane.lane,account:lane.username}:{}),testedSha:version.output.trim(),dirtyWorkingTree:!!dirty.output.trim(),executionOrigin:process.env.E2E_ATOMGIT_JOB==='1'?'atomgit-job':'local-working-tree',configuration:executionSnapshot(config)};
 const persist=async report=>{
   Object.assign(report,metadata);const safe=JSON.parse(redact(JSON.stringify(report)));const view=renderSummary(safe);
   fs.writeFileSync(path.join(root,'report.json'),JSON.stringify(safe,null,2)+'\n');fs.writeFileSync(path.join(root,'report.html'),view.html);fs.writeFileSync(path.join(root,'summary.md'),view.markdown+'\n');
@@ -92,7 +92,7 @@ const report=await executeSuite({mode:effectiveMode,caseModes:Object.fromEntries
       if(prepared.code!==0)return {status:'BLOCKED',fullSuiteComplete:false,interrupted:prepared.expired,reason:'隔离 UT 数据库初始化失败，npm test 尚未执行'};
       if(process.env.E2E_ISOLATED_CONTAINER==='1'){const legacy=path.join(project,'data/witty_insight.db');fs.mkdirSync(path.dirname(legacy),{recursive:true});fs.copyFileSync(path.join(env.AGENT_INSIGHT_HOME,'data/witty_insight.db'),legacy,fs.constants.COPYFILE_EXCL);}
     }
-    const execution=await command('npm',['test'],{cwd:project,env:boundedUtEnv(root,env,config.timeouts.utFileMs),log,timeout});
+    const execution=await command('npm',['test'],{cwd:project,env:boundedUtEnv(root,env,config.timeouts.utFileMs,env.E2E_ISOLATED_CONTAINER==='1'?config.resources.cpus:undefined),log,timeout});
     await cleanupContainerOrphans();
     const result={...parseUtResult(fs.readFileSync(log,'utf8'),execution),fileTimeoutMs:config.timeouts.utFileMs};console.log('UT:',result.status);return result;
   },

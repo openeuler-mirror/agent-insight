@@ -22,6 +22,7 @@ import {
   isOptimizationStatus,
   type SkillOptimizationStatus,
 } from './domain';
+import { loadOptimizationPublishedVersionStates } from './version-verification-service';
 
 export const OPTIMIZATION_SOURCE_KINDS = ['user', 'evaluation', 'experiment', 'diagnosis'] as const;
 export type OptimizationSourceKind = (typeof OPTIMIZATION_SOURCE_KINDS)[number];
@@ -177,16 +178,27 @@ export async function listSkillOptimizationRecords(input: {
       select: { id: true, issuesJson: true },
     })
     : [];
+  const publishedVersionStates = await loadOptimizationPublishedVersionStates(input.user, records);
   const blockingIssuesByEvaluation = new Map(evaluations.map((evaluation) => [
     evaluation.id,
     parseOptimizationBlockingIssues(evaluation.id, evaluation.issuesJson),
   ]));
-  return records.map((record) => serializeRecord({
-    ...record,
-    blockingIssues: record.staticEvaluationId
-      ? blockingIssuesByEvaluation.get(record.staticEvaluationId) || []
-      : [],
-  }));
+  return records.map((record) => {
+    const versionState = publishedVersionStates.get(record.id);
+    return serializeRecord({
+      ...record,
+      skillId: versionState?.skillId || null,
+      activeVersion: versionState?.activeVersion ?? null,
+      verificationStatus: versionState?.verificationStatus || null,
+      verificationMode: versionState?.verificationMode || null,
+      verifiedAt: versionState?.verifiedAt || null,
+      verifiedBy: versionState?.verifiedBy || null,
+      verificationNote: versionState?.verificationNote || null,
+      blockingIssues: record.staticEvaluationId
+        ? blockingIssuesByEvaluation.get(record.staticEvaluationId) || []
+        : [],
+    });
+  });
 }
 
 export async function createSkillOptimizationCandidate(input: {
