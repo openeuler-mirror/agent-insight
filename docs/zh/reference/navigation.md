@@ -17,7 +17,6 @@ changefreq: "monthly"
 - [Agent 运行时参考](./platform/agent-runtime.md)
 - [API & Contracts](./platform/api-and-contracts.md)
 - [Design System & Frontend Style](./platform/design-system.md)
-- [内置示例走查的成本参考](./platform/example-cost.md)
 - [File Map](./platform/file-map.md)
 
 ## 观测

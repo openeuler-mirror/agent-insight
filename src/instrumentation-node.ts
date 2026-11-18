@@ -45,17 +45,25 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
-  // 确保内置「messages 日志分析」示例日志存在于平台数据根。内置 case 的 query 指向
-  // ~/.agent-insight/example/messages（执行时展开成绝对路径），换台干净服务器/重装后那个
-  // 路径可能没文件 → agent 一读就 "No such file" 直接结束。这里"不在才补"一份（存在即跳过，
-  // 绝不覆盖）。详见 ensure-example-file.ts。
+  // 旧版本会为新用户注入内置示例数据；该注入已移除，启动时把旧库里残留的示例
+  // Agent / Skill / 数据集 / Trace 按固定标识清掉（精确匹配，重复执行无副作用）。
   try {
-    const { ensureExampleMessagesFile } = await import('@/server/builtin-example/ensure-example-file');
-    if (ensureExampleMessagesFile() === 'copied') {
-      console.warn('[instrumentation] 补齐内置示例日志 → ~/.agent-insight/example/messages');
+    const { cleanupBuiltinDemoData } = await import('@/server/builtin-example/cleanup-demo');
+    const removed = await cleanupBuiltinDemoData();
+    const total = removed.executions + removed.sessions + removed.agents
+      + removed.datasets + removed.skills;
+    if (total > 0) {
+      console.warn(
+        '[instrumentation] 清理内置示例数据:',
+        `executions=${removed.executions}`,
+        `sessions=${removed.sessions}`,
+        `agents=${removed.agents}`,
+        `datasets=${removed.datasets}`,
+        `skills=${removed.skills}`,
+      );
     }
   } catch (err) {
-    console.warn('[instrumentation] ensure example messages failed (non-fatal):', (err as Error)?.message);
+    console.warn('[instrumentation] builtin demo cleanup failed (non-fatal):', (err as Error)?.message);
   }
 
   // 注册进程退出钩子：dev server / 生产 server 关闭时把 spawn 出去的 opencode 子进程
