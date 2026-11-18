@@ -4,7 +4,25 @@ import type {BenchmarkCallbackContext} from '@/lib/benchmark/core-store';
 
 import type {JsonValue} from '../packages/benchmark-protocol/src/contracts';import type {BenchmarkEvaluationCompletion} from '../packages/benchmark-protocol/src/evaluator-contracts';
 
-import {createIsolatedDatabase} from './helpers/isolated-database';const database=createIsolatedDatabase();
+import {createIsolatedDatabase} from './helpers/isolated-database';
+import {isolatedHomeEnv} from './helpers/isolated-home';
+import {fileURLToPath} from 'node:url';
+const variants=[[false,false,false,false,false,false],[true,false,false,false,false,false],[false,true,false,false,false,false],[false,false,true,false,false,false],[false,false,false,true,false,false],[false,false,false,false,true,false],[false,false,false,false,false,true]] as const;
+const variantName=([recoverInterruptedRaw,imported,supplemental,retry,cancel,caseRetry]:readonly boolean[])=>caseRetry?'manual Benchmark Case retry runs a fresh Agent command and frozen Harness while preserving old receipts':cancel?'delete-only Benchmark cancellation persists an exact command before real device cleanup and fences the old capability':retry?'manual Benchmark reevaluation runs one new Harness job and preserves the original single Agent command':supplemental?'primary HTTP result and missing-Trace supplemental close through native failed-null work without a model':imported?'controlled imported submission uses the real evaluator HTTP chain without any Agent client or command':recoverInterruptedRaw?'durable raw HTTP completion recovers after inline normalization interruption without running Harness again':'real executor callback and evaluator HTTP clients persist one normalized Benchmark result through isolated core storage';
+const selected=process.env.AGENT_INSIGHT_BENCHMARK_HTTP_CASE;
+if(selected===undefined){
+ for(const [index,variant] of variants.entries())test(variantName(variant),{concurrency:false},async(t)=>{
+  const home=await mkdtemp(path.join(os.tmpdir(),'benchmark-http-case-'));
+  const environment={...isolatedHomeEnv(home),AGENT_INSIGHT_BENCHMARK_HTTP_CASE:String(index)};delete environment.NODE_TEST_CONTEXT;
+  const child=spawn(process.execPath,['--import','tsx','--test','--test-reporter=spec',fileURLToPath(import.meta.url)],{cwd:process.cwd(),env:environment,stdio:['ignore','pipe','pipe']});
+  let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',value=>{output=(output+String(value)).slice(-120000);});
+  const abort=()=>child.kill('SIGTERM');t.signal.addEventListener('abort',abort,{once:true});
+  try{const code=await new Promise<number|null>((resolve,reject)=>{child.once('error',reject);child.once('exit',resolve);});assert.equal(code,0,output);assert.match(output,/tests 1(?:\r?\n)/);assert.match(output,/pass 1(?:\r?\n)/);assert.match(output,/fail 0(?:\r?\n)/);assert.match(output,/skipped 0(?:\r?\n)/);}
+  finally{t.signal.removeEventListener('abort',abort);await rm(home,{recursive:true,force:true});}
+ });
+}else{
+ if(!/^[0-6]$/.test(selected))throw Error('Invalid Benchmark HTTP fixture case');
+const database=createIsolatedDatabase();
 process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
 const require=createRequire(import.meta.url);
 const {withCoreExperiments,runWithCoreExperimentContext,requireCoreExperimentContext}=require('@/lib/storage-core/experiments');
@@ -32,7 +50,7 @@ const {POST:commandStatusRoute}=require('@/app/api/reliability/client/v1/command
 
 test.after(async()=>{await prisma.$disconnect();database.dispose();});
 
-const {BenchmarkEvaluatorService}=require('../services/evaluator/src/service.cjs') as {BenchmarkEvaluatorService:new(options:Record<string,unknown>)=>{createServer():http.Server}};
+const {BenchmarkEvaluatorService}=require('../services/evaluator/src/service.cjs') as {BenchmarkEvaluatorService:new(options:Record<string,unknown>)=>{createServer():http.Server;start(runId:string):Promise<unknown>;shutdown():Promise<void>;active:Map<string,Promise<unknown>>;admission:Promise<unknown>;retryAttempts:Map<string,number>}};
 const {EvaluatorRegistry}=require('../services/evaluator/src/evaluator-registry.cjs') as {EvaluatorRegistry:new(values:unknown[])=>unknown};
 const {AgentInsightCallbackClient}=require('../services/executor/src/index.cjs') as {AgentInsightCallbackClient:new(options:Record<string,unknown>)=>{progress(request:unknown,stage:string):Promise<unknown>;uploadArtifact(request:unknown,artifact:unknown):Promise<{artifactId:string}>;complete(request:unknown,completion:unknown):Promise<unknown>}};
 const manifest={adapterKey:'core-http-fixture',displayName:'HTTP Fixture',requiredCapabilities:[],defaultTimeoutSeconds:30,requiredArtifacts:[{name:'answer.txt',mediaType:'text/plain',maxBytes:1024}],evaluation:{evaluatorKey:'core-http-fixture',defaultTimeoutSeconds:30,defaultResources:{cpu:1,memoryMiB:128}}};
@@ -54,14 +72,14 @@ finally:case.doCleanups()
 `;
 async function listen(server:http.Server){await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address() as {port:number};return {origin:'http://127.0.0.1:'+address.port,close:()=>new Promise<void>((resolve,reject)=>{server.close(error=>error?reject(error):resolve());server.closeIdleConnections();})};}
 
-for(const [recoverInterruptedRaw,imported,supplemental,retry,cancel,caseRetry] of [[false,false,false,false,false,false],[true,false,false,false,false,false],[false,true,false,false,false,false],[false,false,true,false,false,false],[false,false,false,true,false,false],[false,false,false,false,true,false],[false,false,false,false,false,true]])test(caseRetry?'manual Benchmark Case retry runs a fresh Agent command and frozen Harness while preserving old receipts':cancel?'delete-only Benchmark cancellation persists an exact command before real device cleanup and fences the old capability':retry?'manual Benchmark reevaluation runs one new Harness job and preserves the original single Agent command':supplemental?'primary HTTP result and missing-Trace supplemental close through native failed-null work without a model':imported?'controlled imported submission uses the real evaluator HTTP chain without any Agent client or command':recoverInterruptedRaw?'durable raw HTTP completion recovers after inline normalization interruption without running Harness again':'real executor callback and evaluator HTTP clients persist one normalized Benchmark result through isolated core storage',async(t)=>{
+for(const [caseIndex,variant] of variants.entries()){if(caseIndex!==Number(selected))continue;const [recoverInterruptedRaw,imported,supplemental,retry,cancel,caseRetry]=variant;test(variantName(variant),async(t)=>{
  const directory=await mkdtemp(path.join(os.tmpdir(),'benchmark-real-http-'));const config=path.join(directory,'private.json');const child=spawn(process.env.PYTHON||'python3',['-u','-c',pythonFixture,config],{cwd:process.cwd(),stdio:['ignore','ignore','pipe']});let stderr='';child.stderr.on('data',value=>{if(stderr.length<8192)stderr+=String(value);});const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));
- const old={mode:process.env.AGENT_INSIGHT_TRACE_STORAGE,url:process.env.AGENT_INSIGHT_STORAGE_CORE_URL,key:process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE};let platform:Awaited<ReturnType<typeof listen>>|undefined;let evaluator:Awaited<ReturnType<typeof listen>>|undefined;const platformErrors:string[]=[];
+ const old={mode:process.env.AGENT_INSIGHT_TRACE_STORAGE,url:process.env.AGENT_INSIGHT_STORAGE_CORE_URL,key:process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE};let platform:Awaited<ReturnType<typeof listen>>|undefined;let evaluator:Awaited<ReturnType<typeof listen>>|undefined;const platformErrors:string[]=[];let evaluatorService:InstanceType<typeof BenchmarkEvaluatorService>|undefined;let blockInlineNormalization=recoverInterruptedRaw;const ownedWork=new Set<Promise<unknown>>();const own=<T,>(work:Promise<T>)=>{ownedWork.add(work);void work.catch(()=>{});return work;};
  try{
   let settings:{origin:string;token:string;controller_key_file:string;delete_token:string;readonly_token:string}|undefined;const deadline=Date.now()+30_000;while(!settings){try{settings=JSON.parse(await readFile(config,'utf8'));}catch{if(child.exitCode!==null)throw Error('Benchmark fixture failed: '+stderr);if(Date.now()>deadline)throw Error('Benchmark fixture startup timed out');await new Promise(resolve=>setTimeout(resolve,20));}}
   process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
 const require=createRequire(import.meta.url);process.env.AGENT_INSIGHT_STORAGE_CORE_URL=settings.origin;process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=settings.controller_key_file;
-  let blockInlineNormalization=recoverInterruptedRaw;let interruptedCalls=0;let recoveredIntents=0;const storageErrors:string[]=[];const nativeFetch=fetch;
+  let interruptedCalls=0;let recoveredIntents=0;const storageErrors:string[]=[];const nativeFetch=fetch;
   if(imported)t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,options?:RequestInit)=>{const response=await nativeFetch(input,options);if(!response.ok&&String(input).startsWith(settings!.origin)){const error=await response.clone().json();storageErrors.push(response.status+':'+String(error.error));}return response;});
   if(recoverInterruptedRaw)t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,options?:RequestInit)=>{if(String(input).startsWith(settings!.origin)&&String(options?.body||'').includes('load_normalization_work')&&blockInlineNormalization){interruptedCalls++;return Response.json({error:'injected normalization transport interruption'},{status:503});}return nativeFetch(input,options);});
   platform=await listen(http.createServer((incoming,response)=>void(async()=>{
@@ -78,7 +96,8 @@ const require=createRequire(import.meta.url);process.env.AGENT_INSIGHT_STORAGE_C
   })()));
   await withCoreExperiments(new Request('http://localhost/device-fixture',{headers:{authorization:'Bearer '+settings.token}}),async()=>{await prisma.reliabilityClient.deleteMany({where:{clientId:'device'}});if(!imported)await prisma.reliabilityClient.create({data:{clientId:'device',user:'alice',name:'isolated HTTP device',status:'online',serviceHealth:'healthy',lastSeenAt:new Date(),capabilitiesJson:JSON.stringify({actions:['RUN_BENCHMARK_CASE'],platforms:[{id:'fixture',agents:['agent'],runBenchmarkCase:{returnsTraceId:true}}],components:{'agent-runtime/fixture/v1':{ready:true}}}),credentials:{create:{credentialHash:createHash('sha256').update('dc_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii').digest('hex')}}}});});
   let harnessCalls=0;
-  const evaluatorService=new BenchmarkEvaluatorService({dataDir:path.join(directory,'evaluator'),imagePoolConfig:{enabled:false},cleanupContainers:async()=>({status:'succeeded',removedContainerIds:[]}),registry:new EvaluatorRegistry([{key:manifest.evaluation.evaluatorKey,checkReady:async()=>({ready:true}),validateJob:()=>{},evaluate:async(input:{workDir:string})=>{harnessCalls++;const report=path.join(input.workDir,'report.json');await writeFile(report,'{"score":75}');return {completion:{status:'completed',rawResult:{score:100},runtimeFacts:{},cleanup:{status:'succeeded'}},evidenceFiles:[{name:'report.json',kind:'official-report',mediaType:'application/json',path:report}]};}}])});
+  evaluatorService=new BenchmarkEvaluatorService({dataDir:path.join(directory,'evaluator'),imagePoolConfig:{enabled:false},cleanupContainers:async()=>({status:'succeeded',removedContainerIds:[]}),registry:new EvaluatorRegistry([{key:manifest.evaluation.evaluatorKey,checkReady:async()=>({ready:true}),validateJob:()=>{},evaluate:async(input:{workDir:string})=>{harnessCalls++;const report=path.join(input.workDir,'report.json');await writeFile(report,'{"score":75}');return {completion:{status:'completed',rawResult:{score:100},runtimeFacts:{},cleanup:{status:'succeeded'}},evidenceFiles:[{name:'report.json',kind:'official-report',mediaType:'application/json',path:report}]};}}])});
+  const startEvaluation=evaluatorService.start.bind(evaluatorService);evaluatorService.start=(runId:string)=>own(startEvaluation(runId));
   evaluator=await listen(evaluatorService.createServer());t.mock.method(defaultEvaluatorTargetResolver,'resolve',()=>({baseUrl:evaluator!.origin,evaluatorKey:manifest.evaluation.evaluatorKey,targetKey:'isolated-fixture'}));
   const request=new Request('http://localhost/api/experiments',{method:'POST',headers:{authorization:'Bearer '+settings.token,'content-type':'application/json'},body:'{}'});
   await withCoreExperiments(request,async()=>{
@@ -89,7 +108,7 @@ const require=createRequire(import.meta.url);process.env.AGENT_INSIGHT_STORAGE_C
    if(!recoverInterruptedRaw&&!supplemental&&!retry&&!cancel&&!caseRetry){
     const runRequest=new Request(platform!.origin+'/api/experiments/'+experimentId+'/run',{method:'POST',headers:{authorization:'Bearer '+settings!.token,'content-type':'application/json'},body:'{}'});const context=requireCoreExperimentContext();
     const response=await runWithCoreExperimentContext({...context,request:runRequest},()=>genericRunRoute(runRequest,{params:Promise.resolve({id:experimentId})}));assert.equal(response.status,202);started=await response.json();
-   }else started=await startBenchmarkExperiment({experimentId,user:'alice',publicCallbackOrigin:platform!.origin,executorCallbackOrigin:platform!.origin});assert.ok(started);
+   }else started=await startBenchmarkExperiment({experimentId,user:'alice',publicCallbackOrigin:platform!.origin,executorCallbackOrigin:platform!.origin});assert.ok(started);if(started.completion instanceof Promise)own(started.completion);
    const deviceHeaders={authorization:'Bearer dc_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii','x-agent-insight-client-id':'device'};const polled=await fetch(platform!.origin+'/api/reliability/client/v1/commands/next?waitSeconds=2',{headers:deviceHeaders});assert.equal(polled.status,200);const frame=await polled.json() as {commandId:string;action:string;payload:{request:Record<string,unknown>}};assert.equal(frame.action,'RUN_BENCHMARK_CASE');
    const acknowledged=await fetch(platform!.origin+'/api/reliability/client/v1/commands/'+frame.commandId+'/status',{method:'POST',headers:{...deviceHeaders,'content-type':'application/json'},body:JSON.stringify({status:'RUNNING',result:{runId:frame.payload.request.runId,requestDigest:frame.payload.request.requestDigest}})});assert.equal(acknowledged.status,200);await started.completion;const dispatch={request:frame.payload.request};
    const client=new AgentInsightCallbackClient({clientId:'device',deviceCredential:'dc_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii',insightBaseUrl:platform!.origin});await client.progress(dispatch.request,'agent_running');const submission=Buffer.from('fixture submission');const artifact=await client.uploadArtifact(dispatch.request,{name:'answer.txt',mediaType:'text/plain',sha256:'sha256:'+createHash('sha256').update(submission).digest('hex'),bytes:submission});
@@ -102,7 +121,7 @@ const require=createRequire(import.meta.url);process.env.AGENT_INSIGHT_STORAGE_C
     const {requireCoreExperimentContext}=require('@/lib/storage-core/experiments');const context=requireCoreExperimentContext();
     const before=await benchmarkCoreRpc<Array<{job_id:string;kind:string;attempt_no:number;retry_of_job_id:string|null}>>('list_jobs',{experiment_id:experimentId});const original=before.find(job=>job.kind==='execute')!;
     const snapshot=await context.rpc('read',{experiment_id:experimentId}) as {experiment:{cases:Array<{id:string}>}};
-    const next=await retryCoreBenchmarkCase({experimentId,caseId:snapshot.experiment.cases[0].id,user:'alice'});assert.notEqual(next.runId,original.job_id);
+    const next=await retryCoreBenchmarkCase({experimentId,caseId:snapshot.experiment.cases[0].id,user:'alice'});own(next.completion);assert.notEqual(next.runId,original.job_id);
     const deviceHeaders={authorization:'Bearer dc_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii','x-agent-insight-client-id':'device'};
     const polled=await fetch(platform!.origin+'/api/reliability/client/v1/commands/next?waitSeconds=2',{headers:deviceHeaders});assert.equal(polled.status,200);const frame=await polled.json() as {commandId:string;action:string;payload:{request:Record<string,unknown>}};assert.equal(frame.action,'RUN_BENCHMARK_CASE');assert.equal(frame.payload.request.runId,next.runId);
     const acknowledged=await fetch(platform!.origin+'/api/reliability/client/v1/commands/'+frame.commandId+'/status',{method:'POST',headers:{...deviceHeaders,'content-type':'application/json'},body:JSON.stringify({status:'RUNNING',result:{runId:frame.payload.request.runId,requestDigest:frame.payload.request.requestDigest}})});assert.equal(acknowledged.status,200);await next.completion;
@@ -112,5 +131,13 @@ const require=createRequire(import.meta.url);process.env.AGENT_INSIGHT_STORAGE_C
    }
    if(recoverInterruptedRaw){assert.ok(interruptedCalls>0);assert.equal(recoveredIntents,1);assert.ok(platformErrors.every(error=>error.startsWith('503:')));}else assert.deepEqual(platformErrors,[]);assert.equal(harnessCalls,retry||caseRetry?2:1);assert.equal(result?.cases[0].score,75);assert.equal(result?.cases[0].runStatus,'evaluated');assert.equal(result?.cases[0].evidenceArtifacts.length,1);assert.equal(JSON.stringify(result).includes('PRIVATE GOLD'),false);const publicRead=await fetch(platform!.origin+'/api/benchmark/v1/experiments/'+experimentId,{headers:{authorization:'Bearer '+settings!.token}});assert.equal(publicRead.status,200);assert.deepEqual(await publicRead.json(),result);
   });
- }finally{await evaluator?.close();await platform?.close();if(child.exitCode===null)child.kill('SIGTERM');await exited;for(const [name,value] of [['AGENT_INSIGHT_TRACE_STORAGE',old.mode],['AGENT_INSIGHT_STORAGE_CORE_URL',old.url],['AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE',old.key]]){if(value===undefined)delete process.env[name!];else process.env[name!]=value;}await rm(directory,{recursive:true,force:true});}
+ }finally{
+  blockInlineNormalization=false;
+  let observed=-1;while(observed!==ownedWork.size||evaluatorService?.retryAttempts.size){observed=ownedWork.size;await Promise.allSettled([...ownedWork]);await evaluatorService?.admission;await new Promise(resolve=>setTimeout(resolve,20));}
+  await evaluatorService?.shutdown();await Promise.allSettled([...(evaluatorService?.active.values()||[])]);
+  await (require('@/lib/benchmark/scheduler') as typeof import('@/lib/benchmark/scheduler')).stopBenchmarkBackgroundWorkForTest();
+  await evaluator?.close();await platform?.close();if(child.exitCode===null)child.kill('SIGTERM');await exited;for(const [name,value] of [['AGENT_INSIGHT_TRACE_STORAGE',old.mode],['AGENT_INSIGHT_STORAGE_CORE_URL',old.url],['AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE',old.key]]){if(value===undefined)delete process.env[name!];else process.env[name!]=value;}await rm(directory,{recursive:true,force:true});}
 });
+
+}
+}
