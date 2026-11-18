@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import type {CoreExperimentContext} from './experiments';
-export interface CoreCancellation {id:string;experimentId:string;caseKey:string;revision:string;status:string;error?:string|null;targetsJson:string;updatedAt?:string}
+export interface CoreCancellation {id:string;experimentId:string;caseKey:string;revision:string;status:string;error?:string|null;targetsJson:string;updatedAt?:string;historical_inert?:boolean}
 type Target={kind:'ordinary'|'fi'|'local';runId:string;clientId?:string;commandId?:string;confirmed?:boolean;error?:string;fiTaskKey?:string};
 interface Dependencies {
  getCommand:(id:string)=>Promise<Record<string,unknown>|null>;
@@ -34,7 +34,7 @@ export async function reconcileCoreCancellation(context:CoreExperimentContext,id
    const {reconcileCoreBenchmarkCancellation}=await import('@/lib/benchmark/core-cancellation');const current=await reconcileCoreBenchmarkCancellation(context,id);
    if(!current)throw Object.assign(new Error('Benchmark cancellation identity changed'),{status:503});return current;
   }
-  let current=await context.rpc('cancellation_lookup',{cancellation_id:id}) as CoreCancellation;if(current.status==='completed')return current;
+  let current=await context.rpc('cancellation_lookup',{cancellation_id:id}) as CoreCancellation;if(current.historical_inert===true||current.status==='completed')return current;
   const targets=JSON.parse(current.targetsJson) as Target[];if(!Array.isArray(targets)||targets.length>100000)throw Object.assign(new Error('Invalid cancellation targets'),{status:503});
   const deps=injected||await dependencies();const user=context.actor.username;
   const persist=async()=>{

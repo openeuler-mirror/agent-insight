@@ -1600,6 +1600,8 @@ class ExperimentStore:
             if head is None:raise ExperimentNotFound('Cancellation experiment not found')
             capability='delete' if head['scope']=='benchmark' or mode in {'remove','case_remove'} else 'read' if mode=='load' else 'write'
             self.iam._authorize_scope(con,scope,ws,capability,'run',exp);fingerprint=scope.fingerprint
+            from .legacy_history import assert_control_live
+            assert_control_live(con,ws,'experiment',exp)
             result={'kind':'benchmark' if head['scope']=='benchmark' else 'ordinary'}
         with self.control.read_transaction() as con:
             current=self.iam._scope(con,token)
@@ -1613,6 +1615,8 @@ class ExperimentStore:
         self._head(con,token,ws,row['experiment_id'],'read',deleted=True)
         records=self._cancellations_tx(con,ws,row['experiment_id'],self._annotations(con,ws,row['experiment_id']))
         record=next(v for v in records if v['id']==identity);record.setdefault('revision','1')
+        from .legacy_history import is_historical_control
+        if is_historical_control(con,ws,'experiment',row['experiment_id']):record={**record,'historical_inert':True}
         return record
 
     def _cancellation_update(self,con,token,ws,body,scope):
@@ -2168,6 +2172,8 @@ class ExperimentStore:
                 exp=row['experiment_id']
                 if exp in seen:continue
                 seen.add(exp);self._head(con,token,ws,exp,'read',deleted=True)
+                from .legacy_history import is_historical_control
+                if is_historical_control(con,ws,'experiment',exp):continue
                 for record in self._cancellations_tx(con,ws,exp,self._annotations(con,ws,exp)):
                     if record['status']!='pending':continue
                     size+=len(_json(record).encode())

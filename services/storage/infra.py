@@ -127,7 +127,7 @@ class InfraStore:
             if not isinstance(parsed,dict):raise ValueError('Sample partition object required')
         digest=hashlib.sha256(_json([source,text]).encode()).hexdigest()
         with self.control.transaction() as con:
-            row=self._source(con,token,ws,source,'write');owner=row['owner_principal_id'];purpose='infra-accept/v1:'+owner;receipt=con.execute('SELECT content_hash FROM inbox_receipts WHERE workspace_id=? AND source_id=? AND event_id=?',(ws,purpose,operation)).fetchone();sample=str(uuid.uuid5(uuid.NAMESPACE_URL,_json([ws,owner,operation])));event='infra:'+sample
+            row=self._source(con,token,ws,source,'write');assert_control_live(con,ws,'infraSource',source);owner=row['owner_principal_id'];purpose='infra-accept/v1:'+owner;receipt=con.execute('SELECT content_hash FROM inbox_receipts WHERE workspace_id=? AND source_id=? AND event_id=?',(ws,purpose,operation)).fetchone();sample=str(uuid.uuid5(uuid.NAMESPACE_URL,_json([ws,owner,operation])));event='infra:'+sample
             if receipt:
                 if receipt[0]!=digest:raise Conflict('Infra operation has different input')
                 return {'sampleId':sample,'state':'accepted'}
