@@ -481,3 +481,5 @@ Trace 使用实际采集领域和事实流水；保留旧 Execution/Session/子 
 控制请求嵌套在已验证请求内时，未显式传入 transport 才继承当前范围的 pinned options；每次仍重新校验实际凭据、workspace 和能力。后台主体解析保留匹配来源的401/503，未知用户名不受其他owner的失败状态影响；私有目录的failure_owners只包含来源标签及状态，不返回失效key。Trace草稿入口在读取证据前把鉴权失败转换为原公开401/403响应。
 
 设备FI使用独立的固定TASK/RUN/WORKER owner投影；其前置dc校验、clientId绑定与历史inert过滤保留，不扩展通用设备可读kind。Benchmark取消指令通过既有私有Benchmark接口的cancel_control操作处理，仅接受当前pending取消记录中的冻结client目标；实际owner和当前delete、任务request hash、确切已绑定commandId、设备未解绑及历史marker逐次校验。仅可lookup/create/sent该CANCEL_EXPERIMENT_RUN指令，原TTL、重试与迟到回调fence保留；delete-only不获得普通read/write能力。
+
+登录前的 `GET /api/eval/config/status?check_login=true`（以及兼容的 `check_org=true`）仅返回登录模式和组织登录跳转地址，不要求用户凭据。查询具体评测配置仍进入统一授权范围，未登录不能读取配置内容。

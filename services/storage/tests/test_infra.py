@@ -50,7 +50,7 @@ class InfraTests(unittest.TestCase):
     def test_readonly_capability_cannot_mutate_and_schema_is_append_only(self):
         read=self.fixture.iam.issue_api_credential(self.fixture.token,'w',['read']);src=self.source()
         with self.assertRaises(Forbidden):self.store.accept_sample(read,'w',src['id'],'one',self.raw())
-        with self.control.read_transaction() as con:self.assertEqual(con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0],18);self.assertEqual(con.execute('PRAGMA foreign_key_check').fetchall(),[])
+        with self.control.read_transaction() as con:self.assertEqual(con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0],len(__import__('services.storage.migrations',fromlist=['load_migrations']).load_migrations('sqlite')));self.assertEqual(con.execute('PRAGMA foreign_key_check').fetchall(),[])
 
     def test_endpoint_metadata_reads_actual_capsule_with_source_boundary(self):
         from services.storage.infra import InfraStore
