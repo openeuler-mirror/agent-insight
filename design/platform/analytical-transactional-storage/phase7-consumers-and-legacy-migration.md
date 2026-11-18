@@ -386,3 +386,16 @@ L6已集成为39f59b08，40固定kind/488字段、72事务表+16CH；原登录�
 ### 020语义与Usage域汇总
 
 主树250d8aca汇总L7，77事务表/19CH，原Goal/协作/用量算法及前端保持，开发快速Python6项/Node2项和最终types通过。功能消费者接入进入整体验证前收尾；完整旧库转换及diagnosis/report/generation历史运行保护继续实施，未以raw存档冒充typed历史。全部逻辑冻源后集中验收，暂无本批全量/原生/真实CH/浏览器通过声明。
+
+
+### 2026-11-18 集中验证及可打开的原界面
+
+020/CH004（77事务表、19CH）逻辑已汇总，原公共upload/completion/Session、静态控制、Infra、RAS/FI、GoalPlus/协作/Usage和96模型语义转换不再只是前文开发检查点。集中验证取得后端1421项（1242通过、179可选跳过、0失败）、原生PG/OG各113/113、真实CH五域5/5及保留式016→020/CH003/004升级证据；来源快照及精确边界见implementation-status.md最后一节，不将各批结果拼成最终全矩阵。
+
+HISTORY_FENCE_VERSION=1启用实际离线导入。实际CLI在新47行样本（含running BatchEvalTask）完成verify47/replay47，原源保持；原running可读而自动执行选择排除，运行任务/命令未产生。任意客户全库、外部附件/owner/spool仍需真实计划和演练，full_migration_ready/production_cutover_ready保持false。
+
+原界面隔离入口http://localhost:62632/trace?taskId=storage-acceptance-final-20261118 ，原登录admin。原上传、列表、详情/完整Span、导出、空筛选及部分页面读回已实际验证；无名Agent原DTO缺省已修复，明确名称和旧回执保留。异步分析revision切换曾短暂409/503，稳定indexed后原UI恢复，完整日志保留。277份TSX/CSS中269字节一致、8份仅请求鉴权/CAS接线，无展示/布局/CSS变化；原58488/默认数据/生产未动。
+
+Node最终af2854b8冻结完整6167项：6145通过、22跳过、0失败/取消。CLI15秒启动和history旧版本断言的原失败日志保留。此后当前c9853cb1的summary/settings/Infra/下载小修另以Python32项、Node12项、完整tsc及原UI真下载验证，不混称同来源完整套件。13份ZIP文件与原内置文件逐字一致；最终结果见implementation-status.md。未实际重跑的全部浏览器模型/设备流程和客户迁移需如实保留，第二版容量目标不提前纳入。
+
+最终当前前端对789e8d04的277份TSX/CSS有263份字节一致，14份仅数据传输/CAS/下载接线；14文件162个顶层JSX根原文相同，CSS0。原Infra鉴权和文件下载的初次401已修复、原UI复验200；异步分析切换revision时短暂409/503仍记录为限制。

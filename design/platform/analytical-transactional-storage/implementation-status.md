@@ -1,6 +1,6 @@
 # 存储核心、IAM、default项目与三库适配实施状态
 
-日期：2026-11-17。001–014基础及已接通消费者保留；015统一授权统计投影与Dashboard、Fleet、Quality、Task统计已接通；016补齐私有采集准备与中断恢复，017公共采集、018 Infra、019静态控制及RAS/FI接入逻辑已汇总、待完整迁移逻辑与集中验收；后续Skill列表/版本和Agent列表已完成隔离验收，最新证据见文末。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 前面各批历史零失败数字不代表本批最终全量门禁。全产品数据迁移仍未完成，不能作为生产切库或完整验收。总体目标见phase1/phase2，当前兼容批次见[phase6](phase6-trace-vertical-slice.md)。
+日期：2026-11-18。第一版原功能的新存储消费者逻辑已汇总至020（77张事务表、19张ClickHouse表），公共采集、静态控制、Infra、GoalPlus/协作/Usage及旧库语义转换已进入集中验证。原界面隔离验收已可打开，最新实际结果和限制见文末“2026-11-18 集中验证与原界面验收”；旧章节保留各阶段证据，不表示当前仍未接线。**第一版以原有功能、界面及统计口径一致为目标；万级Span、统计水位和千级混合容量优化延期至第二版。** 当前仍未执行客户全库迁移或生产切库，不能将样本演练和部分原界面流程解释为全产品生产验收。
 
 **后续执行节奏（2026-11-17用户调整）**：先按依赖连续完成剩余接入逻辑并保存本地开发检查点；开发期只做必要类型检查和快速专项，不再对每个内部片段分别做Spec/Quality、应用全量、三库及浏览器验收。全部接入逻辑完成后集中独立审查、全量测试、三库、原界面端到端及旧数据迁移演练。未集中验收的片段明确标为“逻辑完成、待统一验收”，不能据此切换生产。
 
@@ -656,3 +656,38 @@ Infra也已在独立分支2800da7d完成整域逻辑（018两控制表+CH003，�
 主树250d8aca汇总55文件，020新增5事务表、CH004新增3事实表，总计77事务表/19CH。原Goal快照/Run/候选/迭代/完整性与精确Trace关联、两层协作report/bind/graph/Trace投影、真实actor携带的Usage队列/去重/日报/管理员统计均接线，未增加TSX/CSS变化。writer开发快检Python6项、Node2项通过，后者包含原handler→loopback Python→隔离SQLite+MemoryFacts以及部分owner失败只重试未完成项；最终tsc实际exit0。实例使用已indexed Trace关联，旧Goal/协作/Usage表0行，core关闭后legacy分支也验证；不是原生数据库/真实CH/UI验收。精确handoff与未验收边界在同collector目录semantic-usage-development-checkpoint.json。
 
 功能接入已汇总，剩余历史转换和diagnosis/report/generation运行保护仍在各自工作区连续实施；它们全部冻结后统一执行完整/三库/CH/原界面和迁移演练。旧数据/原58488服务保持，不切生产，第二版容量不实施。
+
+
+## 2026-11-18 集中验证与原界面验收
+
+功能逻辑汇总后集中修正实际请求授权上下文、FI owner范围、未登录配置探测、取消receipt归属和历史运行保护。旧历史状态保持原值，运行marker阻止Experiment取消生成命令、历史Infra采样落盘以及旧任务/设备重新执行。HISTORY_FENCE_VERSION已显式启用1，允许通过计划校验的离线导入；未知owner、缺附件、来源漂移、目标碰撞仍阻断，full_migration_ready及production_cutover_ready继续为false。
+
+| 验证 | 实际结果与边界 |
+|---|---|
+| 后端完整套件 | 冻结8511aba9：1421项，1242通过、179可选引擎跳过、0失败，1347.83秒，来源218文件未变；随后历史导入/运行保护49项及无名Agent3项通过，后两批是变更专项，不能相加冒充最新完整套件 |
+| Node完整套件 | 最终冻结af2854b8：6167项，6145通过、22跳过、0失败/取消，1067.53秒。前轮CLI15秒夹具启动超时已通过测试环境关闭npm通知/出网修复；另一次唯一失败为history版本断言仍要求0，更新为实际默认1后原保护流程专项通过，随后本轮完整重跑通过。原失败日志保留 |
+| 最终小修与类型 | af2854b8完整套件后，匿名Agent汇总、旧settings别名、Infra鉴权与下载小修以当前c9853cb1的32项Python、12项Node集成专项、完整tsc（exit0，27.96秒）及真实原UI验收；这些是变更专项，不冒称该新来源重新跑过完整Node/Python |
+| 原生关系库 | PG15与原生openGauss7各113/113、0失败/错误/跳过；每库113个自有schema清理后残留0，另有4个SQLite专用排除项。来源caa0a53a，Facts使用MemoryFacts；后续HTTP及历史保护有单独专项，不能称最终三库×CH全矩阵 |
+| 新接领域真实CH | 原Node处理器/DTO、真实CH004：GoalPlus、协作、Usage、Infra、RAS五域读写及owner/只读/幂等检查5/5；是隔离人工输入，无外部执行或物理抓取效果声明 |
+| 保留式升级 | 独立016副本备份后升020及CH003/004，原66张事务表全部行多集、15张CH逻辑表及711份工件内容保留，源未修改 |
+| 旧库语义迁移 | 先46条样本，后在独立副本增加1条合法running BatchEvalTask：实际export/plan/apply/verify CLI校验47条、重复apply重放47条，源字节/内容未变；HISTORY_FENCE_VERSION为实际默认1。原running字段可读、execute筛选不选旧任务，work_items/attempts/runs/运行命令/执行outbox均0；12条自有存储outbox正常indexed。96表schema仅13表有样本，不代表全部客户内容/外部assetPath已验收 |
+| 原界面真实闭环 | 原standalone登录admin→原upload别名→列表/详情→Span完整输入输出→原导出按钮，筛选无匹配0/重置1；原Dataset两张内置卡、Evaluator页面和Dashboard实际读回。原opaque扩展及framework保留，旧Prisma User/Execution/Session/Dataset/Skill对应表仍0。没有将其他全部页面按钮或真实LLM/SSE/物理设备宣称为本批重跑 |
+| 最终无名Agent修复 | 真实旧handler+SQLite对照确认generic未给agentName时原DTO省略agent/agentName。新适配只去掉该命名空间的collector缺省，显式collector/unknown和native OTLP不改；旧prepared/receipt原内容不变，新快照正常递增，旧receipt不回退。新真实CH任务经原upload/list/session及原Span面板通过，旧验收行未自动重写 |
+| 前端保持 | 对789e8d04的277份TSX/CSS：263份字节相同，14份仅请求鉴权/CAS/runtime header/下载接线。独立与根AST复验14文件共162个顶层JSX根原文字节完全相同，CSS变更0；保留原展示文案、结构和布局。先前4份/8份为对应历史片段口径 |
+
+原界面地址：http://localhost:62632/trace?taskId=storage-acceptance-final-20261118 ，原登录输入admin。运行产品代码已刷新至c9853cb1。运行环境位于独立acceptance-v2，使用专用SQLite、CH数据库、HOME和依赖副本；服务通过原scripts/develop_start.sh启动，runtime配置只调整隔离distDir及Turbopack根/缓存。原58488验收服务、默认业务数据库/spool、生产均未切换，未推送远端。
+
+异步分析切换revision的真实过程中观察到短暂409/503，原自动刷新在indexed稳定后恢复，最终原详情和完整正文可读；这段日志保留，不能声称全程无错误。原界面没有为本次后端重构调整展示。当前验收入口保留的是最终新任务，旧synthetic任务及其旧captured语义仍保留。
+
+证据目录仍为exclude/storage-core-collector/20261117-i_wpbhkw/：consolidated-v4-result.json、consolidated-v3-python-report.json、consolidated-v1-native/、consolidated-v4-domain-smoke-20261118-3ee65686/report.json、consolidated-v2-upgrade-semantic-rehearsal-20261118/report.json、consolidated-final-history-cli-20261118-45e72e56/report.json、consolidated-acceptance-checklist.json及acceptance-v2/{browser-acceptance-report,final-anonymous-http-evidence}.json、final-trace-detail.jpg。首次失败、超时及初次未索引迁移的Conflict日志全部保留。最终完整应用结果为consolidated-final-v4-result.json，当前变更专项为final-transport-delta-regression.json，完整类型结果为consolidated-final-types-result.json，真实当前入口截图为acceptance-v2/final-trace-after-transport.jpg。
+
+尚未验收/不纳入本版完成声明：客户真实全库owner/附件/spool映射及正式停写迁移；所有原界面流程逐按钮的真实外部模型/设备/物理故障场景；当前小修后未再次重跑同来源完整Node/Python（已有变更专项、完整types和原UI证据）；第二版千级采集端容量和万Span优化。异步分析切版本时短暂409/503仍是已记录限制。已实现的旧模式分支继续保留，不能把legacy代码存在直接算为未接管消费者，也不能因新模式通过就擅自切生产。
+
+
+### 当前原界面补查与下载复验
+
+补充原Agent、Skill工作台、实验、Infra与诊断页只读检查时，真实HTTP揭示Infra空状态掩盖401、旧/api/settings别名不附Key、直接ZIP/Infra下载不经header及无名Agent summary索引缺省字段引起400。现21处Infra请求统一复用apiFetch，三个Skill下载入口和Infra导出经受鉴权Blob；当前actor来自header，user只保留兼容标签，凭据不进URL。原SSE/Abort/FormData和导出query保持；浏览器先缓存完整下载Blob，不声称仍直接流式落盘。
+
+修复后实际浏览器Infra请求200，summary agents与settings别名HTTP200；原Skill管理“下载zip”按钮真实下载linux-messages-auth-triage-demo-v0.zip，13份文件逐字与原内置bundle一致。原Agent、工作台、实验、Infra和诊断只读页均可打开，后者显示2条Trace/0异常。无真实外部模型调用或物理设备。初次401/400日志及截图继续保留，不能将当时空页面记为成功读取。
+
+证据补充：acceptance-v2/{final-transport-http-evidence,original-ui-skill-download-evidence,final-transport-refresh-evidence}.json、original-ui-skill-download.zip、final-skill-download.jpg、final-infra-authenticated-page.jpg；consolidated-final-ui-transport-review.json为独立静态审查，consolidated-final-ui-root-recheck.json为根独立复验。当前完整字段/schema版本没有再变化，用户AGENTS.md原哈希保持。

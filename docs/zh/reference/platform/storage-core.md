@@ -419,6 +419,8 @@ Session 页面仍调用原 Node 的 Claude/subagent/OpenCode/Dify/Goal/collabora
 
 018增加infra_sources/session_infra_links两张事务表，CH另显式应用schema/clickhouse/003_infra.sql（或ClickHouseStore.initialize_infra_schema），总计71事务表+16CH；服务启动不会隐式改已有CH目标。升级沿既有显式备份/迁移流程，当前不迁默认库。原source CRUD、pull/push、概览、历史、导出、检测及Trace树自动/人工关联保持API/DTO和界面。原prom/OTLP规范化、直方图Infinity往返、counter窗口/重置、诊断和导出计算继续复用。
 
+Infra概览、源管理/详情及Trace关联组件通过apiFetch逐次携带当前登录凭据，保留原API路径、请求体及取消信号。CSV/Markdown导出同样经鉴权请求后下载，沿用服务端文件名与原始字节；浏览器会先接收完整Blob，下载后释放临时URL，凭据不进入下载链接。界面展示与操作保持原样。
+
 源按workspace/owner授权，组管理员可读组内源，写入要求实际owner和当前凭据能力。authHeaders只保存在私有artifact，Node侧经infra/v1证明读取，浏览器仅headernames/hasAuth；省略凭据不清除，null/空串显式清除。删除保留源/样本及人工关联物理历史，但已删源不可读；重新登记产生新sourceID，旧样本不复活。
 
 core后台poller只使用私有身份映射中显式配置的各owner，并检查read/write；不会以管理员身份为他人拉取入库。无凭据metrics只有明确DEFAULT_INGEST_USER及其唯一私有映射可写；未配置或无法授权时仍保持原best-effort accepted/attachedTo:null且不写。该ACK不是durable/indexed证明；实际accept先同事务记录inbox/outbox和私有样本，worker完成CH发布后才是indexed，同次重试不重复样本，不同接收不按时间/内容合并。
@@ -440,7 +442,7 @@ Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型
 
 原工作台、优化/生成会话、消息/blocks/VFS、候选、评测任务壳和调试结果使用固定控制记录，动态Experiment/评测/诊断继续用既有typed库。Agent删除提交既有Trace删除屏障及Agent软删除，工件保留；新用户原示例使用typed Dataset和既有Trace bundle导入。公开URL/DTO和界面保持，4个TSX仅加入请求封装导入，其中runtime provider另接动态header回调；不改JSX/CSS/文案/布局。SSE、AbortSignal和FormData沿原请求处理。
 
-单次固定kind读最多20000记录、载荷128MiB、写批次2000操作；超限明确失败，不截断结果。这些是当前有界正确性保护，不是容量认证。019仅做必要隔离快速验证；全量、真实PG/openGauss/CH、原UI和历史迁移统一验收，尚不切生产。历史任务的状态/时间由迁移保留；已有历史marker的控制记录不会进入自动执行选择、设备/install鉴权或Infra抓取，Experiment/Benchmark/FI同样核验运行保护。诊断/report与完整历史转换仍待接入，当前history fence version仍0，未满足完整保护的历史记录继续阻断，不能据此切库。
+单次固定kind读最多20000记录、载荷128MiB、写批次2000操作；超限明确失败，不截断结果。这些是当前有界正确性保护，不是容量认证。019之后已进入集中验证；实际后端完整套件、PG/openGauss专项、真实CH领域读写及原界面部分流程已有隔离证据，完整覆盖和来源快照见设计实施状态，仍不切生产。历史任务的状态/时间由迁移保留；已有历史marker的控制记录不会进入自动执行选择、设备/install鉴权或Infra抓取，Experiment/Benchmark/FI同样核验运行保护。诊断/report及历史转换的运行保护已汇总，当前HISTORY_FENCE_VERSION=1允许显式惰性历史导入；旧版本、未知owner、缺附件或来源/目标冲突仍阻断，不能据此切库。
 
 ## Goal Plus、协作和用量兼容（020，逻辑完成待集中验收）
 
@@ -471,7 +473,7 @@ Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型
 
 Trace 使用实际采集领域和事实流水；保留旧 Execution/Session/子 Agent/Thread/Skill origins/手工字段、原日期与业务 ID。原 Session 字符串及 Node JSON 语义保留，只有 Session 的记录不伪造 Execution。评估器、数据集、Skill 版本进入真实 private/public release、alias 和正文/附件制品。`--files-file` 以实体键提供 base64 字节；`--skill-directories-file` 只读取显式提供的目录并捕获实际字节/模式，不把旧路径当正文；缺文件、软链接、不安全路径或 hash/size 不符拒绝。只有没有外部 assetPath 且文件声明为空或仅根 `SKILL.md` 的纯正文版本可以由真实 SQL content 生成该文件。诊断消息相同时间戳不能推断先后，需 `--message-order-file` 按 sessionId 提供完整 message ID 顺序。
 
-历史 running/pending/busy、控制凭据/命令、基础设施来源、实验、Benchmark job、诊断/报告和生成任务必须 inert：原状态/时间保持，历史租约无执行权，不发模型、worker、采集或外部任务。未整合并验证运行门禁时 `HISTORY_FENCE_VERSION=0`，相关行在 plan 中明确阻断；只有集成验收后才能提升门禁版本。历史 DatasetGenerationJob 存在固定私有历史目录而不进入可领取队列；进度/原 receipt 可以读取，显式删除仍按当前 IAM 作用于真实数据集。Usage raw 仅导原始事件和永久去重收据，Daily 直接导原 count/first/last，不由 raw 二次累计。评测写真实 machine receipt/selected result/human annotation，迁移 work phase=migrate 且终态，不伪造有效评估租约。
+历史 running/pending/busy、控制凭据/命令、基础设施来源、实验、Benchmark job、诊断/报告和生成任务必须 inert：原状态/时间保持，历史租约无执行权，不发模型、worker、采集或外部任务。当前 `HISTORY_FENCE_VERSION=1` 允许通过显式计划校验的惰性历史导入；低于1的旧实现仍在 plan 中明确阻断相关行，运行marker保护不会因版本1而解除。历史 DatasetGenerationJob 存在固定私有历史目录而不进入可领取队列；进度/原 receipt 可以读取，显式删除仍按当前 IAM 作用于真实数据集。Usage raw 仅导原始事件和永久去重收据，Daily 直接导原 count/first/last，不由 raw 二次累计。评测写真实 machine receipt/selected result/human annotation，迁移 work phase=migrate 且终态，不伪造有效评估租约。
 
 旧诊断可只读；显式复测须有 verified 导入收据、原 snapshot 字节、仍一致的真实 Trace/Session、实验/结果、数据集/评估器及 Skill 正文基线，并再次通过当前 IAM。核验从当前真实证据重建快照与旧快照逐项比较；缺证据或来源变化 Conflict，不能臆造旧模型证明。通过后冻结当前真实新模型和新资产，创建全新复测实验/RunPlan，保留历史 diagnosis ID/inputHash origin；绝不恢复旧 lease 或修改旧运行。内部 historical 标志由 Node 消费后剥离，不改变原前端 DTO/界面。
 
@@ -491,3 +493,6 @@ Trace 使用实际采集领域和事实流水；保留旧 Execution/Session/子 
 
 
 collector.source.v1适配原上传协议时，不为未提供、null或空agentName合成service.name；其列表DTO按原readRecords省略agent和agentName。明确给定的名称（包括collector、unknown）原样保留。该缺省处理只针对collector命名空间，原生OTLP的真实service.name、agent.name优先级及既有未知值行为不变。原Execution导出的null/字段缺省不改。已捕获的prepared计划及同operation回执继续重放原内容，不自动重写旧行；明确的新快照按既有source revision/hash协议接续，此后相同实体不重复递增，旧回执重放不会回退当前数据。
+
+
+原 `/api/settings` 与 `/api/settings/test` 别名也通过apiFetch携带当前凭据，仍由真实actor及当前owner/capability授权。原Skill管理、工作台及生成会话的ZIP下载复用鉴权Blob传输，优先沿用服务端Content-Disposition文件名，保留原字节；不将凭据放入链接，不按query user授权。页面JSX/样式保持，完整Blob缓冲的边界同Infra导出。

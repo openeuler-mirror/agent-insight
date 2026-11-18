@@ -145,7 +145,7 @@ Explicitly upgrade the isolated target to019, then use the original login and sc
 
 Skill versions/files, configuration, clients, Workbench/optimization/generator sessions and debug results now use the control repository. Consolidated acceptance must cover list/detail/file/save, installation/heartbeat/command ACK/configuration and deployment receipts, session SSE/candidate/retest/publish, and Agent deletion with Trace/diagnosis source lifecycle. Four TSX files only add transport imports, with dynamic runtime headers; visible layout, wording, interactions and existing features remain unchanged. Focused checks and types are not full acceptance.
 
-Keep the original database and files. Import historical terminal/static records explicitly under their real owner. Active tasks, unconsumed installation tokens and usable device credentials cannot be activated silently; report and block them until an explicit inert-migration contract exists. Do not disguise them as deleted or completed. Production remains unchanged.
+Keep the original database and files. Import historical records explicitly under their real owner. HISTORY_FENCE_VERSION=1 permits inert historical records while preserving running/pending values; old tasks, installation tokens and device credentials never regain execution or authentication rights. Unresolved owners, missing files and source/target conflicts still block import. Do not disguise them as deleted or completed. Production remains unchanged.
 
 
 ### No extra background mapping for native users
@@ -153,3 +153,12 @@ Keep the original database and files. Import historical terminal/static records 
 Create the native User and configure its personal model in the original screens. Background work restores the durable User and its actual current API credential after restart without a handwritten identity file. Migrated wi credentials still use the existing private mapping; malformed or ambiguous mappings are never guessed or silently replaced. Keep the existing private core controller file configured; no browser key-disclosure workaround is required.
 
 The uploader still needs write only. Background analysis separately checks the same owner's current execute capability. Readonly, revoked or expired credentials and administrators merely viewing another user's Trace cannot use that user's model. Validate this workflow in isolated state; the original UI and production data remain unchanged.
+
+
+## Isolated020 acceptance and explicit legacy import
+
+The current isolated target uses transactional schema020 and CH004. Keep new-database initialization separate from backed-up upgrades of existing targets. Never run Prisma db push against the original business database. Use the original login and pages; default-project ownership adds no project-selection UI.
+
+Export a consistent legacy SQLite copy with export-legacy, then use the separate plan-legacy-import, apply-legacy-import and verify-legacy-import commands. Specify the private export directory, stable source ID, owner bindings and isolated target config explicitly; apply/verify also require current actor credentials and a migration ID. The original plan-legacy remains strict read-only inventory and has no apply operation.
+
+Resolve owner, file and source/target conflicts first. Retry apply using the same receipt to recover pending work, then wait for actual CH indexing before verify. Durable acceptance with pending facts is not completed migration. A subsequent apply should replay without new imports. Check unchanged source bytes/content, readable original history states and zero execution commands. The47-row rehearsal covers those fixtures only and does not replace customer-wide preflight. No production cutover is performed.
