@@ -5,6 +5,7 @@ import { buildAnalyticsProjection, type AnalyticsProjection, type AnalyticsExecu
 import type { ReliabilityEventRow } from '../fleet/reliability';
 import {bucketStarts,normalizeWindow,planOf} from '../fleet/agg';
 import type {CoreOutcomeLookup} from './trace-outcome-projection';
+import {bindCoreReadIdentity} from './read-retry';
 
 type Actor = Awaited<ReturnType<typeof compatibilityContext>>;
 type Execution = Omit<AnalyticsExecution,'timestamp'> & {timestamp:Date};
@@ -267,7 +268,7 @@ async function readActor(actor:Actor,options:CompatibilityOptions,background=fal
   return {...createAnalyticsSource(actor.username,items,[...events.values()],outcomes),actor,validate,enrich};
 }
 export async function readCoreAnalytics(request:Request,options:CompatibilityOptions={}):Promise<AnalyticsSource> {
-  const actor=await compatibilityContext(request,options);const selection=selectionFor(request);
+  const actor=await compatibilityContext(request,options);bindCoreReadIdentity(actor);const selection=selectionFor(request);
   for(let attempt=0;;attempt++) {
     try{return await readActor(actor,options,false,selection,new URL(request.url).pathname!=='/api/ingest/ras-events');}
     catch(error){if(attempt>=2||!error||typeof error!=='object'||!('status'in error)||error.status!==409)throw error;}
@@ -296,6 +297,7 @@ export async function ingestCoreRas(request:Request,events:Record<string,unknown
 export type CoreRasEvent=ReliabilityEventRow & {user:string;rasSessionKey:string|null;executionId:string|null};
 export async function readCoreRasEvents(request:Request,taskIds:string[]=[],selection:{limit?:number;types?:string[];order?:'asc'|'desc'}={},options:CompatibilityOptions={}) {
   const actor=await compatibilityContext(request,options);
+  bindCoreReadIdentity(actor);
   const value=await rpc(actor,'ras_read',{task_ids:taskIds,selection},options);
   if(!Array.isArray(value.events)||typeof value.read_token!=='string'||typeof value.scope_fingerprint!=='string'||!value.execution_ids||typeof value.execution_ids!=='object')fail('RAS read coverage unavailable');
   const events=value.events.map(raw=>{
@@ -308,7 +310,9 @@ export async function readCoreRasEvents(request:Request,taskIds:string[]=[],sele
 }
 
 export async function readCoreRasMetadata(request:Request,limit:number,options:CompatibilityOptions={}) {
-  const actor=await compatibilityContext(request,options);const value=await rpc(actor,'ras_read',{task_ids:[],selection:{limit,view:'metadata'}},options);
+  const actor=await compatibilityContext(request,options);
+  bindCoreReadIdentity(actor);
+  const value=await rpc(actor,'ras_read',{task_ids:[],selection:{limit,view:'metadata'}},options);
   if(!Array.isArray(value.events)||typeof value.read_token!=='string'||typeof value.scope_fingerprint!=='string')fail('RAS metadata coverage unavailable');
   const rows=value.events.map(raw=>{
     const row=raw as {taskId:string;user:string;platform:string|null;framework:string|null;ts:string};const ts=new Date(row.ts);

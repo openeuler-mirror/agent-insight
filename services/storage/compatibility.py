@@ -70,10 +70,11 @@ class LegacyTraceReads:
 
     def _spans(self,token,workspace,route):
         if route.get('source_namespace')=='collector.source.v1':
-            from .collector_sources import current_rows
+            from .collector_sources import current_rows, current_boundary
+            begin=current_boundary(self.queries.control,token,workspace,route)
             rows=list(self._scan_spans(token,workspace,route))
             if _bytes(rows)>MAX_STRUCTURE_BYTES:raise CompatibilityLimitError('Collector structure exceeds16MiB')
-            yield from current_rows(self.queries.control,token,workspace,route,rows)
+            yield from current_rows(self.queries.control,token,workspace,route,rows,begin=begin)
             return
         yield from self._scan_spans(token,workspace,route)
 

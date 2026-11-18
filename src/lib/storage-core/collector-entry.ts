@@ -10,6 +10,7 @@ import {getDefaultIngestUser} from '@/lib/storage/data-service';
 import {normalizeEndpointUrl} from '@/lib/infra/endpoint-resolve';
 import {normalizeTraceClientMetadata} from '@/lib/reliability/trace-client';
 import {clientIpFromRequest} from '@/lib/reliability/client-ip';
+import {coreReadChanged,coreReadInvalidated,markCoreReadSideEffect} from './read-retry';
 
 type Row=Record<string,any>;
 export interface CoreCollectorWriteOptions {operationKey?:string;analysis?:boolean;analysisJob?:Row;channel?:string;receivedAt?:Date|null;sourceProof?:Row;}
@@ -129,11 +130,11 @@ export async function handleCoreCollectorUpload(request:Request){
 export async function handleCoreCollectorComplete(request:Request){try{const body=await request.json().catch(()=>({}));const identity=await resolveCollectorRequest(request,'complete',body);return Response.json(await completeCoreCollector(identity,body,request.headers.get('idempotency-key')||undefined));}catch(error){return collectorFailure(error);}}
 export async function runCoreSessionModel<T>(request:Request,taskId:string,action:()=>Promise<T>):Promise<T>{
  const {getCoreSessionScope,readCoreStoredSession}=await import('./session-source');const scope=getCoreSessionScope();if(!scope)throw fail(403,'Session model scope required');
- const before=scope.values.get(taskId);const source=await readCoreStoredSession(taskId,true);if(before&&(!source||before.trace_id!==source.source.trace_id||before.source_revision!==source.source.source_revision||before.annotation_revision!==source.source.annotation_revision))throw fail(409,'Session changed before model execution');if(!source?.source.can_execute||source.source.owner_principal_id!==scope.actor.principal)throw fail(403,'Session owner execute capability required');
+ const before=scope.values.get(taskId);const source=await readCoreStoredSession(taskId,true);if(before&&(!source||before.trace_id!==source.source.trace_id||before.owner_principal_id!==source.source.owner_principal_id||before.identity_hash!==source.source.identity_hash))throw coreReadInvalidated('Session identity changed before model execution');if(before&&source&&(before.source_revision!==source.source.source_revision||before.annotation_revision!==source.source.annotation_revision)){if(before.identity_hash)throw coreReadChanged('Session changed before model execution');throw coreReadInvalidated('Session changed without a stable identity proof');}if(!source?.source.can_execute||source.source.owner_principal_id!==scope.actor.principal)throw fail(403,'Session owner execute capability required');
  let identity:CoreCollectorIdentity;
  try{identity=await resolveCollectorRequest(request,'snapshot');}catch(error){
   if(!/^Bearer session_/.test(request.headers.get('authorization')||''))throw error;
   let selected:CoreCollectorIdentity|undefined;const configured=await configuredCoreBackgroundActors({},true);for(const actor of configured.actors){if(actor.username!==source.session!.user||actor.principal!==scope.actor.principal||actor.workspace!==scope.actor.workspace)continue;try{const candidate=await collectorIdentityForBackgroundActor(actor,{operation:'snapshot'});await collectorPrivate(candidate,'model_scope',{task_id:taskId});selected=candidate;break;}catch(error){if(![401,403].includes(Number((error as Row)?.status)))throw error;}}if(!selected)throw fail(403,'Verified Session owner executor required');identity=selected;
  }
- return withCoreCollectorIdentity(identity,async()=>{await collectorPrivate(identity,'model_scope',{task_id:taskId});return action();});
+ return withCoreCollectorIdentity(identity,async()=>{await collectorPrivate(identity,'model_scope',{task_id:taskId});markCoreReadSideEffect();return action();});
 }

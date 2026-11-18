@@ -2,6 +2,7 @@ import type { CoreProfile } from './types';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
+import {coreReadAttempts} from './read-attempt-context';
 
 const JSON_LIMIT = 4 * 1024 * 1024;
 const INPUT_LIMIT = 8 * 1024 * 1024;
@@ -56,13 +57,22 @@ async function bytes(body: ReadableStream<Uint8Array> | null, limit: number, sta
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
   return result;
 }
-async function upstream(path: string, options: { token?: string; method?: string; body?: string; headers?: Record<string, string>; responseLimit?: number; timeoutMs?: number }, fetcher: typeof fetch): Promise<{ data: Record<string, unknown>; status: number }> {
+async function upstream(path: string, options: { token?: string; method?: string; body?: string; headers?: Record<string, string>; responseLimit?: number; timeoutMs?: number; signal?: AbortSignal }, fetcher: typeof fetch): Promise<{ data: Record<string, unknown>; status: number }> {
+  const attempt=coreReadAttempts.getStore(),origin=coreServiceOrigin();
+  if(attempt&&origin!==attempt.origin)throw new CoreError(503,'Storage read origin changed');
+  const signals=[options.signal,attempt?.signal].filter((value):value is AbortSignal=>value!==undefined);
+  const signal=signals.length?AbortSignal.any(signals):undefined;
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
+  const abort=()=>controller.abort(signal?.reason);
+  signal?.addEventListener('abort',abort,{once:true});
   try {
-    const response = await fetcher(coreServiceOrigin() + path, {
+    signal?.throwIfAborted();
+    const response = await fetcher(origin + path, {
       method: options.method || 'GET', redirect: 'error', cache: 'no-store', signal: controller.signal,
       headers: { accept: 'application/json', ...(options.token ? { authorization: 'Bearer ' + options.token } : {}), ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers }, body: options.body,
     });
+    signal?.throwIfAborted();
+    if(attempt&&coreServiceOrigin()!==attempt.origin){void response.body?.cancel();throw new CoreError(503,'Storage read origin changed');}
     if (!response.ok) {
       let code:string|undefined;
       if(path.startsWith('/v1/compat/datasets/generation?')){
@@ -72,6 +82,8 @@ async function upstream(path: string, options: { token?: string; method?: string
         }catch{}
       }else if(path.startsWith('/v1/compat/experiments?')&&response.status===409){
         try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));if(value&&typeof value==='object'&&!Array.isArray(value)&&value.code==='TRIGGER_READ_CHANGED')code=value.code;}catch{}
+      }else if(/^\/v1\/compat\/(?:observe\/(?:data|session|session-source|session-sources|session-relations|evidence|traces\/export)|analytics)(?:\?|$)/.test(path)&&[409,503].includes(response.status)){
+        try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));if(value&&typeof value==='object'&&!Array.isArray(value)&&(response.status===409&&value.code==='TRACE_READ_CHANGED'||response.status===503&&value.code==='TRACE_INDEXING'))code=value.code;}catch{}
       }else void response.body?.cancel();
       const status = [400, 401, 403, 404, 409, 410, 413, 415, 422, 429, 501, 503].includes(response.status) ? response.status : 502;
       throw new CoreError(status, status === 401 ? 'Authentication required' : status === 403 ? 'Forbidden' : 'Storage core request failed',code);
@@ -80,8 +92,9 @@ async function upstream(path: string, options: { token?: string; method?: string
     let data: unknown;
     try { data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); } catch { throw new CoreError(502, 'Invalid storage core response'); }
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new CoreError(502, 'Invalid storage core response');
+    signal?.throwIfAborted();
     return { data: data as Record<string, unknown>, status: response.status };
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer);signal?.removeEventListener('abort',abort); }
 }
 function segment(value: string): string {
   if (value === '.' || value === '..' || value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) throw new CoreError(400, 'Invalid resource identifier');

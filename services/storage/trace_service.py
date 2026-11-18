@@ -7,6 +7,7 @@ from pathlib import Path
 from .contracts import canonical_json, content_hash, identifier
 from .control import StorageError, Conflict
 from .iam import IAMStore, Forbidden
+from .read_transitions import TraceIndexing, TraceReadChanged
 
 
 class CursorExpired(StorageError):
@@ -75,15 +76,26 @@ class TraceQueries:
                 WHERE t.workspace_id=? AND t.state='active'"""+access+' ORDER BY t.created_at_ms DESC,t.trace_id DESC LIMIT ?',tuple(params)).fetchall()
             return scope,[dict(r) for r in rows]
 
-    def _trace_rows(self, workspace_id, candidates, *, status, agent, search):
+    def _trace_rows(self, workspace_id, candidates, *, status, agent, search, credential=None, scope=None, read_boundaries=None):
         if not candidates:
             return {}
         from .collector_sources import indexed_boundary, CollectorSourcePending
         boundary_candidates=candidates
         source_boundary=indexed_boundary(self.control,workspace_id,boundary_candidates)
+        def recheck():
+            if credential is not None and scope is not None:
+                with self.control.read_transaction() as con:
+                    current=self.iam._scope(con,credential);self.iam._workspace(current,workspace_id,'read')
+                    if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed during collector query')
+                    for trace in source_boundary:self.iam._authorize_scope(con,current,workspace_id,'read','trace',trace)
+            after=indexed_boundary(self.control,workspace_id,boundary_candidates,identities={trace:value['identity'] for trace,value in source_boundary.items()})
+            if after==source_boundary:return
+            if credential is not None and scope is not None and set(after)==set(source_boundary) and all(after[trace].get('retired')==before.get('retired') for trace,before in source_boundary.items()):
+                raise TraceReadChanged('Collector source changed during query')
+            raise Conflict('Collector source identity changed during query')
         candidates=[candidate for candidate in candidates if not source_boundary.get(candidate['trace_id'],{}).get('retired')]
         if not candidates:
-            if indexed_boundary(self.control,workspace_id,boundary_candidates)!=source_boundary:raise Conflict('Collector source changed during query')
+            recheck()
             return {}
         params={'workspace_id':workspace_id}
         pairs=[]
@@ -104,7 +116,7 @@ class TraceQueries:
         sql='SELECT * FROM obs_trace_current FINAL WHERE '+' AND '.join(predicates)+' FORMAT JSONEachRow'
         raw=self.facts._request(sql,parameters=params)
         rows=[json.loads(line) for line in raw.splitlines() if line]
-        if indexed_boundary(self.control,workspace_id,boundary_candidates)!=source_boundary:raise Conflict('Collector source changed during query')
+        recheck()
         expected_ids={trace for trace,value in source_boundary.items() if value['revision'] is not None and not value.get('retired')}
         missing=expected_ids-{row.get('trace_id') for row in rows}
         verified=[]
@@ -116,7 +128,7 @@ class TraceQueries:
             presence_sql='SELECT * FROM obs_trace_current FINAL WHERE workspace_id={workspace_id:String} AND is_deleted=0 AND ('+' OR '.join(presence_pairs)+') FORMAT JSONEachRow'
             raw=self.facts._request(presence_sql,parameters=presence_params)
             verified=[json.loads(line) for line in raw.splitlines() if line]
-            if indexed_boundary(self.control,workspace_id,boundary_candidates)!=source_boundary:raise Conflict('Collector source changed during presence verification')
+            recheck()
         selected={candidate['trace_id']:candidate for candidate in candidates}
         for group,allowed in ((rows,set(selected)),(verified,missing)):
             for row in group:
@@ -128,9 +140,10 @@ class TraceQueries:
                             or row.get('trace_bucket')!=expected['bucket'] or row.get('source_namespace')!=candidate['source_namespace']
                             or row.get('native_trace_id')!=candidate['native_trace_id']):raise CollectorSourcePending('Collector summary is not at its indexed source revision')
         if expected_ids-{row.get('trace_id') for row in rows+verified}:raise CollectorSourcePending('Indexed collector summary is unavailable')
+        if read_boundaries is not None:read_boundaries.update(source_boundary)
         return {(r['trace_bucket'],r['trace_id']):r for r in rows if r['workspace_id']==workspace_id}
 
-    def list_traces(self, credential, workspace_id, *, limit=50, cursor=None, status=None, agent=None, search=None):
+    def list_traces(self, credential, workspace_id, *, limit=50, cursor=None, status=None, agent=None, search=None, read_boundaries=None):
         identifier(workspace_id)
         if type(limit) is not int or not 1<=limit<=200:
             raise ValueError('Trace page size must be1..200')
@@ -149,7 +162,7 @@ class TraceQueries:
                 raise CursorExpired('authorization changed while listing; refresh')
             if not candidates:
                 exhausted=True;break
-            facts=self._trace_rows(workspace_id,candidates,status=status,agent=agent,search=search)
+            facts=self._trace_rows(workspace_id,candidates,status=status,agent=agent,search=search,credential=credential,scope=scope,read_boundaries=read_boundaries)
             for candidate in candidates:
                 scanned+=1
                 position=(candidate['created_at_ms'],candidate['trace_id'])
@@ -182,9 +195,10 @@ class TraceQueries:
                 raise Forbidden('Trace route is not available')
             return dict(row)
 
-    def summary(self, credential, workspace_id, trace_id):
+    def summary(self, credential, workspace_id, trace_id, *, read_boundaries=None):
         route=self.route(credential,workspace_id,trace_id)
-        rows=self._trace_rows(workspace_id,[route],status=None,agent=None,search=None)
+        scope=self.iam.scope(credential)
+        rows=self._trace_rows(workspace_id,[route],status=None,agent=None,search=None,credential=credential,scope=scope,read_boundaries=read_boundaries)
         row=rows.get((route['trace_bucket'],trace_id))
         with self.control.read_transaction() as con:
             self.iam._authorize(con,credential,workspace_id,'read','trace',trace_id)
@@ -343,6 +357,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
             except Unauthorized:self.reply(401,{'error':'Authentication required'})
             except Forbidden:self.reply(403,{'error':'Forbidden'})
             except RateLimited:self.reply(429,{'error':'Too many login attempts'})
+            except TraceReadChanged:self.reply(409,{'error':'Trace read changed; retry the complete read','code':'TRACE_READ_CHANGED'})
+            except TraceIndexing:self.reply(503,{'error':'Trace is indexing; retry the complete read','code':'TRACE_INDEXING'})
             except (CursorExpired,Conflict) as exc:
                 code=getattr(exc,'code',None)
                 if code is None and str(exc) in ('IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED'):code=str(exc)

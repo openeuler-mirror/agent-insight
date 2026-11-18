@@ -18,6 +18,11 @@ class CollectorPublic:
         row=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
         return dict(row) if row else None
 
+    @staticmethod
+    def _identity_hash(con,workspace,route,owner):
+        aliases=[dict(row) for row in con.execute('SELECT alias_kind,alias_id FROM trace_legacy_ids WHERE workspace_id=? AND trace_id=? ORDER BY alias_kind,created_at_ms,alias_id',(workspace,route['trace_id']))]
+        return _hash({'route':route,'owner':owner,'aliases':aliases})
+
     def _read(self,con,token,workspace,reference):
         scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read')
         route=self._route(con,workspace,reference)
@@ -30,6 +35,7 @@ class CollectorPublic:
         owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(workspace,route['trace_id'])).fetchone()
         if not owner or owner[0]!=state.get('actor_id'):raise CollectorSourcePending('Collector owner differs')
         indexed_boundary(self.control,workspace,[route])
+        identity_hash=self._identity_hash(con,workspace,route,owner[0])
         snapshot=self.sources._load(state.get('snapshot_ref'))
         execution=copy.deepcopy(snapshot['execution']) if snapshot and not state.get('execution_retired') else None
         text,_=self.preparations._prior_session(state);session=json.loads(text)
@@ -49,7 +55,7 @@ class CollectorPublic:
         if can_execute:
             try:self.iam._workspace(scope,workspace,'execute')
             except Forbidden:can_execute=False
-        return {'collector':True,'trace_id':route['trace_id'],'source_revision':str(state['source_revision']),'annotation_revision':str(annotation['revision']) if annotation else '0','session_json':text,'execution':execution,'can_write':can_write,'can_execute':can_execute,'owner_principal_id':state['actor_id'],'execution_skills':copy.deepcopy(state.get('execution_skills',[]))},state
+        return {'collector':True,'trace_id':route['trace_id'],'identity_hash':identity_hash,'source_revision':str(state['source_revision']),'annotation_revision':str(annotation['revision']) if annotation else '0','session_json':text,'execution':execution,'can_write':can_write,'can_execute':can_execute,'owner_principal_id':state['actor_id'],'execution_skills':copy.deepcopy(state.get('execution_skills',[]))},state
 
     def _thread(self,con,token,workspace,execution):
         identity=execution.get('traceThreadId') if execution else None

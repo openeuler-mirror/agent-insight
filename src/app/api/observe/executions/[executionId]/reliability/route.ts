@@ -22,6 +22,7 @@ import type { RasEventRow } from '@/lib/ingest/ras/normalize'
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
 import { readTraceExecution } from '@/lib/storage-core/evidence'
 import { readCoreRasEvents, analyticsFailure } from '@/lib/storage-core/analytics'
+import {withCoreReadRetry,coreReadChanged} from '@/lib/storage-core/read-retry'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +31,12 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ executionId: string }> },
 ) {
+  if(!isStorageCoreEnabled())return readReliability(req,params)
+  try{return await withCoreReadRetry(req,()=>readReliability(req,params))}
+  catch(error){return analyticsFailure(error)}
+}
+
+async function readReliability(req:Request,params:Promise<{executionId:string}>) {
   try {
     const { executionId } = await params
     const id = String(executionId || '').trim()
@@ -42,11 +49,13 @@ export async function GET(
 
     const core = isStorageCoreEnabled()
     let executionSnapshot: string | null = null
+    let executionIdentity: Record<string,unknown> | null = null
     let execution: {id: string; taskId: string | null; finalResult: string | null} | null = null
     if (core) {
       try {
         const {evidence} = await readTraceExecution(req, {executionId: id})
         executionSnapshot = evidence.snapshot_hash
+        executionIdentity = evidence.manifest
         execution = {id: evidence.execution.id, taskId: evidence.execution.taskId, finalResult: evidence.execution.finalResult ?? null}
       } catch (error) {
         if ((error as {status?: number})?.status !== 404) throw error
@@ -141,7 +150,14 @@ export async function GET(
 
     if (executionSnapshot) {
       const {evidence} = await readTraceExecution(req, {executionId: id})
-      if (evidence.snapshot_hash !== executionSnapshot) throw Object.assign(new Error('Reliability execution source changed'), {status: 409})
+      if (evidence.snapshot_hash !== executionSnapshot) {
+        const fields=['project_id','workspace_id','trace_id','source_namespace','native_trace_id','trace_bucket','incarnation','route_epoch','owner_principal_id']
+        const firstIdentity=executionIdentity,firstAliases=firstIdentity?.aliases as Record<string,unknown>|undefined,nextAliases=evidence.manifest.aliases as Record<string,unknown>|undefined
+        const sameAliases=firstAliases&&nextAliases&&['task_id','execution_id'].every(key=>typeof firstAliases[key]==='string'&&firstAliases[key]===nextAliases[key])
+        const sameIdentity=firstIdentity&&sameAliases&&execution?.id===evidence.execution.id&&execution?.taskId===evidence.execution.taskId&&fields.every(key=>typeof firstIdentity[key]==='string'&&firstIdentity[key]===evidence.manifest[key])
+        if(sameIdentity)throw coreReadChanged('Reliability execution source changed')
+        throw Object.assign(new Error('Reliability execution identity changed'), {status: 409})
+      }
     }
     if (coreEvents) await coreEvents.validate()
     return NextResponse.json({
@@ -162,7 +178,7 @@ export async function GET(
       evaluation: null,
     })
   } catch (error) {
-    if (isStorageCoreEnabled()) return analyticsFailure(error)
+    if (isStorageCoreEnabled()) throw error
     console.error('[observe reliability GET]', error)
     return NextResponse.json({ error: 'failed to load reliability detail' }, { status: 500 })
   }

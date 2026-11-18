@@ -1,6 +1,7 @@
 import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import { handleCompatibleSession } from '@/lib/storage-core/compat';
 import {getCoreSessionScope,withCoreSessionRead,readCoreStoredSession,readCoreSessionRelations,revalidateCoreSession} from '@/lib/storage-core/session-source';
+import {withCoreReadRetry,isCoreReadTransition} from '@/lib/storage-core/read-retry';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -206,7 +207,8 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
     const thread = core?(stored?.thread as TraceThreadDto|null)??undefined:executionRow && owner
         ? await loadTraceThread(executionRow.traceThreadId, owner, executionRow.id)
         : undefined;
-    const signature = sessionSignature(session, framework, { ...executionRow, user: owner }, thread);
+    const sourceVersion=core&&stored?JSON.stringify([stored.source.trace_id,stored.source.identity_hash,stored.source.source_revision,stored.source.annotation_revision]):'';
+    const signature = sourceVersion+sessionSignature(session, framework, { ...executionRow, user: owner }, thread);
     const cacheKey=core?[core.actor.workspace,core.actor.principal,taskId].join('\0'):taskId;
     const cached = parsedSessionCache.get(cacheKey);
     if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
@@ -289,13 +291,13 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
 
 export async function GET(request: Request) {
   if(!isStorageCoreEnabled())return sessionRequest(request);
-  try{return await withCoreSessionRead(request,async()=>{
+  try{return await withCoreReadRetry(request,()=>withCoreSessionRead(request,async()=>{
     const taskId=new URL(request.url).searchParams.get('taskId');
     if(taskId&&!await readCoreStoredSession(taskId))return handleCompatibleSession(request);
     const response=await sessionRequest(request);
     if(taskId&&response.ok)await revalidateCoreSession(taskId);
     return response;
-  });}catch(error){const status=Number((error as {status?:number}).status)||503;return NextResponse.json({error:status===409?'Session changed; retry the request':'Session storage unavailable'},{status:[400,401,403,404,409,413,503].includes(status)?status:503});}
+  }));}catch(error){const status=Number((error as {status?:number}).status)||503;return NextResponse.json({error:status===409?'Session changed; retry the request':'Session storage unavailable'},{status:[400,401,403,404,409,413,503].includes(status)?status:503});}
 }
 async function sessionRequest(request:Request){
     const { searchParams } = new URL(request.url);
@@ -411,6 +413,7 @@ async function sessionRequest(request:Request){
                     else db.updateSession(taskId, { query }).catch(console.error);
                 }
             } catch (e) {
+                if(core&&(isCoreReadTransition(e)||(e as {code?:string})?.code==='TRACE_READ_INVALIDATED'))throw e;
                 console.warn('Failed to extract query on the fly', e);
             }
         }
@@ -439,6 +442,7 @@ async function sessionRequest(request:Request){
             ...(thread ? { thread } : {}),
         });
     } catch (e) {
+        if(getCoreSessionScope())throw e;
         console.error('Error reading session from DB:', e);
         return NextResponse.json({ error: 'Failed to read session' }, { status: 500 });
     }

@@ -9,6 +9,7 @@ import re
 from .contracts import content_hash, identifier
 from .control import Conflict, StorageError
 from .iam import Forbidden
+from .read_transitions import TraceReadChanged
 from .trace_evidence import TraceEvidence
 
 MAX_PROJECTION_BYTES=2*1024*1024
@@ -140,22 +141,28 @@ class TraceAnalytics:
         # Ingest prepares every changed Span and advances this Trace head in the same control transaction.
         value={'route':dict(route),'owner':dict(owner),'aliases':aliases,'annotation':dict(annotation) if annotation else None,'trace_head':dict(head) if head else None,'parser_version':PARSER_VERSION}
         task=next((row['alias_id'] for row in aliases if row['alias_kind']=='task'),trace)
-        return _hash(value),{'route':dict(route),'owner':dict(owner),'task_id':task,'trace_head_revision':head['revision'] if head else None}
+        return _hash(value),{'route':dict(route),'owner':dict(owner),'task_id':task,'trace_head_revision':head['revision'] if head else None,
+            'read_identity':{'scope':scope.fingerprint,'route':dict(route),'owner':dict(owner),'aliases':aliases,'barriers':[]}}
 
-    def _recheck(self,token,workspace,scope,boundaries):
+    def _recheck(self,token,workspace,scope,boundaries,identities=None):
         with self.control.read_transaction() as con:
             current=self.iam._scope(con,token);self.iam._workspace(current,workspace,'read')
             if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed during analytics query')
             for trace,boundary in boundaries.items():
-                if self._boundary(con,token,workspace,trace,current)[0]!=boundary:raise Conflict('Trace source changed during analytics query')
+                actual,source=self._boundary(con,token,workspace,trace,current)
+                identity=(identities or {}).get(trace)
+                if identity is not None and source['read_identity']!=identity:raise Conflict('Trace read identity changed during analytics query')
+                if actual!=boundary:
+                    if identity is not None:raise TraceReadChanged('Trace source changed during analytics query')
+                    raise Conflict('Trace source changed during analytics query')
 
     def prepare(self,token,workspace,trace):
         identifier(workspace);identifier(trace)
         with self.control.read_transaction() as con:
-            scope=self.iam._scope(con,token);boundary,_=self._boundary(con,token,workspace,trace,scope)
+            scope=self.iam._scope(con,token);boundary,source=self._boundary(con,token,workspace,trace,scope)
         evidence=TraceEvidence(self.queries,self.authorized,max_bytes=128*1024*1024,allow_missing_session=True,analytics_fields=True).read(token,workspace,trace_ref=trace)
         summary=self.queries.summary(token,workspace,trace)['trace']
-        self._recheck(token,workspace,scope,{trace:boundary})
+        self._recheck(token,workspace,scope,{trace:boundary},{trace:source['read_identity']})
         return {'trace_id':trace,'boundary':boundary,'summary':summary,'evidence':evidence}
 
     def publish(self,token,workspace,trace,boundary,projection):
@@ -219,7 +226,7 @@ class TraceAnalytics:
                 if receipt:accepted.append({'trace_id':trace,'trace_bucket':row['trace_bucket'],'boundary':boundary,'projection_hash':receipt['projection_hash']})
                 else:pending.append({'trace_id':trace,'boundary':boundary})
         if pending and any(key in selection_filter for key in ('from_ms','to_ms')):
-            summaries=self.queries._trace_rows(workspace,[sources[row['trace_id']]['route'] for row in pending],status=None,agent=None,search=None)
+            summaries=self.queries._trace_rows(workspace,[sources[row['trace_id']]['route'] for row in pending],status=None,agent=None,search=None,credential=token,scope=scope)
             pending=[row for row in pending if self._summary_might_match(summaries.get((sources[row['trace_id']]['route']['trace_bucket'],row['trace_id'])),sources[row['trace_id']],selection_filter)]
         facts=self.facts.read_analytics(workspace,accepted) if accepted else []
         actual={(row['trace_id'],row['boundary'],row['projection_hash']):row for row in facts if row.get('workspace_id')==workspace}
@@ -237,7 +244,7 @@ class TraceAnalytics:
         selected_ids={row['trace_id'] for row in items+pending}
         with self.control.read_transaction() as con:outcome_snapshot=self._outcome_snapshot(con,token,workspace,sorted(row['trace_id'] for row in items))
         events,ras_snapshot=self._ras_read(workspace,{trace:source for trace,source in sources.items() if trace in selected_ids}) if include_ras else ([],None)
-        self._recheck(token,workspace,scope,boundaries)
+        self._recheck(token,workspace,scope,boundaries,{trace:source['read_identity'] for trace,source in sources.items()})
         position=candidates[-1] if candidates else None
         next_cursor=self.queries._encode({'version':1,'scope':scope.fingerprint,'query':query,'created_at_ms':position['created_at_ms'],'trace_id':position['trace_id']}) if more else None
         ras_token=self.queries._encode({'purpose':'analytics-ras/v1','workspace_id':workspace,'scope':scope.fingerprint,'trace_ids':sorted(selected_ids),'snapshot_hash':_hash(ras_snapshot)}) if include_ras else None
@@ -321,6 +328,9 @@ class TraceAnalytics:
         result=dict(rows[0])
         annotation=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(workspace,result['trace_id'])).fetchone()
         source_route=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,result['trace_id'])).fetchone()
+        result['read_identity']={'route':dict(source_route),'owner_principal_id':result['owner_principal_id'],
+            'aliases':[dict(row) for row in con.execute('SELECT alias_kind,alias_id FROM trace_legacy_ids WHERE workspace_id=? AND trace_id=? ORDER BY alias_kind,created_at_ms,alias_id',(workspace,result['trace_id']))],
+            'barriers':[dict(row) for row in con.execute("SELECT * FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=? ORDER BY deletion_id",(workspace,result['trace_id'],source_route['incarnation']))]}
         if source_route['source_namespace']=='collector.source.v1':
             from .collector_sources import indexed_boundary
             indexed_boundary(self.control,workspace,[dict(source_route)])
@@ -401,8 +411,24 @@ class TraceAnalytics:
             key=(row['owner_principal_id'],row['task_id'])
             if key not in links:links[key]=self._ras_trace_link(con,scope,workspace,row['task_id'],row['owner_principal_id'],deadline=deadline)
             row['execution_id']=links[key]['execution_id'] if links[key] else None
+        pairs={(row['owner_principal_id'],row['task_id']) for row in receipts}
+        pairs.update((root['owner_principal_id'] if root else scope.principal_id,task) for task,root in roots.items())
+        barriers=[]
+        for owner,task in sorted(pairs):
+            barriers.extend(dict(row) for row in con.execute("SELECT * FROM deletion_requests WHERE workspace_id=? AND resource_kind='ras_task' AND resource_id=? ORDER BY deletion_id",(workspace,ras_task_barrier(owner,task))))
+        identity={'links':[{'owner_principal_id':owner,'task_id':task,'trace':link['read_identity'] if link else None} for (owner,task),link in sorted(links.items())],'barriers':barriers}
         self._ras_budget(deadline)
-        return {'scope':scope.fingerprint,'receipts':receipts,'roots':roots}
+        return {'scope':scope.fingerprint,'receipts':receipts,'roots':roots,'read_identity':identity}
+
+    @staticmethod
+    def _ras_read_identity_hash(snapshot):
+        roots={task:{key:value for key,value in root.items() if key not in {'head_revision','head_hash','annotation_hash'}} if root else None for task,root in snapshot['roots'].items()}
+        return _hash({**snapshot,'roots':roots})
+
+    @staticmethod
+    def _ras_legacy_snapshot(snapshot):
+        return {'scope':snapshot['scope'],'receipts':snapshot['receipts'],
+            'roots':{task:{key:value for key,value in root.items() if key!='read_identity'} if root else None for task,root in snapshot['roots'].items()}}
 
     def ras_read(self,token,workspace,tasks=None,selection=None):
         import time
@@ -421,7 +447,12 @@ class TraceAnalytics:
         while True:
             self._ras_budget(deadline)
             with self.control.read_transaction() as con:current=self._ras_read_snapshot(con,token,workspace,selection,deadline)
-            if before and (current['scope']!=before['scope'] or current['roots']!=before['roots'] or current['receipts'][:processed]!=before['receipts']):raise Conflict('RAS sources changed during bounded scan')
+            if before:
+                links={(row['owner_principal_id'],row['task_id']):row for row in current['read_identity']['links']}
+                identity_changed=current['read_identity']['barriers']!=before['read_identity']['barriers'] or any(links.get((row['owner_principal_id'],row['task_id']))!=row for row in before['read_identity']['links'])
+                if current['scope']!=before['scope'] or current['roots']!=before['roots'] or current['receipts'][:processed]!=before['receipts'] or identity_changed:
+                    if current['receipts']==before['receipts'] and self._ras_read_identity_hash(current)==self._ras_read_identity_hash(before):raise TraceReadChanged('RAS Trace versions changed during bounded scan')
+                    raise Conflict('RAS sources changed during bounded scan')
             before=current;pending=before['receipts'][processed:]
             for offset in range(0,len(pending),200):
                 rows=pending[offset:offset+200];facts=read_facts(rows)
@@ -444,8 +475,11 @@ class TraceAnalytics:
             if selection['scan_limit']>=MAX_RAS_SCAN:raise AnalyticsTooLarge('RAS type scan exceeds receipt budget; narrow taskIds')
             selection['scan_limit']=min(MAX_RAS_SCAN,selection['scan_limit']+200)
         with self.control.read_transaction() as con:
-            if self._ras_read_snapshot(con,token,workspace,selection,deadline)!=before:raise Conflict('RAS read source or authorization changed')
-        read_token=self.queries._encode({'purpose':'analytics-ras-read/v1','workspace_id':workspace,'scope':before['scope'],'selection':selection,'snapshot_hash':_hash(before)})
+            after=self._ras_read_snapshot(con,token,workspace,selection,deadline)
+            if after!=before:
+                if self._ras_read_identity_hash(after)==self._ras_read_identity_hash(before):raise TraceReadChanged('RAS Trace versions changed during read')
+                raise Conflict('RAS read source or authorization changed')
+        read_token=self.queries._encode({'purpose':'analytics-ras-read/v1','workspace_id':workspace,'scope':before['scope'],'selection':selection,'snapshot_hash':_hash(before),'identity_hash':self._ras_read_identity_hash(before)})
         self._ras_budget(deadline)
         if len(read_token)>MAX_RAS_READ_TOKEN_BYTES:raise AnalyticsTooLarge('RAS selection exceeds read token budget; narrow taskIds')
         return {'events':events,'has_more':seen>selection['limit'] or bool(selection['types'] and seen>=selection['limit'] and processed==selection['scan_limit']),'execution_ids':{task:row['execution_id'] if row else None for task,row in before['roots'].items()},'scope_fingerprint':before['scope'],'read_token':read_token}
@@ -456,7 +490,11 @@ class TraceAnalytics:
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read')
             value=self._read_snapshot_token(read_token,workspace,scope,'analytics-ras-read/v1',selection_key='selection')
-            if _hash(self._ras_read_snapshot(con,token,workspace,value['selection'],deadline))!=value['snapshot_hash']:raise Conflict('RAS read sources changed')
+            current=self._ras_read_snapshot(con,token,workspace,value['selection'],deadline)
+            selected=current if 'identity_hash' in value else self._ras_legacy_snapshot(current)
+            if _hash(selected)!=value['snapshot_hash']:
+                if value.get('identity_hash')==self._ras_read_identity_hash(current):raise TraceReadChanged('RAS Trace versions changed after read')
+                raise Conflict('RAS read sources changed')
         self._ras_budget(deadline)
         return {'scope_fingerprint':scope.fingerprint}
 
@@ -822,7 +860,10 @@ class TraceAnalytics:
             body,signature=raw[:-32],raw[-32:]
             if len(signature)!=32 or not hmac.compare_digest(signature,hmac.new(self.queries.secret,body,hashlib.sha256).digest()):raise ValueError()
             value=json.loads(body)
-            if not isinstance(value,dict) or set(value)!={'purpose','workspace_id','scope',selection_key,'snapshot_hash'} or value['purpose']!=purpose or value['workspace_id']!=workspace or value['scope']!=scope.fingerprint:raise ValueError()
+            expected={'purpose','workspace_id','scope',selection_key,'snapshot_hash'}
+            if purpose=='analytics-ras-read/v1' and selection_key=='selection' and isinstance(value,dict) and 'identity_hash' in value:
+                expected.add('identity_hash');_digest(value['identity_hash'])
+            if not isinstance(value,dict) or set(value)!=expected or value['purpose']!=purpose or value['workspace_id']!=workspace or value['scope']!=scope.fingerprint:raise ValueError()
             _digest(value['snapshot_hash'])
             if selection_key=='selection':
                 selected=value[selection_key]

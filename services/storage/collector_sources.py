@@ -8,6 +8,7 @@ import uuid
 from .contracts import canonical_json, identifier
 from .control import Conflict, StorageError
 from .iam import IAMStore, Forbidden
+from .read_transitions import TraceIndexing, TraceReadChanged
 from .observations import EVENT_TYPE, _json, _payload_revision, _normalize, _source_projection, _merge_projection
 from .trace_transfer import LegacyTraceTransfer, _attribute
 
@@ -22,6 +23,10 @@ MAX_OPERATIONS=4096
 
 class CollectorSourcePending(StorageError):
     status=503
+
+
+class CollectorIndexing(CollectorSourcePending, TraceIndexing):
+    pass
 
 
 class CollectorSourceLimit(ValueError):
@@ -120,7 +125,7 @@ def graph_state(sources,con,workspace,op):
         if member['operation_key']==op['operation_key'] and member['input_hash']==op['input_hash']:own=True
         for ref in member['batch_refs']:
             row=con.execute('SELECT state,principal_id,packet_hash,trace_ids_json FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(workspace,ref['batch_id'])).fetchone()
-            if row is None or row['principal_id']!=member['actor_id'] or row['packet_hash']!=ref['packet_hash'] or json.loads(row['trace_ids_json'])!=[trace]:raise CollectorSourcePending('Collector graph receipt batch differs')
+            if row is None or row['principal_id']!=member['actor_id'] or row['packet_hash']!=ref['packet_hash'] or json.loads(row['trace_ids_json'])!=[trace] or row['state'] not in {'accepted','prepared','indexed','failed'}:raise CollectorSourcePending('Collector graph receipt batch differs')
             states.append(row['state'])
     if not own:raise CollectorSourcePending('Collector operation is absent from graph vector')
     if any(state=='failed' for state in states):return 'failed'
@@ -128,7 +133,7 @@ def graph_state(sources,con,workspace,op):
     return 'prepared' if any(state=='prepared' for state in states) else 'accepted'
 
 
-def indexed_boundary(control,workspace,candidates):
+def indexed_boundary(control,workspace,candidates,*,identities=None):
     selected=[candidate for candidate in candidates if candidate.get('source_namespace')==NAMESPACE]
     if not selected:return {}
     result={}
@@ -137,34 +142,49 @@ def indexed_boundary(control,workspace,candidates):
     with control.read_transaction() as con:
         for candidate in selected:
             trace=candidate['trace_id'];route=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
-            if route is None or route['state']!='active':raise Conflict('Collector source route changed')
+            if route is None or route['state']!='active' or any(candidate.get(key)!=route[key] for key in route.keys()):raise Conflict('Collector source route changed')
             owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(workspace,trace)).fetchone()
+            aliases=[dict(row) for row in con.execute('SELECT alias_kind,alias_id FROM trace_legacy_ids WHERE workspace_id=? AND trace_id=? ORDER BY alias_kind,created_at_ms,alias_id',(workspace,trace))]
+            if con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=?",(workspace,trace,route['incarnation'])).fetchone():raise Conflict('Collector deletion barrier exists')
+            identity={'route':dict(route),'owner':owner[0] if owner else None,'aliases':aliases}
+            if (identities or {}).get(trace) is not None and identities[trace]!=identity:raise Conflict('Collector read identity changed')
             annotation=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
             state=_source_state(dict(route),annotation,owner[0] if owner else None);pending=state.get('pending')
             if pending:
                 op=state.get('operations',{}).get(pending)
                 if not isinstance(op,dict):raise CollectorSourcePending('Collector source receipt is unavailable')
                 if op['stage']=='committed':
-                    if op.get('graph_ref') and graph_state(sources,con,workspace,op)!='indexed':raise CollectorSourcePending('Collector graph is not fully indexed')
+                    states=[]
+                    if op.get('graph_ref'):
+                        graph=graph_state(sources,con,workspace,op)
+                        if graph=='failed':raise CollectorSourcePending('Collector graph publication failed')
+                        states.append(graph)
                     for ref in op['batch_refs']:
                         row=con.execute('SELECT state,principal_id,packet_hash,trace_ids_json FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(workspace,ref['batch_id'])).fetchone()
-                        if (row is None or row['state']!='indexed' or row['principal_id']!=state['actor_id'] or row['packet_hash']!=ref['packet_hash'] or json.loads(row['trace_ids_json'])!=[trace]):raise CollectorSourcePending('Collector snapshot is not fully indexed')
+                        if (row is None or row['principal_id']!=state['actor_id'] or row['packet_hash']!=ref['packet_hash'] or json.loads(row['trace_ids_json'])!=[trace]
+                                or row['state'] not in {'accepted','prepared','indexed','failed'}):raise CollectorSourcePending('Collector snapshot receipt differs')
+                        states.append(row['state'])
+                    if 'failed' in states:raise CollectorSourcePending('Collector snapshot publication failed')
+                    if any(value in {'accepted','prepared'} for value in states):raise CollectorIndexing('Collector snapshot is not fully indexed')
             head=con.execute("SELECT revision,content_hash FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? AND entity_kind='trace' AND entity_id=?",(workspace,trace,trace)).fetchone()
-            result[trace]={'revision':str(head['revision']) if head else None,'hash':head['content_hash'] if head else None,'bucket':route['trace_bucket']}
+            result[trace]={'revision':str(head['revision']) if head else None,'hash':head['content_hash'] if head else None,'bucket':route['trace_bucket'],'identity':identity}
             if state.get('execution_retired') is True:result[trace]['retired']=True
     return result
 
 
-def current_boundary(control,token,workspace,route):
+def current_boundary(control,token,workspace,route,*,check_indexed=True):
     iam=IAMStore(control)
     with control.read_transaction() as con:
-        iam._authorize(con,token,workspace,'read','trace',route['trace_id'])
+        scope=iam._authorize(con,token,workspace,'read','trace',route['trace_id'])
         actual=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,route['trace_id'])).fetchone()
         if actual is None or dict(actual)!=route:raise Conflict('Collector read route changed')
         owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(workspace,route['trace_id'])).fetchone()
         annotation=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(workspace,route['trace_id'])).fetchone()
+        aliases=[dict(row) for row in con.execute('SELECT alias_kind,alias_id FROM trace_legacy_ids WHERE workspace_id=? AND trace_id=? ORDER BY alias_kind,created_at_ms,alias_id',(workspace,route['trace_id']))]
+        if con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=?",(workspace,route['trace_id'],route['incarnation'])).fetchone():raise Conflict('Collector deletion barrier exists')
+        if check_indexed:indexed_boundary(control,workspace,[route])
         heads=[dict(row) for row in con.execute('SELECT * FROM obs_entity_heads WHERE workspace_id=? AND trace_id=? ORDER BY entity_kind,entity_id',(workspace,route['trace_id']))]
-        return {'route':dict(actual),'annotation':dict(annotation) if annotation else None,'owner':{'owner_principal_id':owner[0]},'heads':heads}
+        return {'scope':scope.fingerprint,'route':dict(actual),'annotation':dict(annotation) if annotation else None,'owner':{'owner_principal_id':owner[0]},'aliases':aliases,'heads':heads}
 
 
 def relations(control,token,workspace,route):
@@ -176,8 +196,14 @@ def relations(control,token,workspace,route):
     return copy.deepcopy(value)
 
 
-def current_rows(control,token,workspace,route,rows):
-    begin=current_boundary(control,token,workspace,route)
+def current_rows(control,token,workspace,route,rows,*,begin=None):
+    begin=begin or current_boundary(control,token,workspace,route)
+    def verify():
+        end=current_boundary(control,token,workspace,route,check_indexed=False)
+        if end['scope']!=begin['scope']:raise Forbidden('Authorization changed during collector read')
+        if any(end[key]!=begin[key] for key in ('route','owner','aliases')):raise Conflict('Collector read identity changed')
+        indexed_boundary(control,workspace,[route],identities={route['trace_id']:{'route':begin['route'],'owner':begin['owner']['owner_principal_id'],'aliases':begin['aliases']}})
+        if end!=begin:raise TraceReadChanged('Collector source changed while reading')
     from .observations import ObservationIngest
     ingest=ObservationIngest(control,None)
     def load(head):
@@ -185,10 +211,10 @@ def current_rows(control,token,workspace,route,rows):
         if _hash(value)!=head['content_hash']:raise CollectorSourcePending('Collector source artifact differs')
         return value
     expected={head['entity_id']:head for head in active_heads(control,begin,load)}
-    if set(expected)!={row['span_id'] for row in rows} or any(str(row.get('revision'))!=str(expected[row['span_id']]['revision']) for row in rows):raise CollectorSourcePending('Collector facts are not fully indexed')
+    if set(expected)!={row['span_id'] for row in rows} or any(str(row.get('revision'))!=str(expected[row['span_id']]['revision']) for row in rows):
+        verify();raise CollectorSourcePending('Collector facts are not fully indexed')
     ordered=order_rows(begin,rows)
-    end=current_boundary(control,token,workspace,route)
-    if end!=begin:raise Conflict('Collector source changed while reading')
+    verify()
     return ordered
 
 

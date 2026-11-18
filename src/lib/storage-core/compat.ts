@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { coreServiceOrigin, handleCoreIngest, readCoreBytes, requestCore } from './server';
+import {withCoreReadRetry,bindCoreReadIdentity,coreReadRetryActive,isCoreReadTransition} from './read-retry';
 
 interface Identity { username: string | null; apiKey: string | null }
 interface Binding { legacy_api_key_sha256: string; legacy_username: string; principal_id: string; workspace_id: string; credential: string }
@@ -125,7 +126,8 @@ async function context(request:Request,options:CompatibilityOptions={}) {
 }
 export async function compatibleRequest(request:Request,target:string,fields:string[],options:CompatibilityOptions={}) {
  try {
-  const actor=await context(request,options);const source=new URL(request.url).searchParams;const query=new URLSearchParams({workspace_id:actor.workspace});
+  return await withCoreReadRetry(request,async()=>{
+  const actor=await context(request,options);bindCoreReadIdentity(actor);const source=new URL(request.url).searchParams;const query=new URLSearchParams({workspace_id:actor.workspace});
   for(const key of fields) {const values=source.getAll(key);if(values.length>1)throw new CompatibilityError(400,'Duplicate query parameter');if(values.length)query.set(key,values[0]);}
   let body:string|undefined;
   if(request.method!=='GET' && request.method!=='HEAD') {
@@ -143,7 +145,7 @@ export async function compatibleRequest(request:Request,target:string,fields:str
    if(!/^[\x21-\x7e]{1,512}$/.test(receipt))throw new CompatibilityError(400,'Invalid import receipt');
    headers['idempotency-key']=receipt;
   }
-  const {data,status}=await requestCore(target+'?'+query,{token:actor.token,method:request.method,body,responseLimit,timeoutMs,headers},options.fetcher || fetch);
+  const {data,status}=await requestCore(target+'?'+query,{token:actor.token,method:request.method,body,responseLimit,timeoutMs,headers,signal:request.signal},options.fetcher || fetch);
   if(!Object.prototype.hasOwnProperty.call(data,'value'))throw new CompatibilityError(502,'Invalid compatibility response');
   const result=json(data.value,status);
   if(target.endsWith('/traces/export')) {
@@ -163,7 +165,8 @@ export async function compatibleRequest(request:Request,target:string,fields:str
    if(feature&&event)recordVerifiedCoreUsage({...actor,username:actor.username},options,feature,event);
   }
   return result;
- } catch(error) {return failure(error);}
+  });
+ } catch(error) {if(coreReadRetryActive()&&isCoreReadTransition(error))throw error;return failure(error);}
 }
 export async function handleCompatibleObserveData(request:Request,options:CompatibilityOptions={}) {
  if(request.method==='PATCH'){

@@ -496,3 +496,9 @@ collector.source.v1适配原上传协议时，不为未提供、null或空agentN
 
 
 原 `/api/settings` 与 `/api/settings/test` 别名也通过apiFetch携带当前凭据，仍由真实actor及当前owner/capability授权。原Skill管理、工作台及生成会话的ZIP下载复用鉴权Blob传输，优先沿用服务端Content-Disposition文件名，保留原字节；不将凭据放入链接，不按query user授权。页面JSX/样式保持，完整Blob缓冲的边界同Infra导出。
+
+### 分析更新期间的完整读取
+
+原 Trace 列表、Session、证据及 reliability 读取保留完整快照校验。已提交但尚未索引的采集快照以私有 `503/TRACE_INDEXING` 标识；同一身份的来源或分析版本在读取中更新，以 `409/TRACE_READ_CHANGED` 标识。Node 只对这两类 GET 重新执行完整的授权及读取流程，不返回旧快照、部分正文或空结果作为成功。每次读取绑定原服务地址、实际 principal/workspace 及取消信号；来源改绑、删除、权限撤销、稳定事实缺失、损坏和普通服务故障继续按原错误返回。
+
+自动重试最多 32 次，等待及新尝试的启动窗口为 15 秒；单次既有 I/O 超时保持，因此这不是整个请求的 15 秒硬超时。写入和已经开始的模型调用不重放。Session 解析缓存同时绑定来源身份、source revision 与 annotation revision。私有 session-source 可返回 `identity_hash`，RAS 签名读取 token 可携带同名身份摘要；只在身份证明未变化时允许版本切换重试。旧服务未提供摘要、旧 RAS token 或身份变化仍返回 Conflict，不推断可安全重试。公共 DTO、原界面和关系库 schema 均不因此变化。

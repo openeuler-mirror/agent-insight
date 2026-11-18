@@ -691,3 +691,9 @@ Infra也已在独立分支2800da7d完成整域逻辑（018两控制表+CH003，�
 修复后实际浏览器Infra请求200，summary agents与settings别名HTTP200；原Skill管理“下载zip”按钮真实下载linux-messages-auth-triage-demo-v0.zip，13份文件逐字与原内置bundle一致。原Agent、工作台、实验、Infra和诊断只读页均可打开，后者显示2条Trace/0异常。无真实外部模型调用或物理设备。初次401/400日志及截图继续保留，不能将当时空页面记为成功读取。
 
 证据补充：acceptance-v2/{final-transport-http-evidence,original-ui-skill-download-evidence,final-transport-refresh-evidence}.json、original-ui-skill-download.zip、final-skill-download.jpg、final-infra-authenticated-page.jpg；consolidated-final-ui-transport-review.json为独立静态审查，consolidated-final-ui-root-recheck.json为根独立复验。当前完整字段/schema版本没有再变化，用户AGENTS.md原哈希保持。
+
+## 2026-11-18 分析更新读取一致性修复（最终回归进行中）
+
+本片针对上轮实际观察到的分析更新短暂409/503。保持后端完整快照与身份校验，通过私有TRACE_INDEXING/TRACE_READ_CHANGED识别可重新读取的索引等待与同身份版本变化；Node重新执行完整授权读取，固定origin/actor并响应取消。只重试GET，模型开始后及写入不重放；来源改绑、删除、权限撤销、事实缺失/损坏继续失败。Session缓存绑定来源身份/source/annotation版本，RAS新私有签名token区分版本变化与身份变化，旧token不放宽。最多32次，15秒为等待与新尝试启动窗口，单次I/O超时不改。
+
+当前专项：Python81/81；原四个handler→实际Python索引等待→真实ClickHouse更新后均200，正文/标签为新值。独立审查的model preflight吞错、origin/取消后继续RPC及等待耗尽仍发请求三个P2已修复并复验。尚不把这些专项称最终全量结果；后续以冻结来源完整Node/Python结果及原界面复查为准。新证据独立保存在exclude/storage-core-read-transition/20261118-z7j6zhaw/，不覆盖上轮失败和通过日志。未改TSX/CSS/schema，未刷新旧58488环境或切生产。

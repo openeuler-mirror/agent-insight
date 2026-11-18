@@ -4,7 +4,8 @@ import json
 import math
 
 from .iam import Forbidden
-from .control import StorageError
+from .control import StorageError, Conflict
+from .read_transitions import TraceReadChanged
 
 
 class CompatibilityListLimit(StorageError):
@@ -44,27 +45,41 @@ class LegacyTraceList:
         outcome_store=ExperimentStore(self.control)
         from .trace_analytics import MAX_EXECUTION_SOURCE_BYTES
         from .execution_metadata import record_fields
-        cursor=None;result=[];scope=self.iam.scope(token);source_budget={'remaining':MAX_EXECUTION_SOURCE_BYTES};boundaries={}
+        from .trace_analytics import TraceAnalytics
+        reader=self.analytics or TraceAnalytics(self.queries,None)
+        cursor=None;result=[];scope=self.iam.scope(token);source_budget={'remaining':MAX_EXECUTION_SOURCE_BYTES};boundaries={};identities={};summary_boundaries={}
         self.iam._workspace(scope,workspace,'read')
         if trace_ids is not None:trace_ids=sorted(trace_ids)
         while True:
-            if trace_ids is None:page=self.queries.list_traces(token,workspace,limit=200,cursor=cursor)
+            if trace_ids is None:page=self.queries.list_traces(token,workspace,limit=200,cursor=cursor,read_boundaries=summary_boundaries)
             else:
                 offset=cursor or 0;items=[]
                 for trace in trace_ids[offset:offset+200]:
                     route=self.queries.route(token,workspace,trace)
-                    row=self.queries.summary(token,workspace,trace)['trace']
+                    row=self.queries.summary(token,workspace,trace,read_boundaries=summary_boundaries)['trace']
                     if row is not None:
                         if row['trace_bucket']!=route['trace_bucket']:raise Forbidden('Trace route changed during compatibility read')
                         items.append(dict(row,created_at_ms=route['created_at_ms']))
                 page={'items':items,'next_cursor':offset+200 if offset+200<len(trace_ids) else None}
             captured={}
-            if self.analytics and page['items']:
+            if page['items']:
                 with self.control.read_transaction() as con:
-                    selections=[{'trace_id':row['trace_id'],'boundary':self.analytics._boundary(con,token,workspace,row['trace_id'],scope)[0]} for row in page['items']]
-                snapshot=self.analytics.execution_metadata(token,workspace,selections,source_budget=source_budget)
+                    current=self.iam._scope(con,token);self.iam._workspace(current,workspace,'read')
+                    if current.fingerprint!=scope.fingerprint:raise Forbidden('authorization changed before compatibility capture')
+                    for row in page['items']:
+                        trace=row['trace_id'];boundary,source=reader._boundary(con,token,workspace,trace,scope)
+                        if row.get('source_namespace')=='collector.source.v1' and str(row.get('revision'))!=str(source['trace_head_revision']):
+                            before=summary_boundaries.get(trace,{}).get('identity');identity=source['read_identity']
+                            if before=={'route':identity['route'],'owner':identity['owner']['owner_principal_id'],'aliases':identity['aliases']}:raise TraceReadChanged('Collector summary changed before compatibility capture')
+                            raise Conflict('Collector summary changed before compatibility capture')
+                        boundaries[trace]=boundary;identities[trace]=source['read_identity']
+            if self.analytics and page['items']:
+                selections=[{'trace_id':row['trace_id'],'boundary':boundaries[row['trace_id']]} for row in page['items']]
+                try:snapshot=self.analytics.execution_metadata(token,workspace,selections,source_budget=source_budget)
+                except Conflict:
+                    reader._recheck(token,workspace,scope,boundaries,identities)
+                    raise
                 captured={row['trace_id']:row for row in snapshot['items']}
-                boundaries.update({row['trace_id']:row['boundary'] for row in snapshot['items']})
             with self.control.read_transaction() as con:
                 for row in page['items']:
                     owner=con.execute('SELECT normalized_login_name FROM iam_principals WHERE principal_id=?',(row['owner_principal_id'],)).fetchone()
@@ -119,17 +134,20 @@ class LegacyTraceList:
                         if 'skill' in projection:record['_source_skill']=projection['skill'];record['_source_skill_version']=projection.get('skill_version')
                         if 'invokedSkills' in projection:
                             record['_execution_relations']=[{'skillName':item['name'],'skillVersion':item.get('version')} for item in projection['invokedSkills'] or []]
+                    record['_read_identity']=identities.get(row['trace_id'])
                     result.append(record)
             if len(result)>100000:raise CompatibilityListLimit('narrow the legacy query scope')
             cursor=page.get('next_cursor')
             if not cursor:break
-        self._recheck(token,workspace,scope,[row['_trace_id'] for row in result],{row['_trace_id']:row['_outcome_selection'] for row in result},boundaries)
+        self._recheck(token,workspace,scope,[row['_trace_id'] for row in result],{row['_trace_id']:row['_outcome_selection'] for row in result},boundaries,identities)
         for row in result:row['_execution_boundary']=boundaries.get(row['_trace_id'])
         return result,scope
 
-    def _recheck(self,token,workspace,scope,trace_ids=(),outcomes=None,boundaries=None):
+    def _recheck(self,token,workspace,scope,trace_ids=(),outcomes=None,boundaries=None,identities=None):
         from .experiments import ExperimentStore
         from .trace_outcome import _lookup_tx
+        from .trace_analytics import TraceAnalytics
+        reader=self.analytics or TraceAnalytics(self.queries,None)
         with self.control.read_transaction() as con:
             current=self.iam._scope(con,token);self.iam._workspace(current,workspace,'read')
             if current.fingerprint!=scope.fingerprint:raise Forbidden('authorization changed during compatibility read')
@@ -138,12 +156,13 @@ class LegacyTraceList:
                 marks=','.join('?' for _ in roots)
                 count=con.execute("SELECT COUNT(*) FROM trace_locators WHERE workspace_id=? AND state='active' AND trace_id IN ("+marks+")",tuple([workspace,*roots])).fetchone()[0]
                 if count!=len(roots):raise Forbidden('Trace deletion changed during compatibility read')
+            if boundaries:reader._recheck(token,workspace,scope,boundaries,identities)
             store=ExperimentStore(self.control)
             for trace,selection in (outcomes or {}).items():
                 if _lookup_tx(store,con,token,workspace,{'trace_ref':trace})['selection_hash']!=selection:
-                    from .control import Conflict
+                    if (identities or {}).get(trace) is not None:raise TraceReadChanged('Outcome selection changed during Trace list read')
                     raise Conflict('Outcome selection changed during Trace list read')
-        if self.analytics and boundaries:self.analytics._recheck(token,workspace,scope,boundaries)
+        if boundaries:reader._recheck(token,workspace,scope,boundaries,identities)
 
     @staticmethod
     def _value(row,column):
@@ -193,9 +212,12 @@ class LegacyTraceList:
         selections=[value for value in (task_selection,execution_selection,tasks_selection) if value is not None]
         trace_ids=set.intersection(*selections) if selections else None
         rows,scope=self._records(token,workspace,trace_ids)
+        def finish(value):
+            self._recheck(token,workspace,scope,[row['_trace_id'] for row in rows],{row['_trace_id']:row['_outcome_selection'] for row in rows},{row['_trace_id']:row['_execution_boundary'] for row in rows if row.get('_execution_boundary')},{row['_trace_id']:row['_read_identity'] for row in rows if row.get('_read_identity')})
+            return value
         grant=self.iam._workspace(scope,workspace,'read')
         can_all=grant.role in ('owner','admin')
-        if facet=='tags':return self.metadata.list_tags(token,workspace,params.get('kind')) if self.metadata else []
+        if facet=='tags':return finish(self.metadata.list_tags(token,workspace,params.get('kind')) if self.metadata else [])
         if facet=='skills':
             names=collections.defaultdict(set)
             for row in rows:
@@ -211,14 +233,14 @@ class LegacyTraceList:
                         name=row['_source_skill'];version=row.get('_source_skill_version')
                         if version is not None:names[name].add(version)
                         else:names[name]
-            return [{'name':name,'versions':sorted(versions)} for name,versions in sorted(names.items())]
+            return finish([{'name':name,'versions':sorted(versions)} for name,versions in sorted(names.items())])
         if facet=='values':
             counter=collections.Counter()
             for row in rows:
                 value=self._value(row,params.get('column',''))
                 if value is not None:
                     for item in value if isinstance(value,list) else [value]:counter[str(item)]+=1
-            return [{'value':value,'count':count} for value,count in sorted(counter.items(),key=lambda item:(-item[1],item[0]))]
+            return finish([{'value':value,'count':count} for value,count in sorted(counter.items(),key=lambda item:(-item[1],item[0]))])
         selected=[]
         raw_filters=params.get('filters')
         clauses=json.loads(raw_filters) if raw_filters else []
@@ -271,16 +293,16 @@ class LegacyTraceList:
             if sort in ('latency','tokens','cost'):value=_number(value)
             return (value is not None,value if value is not None else 0,row['task_id'])
         selected.sort(key=order,reverse=direction=='desc')
-        if params.get('summary')=='agents':return {'agents':sorted({r['agentName'] for r in selected if r.get('agentName')})}
-        if params.get('summary')=='traceIds':return {'traceIds':list(dict.fromkeys(r['task_id'] for r in selected))}
+        if params.get('summary')=='agents':return finish({'agents':sorted({r['agentName'] for r in selected if r.get('agentName')})})
+        if params.get('summary')=='traceIds':return finish({'traceIds':list(dict.fromkeys(r['task_id'] for r in selected))})
         latencies=[r['latency'] for r in selected if r['latency'] is not None]
         calls=sum(int(r.get('tool_call_count') or 0) for r in selected);errors=sum(int(r.get('tool_call_error_count') or 0) for r in selected)
         stats={'total':len(selected),'failedCount':sum(r['trace_status']=='failed' for r in selected),'avgLatencyMs':sum(latencies)/len(selected) if selected else 0,'toolErrorRate':math.floor(errors/calls*1000+0.5)/10 if calls else 0}
-        self._recheck(token,workspace,scope,[row['_trace_id'] for row in selected],{row['_trace_id']:row['_outcome_selection'] for row in selected},{row['_trace_id']:row['_execution_boundary'] for row in selected if row.get('_execution_boundary')})
+        finish(None)
         for row in selected:
             trace_id=row.pop('_trace_id',None)
             row.pop('_outcome_selection',None)
-            for key in ('_execution_boundary','_execution_relations','_source_skill','_source_skill_version'):row.pop(key,None)
+            for key in ('_execution_boundary','_execution_relations','_source_skill','_source_skill_version','_read_identity'):row.pop(key,None)
             if _flag(params.get('includeCoreIdentity')):row['core_trace_id']=trace_id
         if not _flag(params.get('paginated')):return selected
         page=int(params.get('page',1));size=int(params.get('pageSize',20))

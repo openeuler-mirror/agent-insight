@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from .compatibility import LegacyTraceReads, TraceNotFound
 from .control import Conflict, StorageError
+from .read_transitions import TraceReadChanged
 from .contracts import identifier
 from .iam import Forbidden, Unauthorized
 from .observations import _payload_revision, _section_text, _legacy_value, _source_projection, summary_status
@@ -121,7 +122,7 @@ class TraceEvidence:
     def _deadline(self):
         if time.monotonic()>self.deadline:raise EvidenceUnavailable('Evidence read timed out')
 
-    def _capture(self,token,workspace,task,execution,trace_ref=None):
+    def _capture(self,token,workspace,task,execution,trace_ref=None,*,check_indexed=True):
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'read')
             traces=[];requested=[]
@@ -141,6 +142,7 @@ class TraceEvidence:
             if route is None:raise TraceNotFound('Trace not found')
             self.iam._authorize(con,token,workspace,'read','trace',trace)
             if route['state']!='active':raise Conflict('Trace route retired')
+            alias_vector=[dict(row) for row in con.execute('SELECT alias_kind,alias_id FROM trace_legacy_ids WHERE workspace_id=? AND trace_id=? ORDER BY alias_kind,created_at_ms,alias_id',(workspace,trace))]
             aliases={}
             for kind,key in [('task','task_id'),('execution','execution_id')]:
                 row=con.execute('SELECT alias_id FROM trace_legacy_ids WHERE workspace_id=? AND trace_id=? AND alias_kind=? ORDER BY created_at_ms,alias_id LIMIT 1',(workspace,trace,kind)).fetchone()
@@ -150,6 +152,9 @@ class TraceEvidence:
             annotation=con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
             barriers=[dict(row) for row in con.execute("SELECT * FROM deletion_requests WHERE workspace_id=? AND resource_kind='trace' AND resource_id=? AND incarnation=?",(workspace,trace,route['incarnation']))]
             if barriers:raise Conflict('Trace deletion barrier exists')
+            if check_indexed and route['source_namespace']=='collector.source.v1':
+                from .collector_sources import indexed_boundary
+                indexed_boundary(self.control,workspace,[dict(route)])
             heads=[];size=0
             last_kind='';last_entity=''
             while True:
@@ -160,17 +165,21 @@ class TraceEvidence:
                     item=dict(row);size+=_size(item,self.byte_budget)
                     if len(heads)>=MAX_SPANS+1 or size>self.byte_budget:raise EvidenceTooLarge('Trace head vector exceeds budget')
                     heads.append(item);last_kind=item['entity_kind'];last_entity=item['entity_id']
-            result={'scope':scope.fingerprint,'route':dict(route),'requested':requested,'aliases':aliases,'owner':dict(owner),
+            result={'scope':scope.fingerprint,'route':dict(route),'requested':requested,'aliases':aliases,'alias_vector':alias_vector,'owner':dict(owner),
                     'annotation':dict(annotation) if annotation else None,'barriers':barriers,'heads':heads}
             _size(result,self.byte_budget)
             return result
 
     def _verify_end(self,token,workspace,task,execution,begin,trace_ref=None):
         self._deadline()
-        try:end=self._capture(token,workspace,task,execution,trace_ref)
+        try:end=self._capture(token,workspace,task,execution,trace_ref,check_indexed=False)
         except (TraceNotFound,EvidenceTooLarge):raise Conflict('Trace identity changed while reading') from None
         if end['scope']!=begin['scope']:raise Forbidden('Authorization changed while reading evidence')
-        if end!=begin:raise Conflict('Trace evidence boundary changed; retry')
+        if any(end[key]!=begin[key] for key in ('route','requested','aliases','alias_vector','owner','barriers')):raise Conflict('Trace evidence identity changed')
+        if end['route']['source_namespace']=='collector.source.v1':
+            from .collector_sources import indexed_boundary
+            indexed_boundary(self.control,workspace,[end['route']])
+        if end!=begin:raise TraceReadChanged('Trace evidence boundary changed; retry')
 
     def _artifact(self,head):
         self._deadline();target=Path(head['artifact_ref']);directory=self.control.artifact_directory

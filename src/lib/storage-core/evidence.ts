@@ -1,5 +1,6 @@
 import { compatibilityContext, type CompatibilityOptions } from './compat';
 import { requestCore } from './server';
+import {withCoreReadRetry,bindCoreReadIdentity} from './read-retry';
 
 export const TRACE_EVIDENCE_BYTES=16*1024*1024;
 export interface TraceEvidenceValue {
@@ -17,6 +18,7 @@ function object(value:unknown):value is Record<string,unknown> {return !!value &
 async function readEvidence(request:Request,refs:{taskId?:string;executionId?:string;traceRef?:string},options:CompatibilityOptions,executionOnly=false,allowMissingSession=false) {
  if(typeof window!=='undefined')throw new Error('Trace evidence is server only');
  const actor=await compatibilityContext(request,options);
+ bindCoreReadIdentity(actor);
  if(!actor.username)invalid();
  const query=new URLSearchParams({workspace_id:actor.workspace});
  if(executionOnly)query.set('view','execution');
@@ -27,7 +29,7 @@ async function readEvidence(request:Request,refs:{taskId?:string;executionId?:st
   query.set(key,ref);
  }
  if(!refs.taskId&&!refs.executionId&&!refs.traceRef)throw Object.assign(new Error('Trace identity required'),{status:400});
- const {data}=await requestCore('/v1/compat/observe/evidence?'+query,{token:actor.token,responseLimit:TRACE_EVIDENCE_BYTES+1024,timeoutMs:65_000},options.fetcher||fetch);
+ const {data}=await requestCore('/v1/compat/observe/evidence?'+query,{token:actor.token,responseLimit:TRACE_EVIDENCE_BYTES+1024,timeoutMs:65_000,signal:request.signal},options.fetcher||fetch);
  const value=data.value;
  if(!object(value)||value.format!==(executionOnly?'agent-insight.trace-execution':'agent-insight.trace-evidence')||value.version!==1||typeof value.captured_at!=='string'||!Number.isFinite(Date.parse(value.captured_at))||typeof value.snapshot_hash!=='string'||!/^[0-9a-f]{64}$/.test(value.snapshot_hash)
   ||!object(value.manifest)||value.manifest.workspace_id!==actor.workspace||typeof value.manifest.trace_id!=='string'
@@ -39,7 +41,7 @@ async function readEvidence(request:Request,refs:{taskId?:string;executionId?:st
 }
 
 async function guardedRead(request:Request,refs:{taskId?:string;executionId?:string;traceRef?:string},options:CompatibilityOptions,executionOnly=false,allowMissingSession=false) {
- try {return await readEvidence(request,refs,options,executionOnly,allowMissingSession);}
+ try {return await withCoreReadRetry(request,()=>readEvidence(request,refs,options,executionOnly,allowMissingSession));}
  catch(error) {
   if(error instanceof Error && 'status'in error && typeof error.status==='number' && [400,401,403,404,409,413,503].includes(error.status))throw error;
   invalid();
