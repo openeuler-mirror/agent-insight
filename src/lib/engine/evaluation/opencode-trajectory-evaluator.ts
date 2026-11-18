@@ -49,6 +49,8 @@ import {
     normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
 import { ChatOpenAI } from '@langchain/openai';
+import { getModelClientConfig } from '@/lib/server/model-client';
+import { getModelSdkApiKey } from '@/lib/shared/model-connection';
 import { hasEvaluatorExecutionPolicy, runConfiguredEvaluationStage } from '../experiment/evaluator-execution-policy';
 import { remainingEvaluationTimeMs, trackEvaluationRequest } from '../experiment/evaluation-attempt';
 import { experimentSignal } from '../experiment/cancellation-context';
@@ -539,12 +541,9 @@ function normalizeOutput(
 
 function makeDirectModel(config: ModelConfig) {
     return new ChatOpenAI({
-        apiKey: config.apiKey || 'no-api-key',
+        apiKey: getModelSdkApiKey(config),
         model: config.model || 'deepseek-chat',
-        configuration: {
-            baseURL: config.baseUrl || 'https://api.deepseek.com',
-            defaultHeaders: config.headers,
-        },
+        configuration: getModelClientConfig({ ...config, baseUrl: config.baseUrl || 'https://api.deepseek.com' }),
         temperature: 0,
         topP: 1,
         timeout: remainingEvaluationTimeMs() ?? 180_000,

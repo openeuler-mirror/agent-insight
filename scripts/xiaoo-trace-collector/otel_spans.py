@@ -29,7 +29,12 @@ so Insight Trace sorting by startTimeMs stays ordered across multi-turn sessions
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import re
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from session_ids import strip_platform_prefix
@@ -68,6 +73,72 @@ def truncate(text: str, limit: int = 4096) -> str:
     if len(s) <= limit:
         return s
     return s[: limit - 3] + "..."
+
+
+def _insight_client_home() -> Path:
+    base = os.path.expanduser(os.path.expandvars(os.environ.get("AGENT_INSIGHT_HOME") or "")).strip()
+    return Path(base or (Path.home() / ".agent-insight")) / "client"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _skill_origin(tool_name: str, arguments: Any) -> dict[str, Any] | None:
+    normalized_tool = re.sub(r"[^a-z0-9]+", "_", str(tool_name or "").lower()).strip("_")
+    if normalized_tool not in {"skill", "load_skill", "use_skill", "read_skill"} or not isinstance(arguments, dict):
+        return None
+    raw_name = next((arguments.get(key) for key in ("name", "skill_name", "skillName", "skill", "id")
+                     if isinstance(arguments.get(key), str) and arguments.get(key).strip()), None)
+    skill_name = str(raw_name or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", skill_name):
+        return None
+    raw_path = next((arguments.get(key) for key in ("path", "file_path", "filePath", "base_dir", "directory", "dir")
+                     if isinstance(arguments.get(key), str) and arguments.get(key).strip()), None)
+    if not raw_path:
+        return None
+    candidate = Path(os.path.expanduser(os.path.expandvars(str(raw_path)))).resolve()
+    target_dir = candidate.parent if candidate.name == "SKILL.md" else candidate
+    if not (target_dir / "SKILL.md").is_file():
+        return None
+    client_home = _insight_client_home()
+    binding = _read_json(client_home / "config.json")
+    client_id = str(binding.get("clientId") or "").strip()
+    if not client_id:
+        return None
+    framework_root = target_dir.parent
+    digest = hashlib.sha256("\n".join(("xiaoo", str(framework_root), str(target_dir), skill_name)).encode()).hexdigest()[:24]
+    origin_ref = f"origin_{digest}"
+    registry_path = client_home / "skill-origins.json"
+    registry = _read_json(registry_path) or {"schemaVersion": 1, "origins": {}}
+    origins = registry.get("origins") if isinstance(registry.get("origins"), dict) else {}
+    origins[origin_ref] = {
+        "platform": "xiaoo",
+        "skillName": skill_name,
+        "frameworkRoot": str(framework_root),
+        "targetDir": str(target_dir),
+        "displayPath": str(target_dir),
+        "observedSkillVersion": None,
+        "observedContentHash": None,
+        "registeredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    registry.update({"schemaVersion": 1, "origins": origins})
+    registry_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=registry_path.parent, delete=False) as stream:
+        temp = Path(stream.name)
+        json.dump(registry, stream, ensure_ascii=False, indent=2)
+    os.chmod(temp, 0o600)
+    temp.replace(registry_path)
+    return {
+        "skill_name": skill_name,
+        "origin_ref": origin_ref,
+        "display_path": str(target_dir),
+        "client_id": client_id,
+    }
 
 
 def _append_text(existing: str, chunk: str, *, snapshot_prefer: bool) -> str:
@@ -156,6 +227,7 @@ class SessionSpanBuffer:
     ) -> None:
         now = _now_ns()
         turn = self._current_turn()
+        origin = _skill_origin(name, arguments)
         turn["tools"].append(
             {
                 "name": str(name or "unknown"),
@@ -165,6 +237,7 @@ class SessionSpanBuffer:
                 "call_id": call_id,
                 "started_ns": now,
                 "ended_ns": now,
+                "skill_origin": origin,
             }
         )
         # Tool boundary closes the current LLM turn so the next stream opens a new span.
@@ -295,6 +368,15 @@ class SessionSpanBuffer:
                     "input.value": truncate(args_text),
                     "witty.tool.input": truncate(args_text),
                 }
+                skill_origin = tool.get("skill_origin")
+                if isinstance(skill_origin, dict):
+                    tool_attrs.update({
+                        "skill.name": skill_origin.get("skill_name"),
+                        "skill.origin_ref": skill_origin.get("origin_ref"),
+                        "skill.display_path": skill_origin.get("display_path"),
+                        "skill.target_mode": "execution_origin",
+                        "agent.insight.client_id": skill_origin.get("client_id"),
+                    })
                 if out_text:
                     tool_attrs["output.value"] = truncate(out_text)
                     tool_attrs["tool.result"] = truncate(out_text)
@@ -324,6 +406,9 @@ class SessionSpanBuffer:
             "session.id": self.native_id,
             "witty.session.id": self.native_id,
         }
+        client_id = str(_read_json(_insight_client_home() / "config.json").get("clientId") or "").strip()
+        if client_id:
+            resource_attrs["agent.insight.client_id"] = client_id
         return {
             "resourceSpans": [
                 {

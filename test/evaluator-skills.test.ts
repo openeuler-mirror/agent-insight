@@ -23,9 +23,10 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import AdmZip from 'adm-zip';
 
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
 const home = mkdtempSync(path.join(os.tmpdir(), 'evaluator-skill-tests-'));
-process.env.AGENT_INSIGHT_HOME = home;
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || 'file:/tmp/agent-insight-evaluator-skills-test.db';
+const database = createIsolatedDatabase();
 
 import { EvaluatorSkillStore, normalizeSkillPackage, readSkillZip, skillRelativePath, type SkillPackageFile } from '@/lib/evaluators/evaluator-skill-store';
 import { normalizeEvaluatorSkillCards, freezeCustomEvaluators, resolveFrozenCustomEvaluator, customEvaluatorsForReuse } from '@/lib/evaluators/evaluator-skill-service';
@@ -66,6 +67,7 @@ test.after(async () => {
   await prismaRaw.skill.deleteMany({ where: { user } });
   await fs.rm(home, { recursive: true, force: true });
   await prismaRaw.$disconnect();
+  database.dispose();
 });
 
 test('完整文件、二进制、执行位在导入和冻结后保持不变，临时数据与持久数据分离', async () => {

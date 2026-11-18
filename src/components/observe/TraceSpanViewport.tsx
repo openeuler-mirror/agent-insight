@@ -29,19 +29,21 @@ export interface TraceSpanViewportHandle {
 
 export const TraceSpanViewport = forwardRef<TraceSpanViewportHandle, {
     navigationKey: unknown;
+    contentKeys: ReadonlyArray<string>;
+    onFollowingLatest?: () => void;
     onUserNavigation?: () => void;
     children: React.ReactNode;
-}>(function TraceSpanViewport({ navigationKey, onUserNavigation, children }, ref) {
+}>(function TraceSpanViewport({ navigationKey, contentKeys, onFollowingLatest, onUserNavigation, children }, ref) {
     const { t } = useLocale();
     const viewportRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
+    const contentKeysRef = useRef(contentKeys);
     const pendingAnchorRef = useRef<SpanScrollAnchor | null>(null);
     const [scroll] = useState(() => createSpanScrollController(() => viewportRef.current));
     const { following, hasNewContent } = useSyncExternalStore(scroll.subscribe, scroll.getSnapshot, scroll.getSnapshot);
-    const visibleKeys = useCallback(() => Array.from(
-        contentRef.current?.querySelectorAll('[data-span-key]') ?? [],
-        element => element.getAttribute('data-span-key') || '',
-    ), []);
+    const currentKeys = useCallback(() => contentKeysRef.current, []);
+    useLayoutEffect(() => { contentKeysRef.current = contentKeys; }, [contentKeys]);
+    useLayoutEffect(() => { if (following) onFollowingLatest?.(); }, [following, onFollowingLatest]);
     const scrollRows = useCallback(() => Array.from(
         contentRef.current?.querySelectorAll('[data-span-key]') ?? [], element => {
             const rect = element.getBoundingClientRect();
@@ -64,7 +66,7 @@ export const TraceSpanViewport = forwardRef<TraceSpanViewportHandle, {
     useImperativeHandle(ref, () => ({ pauseFollowing, captureAnchor }), [pauseFollowing, captureAnchor]);
 
     useLayoutEffect(() => {
-        scroll.resetView(visibleKeys());
+        scroll.resetView(currentKeys());
         const anchor = pendingAnchorRef.current;
         pendingAnchorRef.current = null;
         const viewport = viewportRef.current;
@@ -72,7 +74,9 @@ export const TraceSpanViewport = forwardRef<TraceSpanViewportHandle, {
             const delta = spanScrollAnchorDelta(anchor, viewport.getBoundingClientRect().top, scrollRows());
             if (delta !== null) viewport.scrollTop += delta;
         }
-    }, [navigationKey, scroll, scrollRows, visibleKeys]);
+    }, [navigationKey, scroll, scrollRows, currentKeys]);
+
+    useLayoutEffect(() => { scroll.refresh(currentKeys()); }, [contentKeys, scroll, currentKeys]);
 
     useLayoutEffect(() => {
         const viewport = viewportRef.current;
@@ -83,10 +87,10 @@ export const TraceSpanViewport = forwardRef<TraceSpanViewportHandle, {
             if (frame !== null) return;
             frame = requestAnimationFrame(() => {
                 frame = null;
-                scroll.refresh(visibleKeys());
+                scroll.refresh(currentKeys());
             });
         };
-        scroll.refresh(visibleKeys());
+        scroll.refresh(currentKeys());
         viewport.addEventListener('scrollend', scroll.endUserScroll);
         const mutationObserver = new MutationObserver(schedule);
         mutationObserver.observe(content, { childList: true, subtree: true });
@@ -99,7 +103,7 @@ export const TraceSpanViewport = forwardRef<TraceSpanViewportHandle, {
             resizeObserver.disconnect();
             if (frame !== null) cancelAnimationFrame(frame);
         };
-    }, [scroll, visibleKeys]);
+    }, [scroll, currentKeys]);
 
     return (
         <div className="relative flex-1 min-h-0">
@@ -130,7 +134,7 @@ export const TraceSpanViewport = forwardRef<TraceSpanViewportHandle, {
                     variant="ghost"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    onClick={() => { pendingAnchorRef.current = null; onUserNavigation?.(); scroll.refresh(visibleKeys()); scroll.jumpToBottom(); }}
+                    onClick={() => { pendingAnchorRef.current = null; onUserNavigation?.(); scroll.refresh(currentKeys()); scroll.jumpToBottom(); }}
                 >
                     <ArrowDown className="size-3.5" aria-hidden />
                     {t('traceTree.jumpToBottom')}

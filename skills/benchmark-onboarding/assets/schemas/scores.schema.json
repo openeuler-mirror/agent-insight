@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark onboarding scores",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkKey",
+    "cases"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "benchmark-onboarding-scores/v1"
+    },
+    "benchmarkKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "caseId",
+          "kind",
+          "submissionDigest",
+          "status",
+          "metrics"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Agent 依据官方评分行为定义的样本用途标签，不强制类别或数量。"
+          },
+          "submissionDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "invalid",
+              "infrastructure_error"
+            ]
+          },
+          "metrics": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "aggregate": {
+      "type": "object"
+    }
+  }
+}

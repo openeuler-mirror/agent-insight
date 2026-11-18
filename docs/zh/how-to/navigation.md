@@ -12,6 +12,7 @@ changefreq: "monthly"
 ## 平台公共
 
 - [用 Docker 部署服务端](./platform/deploy-docker.md)
+- [在 OpenShift 上部署服务端](./platform/deploy-openshift.md)（含 Developer Sandbox 集群内构建）
 - [升级与回滚](./platform/upgrade-and-rollback.md)
 - [备份与恢复](./platform/backup-and-restore.md)
 - [Conventions & Extension](./platform/conventions-and-extension.md)
@@ -22,7 +23,9 @@ changefreq: "monthly"
 - [Q&A](./platform/qa.md)
 - [Docker 镜像发布](./platform/release-docker-image.md)
 - [客户端安装](./platform/settings/access-control.md)
+- [Agent 运行时](./platform/settings/agent-runtimes.md)
 - [模型注册](./platform/settings/model-registry.md)
+- [Agent 运行时](./platform/settings/agent-runtime.md)
 - [用量统计](./platform/settings/usage-analytics.md)
 - [联网搜索](./platform/settings/web-search.md)
 - [概览面板](./platform/workspace-overview.md)
@@ -39,6 +42,7 @@ changefreq: "monthly"
 - [QwenPaw Trace Collector](./observability/qwenpaw-trace-collector.md)
 - [Trae IDE 接入指南](./observability/trae-integration.md)
 - [链路追踪](./observability/view-traces.md)：查看模型与工具的关联、类型多选及详情；可同时筛选 User 与 LLM、跳到底部并跟随更新，明确关联的普通工具缩进到对应 LLM 下
+- [Token 与任务分析](./observability/token-task-insight.md)：按任务类型与用户拆 Token/成本，识别长时任务与可延后的夜间执行项
 - [WorkBuddy Trace Collector](./observability/workbuddy-trace-collector.md)
 
 ## 评测
@@ -47,7 +51,7 @@ changefreq: "monthly"
 - [SWE-bench 部署指南](./evaluation/benchmarks/deploy-swe-bench.md)
 - [ZSoft 部署指南](./evaluation/benchmarks/deploy-zsoft.md)
 - [Benchmark 接入开发规范](./evaluation/benchmarks/develop-benchmark.md)
-- [自定义 Benchmark 接入指南](./evaluation/benchmarks/onboard-custom-benchmark.md)
+- [自定义 Benchmark 接入指南](./evaluation/benchmarks/onboard-custom-benchmark.md)（含项目地址与 Benchmark 来源驱动的自动接入 Skill）
 - [ZSoft 评测资产发布指南](./evaluation/benchmarks/release-zsoft-assets.md)
 - [评测数据集](./evaluation/datasets.md)
 - [评估器开发指南](./evaluation/develop-evaluator.md)

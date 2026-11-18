@@ -48,7 +48,7 @@ test('Custom OpenAI Compatible 支持 headers-only 和无鉴权连接', () => {
   assert.equal(isModelConnectionReady(headersOnly), true);
   assert.equal(isModelConnectionReady(noAuth), true);
   assert.equal(isModelConnectionReady({ ...noAuth, model: '' }), false);
-  assert.equal(isModelConnectionReady({ provider: 'openai', apiKey: '' }), false);
+  assert.equal(isModelConnectionReady({ provider: 'openai', apiKey: '' }), true);
 });
 
 test('自定义请求头会校验名称、值和传输层保留字段', () => {
@@ -73,19 +73,28 @@ test('自定义请求头会校验名称、值和传输层保留字段', () => {
 });
 
 test('OpenAI Compatible 客户端参数透传 headers 且允许空 API Key', () => {
-  assert.deepEqual(
-    getOpenAICompatibleClientConfig({
-      provider: 'custom',
-      apiKey: '',
-      baseUrl: 'https://example.test/v1',
-      headers: { Authorization: 'token' },
-    }),
-    {
-      apiKey: 'no-api-key-required',
-      baseURL: 'https://example.test/v1',
-      defaultHeaders: { Authorization: 'token' },
-    },
-  );
+  const options = getOpenAICompatibleClientConfig({
+    provider: 'custom', apiKey: '', baseUrl: 'https://example.test/v1', headers: { Authorization: 'token' },
+  });
+  assert.equal(options.baseURL, 'https://example.test/v1');
+  assert.equal(options.defaultHeaders.authorization, 'token');
+  assert.equal(options.defaultHeaders['x-api-key'], null);
+});
+
+test('OpenAI 地址依次采用显式配置、环境变量、目录默认值', t => {
+  const previous = process.env.OPENAI_BASE_URL;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = previous;
+  });
+
+  process.env.OPENAI_BASE_URL = 'https://gateway.test/v1';
+  const config = { provider: 'openai' };
+  assert.equal(getOpenAICompatibleClientConfig(config).baseURL, 'https://gateway.test/v1');
+  assert.equal(getOpenAICompatibleClientConfig({ ...config, baseUrl: 'https://explicit.test/v1' }).baseURL, 'https://explicit.test/v1');
+  assert.equal(getOpenAICompatibleClientConfig({ provider: 'xai' }).baseURL, 'https://api.x.ai/v1');
+  delete process.env.OPENAI_BASE_URL;
+  assert.equal(getOpenAICompatibleClientConfig(config).baseURL, 'https://api.openai.com/v1');
 });
 
 test('模型设置返回浏览器前会掩码所有 Header 值', () => {

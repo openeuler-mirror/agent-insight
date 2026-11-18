@@ -212,7 +212,6 @@ test('ZSoft agent tasks use the executor-configured native tasks-dir and keep ju
   const nativeTask = zsoftL1Adapter.buildAgentTask(input)
   assert.deepEqual(nativeTask.workspace, { provider: 'zsoft-tasks', taskId: raw.public.taskId })
   assert.equal(JSON.stringify(nativeTask).includes('agentBundle'), false)
-  const publicPayload = { ...raw.public, agentBundle: { digest: `sha256:${'d'.repeat(64)}` } }
   assert.ok(nativeTask.task.instruction.includes('submission/poc'))
   assert.equal(JSON.stringify(nativeTask).includes(raw.private.sourceTaskDigest), false)
   const kernel = zsoftL1Adapter.buildAgentTask({ ...input, publicPayload: { ...raw.public, tags: ['kernel'], submissionKind: 'c' } })
@@ -264,4 +263,14 @@ test('experiment preflight does not require a frontend tasks-dir and still rejec
       prisma.$transaction = originalTransaction
     }
   }
+})
+
+test('legacy ZSoft report remains valid with controller diagnostics, while cross-evaluation evidence is rejected', () => {
+  const input = result('completed', true)
+  input.evidenceArtifacts = [...input.evidenceArtifacts, {
+    artifactId: 'controller-log', evaluationId: input.evaluationId, name: 'controller/stderr.log', kind: 'controller-diagnostic', source: 'platform', mediaType: 'text/plain', sha256: `sha256:${'f'.repeat(64)}`, sizeBytes: 0,
+  }]
+  assert.equal(zsoftL1Adapter.normalizeResult(input).score, 100)
+  input.evidenceArtifacts = input.evidenceArtifacts.map(item => item.source === 'platform' ? { ...item, evaluationId: 'another-evaluation' } : item)
+  assert.throws(() => zsoftL1Adapter.normalizeResult(input), /报告证据/)
 })

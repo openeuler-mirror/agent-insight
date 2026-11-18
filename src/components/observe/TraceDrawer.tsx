@@ -55,6 +55,7 @@ export interface TraceDrawerExecutionMeta {
 export interface TraceDrawerProps {
     open: boolean;
     execution: TraceDrawerExecutionMeta | null;
+    user?: string | null;
     onClose: () => void;
 }
 
@@ -62,7 +63,7 @@ export interface TraceDrawerProps {
  * Right-side slide-out panel. Lazy-loads the session interactions for the
  * given execution and renders AgentTraceView inside it.
  */
-export default function TraceDrawer({ open, execution, onClose }: TraceDrawerProps) {
+export default function TraceDrawer({ open, execution, user, onClose }: TraceDrawerProps) {
     const { locale } = useLocale();
     const [session, setSession] = useState<SessionPayload | null>(null);
     const [loading, setLoading] = useState(false);
@@ -76,12 +77,17 @@ export default function TraceDrawer({ open, execution, onClose }: TraceDrawerPro
         let cancelled = false;
         let inFlight = false;
         const taskId = execution.taskId;
+        if (!user) {
+            setSession({ error: 'Missing user' });
+            setLoading(false);
+            return;
+        }
         const load = async (silent = false) => {
             if (inFlight) return;
             inFlight = true;
             if (!silent) setLoading(true);
             try {
-                const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`, { cache: 'no-store' });
+                const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}`, { cache: 'no-store' });
                 if (!response.ok) {
                     if (!cancelled && !silent) setSession({ error: 'Fetch failed' });
                     return;
@@ -106,7 +112,7 @@ export default function TraceDrawer({ open, execution, onClose }: TraceDrawerPro
             window.clearInterval(timer);
             document.removeEventListener('visibilitychange', refreshWhenVisible);
         };
-    }, [open, execution?.taskId]);
+    }, [open, execution?.taskId, user]);
 
     // ESC to close
     useEffect(() => {

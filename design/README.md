@@ -14,15 +14,79 @@
 > 而是 `design.md` + `assets/` + 可选的 `index.html`(给人读的渲染版)。它们原先放在已废弃的 `designs/`
 > 目录下,现已并入本目录统一索引。
 
+## 需求 Epic
+
+所有新需求先归入一个主 Epic，再进入需求分析、设计和开发计划。Epic 用于表达需求所属的长期产品能力，具体交付仍由可独立验收和关闭的 issue 跟踪。
+
+| Epic | AtomGit 标题前缀 | 负责的问题 | 典型范围 |
+|-|-|-|-|
+| Observation | `[E0]` | Agent 实际做了什么、运行过程中发生了什么 | Agent/框架接入，Hook 与 OTLP 采集，Trace 完整性，spool，Trace 查询、展示、分析与运行状态观测 |
+| Evaluation | `[E1]` | Agent 或 Skill 做得怎么样，结果是否可信、可比较、可复现 | Dataset，Experiment，Evaluator，Agent/Skill 对照评估，评分校准，版本快照，回归验证与工程证据 |
+| Diagnosis | `[E2]` | 失败发生在哪里、为什么发生、证据是什么 | Trace 异常归因，步骤与 Tool/Skill 分析，故障模式识别，诊断报告及诊断结果回流 |
+| Optimization | `[E3]` | 如何基于证据产生改进，并证明改进没有引入回归 | Skill 生成与优化，候选版本，复测，A/B 对比，发布门禁及持续改进闭环 |
+| Foundation | `[E4]` | 平台能否安全、稳定、可恢复、可扩展地支撑上述能力 | 持久化任务，Session 生命周期，存储与数据库，配置，部署，API 契约，测试、CI、发布及扩展机制 |
+| Project Collaboration & Auth | `[E5]` | 多用户如何在项目边界内安全协作和访问资源 | 身份认证，Project，成员与角色，Trace/Skill/Dataset/Experiment 授权，API Key，审计和数据隔离 |
+
+### Epic 默认审查人
+
+| Epic | 默认审查人 |
+|-|-|
+| E0 Observation | `leon`、`gyc` |
+| E1 Evaluation | `sparkzfl`、`mintu` |
+| E2 Diagnosis | `miaoyanming`、`rongxi` |
+| E3 Optimization | `leon` |
+| E4 Foundation | `leon`、`sparkzfl` |
+| E5 Project Collaboration & Auth | `sparkzfl`、`gyc` |
+
+同一 Epic 配置多人时，名单中的第一位为主审查人，其余为备选或协同审查人。PM 在 AtomGit Issue 页面设置审查人；主审查人不可用或需求跨领域时，再选择后续人员。
+
+归类规则：
+
+1. 每个 issue 只选择一个主 Epic，AtomGit 标题使用对应编号，例如：`[E0][bug] OTLP gzip 请求体解码失败`。
+2. 跨 Epic 依赖写在 issue 正文中，不通过叠加多个 Epic 前缀表达。
+3. `Foundation` 负责通用技术底座；只要需求直接涉及用户、项目、角色或资源访问边界，就归入 `Project Collaboration & Auth`。
+4. Reliability 是横跨 Observation、Evaluation、Diagnosis 和 Optimization 的质量属性，不单独设 Epic：运行状态观测归 Observation，可靠性评估归 Evaluation，故障归因归 Diagnosis，恢复与改进归 Optimization；通用任务恢复和运行底座归 Foundation。
+5. 客户专用协议、身份源、报表或流程优先通过 Adapter、Exporter、Webhook 或配置扩展；只有具备社区普适性的抽象能力才进入核心设计。
+
+## PM Issue 审查流程
+
+PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不完整时先补齐，不直接进入开发。
+
+### 1. 整理 Issue
+
+1. 阅读原始描述，确认问题、使用场景、用户价值和预期结果；信息不足时向提交人追问。
+2. 将标题统一为 `[Epic 编号][类型] 简明标题`，例如：`[E1][feature] 支持自定义评估器超时配置`。
+3. 类型只使用 `feature` 或 `bug`：新增或扩展用户能力归 `feature`；实际行为偏离既定设计、文档或合理预期归 `bug`。
+4. Epic 使用上表中的一个编号；跨 Epic 依赖写在正文，不叠加多个 Epic 编号。
+5. 在 AtomGit 网页的优先级字段中设置优先级，不把优先级编码到 Issue 标题中。
+6. 重写 Issue 描述，至少包含：背景与用户价值、现状或复现步骤、目标行为、范围与非目标、验收标准、依赖或风险。Bug 还应补充环境、实际结果和复现证据。
+
+### 2. 设置审查人
+
+1. 按主 Epic 选择最熟悉该领域、且能够判断需求边界和验收标准的维护者作为审查人。
+2. 涉及跨模块、公共契约、数据模型、安全或兼容性时，增加相关领域维护者共同审查，但保留一名主审查人负责收敛结论。
+3. PM 不把 Issue 默认分配给实现者代替审查；审查人负责确认“是否应该做、范围是否清楚、如何验收”，开发负责人在审查通过后确定。
+4. 审查人缺失或长期无响应时，PM 先更换同领域审查人，再升级给项目 Maintainer，不让 Issue 无负责人停滞。
+
+### 3. 审查完成条件
+
+以下条件全部满足后，Issue 才可进入排期或开发：标题格式正确；Epic 编号和类型已确定；网页优先级已设置；描述及验收标准完整；主审查人已设置；关键依赖和争议已有结论。任何字段发生实质变化时，PM 应重新通知审查人。
+
 ## 清单
 
 本次目录迁移的范围、缺口与待审历史资料见[迁移审查清单](platform/docs-migration/migration-review.md)。迁移保留旧条目的状态描述，不将其视为本轮重新验收的结果。
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
+| Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
+
+| Skill 待验证版本发布 | [需求分析](optimization/external-skill-validation/phase1-requirements-analysis.md) · [需求设计](optimization/external-skill-validation/phase2-requirements-design.md) · [开发计划](optimization/external-skill-validation/phase3-development-plan.md) | 优化候选通过前置质量门禁后，可在会话卡片发布为不立即激活的正式版本，下载到外部环境验证并登记结果，通过后再激活 | Feature | 2026-11-09 | 🟡 核心实现与 79 项相关自动化测试完成；待浏览器验收 | — |
+| 优化后 Skill 下发 | [需求分析](optimization/skill-deployment/phase1-requirements-analysis.md) · [需求设计](optimization/skill-deployment/phase2-requirements-design.md) · [开发计划](optimization/skill-deployment/phase3-development-plan.md) | 将复测并发布的正式 Skill 版本下发到来源 Trace 的用户端，按框架解析项目或全局目标，提供版本账本、持久备份、历史版本重下发、原子替换与验证恢复 | Feature | 2026-11-08 | 🟡 核心实现与专项自动化测试完成；待浏览器及四框架真实客户端验收 | 待补 |
 | 评测结果 → 智能诊断 → Skill 优化 | [需求分析](diagnosis/evaluation-to-skill-optimization/phase1-requirements-analysis.md) · [需求设计](diagnosis/evaluation-to-skill-optimization/phase2-requirements-design.md) · [开发计划](diagnosis/evaluation-to-skill-optimization/phase3-development-plan.md) | 评测证据快照进入诊断，诊断发现转为 Skill 优化计划并复测 | Feature | 2026-11-02 | 已实现；临时库流程与迁移演练通过，真实模型/Worker 联调待验收 | — |
 | 核心 E2E 自动化与采集覆盖 | [实施计划](platform/core-e2e-regression/phase3-implementation-plan.md) | 5 个核心场景：准备、OpenCode 观测、Skill 与数据集生命周期、无数据集 Trace 闭环、故障恢复；逐例 Real/Mock、生产编译门禁与复现规范 | Test / Design | 2026-11-03 | 已实现；001～005连续编号，故障恢复原006改005；编号调整前整轮生产编译、UT和五个活动场景隔离通过，常驻服务待升级 | — |
 | PR Webhook 自动回归 | [实施计划](platform/core-e2e-regression/phase3-pr-webhook-plan.md) | origin 个人仓库、本地先行、隔离执行与逐项报告 | Test / CI | 2026-11-04 | 接收/队列/隔离运行/PR评论已联调；当前逐例配置与编译前置版本待升级常驻部署 | — |
+
 | Skill 优化校验效率 | [verification-efficiency](optimization/verification-efficiency/phase1-requirements-analysis.md) | 有效用例筛选、可比基线复用、静态评估去重与诚实进度 | Fix / Perf | 2026-10-28 | 已实现，已验证 UI | — |
 | Skill 优化验收闭环 | [verification-closure](optimization/verification-closure/phase1-requirements-analysis.md) | 目标验收、证据复用、定向范围、上下文减量与重试诊断 | Fix / Perf | 2026-10-29 | 已实现并验证 | — |
 | 实验评估器超时与重试配置 | [evaluator-execution-settings](evaluation/evaluator-execution-settings/phase1-requirements-analysis.md) | 实验级 LLM 超时与重试统一配置、评估器行内单独配置及逐行恢复，并以最小界面改动增加搜索、来源筛选和分页 | Feature | 2026-10-26 | 🟡 已扩展全部 31 个预置 LLM 与 Skills 自定义项；176 项专项及类型检查通过，隔离浏览器实验 6 项完成；全量 40 项基线失败未新增 | 待补 |
@@ -44,6 +108,7 @@
 | QwenPaw Trace 采集器 | [qwenpaw-trace-collector](observability/qwenpaw-trace-collector/) | 通过 QwenPaw hook 插件、Middleware 和可逆运行时补丁采集真实对话、USER、LLM、Tool、Skill、MCP、Cron 与子 Agent 树，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-09-01 | 🟡 实现中 | —（待补） |
 | Pi Agent Trace 采集器 | [issue-158-pi-agent-trace-collector.md](observability/issue-158-pi-agent-trace-collector.md) | 通过 Pi Extension API、结构化 SubAgent 结果和 durable JSONL spool 采集 Agent/SubAgent/Skill/Tool/LLM/MCP Trace，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#158](https://atomgit.com/openeuler/opensource-intern/issues/158) |
 | Codex CLI 与 IDE Trace 采集器 | [issue-159-codex-trace-collectors.md](observability/issue-159-codex-trace-collectors.md) | 通过 Codex lifecycle Hooks 与原生 OTel 双通道采集 CLI/IDE Agent Trace，以本地 relay 合并 Token、Tool、SubAgent 和编辑器事件，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#159](https://atomgit.com/openeuler/opensource-intern/issues/159) |
+| Codex Desktop 与 App Server Trace 接入 | [codex-app-server-desktop-trace-upgrade](observability/codex-app-server-desktop-trace-upgrade/) | 通过 Desktop rollout、App Server JSON-RPC 代理与 lifecycle reducer 补齐桌面会话、steer、中断、compaction 与 TraceThread 时间线；0.166 起兼容 zstd 压缩会话 | Feature | 2026-10-10 | 🟡 PR #446 评审通过，0.166 适配与 master 合并中 | [#247](https://atomgit.com/openeuler/agent-insight/issues/247) |
 | Hermes 平台适配（OTel/OTLP 接入） | [hermes-otel-adapter](observability/hermes-otel-adapter/) | 让运行在 hermes 平台的 Agent 通过标准 OpenTelemetry(OTLP)协议把链路数据上报到 agent-insight,被解析、按会话归并、标记 `framework=hermes` 并在观测看板呈现;子 Agent 与 skill 对齐 opencode 成为一等公民(可评测/注册/A-B) | Feature | 2026-06-02 | 🟨 MVP 实现中（仓库内置轻量插件、OTLP JSON 高保真采集与 subagent 关联开发中；原生事件上报作为备用方案） | —（待补） |
 | Framework 适配器注册表 | [framework-adapter-registry](observability/framework-adapter-registry/) | 把散落在数十处的「按框架走分支」收进统一的 `FrameworkAdapter` 注册表;第一刀治理三块:skill 抽取重复(4~5 份拷贝)、claude 入库归一化(5 个调用点)、框架名值域不统一(`claude`/`claudecode`) | Refactor | 2026-06-04 | 🟡 实现中（注册表骨架已落地,旧调用点切换与验证待开发） | —（待补） |
 | AgentDebug 与 Skills 分析并行化 | agentdebug-parallel-skills-analysis（历史引用未收录：`agentdebug-parallel-skills-analysis/`） | 将 AgentDebug 主诊断与 Skills 步骤核验拆成独立存储和独立轮询链路,支持点击诊断后并行运行、先完成先展示;不兼容旧 `reportJson.skillsAnalysis` 数据 | Feature | 2026-06-05 | ✅ 已实现 | —（待补） |
@@ -94,8 +159,11 @@
 | FI 故障模式自包含插件化 | [`reliability/agent-fault-injection/fault-mode-plugins.md`](reliability/agent-fault-injection/fault-mode-plugins.md) | 五类 injection_method；plan/副作用分层；metadata + capability；配方契约 | Refactor | 2026-08-10 | ✅ 已实现 | — |
 | LlamaIndex Trace 采集器 | [llamaindex-trace-collector](observability/llamaindex-trace-collector/) | 从 LlamaIndex Dispatcher 获取原始调用信息，由 Agent Insight 自定义 Handler 继承官方 `llama-index-observability-otel` Handler 基类并补充 Agent、子 Agent、Tool、LLM、RAG 与 Workflow 语义，以可靠本地 spool 异步上传至现有 OTLP 接口，并提供服务端直接部署、配置和隔离清理能力 | Feature | 2026-08-03 | 🟢 已实现，待扩展 CI/长期 soak | —（待补） |
 | WorkBuddy (Windows 桌面版) Trace 采集器 | [workbuddy-trace-collector](observability/workbuddy-trace-collector/) | 无 Hook/插件扩展点的闭源 Electron 客户端，通过文件监听采集本地 trace（含 generation.toolOutput 内嵌的逐轮精确 token）+SQLite 只读关联会话元数据，经共享 spool/Adapter 接入平台；客户端安装通过 Windows Task Scheduler 登录触发+崩溃自愈实现免手动启动，补齐平台此前只覆盖 Linux/macOS 的常驻客户端自启动能力 | Feature | 2026-09-06 | 🟡 实现中（采集器/Adapter/独立安装器/一键安装入口/用户指南/测试均已落地，并完成多轮真机反馈修复：Agent 命名、工具就近归属、完成状态、子 Agent 命名、路径保留、latency 毫秒、免装 Node+自愈启动器、跳过标题生成器；待 CI 跑通完整套件） | —（待补） |
+| Token 与任务分析 | [token-task-insight](observability/token-task-insight/) | 从 root trace 汇总 token/成本，按问答、文本、文档、代码、批处理、多步工具归类，综合耗时/token/调用次数识别长时任务并给出夜间执行建议 | Feature | 2026-11-09 | 🟡 实现中（分类/聚合/API/页面/单测已落地；未做浏览器验证） | [#375](https://atomgit.com/openeuler/agent-insight/issues/375) |
 
 | Runtime 启动参数 YAML 配置 | [runtime-parameters](platform/runtime-parameters/) | 通用嵌套编辑、独立草稿、完整快照与原样下发；默认值仅初始化，执行参数由客户端消费 | Refactor | 2026-10-16 | ✅ 通用草稿与原样下发已实现，105 项专项回归通过；全量测试及类型检查仍有既有基线问题；用户选择暂不进行浏览器验证 | 待补 |
+| Agent 运行时切换 | [agent-runtime-switching](platform/agent-runtime-switching/) | 检测服务部署环境中的内置 Agent 运行时，展示版本、来源、兼容性、能力与不可用原因，并保存个人默认值；执行层与 Pi 适配器分期接入 | Feature | 2026-11-09 | 🟡 阶段一已实现（探测/诊断/偏好保存/页面/单测）；统一执行服务、OpenCode 适配器抽取与内置 Pi 待实现 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
+| 平台内置 Agent 运行时选择 | [agent-runtime-selection](platform/agent-runtime-selection/) | 检测服务可访问的 Pi/OpenCode，展示版本、来源、兼容性、能力与不可用原因；保存个人默认值并在执行入口强制校验，不静默换引擎 | Feature | 2026-11-09 | 🟡 检测、能力评估、个人默认值、页面与执行入口约束已实现并覆盖专项测试；Pi 执行适配器、内置 Pi 交付与浏览器/真实模型验收见开发计划 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
 
 ## 字段口径
 
@@ -112,3 +180,5 @@
 2. 默认在子目录内放 `phase1-requirements-analysis.md` / `phase2-requirements-design.md` / `phase3-development-plan.md`。
 3. issue 或维护者明确要求单文档时，改用 `issue-<number>-<slug>.md`，不再创建三阶段目录。
 4. **回到本清单追加一行**,填齐上表各列。
+
+| JiuwenSwarm 企业版 WebSocket 实验 | [设计](evaluation/jiuwen-enterprise-websocket/phase2-design.md) / [计划](evaluation/jiuwen-enterprise-websocket/phase3-plan.md) | 本地登录、授权 Agent 发现与选择，沿用 #588 WS 下发 | Feature | 2026-11-10 | 开发中 | — |

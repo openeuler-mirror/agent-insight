@@ -15,10 +15,10 @@
  */
 
 // 单个 Agent 的下钻统计端点（仪表盘图表点击某 Agent 时调用）。
-// 作用域 = 当前登录用户(?user=) + 时间窗；口径同 src/lib/fleet/agg.ts（self：只看 agentName=该 agent 的行）。
+// 作用域 = 管理员全量 / 普通用户本人 + 时间窗；口径同 src/lib/fleet/agg.ts（self：只看 agentName=该 agent 的行）。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import {
     normalizeWindow, planOf, bucketStarts, bucketLabel, pct,
     isSuccess, rowTokens, rowCost, assignBuckets, type FleetRow,
@@ -33,8 +33,9 @@ export async function GET(req: Request) {
         const name = (url.searchParams.get('name') || '').trim();
         if (!name) return NextResponse.json({ error: '缺少 name 参数' }, { status: 400 });
 
-        const { username } = await resolveUser(req, url.searchParams.get('user'));
-        const userFilter = username ? { user: username } : {};
+        const { username, user } = await resolveTraceReadScope(req);
+        if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        const userFilter = user ? { user } : {};
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);
         const now = new Date();
@@ -61,7 +62,7 @@ export async function GET(req: Request) {
         const n = rows.length;
         const success = rows.filter(isSuccess).length;
         const latencies = rows.map((r) => r.latency).filter((v): v is number => v != null && v > 0);
-        const traceSet = new Set(rows.map((r) => r.rootExecutionId || r.taskId || r.id));
+        const traceSet = new Set(rows.map((r) => r.rootExecutionId || r.id));
         let inp = 0, out = 0, tot = 0, cost = 0, toolCalls = 0, toolErr = 0, llm = 0;
         for (const r of rows) {
             const tk = rowTokens(r);

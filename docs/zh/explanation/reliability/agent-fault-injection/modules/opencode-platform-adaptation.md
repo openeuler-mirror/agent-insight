@@ -20,7 +20,7 @@ changefreq: "monthly"
 | CLI harness | 已完成 | 仅 `opencode run`；**无** Daemon / TUI 产品路径 |
 | workspace 插件 | 已完成 | `.opencode/plugins/agent-fault-injection.ts` + `.opencode/lib/` 改写表 |
 | Skill / 文件注入 | 已完成 | workspace `.opencode/skills/` + `apply_injection_plan` |
-| inventory | 已完成 | `opencode agent list` / `models` + 用户 jsonc / oh-my 过滤 |
+| inventory | 已完成 | Agent 原生 API，模型按 OpenCode 版本探测 |
 | 产品化 | 已完成 | Insight 任务向导 + Worker；CLI 排障；集成测 skip |
 
 运行示例：Insight FI 新建任务表单选平台 `opencode`（包内不再维护 `configs/opencode-*.yaml`）。
@@ -193,7 +193,7 @@ flowchart TB
 | 事件采集 | 插件 → `raw/events.jsonl` | Hook → `raw/events.jsonl` |
 | 激活信号 | skill 工具成功加载 → `fault.activation.completed` | 同 |
 | 配置策略 | **真实 HOME / 系统 env**；只写 workspace 插件 | 临时 `XIAOO_CONFIG` **整份替换**，须 merge 保留用户 hooker |
-| Agents / Models | `opencode agent list` / `models` + jsonc / oh-my 过滤 | 解析 `config.toml` 的 `[agent.*]` / `[llm]` |
+| Agents / Models | Agent 原生 API，1.x 合并 JSON 与 CLI 模型目录，2.x 读取原生模型目录 | 解析 `config.toml` 的 `[agent.*]` / `[llm]` |
 | Judge | Insight 服务端 | **同一套** |
 
 ### 4.1 为何 OpenCode 不必做「整份 config overlay」
@@ -297,7 +297,7 @@ Worker 启动时一次 `python -m agent_fault_injection.cli platform inventory -
 
 - Agents：跑 `opencode agent list`，再按用户 `~/.config/opencode` jsonc 与 oh-my（`oh-my-openagent.json` / 旧 `oh-my-opencode.json`）过滤。
 - **不**合成 CLI 未返回的 `build/plan/general/explore`；排除 `compaction` / `summary` / `title` / `ras-judge`。
-- Models：配置里 `provider.*.models` 优先，否则带凭证的 CLI `opencode models`。
+- Models：1.x 合并已配置认证的 `provider.*.models` 与 CLI `opencode models`，从 `XDG_DATA_HOME` 下读取 `/connect` 的认证文件。2.x 从 `api --standalone model.list` 获取已启用模型，默认项来自 `model.default`，由 OpenCode 读取 JSON 配置及 SQLite 凭据。
 - `health_check`：PATH 上是否有 `opencode`。
 
 名单只信这次 inventory，不在每次 heartbeat 重算，也不回落 JS 硬编码 builtin。

@@ -36,6 +36,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const CLIENT_LOGIN_MODES = new Set<LoginMode>(['standalone', 'organization', 'idaas_oauth']);
 const IDAAS_REGION_ERROR_CODES = new Set(['region_restricted', 'region_check_unavailable']);
+// 页面卸载会中断进行中的请求；把这类中断当成立即失败会把用户误踢回登录页。
+// 探测登录模式和恢复登录态都先短暂退避重试，只有明确的鉴权拒绝才清除本地凭据。
+const LOGIN_MODE_RETRY_DELAY_MS = 400;
+const LOGIN_MODE_MAX_RETRY_DELAY_MS = 3000;
+const AUTH_RESTORE_MAX_ATTEMPTS = 3;
+const AUTH_RESTORE_RETRY_DELAY_MS = 400;
 
 // 登录后回跳目标：仅接受站内路径（防 open redirect），排除 /login 自身（防循环）。
 // 从 window.location.search 读而不用 useSearchParams()，避免给全局 Provider 引入 Suspense 边界要求。
@@ -59,27 +65,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    apiFetch('/api/eval/config/status?check_login=true')
-      .then(async res => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    const loadLoginMode = async () => {
+      try {
+        const res = await apiFetch('/api/eval/config/status?check_login=true');
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'Failed to load login mode');
         const nextMode = data?.login_mode
           || (data?.org_mode ? 'organization' : 'standalone');
-        if (!CLIENT_LOGIN_MODES.has(nextMode)) throw new Error('Invalid login mode');
+        if (cancelled) return;
+        if (!CLIENT_LOGIN_MODES.has(nextMode)) {
+          // 服务端明确返回了不支持的登录模式：这是配置错误，不是临时故障，重试没有意义。
+          setLoginMode('invalid');
+          setOrganizationLoginRedirectUrl('');
+          setLoginModeReady(true);
+          return;
+        }
         setLoginMode(nextMode);
         setOrganizationLoginRedirectUrl(data?.org_login_redirect_url || '');
-      })
-      .catch(() => {
-        setLoginMode('invalid');
-        setOrganizationLoginRedirectUrl('');
-      })
-      .finally(() => setLoginModeReady(true));
+        setLoginModeReady(true);
+      } catch (err) {
+        if (cancelled) return;
+        // 登录模式探测失败不能等同于未登录：保留本地凭据，退避后重试。
+        attempt += 1;
+        console.error('Failed to load login mode, retrying:', err);
+        retryTimer = setTimeout(
+          () => { void loadLoginMode(); },
+          Math.min(LOGIN_MODE_RETRY_DELAY_MS * attempt, LOGIN_MODE_MAX_RETRY_DELAY_MS),
+        );
+      }
+    };
+
+    void loadLoginMode();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, []);
 
   useEffect(() => {
     if (!loginModeReady) return;
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const clearStoredAuth = () => {
       localStorage.removeItem('user_id');
@@ -89,76 +120,97 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setApiKey(null);
     };
 
+    const waitBeforeRetry = (attempt: number) => new Promise<void>(resolve => {
+      retryTimer = setTimeout(resolve, AUTH_RESTORE_RETRY_DELAY_MS * (attempt + 1));
+    });
+
     const restoreAuth = async () => {
-      try {
-        const storedUser = localStorage.getItem('user_id');
-        const storedApiKey = localStorage.getItem('api_key');
-        let response: Response | null = null;
-
-        if (!loginMode || loginMode === 'invalid') {
-          clearStoredAuth();
-          return;
-        }
-
-        if (loginMode === 'organization') {
-          response = await apiFetch('/api/auth/organization');
-        } else if (storedUser && (loginMode !== 'idaas_oauth' || storedApiKey)) {
-          response = await apiFetch('/api/auth/apikey', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(loginMode === 'idaas_oauth' && storedApiKey
-                ? { 'x-witty-api-key': storedApiKey }
-                : {}),
-            },
-            body: JSON.stringify({ username: storedUser }),
-          });
-        }
-
-        if (!response) {
-          clearStoredAuth();
-          return;
-        }
-
-        const data = await response.json().catch(() => ({}));
+      for (let attempt = 0; attempt < AUTH_RESTORE_MAX_ATTEMPTS; attempt += 1) {
         if (cancelled) return;
-        if (!response.ok) {
-          const responseCode = typeof data?.code === 'string' ? data.code : '';
-          if (loginMode === 'idaas_oauth' && IDAAS_REGION_ERROR_CODES.has(responseCode)) {
-            if (cancelled) return;
-            setIdaasRegionError(responseCode);
+        try {
+          const storedUser = localStorage.getItem('user_id');
+          const storedApiKey = localStorage.getItem('api_key');
+          let response: Response | null = null;
+
+          if (loginMode === 'invalid' || !loginMode) {
+            // 登录模式配置错误与本地身份是否有效无关，不能因此清除凭据。
+            return;
+          }
+
+          if (loginMode === 'organization') {
+            response = await apiFetch('/api/auth/organization');
+          } else if (storedUser && (loginMode !== 'idaas_oauth' || storedApiKey)) {
+            response = await apiFetch('/api/auth/apikey', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(loginMode === 'idaas_oauth' && storedApiKey
+                  ? { 'x-witty-api-key': storedApiKey }
+                  : {}),
+              },
+              body: JSON.stringify({ username: storedUser }),
+            });
+          }
+
+          if (!response) {
             clearStoredAuth();
             return;
           }
-          if (response.status === 401 || response.status === 403) clearStoredAuth();
-          throw new Error(data?.error || `Authentication refresh failed: ${response.status}`);
+
+          const data = await response.json().catch(() => ({}));
+          if (cancelled) return;
+          if (!response.ok) {
+            const responseCode = typeof data?.code === 'string' ? data.code : '';
+            const regionError = loginMode === 'idaas_oauth'
+              && IDAAS_REGION_ERROR_CODES.has(responseCode);
+            const exhausted = attempt + 1 >= AUTH_RESTORE_MAX_ATTEMPTS;
+
+            if (response.status === 401 || response.status === 403) {
+              if (regionError) setIdaasRegionError(responseCode);
+              clearStoredAuth();
+              return;
+            }
+            // 地区校验接口不可用属于临时故障；重试仍失败时按失败关闭处理。
+            if (regionError && exhausted) {
+              setIdaasRegionError(responseCode);
+              clearStoredAuth();
+              return;
+            }
+            throw new Error(data?.error || `Authentication refresh failed: ${response.status}`);
+          }
+
+          const nextUser = loginMode === 'organization'
+            ? data?.displayName || data?.username
+            : data?.username || storedUser;
+          const nextDisplayName = data?.displayName || nextUser;
+          const nextApiKey = data?.apiKey;
+          if (!nextUser || !nextApiKey) throw new Error('Authentication refresh response is incomplete');
+          if (cancelled) return;
+
+          setIdaasRegionError(null);
+          localStorage.setItem('user_id', nextUser);
+          localStorage.setItem('api_key', nextApiKey);
+          setUser(nextUser);
+          setDisplayName(nextDisplayName);
+          setApiKey(nextApiKey);
+          return;
+        } catch (err) {
+          if (cancelled) return;
+          if (attempt + 1 >= AUTH_RESTORE_MAX_ATTEMPTS) {
+            console.error('Authentication refresh failed:', err);
+            return;
+          }
+          await waitBeforeRetry(attempt);
         }
-
-        const nextUser = loginMode === 'organization'
-          ? data?.displayName || data?.username
-          : data?.username || storedUser;
-        const nextDisplayName = data?.displayName || nextUser;
-        const nextApiKey = data?.apiKey;
-        if (!nextUser || !nextApiKey) throw new Error('Authentication refresh response is incomplete');
-        if (cancelled) return;
-
-        setIdaasRegionError(null);
-        localStorage.setItem('user_id', nextUser);
-        localStorage.setItem('api_key', nextApiKey);
-        setUser(nextUser);
-        setDisplayName(nextDisplayName);
-        setApiKey(nextApiKey);
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Authentication refresh failed:', err);
-      } finally {
-        if (!cancelled) setAuthReady(true);
       }
     };
 
-    void restoreAuth();
+    void restoreAuth().finally(() => {
+      if (!cancelled) setAuthReady(true);
+    });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [loginMode, loginModeReady]);
 

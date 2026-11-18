@@ -31,6 +31,9 @@ const eslintConfig = defineConfig([
     // docs/ 下随文档一起发布的第三方压缩产物（mermaid.min.js 等）：
     // 它们不是本仓源码，lint 会产出上万条误报，把真实问题全部淹没。
     "docs/**/vendor/**",
+    // packages/project-config/yaml.cjs 是 js-yaml 的 minified UMD 产物（同目录附 YAML-LICENSE），
+    // 不是本仓源码，对压缩代码 lint 只会产出上百条误报，把真实问题淹没。
+    "packages/project-config/yaml.cjs",
   ]),
 ]);
 

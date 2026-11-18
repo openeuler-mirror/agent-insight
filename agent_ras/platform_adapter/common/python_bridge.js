@@ -248,4 +248,6 @@ open(${JSON.stringify(outPath)}, "w", encoding="utf-8").write(_out)
   }
 }
 
-export default { embedCall, embedReady, embedInitError }
+const pythonBridgeExports = { embedCall, embedReady, embedInitError }
+
+export default pythonBridgeExports

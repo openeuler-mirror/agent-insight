@@ -97,6 +97,45 @@ def main():
         'DIFY_AGENT_TRAJECTORY_INCLUDE_CONTENT': 'true',
     }
     values = {**workflow_values, **(agent_values if agents else {})}
+    compose_environment = dict(line.split('=', 1) for line in
+        docker(['compose', 'config', '--environment'], directory).splitlines() if '=' in line)
+    separator = compose_environment.get('COMPOSE_PATH_SEPARATOR') or os.pathsep
+    compose_files = [name for name in compose_environment.get('COMPOSE_FILE', '').split(separator) if name]
+    if not compose_files:
+        compose_files = [next(name for name in names if (directory / name).is_file())]
+        overrides = ['compose.override.yml', 'compose.override.yaml', 'docker-compose.override.yml', 'docker-compose.override.yaml']
+        existing_override = next((name for name in overrides if (directory / name).is_file()), None)
+        if existing_override:
+            compose_files.append(existing_override)
+    override_file = directory / 'compose.agent-insight.yaml'
+    managed = any((directory / name).resolve() == override_file.resolve() for name in compose_files)
+    needs_override = managed or any('OTEL_EXPORTER_OTLP_TRACES_HEADERS' not in
+        (services[name].get('environment') or {}) for name in workflow)
+    previous_override = None
+    override_mode = 0o600
+    override_changed = False
+    override_content = None
+    if needs_override:
+        if os.environ.get('COMPOSE_FILE') and not managed:
+            raise SetupError('当前终端设置了 COMPOSE_FILE；请将 compose.agent-insight.yaml 加入文件列表后重试，或参考 Dify 接入文档。')
+        if override_file.is_symlink() or (override_file.exists() and not override_file.is_file()):
+            raise SetupError('compose.agent-insight.yaml 不是普通文件，未修改配置。')
+        if override_file.exists():
+            previous_override = override_file.read_text()
+            override_mode = override_file.stat().st_mode & 0o777
+            try:
+                owned = json.loads(previous_override).get('x-agent-insight-managed') == 1
+            except (ValueError, AttributeError):
+                owned = False
+            if not owned:
+                raise SetupError('compose.agent-insight.yaml 已存在且不属于安装脚本，未修改配置。')
+        override_content = json.dumps({'x-agent-insight-managed': 1, 'services': {
+            name: {'environment': {'OTEL_EXPORTER_OTLP_TRACES_HEADERS': '$' + '{OTEL_EXPORTER_OTLP_TRACES_HEADERS}'}}
+            for name in workflow}}, indent=2) + '\n'
+        override_changed = override_content != previous_override
+        if not managed:
+            compose_files.append(override_file.name)
+        values['COMPOSE_FILE'] = separator.join(compose_files)
     original = env_file.read_text()
     original_mode = env_file.stat().st_mode & 0o777
     start = '# >>> Agent Insight Dify OTLP >>>'
@@ -117,6 +156,8 @@ def main():
         write_private(env_file, updated)
         print('配置备份：' + str(backup))
     try:
+        if override_changed:
+            write_private(override_file, override_content)
         rendered = configuration()
         for name in workflow + agents:
             expected = workflow_values if name in workflow else agent_values
@@ -127,6 +168,11 @@ def main():
     except Exception:
         if changed:
             write_private(env_file, original, original_mode)
+        if override_changed:
+            if previous_override is None:
+                override_file.unlink(missing_ok=True)
+            else:
+                write_private(override_file, previous_override, override_mode)
         raise
     selected = workflow + agents
     print('重新加载服务：' + ', '.join(selected))

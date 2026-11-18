@@ -722,6 +722,127 @@ test("Codex adapter merges shell calls whose Hook and OTel wrappers differ", () 
     item.tool_calls?.length).length, 1)
 })
 
+test("Codex adapter merges 0.166 exec wrapper output with the raw Hook shell output", () => {
+  const agent = "a".repeat(16)
+  const hookTool = "b".repeat(16)
+  const otelTool = "c".repeat(16)
+  const inner = '{"name":"codex-e2e-fixture","version":"1.2.3","scripts":{"build":"next build","test":"node --test"}}'
+  const events = normalize([
+    canonical({
+      eventId: "exec-wrapper-agent",
+      spanId: agent,
+      kind: "agent",
+      name: "agent.codex",
+      input: "read package.json",
+      output: "done",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_010_000,
+    }),
+    canonical({
+      eventId: "exec-wrapper-hook",
+      spanId: hookTool,
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.Bash",
+      startTimeMs: 1_700_000_005_787,
+      endTimeMs: 1_700_000_012_009,
+      tool: {
+        name: "Bash",
+        type: "shell",
+        arguments: { command: 'cat "package.json"' },
+        result: inner,
+      },
+      attributes: {
+        "codex.call.id": "exec-95ccfdfa-878f-425a-b6d1-76e240825f3d",
+        "codex.tool.source": "hook",
+      },
+    }),
+    canonical({
+      eventId: "exec-wrapper-otel",
+      spanId: otelTool,
+      parentSpanId: agent,
+      kind: "tool",
+      name: "tool.exec",
+      startTimeMs: 1_700_000_005_786,
+      endTimeMs: 1_700_000_012_910,
+      tool: {
+        name: "exec",
+        type: "custom",
+        result: `Script completed\nWall time 6.8 seconds\nOutput:\n\n{"chunk_id":"6fbb4a","wall_time_seconds":0.0000159,"exit_code":0,"original_token_count":26,"output":${JSON.stringify(inner)}}`,
+      },
+      attributes: {
+        "codex.call.id": "call_af1a790b17584eea848d5fe3f1eb88e1",
+        "codex.tool.source": "otel",
+      },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  assert.equal(record.tool_call_count, 1, "0.166 的 exec 包装与 Hook Bash 必须合并为一次工具调用")
+  const tools = record.interactions.filter((item: { tool_calls?: unknown[] }) => item.tool_calls?.length)
+  assert.equal(tools.length, 1)
+  assert.equal(tools[0].name, "tool.Bash")
+  assert.match(tools[0].tool_calls[0].function.arguments, /package\.json/)
+})
+
+test("Codex adapter merges a lifecycle snapshot root and the OTel agent root for one execution", () => {
+  const execution = "01a19a8d-9fa6-7052-8007-92768b9a42cf:turn:01a19a8d-a4ac-7ba1-8f23-1bf37a8a1fe8"
+  const otelRoot = "d".repeat(16)
+  const events = normalize([
+    canonical({
+      eventId: "root-otel",
+      spanId: otelRoot,
+      kind: "agent",
+      name: "agent.codex",
+      input: "read package.json",
+      output: "Name: codex-e2e-fixture",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_010_000,
+      attributes: {
+        "codex.execution.id": execution,
+        "codex.agent.id": "root",
+        "codex.agent.name": "codex",
+        "codex.source.kind": "cli",
+      },
+    }),
+    canonical({
+      eventId: "root-lifecycle",
+      spanId: "e".repeat(16),
+      kind: "agent",
+      name: "agent.codex",
+      input: "read package.json",
+      startTimeMs: 1_700_000_000_100,
+      endTimeMs: 1_700_000_010_100,
+      attributes: {
+        "codex.execution.id": execution,
+        "agent.insight.lifecycle": "execution",
+        "codex.execution.status": "completed",
+        "codex.input.history": JSON.stringify([{ role: "user", content: "read package.json" }]),
+        "codex.source.kind": "cli",
+      },
+    }),
+    canonical({
+      eventId: "root-llm",
+      spanId: "f".repeat(16),
+      parentSpanId: otelRoot,
+      kind: "llm",
+      name: "llm.gpt-6.1-sol",
+      output: "Name: codex-e2e-fixture",
+      model: "gpt-6.1-sol",
+      startTimeMs: 1_700_000_002_000,
+      endTimeMs: 1_700_000_009_000,
+      attributes: { "codex.execution.id": execution },
+    }),
+  ])
+
+  const record = aggregateOtelTraceEvents("codex-session", events)
+  assert.ok(record)
+  const users = record.interactions.filter((item: { role?: string }) => item.role === "user")
+  assert.equal(users.length, 1, "同 execution 的 Hook 生命周期根与 OTel 根不得生成两个 USER 节点")
+  assert.equal(record.executionStatus, "completed")
+})
+
 test("Codex adapter drops an OTel shell batch already represented by Hook calls", () => {
   const agent = "7".repeat(16)
   const hookEvents = [0, 1, 2].map((offset) => canonical({
@@ -1603,6 +1724,9 @@ test("Codex adapter skips an empty lifecycle and names real untitled work withou
   ]))
   assert.equal(redactedLifecycle, null)
 
+  // Bug 62（2026-08-24 用户现场反馈）：没有任何用户输入信号的执行（桌面自动
+  // 延续 turn、仅工具工作的会话）不再成为列表任务——臆造的
+  // "Codex tool: shell" 查询污染任务列表。真实工作保留为线程事件。
   const untitled = aggregateOtelTraceEvents("tool-session", normalize([
     canonical({
       sessionId: "tool-session",
@@ -1622,8 +1746,58 @@ test("Codex adapter skips an empty lifecycle and names real untitled work withou
       tool: { name: "shell", type: "shell", arguments: {}, result: "ok" },
     }),
   ]))
-  assert.ok(untitled)
-  assert.equal(untitled.query, "Codex tool: shell")
+  assert.ok(untitled === null || untitled?.threadOnly,
+    "tool-only sessions without user input never become a visible list task")
+})
+
+test("Codex adapter suppresses internal utility sessions whose only signal is a system-prompt root input", () => {
+  // Codex 内部会话（任务标题生成、建议生成、worker 系统提示词等）以根 agent
+  // input 出现但没有任何 LLM/Tool/Skill/子 Agent 工作，也没有生命周期执行信号。
+  // 这些不是真实用户任务，不应成为可见执行记录。
+  const phantom = aggregateOtelTraceEvents("phantom-session", normalize([
+    canonical({
+      sessionId: "phantom-session",
+      eventId: "phantom-agent",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.codex",
+      model: "gpt-5.6-luna",
+      input: "You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task.",
+      status: "ok",
+    }),
+    canonical({
+      sessionId: "phantom-session",
+      eventId: "phantom-api-1",
+      spanId: "2".repeat(16),
+      parentSpanId: "1".repeat(16),
+      kind: "api",
+      name: "api.codex",
+      status: "ok",
+    }),
+  ]))
+  assert.equal(phantom, null)
+
+  // 生命周期执行（rollout reader 产出，agent.insight.lifecycle=execution）即使
+  // 没有 hook 工作也必须保留为可见任务。
+  const lifecycle = aggregateOtelTraceEvents("lifecycle-session", normalize([
+    canonical({
+      sessionId: "lifecycle-session",
+      eventId: "lifecycle-start",
+      spanId: "3".repeat(16),
+      kind: "agent",
+      name: "agent.codex",
+      input: "查询今天最重要的科技新闻",
+      attributes: {
+        "agent.insight.lifecycle": "execution",
+        "codex.source.kind": "desktop",
+        "codex.execution.status": "completed",
+      },
+    }),
+  ]))
+  assert.ok(lifecycle)
+  assert.equal(lifecycle.sourceKind, "desktop")
+  assert.equal(lifecycle.executionStatus, "completed")
+  assert.equal(lifecycle.query, "查询今天最重要的科技新闻")
 })
 
 test("Codex adapter output is deterministic for the same canonical structure", () => {

@@ -46,6 +46,7 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
         id: string; taskId?: string | null; query: string | null; framework?: string | null;
         failures?: string | null; endTime?: number | null; timestamp?: number; lastReceived?: number | null;
         agentName?: string | null; model?: string | null; inputTokens?: number | null;
+        executionStatus?: string | null;
     }> = [
         { id: 'a-null', query: null, taskId: null, timestamp: 0, lastReceived: null },
         { id: 'B-empty', query: '', taskId: '', timestamp: -1, lastReceived: 0 },
@@ -71,6 +72,9 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
         { id: 'v-opencode-other-framework', query: 'Other framework', framework: 'actrail', failures: '[{"failure_type":"opencode-session-error"}]', endTime: 1 },
         { id: 'w-opencode-description-only', query: 'Description only', framework: 'opencode', failures: '[{"description":"opencode-session-error"}]', endTime: 1 },
         { id: 'x-opencode-invalid-json', query: 'Invalid error JSON', framework: 'opencode', failures: '[{"failure_type":"opencode-session-error"}', endTime: 1 },
+        { id: 'y1-interrupted-ended', query: 'Interrupted after completion signal', executionStatus: 'interrupted', endTime: snapshot - 60_000 },
+        { id: 'y2-interrupted-open', query: 'Interrupted without completion', executionStatus: 'interrupted' },
+        { id: 'y3-explicit-failed', query: 'Explicit failed without completion', executionStatus: 'failed' },
     ];
     const rows = definitions.map((definition, index) => ({
         id: definition.id,
@@ -94,6 +98,7 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
         toolCallCount: index % 4 ? index : null,
         toolCallErrorCount: index % 3 ? 1 : null,
         skillVersion: index % 3 ? index : null,
+        executionStatus: definition.executionStatus ?? null,
         observedAgents: index % 2 ? '["worker","agent_%"]' : null,
     }));
     await prismaRaw.execution.createMany({ data: rows });
@@ -200,9 +205,9 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
 
     const completed = new Map(sessions.map(session => [session.taskId, session.endTime]));
     const abnormal = new Set([taskAnomaly.id, executionAnomaly.id]);
-    const statusRanks = { running: 0, timed_out: 1, failed: 2, success: 3 };
+    const statusRanks = { running: 0, timed_out: 1, interrupted: 1, failed: 2, success: 3 };
     await context.test('OpenCode error filtering, status ordering and aggregate match completed-session semantics', async () => {
-        const ids = definitions.slice(-6).map(row => row.id);
+        const ids = ['s-opencode-failed', 't-opencode-running', 'u-opencode-timeout', 'v-opencode-other-framework', 'w-opencode-description-only', 'x-opencode-invalid-json'];
         const where = { user: owner, id: { in: ids } };
         const options = { anomaly: 'all' as const, sortKey: 'status' as const, sortDir: 'asc' as const, page: 1, pageSize: 20, lifecycleNow: snapshot };
         const failed = await selectComputedRecordPage(where, { ...options, status: 'failed' });
@@ -251,7 +256,7 @@ test('Trace SQL matches Prisma filters and established lifecycle, pricing, and s
         assert.equal(computed.stats.toolErrorRate, actual.toolErrorRate);
         assert.deepEqual(computed.stats, await aggregateExecutionList(where, { lifecycleNow: snapshot, avgNullAsZero: true }));
     });
-    for (const status of ['all', 'running', 'timed_out', 'failed', 'success']) {
+    for (const status of ['all', 'running', 'timed_out', 'interrupted', 'failed', 'success']) {
         for (const sortKey of ['timestamp', 'cost', 'status'] as const) await context.test(`SQL computed semantics: ${status}/${sortKey}`, async () => {
             const selected = rows.map(row => ({ ...row, lifecycle: getTraceLifecycle(completed.get(row.taskId || row.id), row, snapshot).traceStatus }));
             const expected = selected.filter(row => status === 'all' || row.lifecycle === status);

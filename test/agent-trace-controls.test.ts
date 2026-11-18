@@ -22,6 +22,8 @@ import React from 'react';
 import { getAgentActiveDurationMs } from '../src/lib/engine/observability/agent-trace';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
+import { createSpanScrollController } from '@/lib/client/trace-span-scroll';
+import { resolveEventRenderCount, TRACE_EVENT_RENDER_BATCH } from '@/lib/client/trace-render-budget';
 
 const source = fs.readFileSync(new URL('../src/components/observe/AgentTraceView.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('AgentTraceView.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -220,7 +222,9 @@ test('opening the current Trace from a nested Agent resets to the root and still
     const defaults = new Set(['root']);
     const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
         useCallback: (callback: unknown) => callback,
-        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([['root', { id: 'root', sessionId: 'parent-task' }]]), defaultExpandedKeys: defaults,
+        rootSessionId: 'parent-task', tree: { id: 'virtual' }, nodeMap: new Map([
+            ['root', { id: 'root', sessionId: 'parent-task' }], ['child', { id: 'child', sessionId: 'child-task' }],
+        ]), defaultExpandedKeys: defaults,
         setSelectedKey: (key: string) => { selected = key; },
         setExpandedKeys: (keys: Set<string>) => { expanded = keys; },
         setActiveDetailTab: (value: string) => { tab = value; },
@@ -234,6 +238,20 @@ test('opening the current Trace from a nested Agent resets to the root and still
     assert.deepEqual(opened, ['parent-task']);
     navigate('child-task');
     assert.deepEqual(opened, ['parent-task', 'child-task']);
+});
+
+test('Jiuwen child Trace links use shared standalone navigation for both children', () => {
+    const opened: string[] = [];
+    const navigate = variable<(id: string) => void>('navigateToAgentTrace', {
+        useCallback: (callback: unknown) => callback,
+        rootSessionId: 'parent-task', tree: { id: 'root' },
+        nodeMap: new Map(['child-1', 'child-2'].map(id => [id, { id, sessionId: id, agentName: 'worker' }])),
+        defaultExpandedKeys: new Set(), setSelectedKey: () => {}, setExpandedKeys: () => {}, setActiveDetailTab: () => {},
+        agentKey: (id: string) => `a:${id}`, onSubagentNavigate: (id: string) => { opened.push(id); },
+    });
+    navigate('child-1');
+    navigate('child-2');
+    assert.deepEqual(opened, ['child-1', 'child-2']);
 });
 
 test('nested Workflow containers survive Tool filtering when their linked Agent contains a matching tool', () => {
@@ -413,7 +431,9 @@ test('duplicate parent spans and missing tool IDs stay flat instead of relying o
 test('the new nesting is expanded by default and collapse/expand still covers the parent model', () => {
     const tree = buildAgentCallTree([{ role: 'assistant', content: '', tool_calls: [responseCall('read-call')], parts: [{ type: 'tool', callID: 'read-call', tool: 'read' }] }])!;
     const defaults = functionValue<any>('buildDefaultExpandedKeys', {
-        buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        getAgentEventTree: functionValue<any>('getAgentEventTree', {
+            eventTreeCache: new WeakMap(), buildAgentEventTree: functionValue<any>('buildAgentEventTree', {}),
+        }),
         agentKey: (id: string) => `a:${id}`, eventKey: (id: string, index: number) => `e:${id}:${index}`,
     })(tree);
     assert.ok(defaults.has(`a:${tree.id}`));
@@ -672,4 +692,90 @@ test('Span detail timestamps include the date so adjacent days remain distinguis
     assert.equal(format(new Date(2026, 10, 3, 0, 0, 0, 1).getTime()), '2026-11-03 00:00:00.001');
     assert.equal(format(), null);
     assert.equal(format(Number.NaN), null);
+});
+
+
+test('empty Span type selection preserves the initial render budget', () => {
+    const indexes = Array.from({ length: 500 }, (_, index) => index);
+    const count = (treeKindFilter: string[]) => resolveEventRenderCount(indexes, TRACE_EVENT_RENDER_BATCH, {
+        revealAll: variable<boolean>('filtersActive', {
+            treeKindFilter, minDurationMs: 0, minTokenK: 0, ctxSlowOnly: false, searchQuery: '',
+        }),
+    });
+    assert.equal(count([]), TRACE_EVENT_RENDER_BATCH);
+    assert.equal(count(['llm']), 500);
+    assert.equal(count(['user', 'llm']), 500);
+});
+
+
+test('following latest reveals budgeted Span rows and keeps them after pausing', () => {
+    let spanTailTrace: string | null = null;
+    const spanTraceKey = 'trace-one';
+    const revealSpanRows = variable<() => void>('revealSpanRows', {
+        useCallback: (callback: unknown) => callback,
+        spanTraceKey, setSpanTailTrace: (key: string) => { spanTailTrace = key; },
+    });
+    const count = (key: string, total: number) => variable<number>('renderedEventCount', {
+        resolveEventRenderCount, eventRootIndexes: Array.from({ length: total }, (_, index) => index),
+        eventRenderLimit: TRACE_EVENT_RENDER_BATCH, filtersActive: false, selectedEventIndex: null,
+        ctx: { revealAllSpans: variable<boolean>('revealAllSpans', { spanTraceKey: key, spanTailTrace }) },
+    });
+    const viewport = { scrollTop: 0, scrollHeight: count(spanTraceKey, 500) * 34, clientHeight: 400 };
+    const scroll = createSpanScrollController(() => viewport);
+    const viewportSource = fs.readFileSync(new URL('../src/components/observe/TraceSpanViewport.tsx', import.meta.url), 'utf8');
+    const viewportAst = ts.createSourceFile('TraceSpanViewport.tsx', viewportSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let followingEffect: ts.ArrowFunction | undefined;
+    const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node) && node.expression.getText(viewportAst) === 'useLayoutEffect'
+            && node.arguments[0]?.getText(viewportAst).includes('onFollowingLatest')) {
+            followingEffect = node.arguments[0] as ts.ArrowFunction;
+        }
+        ts.forEachChild(node, visit);
+    };
+    visit(viewportAst);
+    assert.ok(followingEffect, 'following state must notify the parent render budget');
+    const notify = () => evaluate<() => void>(followingEffect!.getText(viewportAst), {
+        following: scroll.getSnapshot().following, onFollowingLatest: revealSpanRows,
+    })();
+    scroll.subscribe(notify);
+    const keys = (total: number) => Array.from({ length: total }, (_, index) => `span-${index}`);
+    scroll.resetView(keys(500));
+    assert.equal(count(spanTraceKey, 500), TRACE_EVENT_RENDER_BATCH);
+    scroll.jumpToBottom();
+    assert.equal(count(spanTraceKey, 500), 500);
+    viewport.scrollHeight = count(spanTraceKey, 500) * 34;
+    scroll.refresh(keys(500));
+    assert.equal(viewport.scrollTop, viewport.scrollHeight - viewport.clientHeight);
+    scroll.pauseFollowing();
+    assert.equal(count(spanTraceKey, 500), 500);
+    scroll.refresh(keys(501));
+    assert.equal(scroll.getSnapshot().hasNewContent, true);
+    scroll.jumpToBottom();
+    viewport.scrollHeight = count(spanTraceKey, 501) * 34;
+    scroll.refresh(keys(501));
+    assert.equal(viewport.scrollTop, viewport.scrollHeight - viewport.clientHeight);
+    assert.equal(count('trace-two', 501), TRACE_EVENT_RENDER_BATCH);
+});
+
+test('clearing a deep search keeps its reading anchor beyond the initial batch', () => {
+    let spanTailTrace: string | null = null;
+    const spanTraceKey = 'deep-search';
+    const revealSpanRows = variable<() => void>('revealSpanRows', {
+        useCallback: (callback: unknown) => callback, spanTraceKey,
+        setSpanTailTrace: (key: string) => { spanTailTrace = key; },
+    });
+    let captured: string | null = null;
+    const capture = variable<() => void>('captureSpanContext', {
+        useCallback: (callback: unknown) => callback, cancelPendingSpanJump: () => {}, revealSpanRows,
+        spanFocusKeyRef: { current: 'e:root:150' },
+        spanViewportRef: { current: { captureAnchor: (key: string) => { captured = key; } } },
+    });
+    capture();
+    const count = variable<number>('renderedEventCount', {
+        resolveEventRenderCount, eventRootIndexes: Array.from({ length: 300 }, (_, index) => index),
+        eventRenderLimit: TRACE_EVENT_RENDER_BATCH, filtersActive: false, selectedEventIndex: null,
+        ctx: { revealAllSpans: variable<boolean>('revealAllSpans', { spanTraceKey, spanTailTrace }) },
+    });
+    assert.equal(captured, 'e:root:150');
+    assert.equal(count, 300);
 });

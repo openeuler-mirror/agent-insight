@@ -4,11 +4,14 @@
 
 ## 目录
 
-- `cases/001-setup`：准备、登录、模型、客户端。
-- `cases/002-opencode-observation`：OpenCode 原生上报和页面观测。
-- `cases/003-skill-lifecycle`：上传、生成、页面建数据集、实验生成 Trace、评测、诊断、优化、发布复跑。
-- `cases/004-trace-evaluation`：已有 Trace、无数据集评测、诊断、优化。
-- `cases/005-fault-recovery`：故障注入、检测、中断回执、恢复；真实执行并如实保留失败。
+| 编号 | 用例名称 | 核心验证 | 目录 |
+| --- | --- | --- | --- |
+| 001 | 账号登录/模型配置/客户端接入 | 页面登录与刷新、模型测试和保存、客户端归属及能力 | `cases/001-setup` |
+| 002 | OpenCode 执行与 Trace 采集展示 | 原生任务执行、真实工具内容上报、Trace/Agent 页面核验 | `cases/002-opencode-observation` |
+| 003 | Skill 生成/数据集评测/优化发布 | 上传和生成 Skill、页面建数据集、实验评测和诊断、候选验证与发布版复跑 | `cases/003-skill-lifecycle` |
+| 004 | 已有 Trace 评测/诊断/Skill 优化 | 复用已有 Trace，不新增数据集，验证评测、诊断、优化及候选复跑 | `cases/004-trace-evaluation` |
+| 005 | 故障注入/检测拦截/恢复验证 | 故障注入、检测、成功原生中断回执及同客户端恢复 | `cases/005-fault-recovery` |
+
 - `shared/`：用例复用层，例如隔离应用启动、登录、客户端、模型连接/Mock、数据集操作、公共断言和报告汇总。单例及整轮执行都使用它，避免每个 case 重复维护相同流程。
 - `control/`：自动执行控制层，例如 Webhook 验签、持久化队列、源码检出/合并、容器与生产编译、Real/Mock 分组、证据导出和 PR 评论回写。由 `serve.mjs` 接收事件、`worker.mjs` 执行任务；本机隔离整轮入口为 `run-isolated.mjs`。
 
@@ -40,6 +43,96 @@ node test/e2e/run.mjs --all --mode mock --ut
 每例独立执行，失败后继续其他场景；生成 `report.json`、`report.html`、`summary.md`，整体非通过退出 1。UT 独立记录完整性和中断，不将环境失败自动归类为产品缺陷。默认 UT 超时 30 分钟；可用 `--ut-timeout-ms` 调整。单例原始报告仍通过 `run-case.mjs` 生成，兼容旧 `tools/core-e2e/run.mjs` 命令。真实单例运行总预算 45 分钟。
 
 当前本地工作树报告带 `dirtyWorkingTree`，不能冒充某个已提交 PR 的验证结果。按运行编号保留原始失败，不覆盖历史报告。未列入本轮执行的场景显示 NOT_RUN；阻塞、不完整和未执行均不计通过。
+
+## 构建环境镜像
+
+`control/Dockerfile` 预装项目锁文件依赖、Prisma Client、Playwright Chromium、Python、PowerShell 和 OpenCode 原生客户端。用于 Actions Job 时，可构建 amd64 镜像并将运行用户设为 root，以适配平台的 Job 初始化；独立隔离执行器仍使用默认 UID 1000。
+
+```bash
+docker buildx build --platform linux/amd64 \
+  --file test/e2e/control/Dockerfile \
+  --build-arg BASE_IMAGE=node:24-bookworm-slim \
+  --build-arg DEBIAN_MIRROR=https://repo.huaweicloud.com \
+  --build-arg RUNTIME_UID=0 \
+  --tag agent-insight-e2e-env:local --load .
+```
+
+构建上下文通过 `control/Dockerfile.dockerignore` 限制为依赖清单及 Prisma schema。依赖锁文件或工具链变化后需重建镜像。Actions 每个非汇总 Job 按当前检出的 schema 生成 Prisma Client，schema 单独变化无需重建 Actions 环境镜像；独立 Docker 控制服务仍按其指南校验镜像中的 schema。上传 SWR 后可以在 Job 的 `container.image` 中引用固定版本或摘要；私有镜像需要另行配置 Runner 的拉取授权。
+
+## GitCode Actions PR 门禁
+
+入口为 [pr-e2e.yml](../../.atomgit/workflows/pr-e2e.yml)。目标为 `master` 的 PR 新建、更新和重开自动触发；普通 `pull_request` 只申请仓库和 PR 读取权限，不读取模型密钥，001～005 固定使用 Mock。真实编译、UT、客户端、浏览器和数据库仍执行。未配置 Actions 变量和密钥时，手动运行也默认五例全 Mock；需要 Real 时使用下列仓库配置。该覆盖仅作用于当前 Actions 运行，不修改 `config.json`，不改变既有本地、Webhook 或 daily 入口。
+
+在项目设置 → Actions 密钥与变量中添加：
+
+| 位置 | 名称 | 内容与默认行为 |
+| --- | --- | --- |
+| 仓库变量 | `E2E_CASE_MODES` | JSON 对象，例如 `{"001":"real","002":"mock","003":"mock","004":"mock","005":"mock"}`。只允许 `001`～`005` 和小写 `mock/real`；未填写的编号按 Mock，变量留空时五例全 Mock |
+| 仓库变量 | `E2E_MODEL_BASE_URL` | 模型服务的 Base URL，例如 `https://model.example.com/v1`；不能含用户名、密码或查询参数 |
+| 仓库变量 | `E2E_MODEL_NAME` | 模型服务实际支持的模型 ID |
+| 仓库密钥 | `E2E_MODEL_API_KEY` | 模型 API Key，不能放入仓库变量或代码 |
+
+存在 Real 例子时三项模型配置均须填写；Base URL 和模型名称在编译前校验，Key 只在对应 Real 用例 Job 启动时校验。五例全 Mock 不需要模型密钥。模型沿用当前测试包的 Chat Completions 协议和 `model.options`，不改变其余资源与超时配置。打开 Actions → PR Build UT E2E → Run workflow，选择包含该 workflow 的待验证分支后运行；变量更新后重新手动运行即可生效。重新运行旧的 PR 任务仍是 PR 全 Mock，不会切换为手动模型验证。
+
+手动入口须先由默认分支上的 workflow 注册；只在 PR 分支新增文件时，平台可能显示流水线却不启用手动运行。注册后可选择包含该 workflow 的测试分支。驱动器及密钥条件兼容平台实际事件名 `Manual` 与 `workflow_dispatch`，两者均读取手动模式和模型配置。
+
+驱动器在 Job 源码目录之外生成本轮配置快照，配置冻结后随编译制品传递，Key 只在 Real 用例 Job 内通过权限为 `0600` 的临时文件传给该用例，正常完成、测试失败或启动异常后移除；不把 Key 放进测试子进程环境变量、报告或制品。门禁独立读取执行前的配置快照，核对配置哈希、五例实际模式及完整 UT；不能把配置为 Real 却实际执行 Mock 的报告算作通过。报告包含模式、模型名称和 Base URL，不包含模型 Key。
+
+流水线在社区 Kubernetes Job 中使用带日期版本标签的 SWR 构建环境镜像，创建独立源码快照，核对项目及 E2E 锁文件与镜像一致，复制预装依赖后，在编译、UT 和每例 Job 内分别按本次检出的 `prisma/schema.prisma` 生成 Prisma Client，再验证 Chromium 无头启动。生成过程使用隔离目录及数据库 URL，只生成代码，不执行迁移或连接业务数据库；源码指纹继续绑定本轮 schema。初始化会检查进程清理工具，当前已发布镜像缺少 `procps` 时自动补装。当前社区资源池拒绝 `image@sha256` 格式，因此使用 `node24-pw1.62.1-amd64-20261111` 标签，已发布标签须保持指向不变。此 Actions 入口要求该环境镜像保持公开并允许匿名拉取，不引用 `SWR_PULL_USERNAME` 或 `SWR_PULL_PASSWORD`；同仓及跨仓 Fork PR 均不需要镜像拉取密钥，保持普通 `pull_request` 触发。环境镜像仅预装工具链、公开依赖、依赖清单及 Prisma 结构文件，不能加入真实凭据或业务数据；PR 应用源码在 Job 中另行检出。总览显示 8 个独立 Job：生产编译 → UT 与 001～005 并行 → 汇总与门禁。编译通过后，UT 和五例 E2E 分别只依赖编译制品即可进入调度，五例不再等待 UT；汇总等待全部阶段结束。生产编译只执行一次，压缩制品包含 `.next`、生成代码和清单；各测试 Job 下载后核对运行 ID、提交 SHA、源码指纹、配置哈希、压缩包哈希和 BUILD_ID，再复用编译结果。UT 与每例 E2E 使用各自独立源码目录、账号状态与数据库，不继承其他测试 Job 的数据库。编译失败时跳过 UT 和用例；UT 失败时五例仍继续，单例失败也不取消其他例。汇总始终尝试运行，缺失制品、异常退出、失败 Job、UT 不完整或必需阶段缺失均不能通过。更多 Job 会增加镜像准备、制品传输和排队开销，实际耗时以本轮运行记录为准。
+
+本 workflow 使用正式仓 Runner 标签 `[self-hosted, openeuler, x86, cpu=8]` 和 amd64 环境镜像。测试副本使用其已获授权的 `[self-hosted, default, x86, cpu=4]` 时，需在副本中同步调整 `runs-on`；资源池共享授权不会随 Fork 自动继承。`runs-on` 数组使用固定标签，当前平台未正确展开其中的仓库条件表达式。Job 使用镜像预装的 npm 依赖、Playwright Chromium、Python 依赖和 PowerShell，补装 `procps` 时需要能访问 Debian 软件源。每轮使用新建的工作目录和 SQLite 状态，测试结束后由 Job 回收。每个测试 Job 独立复制预热 npm 缓存，并固定使用缓存对应的 npmjs registry 与离线模式，不能依赖前序 UT 写入的缓存。用例内部使用由完整运行 ID 派生的短编号，避免页面名称长度限制；公开报告仍保留完整 Actions 运行 ID。
+
+编译结束后最多同时就绪六个测试 Job；实际启动时间由 Runner 池容量决定，资源不足时平台排队。workflow 的 `concurrency.max: 1` 限制不同 PR 或手动运行之间的流水线并发，不限制单次流水线内部的 Job 并行。
+
+编译、UT 与每例 Actions 阶段会给测试子进程注入独立的一次性归属标记，正常结束、异常退出及收到终止信号时执行本阶段的残留进程回收。清理先用 pidfd 固定进程身份，再通过 Linux `/proc` 精确核对标记并发送信号；不按进程名、工作目录或 `PPID=1` 全容器扫描终止，平台 Worker、控制进程和其他 Job 的进程不属于清理目标。阶段启动前检查内核与 Python 的 pidfd 支持；能力不可用、清理失败或仍有残留时阻塞阶段，不能按通过收尾。启动前以 PID 和启动时间记录既有进程的私有快照；遇到无法读取身份或环境的新进程时保留该进程并阻塞阶段，避免误杀 Worker，也避免把未能确认的残留计为零。JSON、HTML 和 Summary 记录清理状态、回收数及剩余数，不公开归属标记。UT Job 额外串行运行进程清理回归文件，避免不可读取环境的测试进程互相干扰，覆盖父进程强杀、另建进程组、退出期间再派生、取消以及无关 Worker 保留。平台直接强杀控制进程或销毁容器时，应用内 finally 无法执行，仍需要平台完成 Job 资源回收。
+
+各阶段每 30 秒输出 `CI_PHASE_PROGRESS`，仅包含当前阶段、用例编号及最新步骤状态。容器或 Runner 被平台提前终止时，可据此定位最后执行阶段；只有这些进度输出不能认定测试通过，仍需完整报告及门禁结果。
+
+隔离容器内的 Next 构建 worker 数及默认 UT 文件并发使用 `resources.cpus`（不足 1 核时按 1 个 worker）。这是测试执行预算，不依赖 Node 识别到的宿主机核数；共享 Runner 的 cgroup v1 环境可能显示宿主机全部 CPU，不能据此扩大并发。此限制不改变逐例 Real/Mock 配置，也不减少编译、UT 或 E2E 范围；非隔离本地入口保留原有并发行为。
+
+Actions UT 可通过阶段命令的 `--ut-concurrency 1..8` 单独指定文件并发，仍执行原始 `npm test` 全量入口。UT 与汇总的 Summary/HTML 列出慢文件前 20 项、进程 CPU/最大 RSS、实际可见 cgroup CPU 配额和内存上限、本轮 500ms 采样峰值、内核生命周期峰值及 OOM kill 增量；读取不到的数据标记不可用，不当作零。完整脱敏文件清单在 `e2e-result-ut` 制品的 `ut-metrics.json`，只公开仓内相对文件名与数字，不上传原始 UT 日志、PID 或系统路径。文件 CPU/RSS 不包含其派生进程；容器采样包含派生进程，祖先 CPU 配额可能共享。当前 Actions PR 门禁在已验证的 8 核 Runner 固定使用 8 文件并发；生产构建及原有本地、Webhook 入口仍沿用各自资源配置。常规门禁只执行一轮全量 UT。
+
+005 的异常上报与原生中断回执可能异步到达。证据阶段最多等待 60 秒，须同时读到本轮同一会话的 thinking loop 检测及成功的原生中断回执，才继续核对原生输出、时间顺序和恢复结果。超时仅公开事件分类计数，原始载荷保存在受限目录。
+
+失败阶段的公开报告附带应用错误分类、Prisma 错误码及编译后堆栈位置，不包含原始日志、SQL 参数或凭据。003 缺少候选验证关联时额外列出候选、输入与结果哈希的匹配情况；SQLite Worker 集成测试超时会记录最后的静态检查点。这些信息仅用于排错，不改变阶段断言或门禁结果。
+
+Actions 当前按数据库重构安排临时设置 `E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT=1`，只跳过 `trace-datasets-integration.test.ts` 中的 `real SQLite + Worker: publish, idempotency, isolation, failure, deletion and replay`；同文件的其余两项及其他 UT 继续执行。跳过计入 UT 汇总，并在 JSON、HTML 和 Markdown 报告列明用例及原因。普通本地 `npm test` 不设置该变量，仍执行此项；数据库运行时代码未作修改。恢复此项时移除 workflow 中的临时变量。
+
+PR 自动检查从 PR 的“检查”标签进入，点击左侧流水线记录打开对应 Actions 运行；列表关联当前提交，旧提交的历史运行从 Actions 列表查找。手动运行也从 Actions 列表查看。运行详情的总览图显示 8 个 Job，点击失败节点或左侧同名 Job 可查看具体步骤和日志（查看日志需要登录）。每个 Job 完成后写入自己的 Summary，最终“汇总与门禁 summary”列出编译、UT、五例结果及 UT 失败用例；已登录用户可在“构建产物”下方查看，未登录时该区域不展示。“构建产物”中的 `pr-e2e` 是最终公开报告，包含 `summary.md`、`report.html`、`report.json`、配置快照和阶段结果；`e2e-result-*` 用于各阶段排错，`e2e-build` 用于跨 Job 复用编译结果。
+
+### PR 结果自动评论
+
+回写仅关联由 PR 事件触发的门禁运行；普通手动测试运行没有 PR 归属，不会自动贴到某个 PR。源提交回退测试与预合并测试会在评论中区分，历史运行只说明当时的测试提交与基线。
+
+[pr-result-comment.yml](../../.atomgit/workflows/pr-result-comment.yml) 是独立的可信回写流程，不增加业务测试 Job。将该 workflow 和回写脚本合入 `master` 后，每 5 分钟触发一次扫描，读取最近 24 小时的已结束 `PR Build UT E2E` PR 运行，覆盖仍打开和已合并的 PR，跳过关闭但未合并的 PR，在同一条机器人评论中更新提交 SHA、编译、UT 通过/失败/跳过数量、五例名称与 Mock/Real 模式、失败项和运行链接。Runner 排队会增加延迟；评论不是流水线结束的即时通知。 定时触发会持续运行，不会在首个结果回写后自动停止；每轮无可回写结果时退出，已验证且未变化的结果不会重复评论。停用该 workflow 或移除 `schedule` 可停止后续定时触发。 每轮全局扫描最多读取 2000 条 PR 运行记录；到达上限仍处理已取得的近 24 小时候选，并在回写日志和 Summary 标记 `SCAN_INCOMPLETE`。更早启动但近期完成的运行可能在上限之外，可通过 `pr_number` 手动补发。平台列表不按结束时间排序，不能仅因遇到旧结束时间就提前停止翻页。
+
+回写流程仅从 `master` 的触发提交检出可信代码，使用平台内置 `ATOMGIT_TOKEN` 的仓库/流水线读取和 PR 写入权限；不配置个人 Token，不检出或执行 PR 代码，也不运行报告中的脚本。原 8 Job 的 `pull_request` 仍只读。写入前核对仓库、PR、运行及当前提交，过期结果不覆盖新提交的评论；同一结果重复扫描不会重复发评论。失败、取消和报告缺失均明确展示，不能将未执行或不完整报告标为通过。回写失败会使独立评论流程失败，原测试门禁仍保留实际测试结论。平台报告通过 `platformRunAttempt` 记录 `ATOMGIT_RUN_ATTEMPT`，回写时核对运行轮次；旧报告缺少该字段时仅兼容首轮，重跑第 2 轮及以后缺少轮次证据会标为不可验证，不能借用首轮制品给出通过结论。 实测平台原地重跑可能保持 `attempt=1`，因此还绑定运行实际开始时间、制品创建时间以及各阶段开始时间；旧报告或旧阶段结果不能作为新执行证据。评论中的“平台轮次”不等同于实际重跑次数。
+
+原生 Token 需要 `project: read` 读取仓库元数据、`repository: read` 读取源码提交、`action: read` 读取运行和制品，以及 `pr: write` / `note: write` 读写 PR 评论。仓库级 Token 不具备全局 `/user` 访问权限，可信 workflow 使用原生写入后读回确认的 `action-bot` ID 和登录名核对作者；本地未固定身份时仍查询当前授权用户。已合并 PR 的补发还要求仓库 Pull Request 设置开启“允许合并请求合并后继续做代码检视和评论”（`add_notes_after_merged`）；未开启时回写记录 `SKIPPED_MERGED_COMMENTS_DISABLED`，仍可预览结果。
+
+需要预览或补发时，从 Actions → **PR Result Comment** → **Run workflow** 选择 `master`：
+
+| 输入 | 用途 |
+| --- | --- |
+| `pr_number` | 可选 PR 序号，可指定仍打开或已合并的 PR；留空扫描最近 24 小时的 PR 运行 |
+| `run_id` | 可选运行 ID，必须同时填写 `pr_number`；仅回写与该 PR 当前提交匹配的运行，支持已合并 PR 的历史补发 |
+| `dry_run` | 设为 `true` 仅预览，不创建或更新评论；默认 `false` |
+
+本地执行 `node test/e2e/control/actions-pr-comment.mjs --repository owner/repo` 默认只预览；显式 `--publish` 才允许写入。可使用 `PR_COMMENT_PR_NUMBER`、`PR_COMMENT_RUN_ID`、`PR_COMMENT_DRY_RUN` 传入上述筛选，`PR_COMMENT_DRY_RUN=true` 始终禁止写入。它们是回写流程参数，与模型配置和已有本地/Webhook/daily 执行入口无关。
+
+已有 PR 重新触发时，若源分支已包含本版 workflow，可从“检查”打开运行详情，使用右上角“重新运行所有 Jobs”。[平台重跑说明](https://docs.gitcode.com/docs/help/home/org_project/pipeline/running-pipelines/rerun-failed-jobs/)规定重跑沿用原提交和原 workflow，不读取最新配置；本套多 Job 存在编译制品依赖，仅重跑失败 Job 的制品继承尚未实测，优先整轮重跑。旧 PR 尚未包含本次 CI 改动时，先将最新 `master` 同步到其源分支，再推送以触发 `pull_request.update`；普通 `pull_request` 读取源分支中的 workflow。手动 Run workflow 用于分支验证，当前未配置 `/retest` 评论触发。 所有上传步骤显式设置 `overwrite: true`，避免原地重跑因同名制品已存在而失败；同一运行 ID 下的制品展示本次执行结果。平台可能不递增 `attempt`，结果评论同时核对实际开始时间，旧制品不会作为当前重跑证据。
+
+失败时仍尝试上传 `report.json`、`report.html`、`summary.md` 并写入 Job Summary。`private-*`、原始浏览器记录、数据库和工作区磁盘不上传；环境准备阶段尚未生成报告时，查看失败步骤日志。平台强制超时/取消时不保证归档步骤能运行，任务仍不得视为通过。Actions Job 成功不等于已配置强制合入规则，需维护者在仓库规则中将该检查设为必需项。
+
+本地检查：
+
+```bash
+node --test test/e2e/control/gitcode-gate.test.mjs
+node --test test/e2e/shared/*.test.mjs test/e2e/cases/*/*.test.mjs test/e2e/control/*.test.mjs
+```
+
+
+社区的 [ComputingActionTest](https://gitcode.com/org/ComputingActionTest/repos) 是测试组织的仓库列表，不是单个测试仓库。若采用组织内 Fork 副本联调，应由社区指定或创建 Agent Insight 测试副本，并确认写入权限、Runner 资源池和镜像变量；在该副本中保留源码与测试包，提交 YAML 后新建/更新 PR 触发。只有 YAML 的空仓库无法调用本项目的相对路径脚本。测试副本调通后再迁回正式仓库，重新确认正式仓库的 Runner/变量和必需检查，Fork 标记本身不证明这些设置已经继承。
 
 ## PR Webhook
 
@@ -107,7 +200,7 @@ CPU/内存/PID、工作盘、空闲磁盘、宿主保留内存与应用堆由 re
 
 测试端读取工作台会话状态时，仅对 `UND_ERR_SOCKET/ECONNRESET/EPIPE` 这类明确的连接关闭／重置重连一次，两个尝试共享原有 45 秒期限。日志记录脱敏路径、错误码及是否重连，不记录查询参数或凭据；HTTP 500、超时、取消、其他 GET 和所有写请求不自动重试，避免把产品失败隐藏在测试重跑中。
 
-活动场景的模型连接测试最多真实尝试 3 次，只重试服务端、网络、超时和限流错误，并逐次保存 `private/model-probe-attempts.json`。耗尽后标记阻塞；无效请求和未知错误直接失败。浏览器响应等待在失败清理时也会收尾，不让未处理的等待异常中断报告生成。
+模型配置页面先等待当前账号的设置加载，再测试并保存模型及默认项；保存失败时检查请求账号归属，并在失败原因中保留脱敏后的服务端错误。活动场景的模型连接测试最多真实尝试 3 次，只重试服务端、网络、超时和限流错误，并逐次保存 `private/model-probe-attempts.json`。耗尽后标记阻塞；无效请求和未知错误直接失败。浏览器响应等待在失败清理时也会收尾，不让未处理的等待异常中断报告生成。
 
 `resources.appHeapMiB` 同时约束隔离应用的 Node 启动进程和 Next.js 派生进程，避免开发启动脚本的固定堆设置绕过测试资源配置；它不等同于容器总内存限制。
 

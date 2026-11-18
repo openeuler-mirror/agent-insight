@@ -14,6 +14,7 @@ changefreq: "monthly"
 - [HTTP 接口与用户身份](./platform/http-api.md)
 - [模型连接测试](./platform/model-connection-test.md)
 - [运行配置参考](./platform/configuration.md)
+- [Agent 运行时参考](./platform/agent-runtime.md)
 - [API & Contracts](./platform/api-and-contracts.md)
 - [Design System & Frontend Style](./platform/design-system.md)
 - [内置示例走查的成本参考](./platform/example-cost.md)

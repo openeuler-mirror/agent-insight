@@ -124,7 +124,7 @@ try {
       env: { ...process.env, DATABASE_URL: dbUrl }
     })
     console.log('✓ Database schema synced')
-  } catch (e) {
+  } catch {
     // prisma 在迁移会删用户数据（删表/删列/加唯一约束）时拒绝执行并退出 1。
     // 这种情况绝不能让整个 npm install 失败——旧库照常可用，给出恢复指引即可。
     console.log('⚠️  Database schema sync skipped: prisma db push failed.')

@@ -8,8 +8,10 @@ changefreq: "monthly"
 Operational procedures currently available in English:
 
 - [Deploy the server with Docker](./platform/deploy-docker.md)
+- [Deploy the server on OpenShift](./platform/deploy-openshift.md), including Developer Sandbox builds
 - [Upgrade and rollback](./platform/upgrade-and-rollback.md)
 - [Backup and restore](./platform/backup-and-restore.md)
+- [View and batch import traces](./observability/view-traces.md)
 
 Client installation and feature-specific operations remain in Chinese.
 
@@ -27,6 +29,6 @@ Select Dify in the shared framework picker and run the same curl command on the 
 
 In Trace details, open **Filters** above the Span list and select both **User** and **LLM** to read inputs and model responses together in their original order. Type selections use OR; search, duration and token conditions still use AND. Click a selected type to remove it. **All**, or removing the last selected type, restores every type; **Reset filters** also clears duration, token and slow-only restrictions. Required ancestors remain visible so matching descendants can be expanded. Clearing search or relaxing/resetting filters keeps the currently visible located Span at its viewport position so adjacent events can be read. If no Span was clicked, the current search match provides the anchor; selected details and expansion state remain intact. See the [Span list guide (Chinese)](../../zh/how-to/observability/view-traces.md#3-span-列表).
 
-The Span panel fills the remaining page height so its lower border and controls stay within the panel. For long sessions, the fixed **Jump to bottom** button scrolls only the Span panel within the current filters and expansion state. The initial view stays unchanged. Clicking the button or manually scrolling to the bottom enables **Following updates** for data received through existing refresh controls. Scrolling upward pauses following and keeps your reading position; newly displayed rows show **New content**. Click **Jump to bottom** to resume. Search navigation, selecting a Span, filtering and expanding/collapsing pause following; switching Traces resets it. The control preserves filters, expansion and selected details, and does not enable polling. Existing tree order still determines the bottom row.
+The Span panel fills the remaining page height so its lower border and controls stay within the panel. For long sessions, the fixed **Jump to bottom** button scrolls only the Span panel within the current filters and expansion state. The initial view stays unchanged. Clicking the button or manually scrolling to the bottom enables **Following updates** for data received through existing refresh controls. Scrolling upward pauses following and keeps your reading position; new Span data shows **New content**, including nodes outside the rendered batch or hidden by filters or collapsed branches. Click **Jump to bottom** to resume. Search navigation, selecting a Span, filtering and expanding/collapsing pause following; switching Traces resets it. The control preserves filters, expansion and selected details, and does not enable polling. Existing tree order still determines the bottom row. Long Traces initially render in batches. Starting to follow, or preserving a reading anchor when clearing search or filters, reveals the remaining batches for the current Trace. Pausing keeps the revealed range; filters and collapsed branches still apply.
 
 Span detail start and end timestamps include the full local date and milliseconds (`YYYY-MM-DD HH:mm:ss.SSS`) in the browser timezone, so calls across midnight can be distinguished.

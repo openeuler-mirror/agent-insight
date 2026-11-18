@@ -15,7 +15,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { exportTraceBundle } from '@/lib/trace-transfer-service';
 
@@ -27,12 +27,12 @@ function safeFileSegment(value: string): string {
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const executionId = (url.searchParams.get('executionId') || '').trim();
-    const { username } = await resolveUser(request, url.searchParams.get('user') || undefined);
+    const { username, canViewAllTraces } = await resolveTraceReadScope(request);
     if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
     if (!executionId) return NextResponse.json({ error: 'executionId is required' }, { status: 400 });
 
     try {
-        const bundle = await exportTraceBundle(executionId, username);
+        const bundle = await exportTraceBundle(executionId, username, { allUsers: canViewAllTraces });
 
         recordUsageEvent({ user: username, featureKey: 'trace', eventKey: 'trace.export' });
 

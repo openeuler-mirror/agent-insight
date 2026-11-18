@@ -18,7 +18,8 @@ import { otelAttrsToObject } from '@/lib/ingest/claude-otel/otlp-json';
 import type { OtelTraceEvent } from './types';
 
 export function isDifyWorkflowRoot(name: unknown): boolean {
-  return name === 'services.workflow_run_agg.WorkflowRunAgg.run';
+  return name === 'services.workflow_run_agg.WorkflowRunAgg.run'
+    || name === 'core.app.apps.workflow.app_runner.WorkflowAppRunner.run';
 }
 
 function isDifyAgentTrajectory(attributes: Record<string, any>): boolean {

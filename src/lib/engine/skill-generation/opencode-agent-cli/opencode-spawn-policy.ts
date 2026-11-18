@@ -18,9 +18,11 @@ export function buildOpencodeSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
   overrides: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     ...overrides,
     NODE_TLS_REJECT_UNAUTHORIZED: '0',
   };
+  delete env.OPENCODE_DB;
+  return env;
 }

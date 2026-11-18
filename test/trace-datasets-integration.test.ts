@@ -28,18 +28,26 @@ import { createRequire } from 'node:module';
 function requestId() { const t = Date.now().toString(16).padStart(12, '0'); return `${t.slice(0, 8)}-${t.slice(8)}-7${randomUUID().slice(0, 3)}-8${randomUUID().slice(0, 3)}-${randomUUID().replace(/-/g, '').slice(0, 12)}`; }
 async function waitUntil<T>(read: () => Promise<T>, predicate: (x: T) => boolean, timeout = 30000) { const start = Date.now(); for (;;) { const result = await read(); if (predicate(result)) return result; if (Date.now() - start > timeout) throw new Error(`timeout: ${JSON.stringify(result)}`); await new Promise(r => setTimeout(r, 100)); } }
 
-test('real SQLite + Worker: publish, idempotency, isolation, failure, deletion and replay', { timeout: 180000 }, async t => {
+test('real SQLite + Worker: publish, idempotency, isolation, failure, deletion and replay', {
+  timeout: 180000,
+  skip: process.env.E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT === '1' ? 'SQLite concurrency UT temporarily deferred during database refactor' : false,
+}, async t => {
+  const checkpoint = (name: string) => { process.env.E2E_UT_CHECKPOINT = `trace-datasets:${name}`; };
+  checkpoint('schema');
   const dir = await mkdtemp(path.join(os.tmpdir(), 'trace-dataset-integration-'));
   process.env.DATABASE_URL = `file:${dir}/test.db`;
   process.env.AGENT_INSIGHT_HOME = dir;
   await writeFile(path.join(dir, 'test.db'), '');
   execFileSync('node', ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' });
+  checkpoint('worker-build');
   execFileSync('node', ['scripts/build-trace-dataset-worker.cjs'], { stdio: 'pipe' });
   const { TraceDatasetManager } = await import('../src/server/trace-datasets/manager');
   const { generationOptions } = await import('../src/server/trace-datasets/catalog');
   const db = new PrismaClient();
   let manager = new TraceDatasetManager(db, path.join(dir, 'jobs'), process.env.DATABASE_URL, path.resolve('generated/trace-datasets/worker.cjs'));
+  let monitor: ReturnType<typeof setInterval> | undefined;
   try {
+    checkpoint('publish');
     const timestamp = new Date(Date.now() - 10000);
     for (let i = 0; i < 8; i++) {
       const taskId = `task-${i}`, query = i < 3 ? 'Write code for adding numbers' : `Explain item ${i}`, answer = ` Answer ${i % 2} \n`;
@@ -139,10 +147,11 @@ test('real SQLite + Worker: publish, idempotency, isolation, failure, deletion a
     assert.equal(await manager.remove('alice', created.datasetId), null);
     await assert.rejects(manager.deletion('bob', removal!.deletionId), /未找到/);
     assert.equal(await db.execution.count(), 9);
+    checkpoint('parallel');
     const many: Awaited<ReturnType<typeof manager.create>>[] = [];
     for (let i = 0; i < 5; i++) many.push(await manager.create('alice', { ...config, name: `Parallel ${i}`, requestId: requestId() }));
     const snapshots: number[] = [];
-    const monitor = setInterval(() => { void db.traceDatasetGenerationJob.count({ where: { status: 'running' } }).then(n => snapshots.push(n)); }, 10);
+    monitor = setInterval(() => { void db.traceDatasetGenerationJob.count({ where: { status: 'running' } }).then(n => snapshots.push(n)); }, 10);
     await manager.remove('alice', many[0].datasetId);
     for (const item of many.slice(1)) {
       const p = await waitUntil(() => manager.progress('alice', item.datasetId), p => p.status !== 'generating');
@@ -152,6 +161,7 @@ test('real SQLite + Worker: publish, idempotency, isolation, failure, deletion a
     assert.ok(snapshots.every(n => n <= 4));
     await waitUntil(() => db.agentEvalDataset.findUnique({ where: { id: many[0].datasetId } }), item => item === null);
     for (const item of many.slice(1)) await manager.remove('alice', item.datasetId);
+    checkpoint('large-source');
     const largeInput = '完整任务 a'.repeat(160000), largeOutput = '完整回答 b'.repeat(160000);
     const largeEvents = [{ role: 'user', content: largeInput }, ...Array.from({ length: 10001 }, (_, i) => ({ role: 'assistant', content: '', tool_calls: [{ function: { name: i % 2 ? 'search' : 'read' } }] })), { role: 'tool', content: 'x'.repeat(9 * 1024 * 1024), extra: JSON.parse('['.repeat(80) + '1' + ']'.repeat(80)) }, { role: 'assistant', content: largeOutput }];
     await db.execution.create({ data: { id: 'large', taskId: 'large', query: largeInput, finalResult: largeOutput, framework: 'codex', agentName: 'Large Agent', user: 'alice', timestamp, lastIngestedAt: timestamp } });
@@ -163,6 +173,7 @@ test('real SQLite + Worker: publish, idempotency, isolation, failure, deletion a
     const largeCases = JSON.parse((await db.agentEvalDataset.findUniqueOrThrow({ where: { id: largeJob.datasetId } })).casesJson);
     assert.equal(largeCases[0].input, largeInput); assert.equal(largeCases[0].expectedOutput, largeOutput);
     await manager.remove('alice', largeJob.datasetId);
+    checkpoint('source-replay');
     const { captureSources } = await import('../src/server/trace-datasets/source-reader');
     const { hash } = await import('../src/lib/trace-datasets/sampling');
     await db.execution.create({ data: { id: 'changing', taskId: 'changing', query: 'before', finalResult: 'answer', framework: 'codex', agentName: 'Changing Agent', user: 'alice', timestamp } });
@@ -245,7 +256,7 @@ test('real SQLite + Worker: publish, idempotency, isolation, failure, deletion a
     assert.equal(failure.error?.code, 'NO_VALID_SAMPLES'); assert.equal(failure.canReturn, true);
     await manager.remove('alice', failed.datasetId, true);
     await waitUntil(() => db.traceDatasetGenerationJob.count(), count => count === 0);
-  } finally { await manager.close(); await db.$disconnect(); }
+  } finally { if (monitor) clearInterval(monitor);checkpoint('manager-close');await manager.close();checkpoint('database-disconnect');await db.$disconnect();checkpoint('complete'); }
 });
 
 

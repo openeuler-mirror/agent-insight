@@ -22,7 +22,7 @@
 // 口径见 src/lib/fleet/agg.ts / 《视图数据计算口径说明》；硬错误口径，软错误(judge)未叠加。
 // 缺埋点的面板（per-tool 延迟、TTFT、箱线、self-time、协作网络）以占位卡诚实标注。
 
-import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
 import {
     ResponsiveContainer, ComposedChart, BarChart, LineChart,
     Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend,

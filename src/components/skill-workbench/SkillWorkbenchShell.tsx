@@ -165,6 +165,8 @@ export function SkillWorkbenchShell() {
   const selectedAssetRef = useRef<SelectedSkillAsset | null>(null);
   const activeSessionRef = useRef<SessionDetail | null>(null);
   const sessionSelectionEpochRef = useRef(0);
+  const viewSelectionEpochRef = useRef(0);
+  const viewIntentRef = useRef<SkillWorkbenchActiveView>('detail');
   const sessionListRequestRef = useRef(0);
   const startingOptimizationRef = useRef(false);
   const optimizationQuickActionRef = useRef(false);
@@ -251,15 +253,18 @@ export function SkillWorkbenchShell() {
     return () => observer.disconnect();
   }, []);
 
-  const loadSession = useCallback(async (id: string, username: string, selectionEpoch = sessionSelectionEpochRef.current, isCurrent: () => boolean = () => true) => {
+  const loadSession = useCallback(async (id: string, username: string, selectionEpoch = sessionSelectionEpochRef.current, isCurrent: () => boolean = () => true, viewEpoch = viewSelectionEpochRef.current) => {
     const response = await apiFetch(
       `/api/skill-workbench/sessions/${encodeURIComponent(id)}?user=${encodeURIComponent(username)}`,
       { cache: 'no-store' },
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '加载会话失败');
-    const session = data.session as SessionDetail;
-    if (selectionEpoch === sessionSelectionEpochRef.current && isCurrent()) {
+    const ownsSelection = selectionEpoch === sessionSelectionEpochRef.current && isCurrent();
+    const snapshot = data.session as SessionDetail;
+    const session = ownsSelection && viewEpoch !== viewSelectionEpochRef.current
+      ? { ...snapshot, activeView: viewIntentRef.current } : snapshot;
+    if (ownsSelection) {
       activeSessionRef.current = session;
       setActive(session);
     }
@@ -346,6 +351,7 @@ export function SkillWorkbenchShell() {
   const loadSessions = useCallback(async () => {
     if (!user) return;
     const selectionEpoch = sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
     const requestId = ++sessionListRequestRef.current;
     const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current && requestId === sessionListRequestRef.current;
     setLoading(true);
@@ -364,16 +370,16 @@ export function SkillWorkbenchShell() {
       if (targetSessionId) {
         const session = activeSessionRef.current?.id === targetSessionId
           ? activeSessionRef.current
-          : await loadSession(targetSessionId, user, selectionEpoch, isCurrent);
+          : await loadSession(targetSessionId, user, selectionEpoch, isCurrent, viewEpoch);
         if (!isCurrent()) return;
         if (session.skillName && session.workVersion !== null) {
           if (session.source === 'management') await selectFormalAsset(session.skillName, session.workVersion, user, selectionEpoch, isCurrent);
-          else selectDraftAsset(session);
+          else selectDraftAsset(session, true);
         } else {
           clearAssetSelection();
         }
         if (!isCurrent()) return;
-        setCurrentView(session.activeView || 'detail');
+        if (viewEpoch === viewSelectionEpochRef.current) setCurrentView(session.activeView || 'detail');
         if (!requestedSessionId) updateSessionUrl(session.id, 'replace');
       } else {
         activeSessionRef.current = null;
@@ -408,9 +414,10 @@ export function SkillWorkbenchShell() {
     return () => window.clearTimeout(timer);
   }, [loadAssetCatalog, user]);
 
-  const createSession = async () => {
+  const createSession = async (isCurrent: () => boolean = () => true) => {
     if (!user || creating) return null;
     const selectionEpoch = ++sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
     setLoading(false);
     setCreating(true);
     setError('');
@@ -422,8 +429,8 @@ export function SkillWorkbenchShell() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '创建会话失败');
-      const next = await loadSession(data.session.id, user, selectionEpoch);
-      if (selectionEpoch !== sessionSelectionEpochRef.current) return null;
+      const next = await loadSession(data.session.id, user, selectionEpoch, isCurrent, viewEpoch);
+      if (selectionEpoch !== sessionSelectionEpochRef.current || !isCurrent()) return null;
       setSessions((current) => [next, ...current.filter((session) => session.id !== next.id)]);
       return next;
     } catch (createError) {
@@ -435,8 +442,12 @@ export function SkillWorkbenchShell() {
   };
 
   const createBlankSession = async () => {
-    const next = await createSession();
+    const selectionEpoch = sessionSelectionEpochRef.current + 1;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const next = await createSession(() => viewEpoch === viewSelectionEpochRef.current);
     if (!next || next.skillName) return next;
+    if (selectionEpoch !== sessionSelectionEpochRef.current || viewEpoch !== viewSelectionEpochRef.current
+      || activeSessionRef.current?.id !== next.id) return next;
     updateSessionUrl(next.id);
     clearAssetSelection();
     setCurrentView('detail');
@@ -476,36 +487,57 @@ export function SkillWorkbenchShell() {
   };
 
   const switchView = async (view: SkillWorkbenchActiveView) => {
+    const viewEpoch = ++viewSelectionEpochRef.current;
+    viewIntentRef.current = view;
     setCurrentView(view);
-    if (!user || !active || active.activeView === view) return;
-    const previous = active;
+    const previous = activeSessionRef.current;
+    if (!user || !previous || previous.activeView === view) return;
     const selectionEpoch = sessionSelectionEpochRef.current;
-    const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current && activeSessionRef.current?.id === previous.id;
-    setActive({ ...active, activeView: view });
+    const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current
+      && viewEpoch === viewSelectionEpochRef.current && activeSessionRef.current?.id === previous.id;
+    activeSessionRef.current = { ...previous, activeView: view };
+    setActive(activeSessionRef.current);
     try {
-      const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(active.id)}`, {
+      const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(previous.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user, activeView: view }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '保存页签失败');
-      if (isCurrent()) setActive(data.session as SessionDetail);
+      const current = activeSessionRef.current;
+      if (isCurrent() && current) {
+        activeSessionRef.current = { ...current, activeView: view };
+        setActive(activeSessionRef.current);
+      }
     } catch (switchError) {
-      if (!isCurrent()) return;
-      setActive(previous);
+      const current = activeSessionRef.current;
+      if (!isCurrent() || !current) return;
+      activeSessionRef.current = { ...current, activeView: previous.activeView };
+      setActive(activeSessionRef.current);
       setError(switchError instanceof Error ? switchError.message : '保存页签失败');
     }
   };
 
   const selectManagedSkill = async (skillName: string, version: number) => {
     if (!user || selectingSkill) return;
+    let selectionEpoch = sessionSelectionEpochRef.current;
+    let sessionId = activeSessionRef.current?.id;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current && sessionId === activeSessionRef.current?.id;
     setSelectingSkill(true);
     setError('');
     try {
       if (pickerPurpose === 'bind') {
-        const targetSession = active?.skillName ? await createSession() : active || await createSession();
+        const current = activeSessionRef.current;
+        const createsSession = !current || Boolean(current.skillName);
+        const targetSession = createsSession ? await createSession() : current;
         if (!targetSession) throw new Error('无法准备当前会话');
+        if (createsSession) {
+          selectionEpoch += 1;
+          sessionId = targetSession.id;
+        }
+        if (!isCurrent()) return;
         const response = await apiFetch(`/api/skill-workbench/sessions/${encodeURIComponent(targetSession.id)}/context`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -513,14 +545,18 @@ export function SkillWorkbenchShell() {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '绑定会话 Skill 失败');
-        const next = data.session as SessionDetail;
+        if (!isCurrent()) return;
+        const snapshot = data.session as SessionDetail;
+        const next = viewEpoch === viewSelectionEpochRef.current
+          ? snapshot : { ...snapshot, activeView: viewIntentRef.current };
         activeSessionRef.current = next;
         setActive(next);
         updateSessionUrl(next.id);
         setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
       }
-      await selectFormalAsset(skillName, version, user);
-      setCurrentView('detail');
+      await selectFormalAsset(skillName, version, user, selectionEpoch, isCurrent);
+      if (!isCurrent()) return;
+      if (viewEpoch === viewSelectionEpochRef.current) setCurrentView('detail');
       setPickerOpen(false);
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : '选择 Skill 失败');
@@ -558,11 +594,18 @@ export function SkillWorkbenchShell() {
 
   const openOptimizationRecord = async (record: OptimizationRecordView) => {
     if (!user) return;
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const sessionId = activeSessionRef.current?.id;
+    const isCurrent = () => selectionEpoch === sessionSelectionEpochRef.current
+      && viewEpoch === viewSelectionEpochRef.current && sessionId === activeSessionRef.current?.id;
     setError('');
     setSelectedOptimizationRecordId(record.id);
     try {
       const targetAsset = await selectFormalAsset(record.skillName, record.baseVersion, user);
+      if (!isCurrent()) return;
       await loadOptimizationRecords(targetAsset, user);
+      if (!isCurrent()) return;
       await switchView('optimization');
     } catch (openError) {
       setError(openError instanceof Error ? openError.message : '打开优化报告失败');
@@ -643,7 +686,7 @@ export function SkillWorkbenchShell() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user, confirmed: true }),
+          body: JSON.stringify({ user, confirmed: true, verificationMode: 'external', activate: false }),
         },
       );
       const data = await response.json();
@@ -682,8 +725,76 @@ export function SkillWorkbenchShell() {
     }
   };
 
+  const downloadPublishedOptimization = (record: OptimizationRecordView) => {
+    if (!user || !record.skillId || record.publishedVersion === null) {
+      setError('正式版本信息尚未同步，请刷新后重试');
+      return;
+    }
+    const prefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+    window.open(`${prefix}/api/skills/${encodeURIComponent(record.skillId)}/versions/${record.publishedVersion}/download?user=${encodeURIComponent(user)}`, '_blank');
+  };
+
+  const recordPublishedVerification = async (record: OptimizationRecordView, result: 'passed' | 'failed') => {
+    if (!user || record.publishedVersion === null || publishingCandidateId) return;
+    const action = result === 'passed' ? '通过' : '失败';
+    if (!window.confirm(`确认将 ${record.skillName} v${record.publishedVersion} 登记为外部验证${action}？`)) return;
+    setPublishingCandidateId(record.id);
+    setError('');
+    try {
+      const response = await apiFetch(
+        `/api/skills/by-name/${encodeURIComponent(record.skillName)}/versions/${record.publishedVersion}/verification`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user, result }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '登记外部验证结果失败');
+      await Promise.all([
+        loadSession(record.sessionId, user),
+        selectedAsset ? loadOptimizationRecords(selectedAsset, user) : Promise.resolve(),
+      ]);
+    } catch (verificationError) {
+      setError(verificationError instanceof Error ? verificationError.message : '登记外部验证结果失败');
+    } finally {
+      setPublishingCandidateId(null);
+    }
+  };
+
+  const activatePublishedOptimization = async (record: OptimizationRecordView) => {
+    if (!user || record.publishedVersion === null || publishingCandidateId) return;
+    if (!window.confirm(`确认激活 ${record.skillName} v${record.publishedVersion}？之后默认执行将使用该版本。`)) return;
+    setPublishingCandidateId(record.id);
+    setError('');
+    try {
+      const response = await apiFetch(
+        `/api/skills/by-name/${encodeURIComponent(record.skillName)}/versions/${record.publishedVersion}/activate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '激活 Skill 版本失败');
+      await Promise.all([
+        loadSession(record.sessionId, user),
+        loadAssetCatalog(user),
+        selectedAsset ? loadOptimizationRecords(selectedAsset, user) : Promise.resolve(),
+      ]);
+    } catch (activationError) {
+      setError(activationError instanceof Error ? activationError.message : '激活 Skill 版本失败');
+    } finally {
+      setPublishingCandidateId(null);
+    }
+  };
+
   const uploadSnapshot = async (files: FileList | null) => {
     if (!user || !active || !files?.length || uploading) return;
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const sessionId = active.id;
     setUploading(true);
     setError('');
     try {
@@ -699,12 +810,15 @@ export function SkillWorkbenchShell() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '上传 Skill 失败');
-      const next = data.session as SessionDetail;
+      if (selectionEpoch !== sessionSelectionEpochRef.current || activeSessionRef.current?.id !== sessionId) return;
+      const preserveView = viewEpoch !== viewSelectionEpochRef.current;
+      const next = { ...data.session as SessionDetail, activeView: preserveView ? viewIntentRef.current : 'detail' as const };
+      activeSessionRef.current = next;
       setActive(next);
       setSessions((current) => current.map((session) => (
         session.id === next.id ? { ...session, ...next } : session
       )));
-      selectDraftAsset(next);
+      selectDraftAsset(next, preserveView);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : '上传 Skill 失败');
     } finally {
@@ -825,9 +939,10 @@ export function SkillWorkbenchShell() {
   }, [loadEvaluation, selectDraftAsset, user]);
 
   const acceptOptimizationSession = useCallback((value: unknown) => {
-    const next = value as SessionDetail;
+    const update = value as SessionDetail;
     const previous = activeSessionRef.current;
-    if (!previous || previous.id !== next.id) return;
+    if (!previous || previous.id !== update.id) return;
+    const next = { ...update, activeView: previous.activeView };
     const asset = selectedAssetRef.current;
     const versionAdvanced = Boolean(
       previous
@@ -847,7 +962,7 @@ export function SkillWorkbenchShell() {
     setActive(next);
     setSessions((current) => current.map((session) => session.id === next.id ? { ...session, ...next } : session));
     setError((current) => isStaticQualityError(current) ? '' : current);
-    if (asset?.kind === 'draft') selectDraftAsset(next);
+    if (asset?.kind === 'draft') selectDraftAsset(next, true);
     if (versionAdvanced && user) {
       void loadAssetCatalog(user)
         .catch((loadError) => setError(loadError instanceof Error ? loadError.message : '加载 Skill 资产失败'));
@@ -967,12 +1082,12 @@ export function SkillWorkbenchShell() {
     && (selectedAsset.kind === 'formal' || selectedAsset.sessionId === active.id),
   );
 
-  const showSessionAsset = async (session: SessionDetail) => {
+  const showSessionAsset = async (session: SessionDetail, preserveView = false) => {
     if (!user || !session.skillName || session.workVersion === null) return null;
     if (session.source === 'management') {
       return selectFormalAsset(session.skillName, session.workVersion, user);
     }
-    return selectDraftAsset(session) || null;
+    return selectDraftAsset(session, preserveView) || null;
   };
 
   const changeAssetSkill = async (value: string) => {
@@ -983,9 +1098,14 @@ export function SkillWorkbenchShell() {
       ? skill.activeVersion as number
       : skill.versions[0]?.version;
     if (version === undefined) return;
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const sessionId = activeSessionRef.current?.id;
     try {
       await selectFormalAsset(skill.name, version, user);
-      setCurrentView('detail');
+      if (selectionEpoch === sessionSelectionEpochRef.current
+        && viewEpoch === viewSelectionEpochRef.current
+        && sessionId === activeSessionRef.current?.id) setCurrentView('detail');
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : '切换 Skill 失败');
     }
@@ -993,9 +1113,14 @@ export function SkillWorkbenchShell() {
 
   const changeAssetVersion = async (version: number) => {
     if (!user || !selectedCatalogSkill) return;
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const sessionId = activeSessionRef.current?.id;
     try {
       await selectFormalAsset(selectedCatalogSkill.name, version, user);
-      setCurrentView('detail');
+      if (selectionEpoch === sessionSelectionEpochRef.current
+        && viewEpoch === viewSelectionEpochRef.current
+        && sessionId === activeSessionRef.current?.id) setCurrentView('detail');
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : '切换 Skill 版本失败');
     }
@@ -1004,14 +1129,16 @@ export function SkillWorkbenchShell() {
   const openHistorySession = async (sessionId: string) => {
     if (!user) return;
     const selectionEpoch = ++sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
     setLoading(false);
     try {
-      const session = await loadSession(sessionId, user, selectionEpoch);
+      const session = await loadSession(sessionId, user, selectionEpoch, () => true, viewEpoch);
       if (selectionEpoch !== sessionSelectionEpochRef.current) return;
       updateSessionUrl(session.id);
-      if (session.skillName && session.workVersion !== null) await showSessionAsset(session);
+      if (session.skillName && session.workVersion !== null) await showSessionAsset(session, true);
       else clearAssetSelection();
-      setCurrentView('detail');
+      if (selectionEpoch !== sessionSelectionEpochRef.current || activeSessionRef.current?.id !== session.id) return;
+      if (viewEpoch === viewSelectionEpochRef.current) setCurrentView('detail');
       updateHistoryOpen(false);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '加载会话失败');
@@ -1020,7 +1147,12 @@ export function SkillWorkbenchShell() {
 
   const openActiveSessionView = async (view: SkillWorkbenchActiveView) => {
     if (!active) return;
-    await showSessionAsset(active);
+    const selectionEpoch = sessionSelectionEpochRef.current;
+    const viewEpoch = viewSelectionEpochRef.current;
+    const sessionId = active.id;
+    await showSessionAsset(active, true);
+    if (selectionEpoch !== sessionSelectionEpochRef.current || viewEpoch !== viewSelectionEpochRef.current
+      || activeSessionRef.current?.id !== sessionId) return;
     await switchView(view);
   };
 
@@ -1205,6 +1337,9 @@ export function SkillWorkbenchShell() {
                   quickActions={workflowActions}
                   onViewRecords={(record) => void openOptimizationRecord(record)}
                   onPublish={(record) => void publishOptimization(record)}
+                  onDownloadPublished={(record) => downloadPublishedOptimization(record)}
+                  onRecordVerification={(record, result) => void recordPublishedVerification(record, result)}
+                  onActivatePublished={(record) => void activatePublishedOptimization(record)}
                   onRepair={(record) => void startOptimization({ autoRun: true, record })}
                   onAutoStartConsumed={() => {
                     setAutoStartOptimization(false);
@@ -1426,6 +1561,7 @@ export function SkillWorkbenchShell() {
         ) : currentView === 'optimization' && optimizationRecords.length ? (
           <OptimizationRecordsPanel
             records={optimizationRecords}
+            user={user || ''}
             onRetest={retestDiagnosis}
             retestingId={retestingId}
             selectedRecordId={selectedOptimizationRecordId}
@@ -1463,12 +1599,13 @@ export function SkillWorkbenchShell() {
         />
       )}
       {publishCandidate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="发布优化候选">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-label="发布待验证版本">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
-            <h2 className="text-base font-semibold text-foreground">发布新版本</h2>
-            <p className="mt-2 text-xs leading-5 text-foreground-secondary">确认将 {publishCandidate.candidateVersionLabel} 发布为正式版本。发布后会立即成为当前激活版本，原版本仍保留在版本历史中。</p>
-            <div className="mt-4 grid grid-cols-2 gap-2 rounded-md bg-background-secondary p-3 text-xs"><span className="text-foreground-muted">当前版本</span><b className="text-right text-foreground">v{publishCandidate.baseVersion}</b><span className="text-foreground-muted">发布版本</span><b className="text-right text-primary">v{publishCandidate.baseVersion + 1}</b><span className="text-foreground-muted">修改文件</span><b className="text-right text-foreground">{publishCandidate.diff?.length || 0} 个</b></div>
-            <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={publishingCandidateId !== null} onClick={() => setPublishCandidate(null)} className="h-8 rounded-md border border-border px-3 text-xs text-foreground-secondary">取消</button><button type="button" disabled={publishingCandidateId !== null} onClick={() => void confirmPublishOptimization()} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50">{publishingCandidateId ? <Loader2 className="size-3.5 animate-spin" /> : null}确认发布</button></div>
+            <h2 className="text-base font-semibold text-foreground">发布为待验证版本</h2>
+            <p className="mt-2 text-xs leading-5 text-foreground-secondary">确认将 {publishCandidate.candidateVersionLabel} 写入正式版本历史。该版本尚未完成外部行为验证，发布后不会替换当前激活版本 v{publishCandidate.activeVersion ?? publishCandidate.baseVersion}。</p>
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-md bg-background-secondary p-3 text-xs"><span className="text-foreground-muted">当前激活版本</span><b className="text-right text-foreground">v{publishCandidate.activeVersion ?? publishCandidate.baseVersion}</b><span className="text-foreground-muted">发布版本</span><b className="text-right text-primary">v{publishCandidate.baseVersion + 1}</b><span className="text-foreground-muted">发布后状态</span><b className="text-right text-warning">待外部验证</b><span className="text-foreground-muted">修改文件</span><b className="text-right text-foreground">{publishCandidate.diff?.length || 0} 个</b></div>
+            <p className="mt-3 rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-[11px] leading-4 text-warning">发布不代表行为验证通过。发布后请下载 ZIP 到实际环境验证，再在会话卡片登记结果。</p>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={publishingCandidateId !== null} onClick={() => setPublishCandidate(null)} className="h-8 rounded-md border border-border px-3 text-xs text-foreground-secondary">取消</button><button type="button" disabled={publishingCandidateId !== null} onClick={() => void confirmPublishOptimization()} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50">{publishingCandidateId ? <Loader2 className="size-3.5 animate-spin" /> : null}确认发布待验证版本</button></div>
           </div>
         </div>
       )}

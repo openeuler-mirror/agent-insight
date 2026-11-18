@@ -671,7 +671,10 @@ try:
         packer.pack(root, output, [other])
     installed.mkdir()
     with tarfile.open(output) as archive:
-        archive.extractall(installed, filter='data')
+        members = archive.getmembers()
+        assert all(member.isfile() or member.isdir() for member in members)
+        assert all((installed / member.name).resolve().is_relative_to(installed.resolve()) for member in members)
+        archive.extractall(installed, members=members)
     merged = load_inventory(installed)
     assert set(merged['tasks']) == {'service-case', 'kernel-case'}
     for task_id in merged['tasks']: verify_task(installed, merged, task_id)

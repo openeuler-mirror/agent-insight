@@ -26,13 +26,13 @@ For npm CLI startup, port precedence is `--port`, process `AGENT_INSIGHT_PORT`, 
 | `DB_PORT` | OpenGauss port | Set explicitly: platform default is `5432`, initialization-script default is `26000`; match the actual instance |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Template defaults database to `postgres`, user to `omm`, no password default | Store credentials only in actual deployment settings; SQLite copying is not an external-database backup |
 | `AGENT_INSIGHT_CONFIG_DIR` | Benchmark configuration directory; empty uses installation `config/benchmark/` | Use an absolute override. This is not the runtime root and does not replace its `.env` |
-| `NEXT_PUBLIC_URL_PREFIX` | Frontend URL prefix | Changing it requires rebuilding, not only restarting |
+| `NEXT_PUBLIC_URL_PREFIX` | Frontend URL prefix | Rebuild after changing it. Source startup uses the prefix recorded in the build to check page readiness. |
 
 Removed `AGENT_INSIGHT_DATA_DIR` must become `AGENT_INSIGHT_HOME` while retaining the original root path. Removed generic `PORT` must become the platform or Evaluator-specific variable.
 
 ## Models and clients
 
-Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1`. Reading later groups stops when a group lacks `NAME`, `PROVIDER`, or `API_KEY`. Explicitly provide `BASE_URL` and `MODEL` rather than assuming every calling path chooses identical provider defaults. Environment-defined models are read-only in the UI; users can add their own through [model registration, Chinese](../../../zh/how-to/platform/settings/model-registry.md).
+Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1`. Reading later groups stops when a group lacks `NAME` or `PROVIDER`. Explicitly provide `BASE_URL` and `MODEL` rather than assuming every calling path chooses identical provider defaults. `API_KEY` may be empty, generating no default authentication header. Optional `PROTOCOL` is `openai-compatible` or `anthropic`; omission keeps legacy behavior. Optional `HEADERS` is a JSON object of custom headers, overriding same-name standard headers. Environment-defined models are read-only in the UI; users can add their own through [model registration, Chinese](../../../zh/how-to/platform/settings/model-registry.md).
 
 See [client installation, Chinese](../../../zh/how-to/platform/settings/access-control.md) for addresses and Keys. Each client has its own environment. Do not share one runtime directory across machines or instances; use separate roots, databases, and ports.
 
@@ -58,3 +58,5 @@ SWE-bench and ZSoft auto-import can be disabled separately through each `dataset
 This page does not enumerate every collector, performance, or diagnostic parameter. Consult its feature guide and current template; omission here does not mean deprecation.
 
 [中文权威版本](../../../zh/reference/platform/configuration.md)
+
+Execution Profiles use `execution.profiles.<key>.backend/options` with explicit bindings. Supported backends validate their own settings; local uses native workspaces and client-default networking, while xGovernor validates its Docker requirements. Legacy flat Profiles retain xGovernor semantics. New explicit configurations do not inject an extra xGovernor Profile. Duplicate Benchmark/platform bindings and unknown fields are rejected. See the [Chinese guide](../../../zh/how-to/evaluation/benchmarks/deploy-services.md#执行-profile-的后端配置).
