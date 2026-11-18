@@ -157,6 +157,39 @@ describe("Call selection and external links", () => {
       assert.equal(llm(interaction).calls?.[0].statusCode, 503);
   });
 
+  test('service response header IDs attach to their own attempt without replacing call IDs', () => {
+      const interaction = retryInteraction();
+      interaction.inference_attempts![0].upstream_request_id = 'service-failed';
+      interaction.inference_attempts![0].upstream_request_id_source = 'model-response-header';
+      interaction.inference_upstream_request_ids = [{ call_id: successId, request_id: 'service-success', source: 'model-response-header' }];
+      const target = llm(interaction);
+      assert.deepEqual(target.callIds, [failedId, successId]);
+      assert.equal(target.calls?.find(call => call.callId === failedId)?.upstreamRequestId, 'service-failed');
+      assert.equal(target.calls?.find(call => call.callId === successId)?.upstreamRequestId, 'service-success');
+      assert.equal(target.calls?.find(call => call.callId === successId)?.upstreamRequestSource, 'model-response-header');
+  });
+
+  test('service IDs for unowned or foreign calls never bind to an LLM', () => {
+      const interaction = retryInteraction();
+      interaction.inference_upstream_request_ids = [
+          { call_id: childId, request_id: 'service-foreign' },
+          { call_id: failedId, request_id: 'service-failed' },
+      ];
+      const target = llm(interaction);
+      assert.equal(target.calls?.length, 2);
+      assert.ok(!target.calls?.some(call => call.upstreamRequestId === 'service-foreign'));
+      assert.equal(target.calls?.find(call => call.callId === failedId)?.upstreamRequestId, 'service-failed');
+  });
+
+  test('Trace-only unassigned calls retain an observed service ID', () => {
+      const target = inferenceAnalysisTarget({ scope: 'trace', rootSessionId: 'session-root', interactions: [{
+          role: 'system', inference_session_id: 'session-root',
+          inference_unassigned_calls: [{ call_id: unknownId, state: 'cancelled', upstream_request_id: 'service-unassigned' }],
+      }] });
+      assert.equal(target.calls?.[0].upstreamRequestId, 'service-unassigned');
+      assert.equal(target.calls?.[0].unassigned, true);
+  });
+
   test('recorded attempt state is retained without inferring completion from an HTTP status', () => {
       const interaction = retryInteraction();
       interaction.inference_attempts![1] = { ...interaction.inference_attempts![1], state: 'cancelled' };
@@ -320,6 +353,32 @@ describe("Inference analysis dialog", () => {
       assert.match(html, /target="_blank"/);
       assert.match(html, /rel="noopener noreferrer"/);
       assert.doesNotMatch(html, /GlobalTrackNO=failed-call[,\u0026]/);
+  });
+
+  test('Inference dialog shows and links each model-service Request ID separately', () => {
+      const html = renderToStaticMarkup(React.createElement(InferenceAnalysisDetails, {
+          target: {
+              scope: 'llm', sessionIds: ['session'], callIds: ['final-call'], preferredCallId: 'final-call',
+              calls: [{ callId: 'final-call', statusCode: 200, upstreamRequestId: 'service/?#&= +汉字', upstreamRequestSource: 'model-response-header' }],
+          },
+          locale: 'zh', config: { status: 'ready', origin: 'http://127.0.0.1:19090' },
+      }));
+      assert.match(html, /推理服务 Request ID/);
+      assert.match(html, /model-response-header|推理服务/);
+      assert.match(html, /href="http:\/\/127.0.0.1:19090\/model-performance\?GlobalTrackNO=final-call"/);
+      const serviceHref = html.match(/href="([^"]*model-performance[^"]*)"/g)?.find(value => value.includes('service'));
+      assert.ok(serviceHref);
+      assert.ok(!serviceHref!.includes('汉字'));
+  });
+
+  test('Inference dialog states when the model service returned no request ID', () => {
+      const html = renderToStaticMarkup(React.createElement(InferenceAnalysisDetails, {
+          target: { scope: 'llm', sessionIds: ['session'], callIds: ['final-call'], preferredCallId: 'final-call',
+              calls: [{ callId: 'final-call', statusCode: 200 }] },
+          locale: 'zh', config: { status: 'ready', origin: 'http://127.0.0.1:19090' },
+      }));
+      assert.match(html, /未提供（服务未返回或不可获取）/);
+      assert.doesNotMatch(html, /GlobalTrackNO=service/);
   });
 
   test('Inference dialog keeps legacy identities visible but never uses them as GlobalTrackNO', () => {

@@ -413,6 +413,27 @@ export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
   }
 }
 
+const UPSTREAM_REQUEST_HEADER = "x-agent-insight-upstream-request-id"
+
+function boundedRequestId(value: unknown): string | undefined {
+  const id = typeof value === "string" ? value.trim() : ""
+  return id && id.length <= 512 && !/[\u0000-\u001f\u007f]/.test(id) ? id : undefined
+}
+
+/**
+ * The gateway relays the model service's own response header separately from
+ * its local call ID. Direct (non-gateway) requests have no local alias, so
+ * their `x-request-id` is the service header.
+ */
+function upstreamRequestIdFromHeaders(headers: any): string | undefined {
+  try {
+    const relayed = boundedRequestId(headers?.get?.(UPSTREAM_REQUEST_HEADER))
+    if (relayed) return relayed
+    if (headers?.get?.("x-agent-insight-call-id") != null) return undefined
+    return boundedRequestId(headers?.get?.("x-request-id"))
+  } catch { return undefined }
+}
+
 export function createInferenceCorrelation(context: any, record: (event: any) => void, transport: any = globalThis, options: any = {}) {
   const emit = (sessionID: string, kind: string, payload: any) => {
     try { record({ t: nowIso(), kind, sessionID, payload }) } catch {}
@@ -464,8 +485,10 @@ export function createInferenceCorrelation(context: any, record: (event: any) =>
             try {
               const response = await invoke([args[0], { ...args[1], headers }]) as Response
               const callId = response.headers.get("x-request-id") ?? response.headers.get("x-agent-insight-call-id")
+              const upstreamRequestId = upstreamRequestIdFromHeaders(response.headers)
               binding.emit(binding.sessionID, "llm.attempt", { ...payload, status_code: response.status,
                 ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || "") ? { call_id: callId } : {}),
+                ...(upstreamRequestId ? { upstream_request_id: upstreamRequestId, upstream_request_id_source: "model-response-header" } : {}),
               })
               return response
             } catch (error) {
@@ -1118,8 +1141,10 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
       const attempt = request.attempts.get(headers.get('x-agent-insight-attempt-id'))
       if (!attempt) return
       const callId = input.response.headers.get('x-request-id') ?? input.response.headers.get('x-agent-insight-call-id')
+      const upstreamRequestId = upstreamRequestIdFromHeaders(input.response.headers)
       Object.assign(attempt, { status_code: input.response.status,
-        ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || '') ? { call_id: callId } : {}) })
+        ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || '') ? { call_id: callId } : {}),
+        ...(upstreamRequestId ? { upstream_request_id: upstreamRequestId, upstream_request_id_source: 'model-response-header' } : {}) })
       publish(request, attempt)
     },
   }

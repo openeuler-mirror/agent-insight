@@ -317,6 +317,12 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     if (inferenceIdentityVerified) interaction.inference_session_id = firstText(attrs['qoder.session.id'], rootAttrs['qoder.session.id']);
     const callIds = parseJson(attrs['agent_insight.inference.call_ids']);
     if (inferenceIdentityVerified && !synthetic && Array.isArray(callIds)) interaction.inference_call_ids = callIds.filter(id => typeof id === 'string');
+    const upstreamIds = parseJson(attrs['agent_insight.inference.upstream_request_ids']);
+    if (inferenceIdentityVerified && !synthetic && Array.isArray(upstreamIds)) {
+      interaction.inference_upstream_request_ids = upstreamIds.filter((entry: any) => (
+        entry && typeof entry.call_id === 'string' && typeof entry.request_id === 'string'
+      ));
+    }
     const input = firstText(attrs['input.value']);
     if (input) interaction.requestMessages = [{ role: 'user', content: input }];
     if (subagentSessionId) {
@@ -435,7 +441,12 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     interactions: (() => {
       const unassigned = parseJson(rootAttrs['agent_insight.inference.unassigned_calls']);
       if (inferenceIdentityVerified && Array.isArray(unassigned) && unassigned.length) interactions.push({
-        role: 'system', content: '', inference_session_id: sessionId, inference_unassigned_calls: unassigned,
+        role: 'system', content: '', inference_session_id: sessionId, inference_unassigned_calls: unassigned.filter((call: any) => (
+          call && typeof call.call_id === 'string'
+        )).map((call: any) => {
+          const { upstream_request_id: upstream, ...rest } = call;
+          return typeof upstream === 'string' ? { ...rest, upstream_request_id: upstream } : rest;
+        }),
       });
       return interactions;
     })(),

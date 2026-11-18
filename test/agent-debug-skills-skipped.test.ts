@@ -56,7 +56,8 @@ test('Skills review skips missing prerequisites and preserves execution errors',
     assert.equal(started.status, 202);
 
     let result = await read();
-    for (let attempt = 0; result.row.status === 'running' && attempt < 100; attempt++) {
+    // 轮询上限只为兜住"永远不结束"；并发跑全量 UT 时 2.5s 会被调度延迟打满。
+    for (let attempt = 0; result.row.status === 'running' && attempt < 400; attempt++) {
       await setTimeout(25);
       result = await read();
     }

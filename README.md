@@ -152,7 +152,7 @@ Run a small task in the connected Agent, then open the execution list in Agent I
 3. **Evaluate**: configure a dataset and evaluators, run the task, and inspect execution details and evaluation results.
 4. **Optimize**: select an existing Skill and use the findings to create an improved version. Re-run the same task or dataset to compare behavior.
 
-Start with the [built-in example walkthrough](docs/zh/tutorial/platform/02-example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
+Start with the [quick-start tutorial](docs/zh/tutorial/platform/01-quick-start.md) to connect a real Agent and inspect its first trace. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
 
 ## Documentation
 

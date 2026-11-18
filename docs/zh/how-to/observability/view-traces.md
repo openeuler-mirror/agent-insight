@@ -624,4 +624,6 @@ Trace 树和时间线会标记失败工具；父 Agent 的“含失败调用”�
 
 ## 外部推理分析
 
-OpenCode 与 Qoder CN CLI 显式接入转发后，链路树顶部和 LLM 详情提供「推理分析」。整条 Trace 列出多个请求，LLM 仅列出已确认归属的请求；每个外部链接携带单个 UUID。重试分别保留，无法确认节点归属的请求仅在 Trace 入口展示。配置、适用边界及备份见[接入指南](./inference-gateway.md)。
+OpenCode 与 Qoder CN CLI 显式接入转发后，链路树顶部和 LLM 详情提供「推理分析」。整条 Trace 列出多个请求，LLM 仅列出已确认归属的请求；每个外部链接携带单个 UUID。重试分别保留，无法确认节点归属的请求仅在 Trace 入口展示。
+
+若模型服务在响应头返回 `X-Request-Id`，LLM 详情会额外展示服务请求 ID 并可复制；只有一条时直接显示，多条时显示数量并提示进入「推理分析」逐次查看。弹窗中每次尝试同时展示网关调用 ID 与服务 ID，并分别提供查询链接。服务未返回、响应头不可见或值冲突时显示“未提供”，不会用调用 ID 或 Trace ID 补造。服务 ID 只挂到已证明归属的 LLM，否则仅保留在 Trace 级未分配调用中。配置、适用边界及备份见[接入指南](./inference-gateway.md)，字段与支持路径见[统一推理请求关联契约](../../reference/observability/inference-correlation.md)。

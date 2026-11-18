@@ -21,7 +21,7 @@ import { expandHomePathsInText } from '@/lib/engine/general-agent/expand-home';
 
 const HOME = '/home/alice';
 
-test('内置 messages case 的 "：~/" 形态 → 展开成绝对路径', () => {
+test('带全角冒号的 "：~/" 形态 → 展开成绝对路径', () => {
     const q = '请分析如下 messages 日志：~/.agent-insight/example/messages。有没有攻击?';
     assert.equal(
         expandHomePathsInText(q, HOME),

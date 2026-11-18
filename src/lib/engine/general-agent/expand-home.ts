@@ -25,8 +25,8 @@ import os from 'node:os';
  * agent 之前先展开成绝对路径, 让 agent 永远看不到 `~`, 就根治了这个时好时坏的问题。
  *
  * 展开目标用平台进程自己的 HOME(os.homedir(), 这里是 /root)—— 而不是 agent 运行时可能被
- * isolateHome 改掉的 HOME —— 因为内置示例文件就落在平台数据根 `<HOME>/.agent-insight/...`,
- * 且 agent 进程与平台同机, 拿绝对路径(同一文件系统)总能读到。
+ * isolateHome 改掉的 HOME —— 因为待读取的文件(如用户提供的日志)通常就在平台数据根
+ * `<HOME>/.agent-insight/...`, 且 agent 进程与平台同机, 拿绝对路径(同一文件系统)总能读到。
  *
  * 数据集里仍保留 `~`(保持可移植), 只在运行时按当前执行机 HOME 解析。
  *

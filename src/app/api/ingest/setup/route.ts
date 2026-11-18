@@ -211,15 +211,7 @@ function generateBashScript(
         'mkdir -p "$HOME/.opencode/skills"',
         'mkdir -p "$HOME/.claude/projects"',
         'mkdir -p ".opencode/skills"',
-        'mkdir -p "$AGENT_INSIGHT_HOME/example"',
         'echo "📂 Created necessary directories"',
-        '',
-        '# 1b. Download built-in example messages log (for the bundled "messages 日志分析" dataset / demo traces)',
-        'if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/example-messages" -o "$AGENT_INSIGHT_HOME/example/messages"; then',
-        '    echo "📄 Example log ready at $AGENT_INSIGHT_HOME/example/messages"',
-        'else',
-        '    echo "⚠️  Skipped example messages log download (non-fatal)"',
-        'fi',
         '',
         // 安装页勾选了框架时，SELECTED_FRAMEWORKS 直接写死，跳过下面整段交互式选择——
         // 那段要 npm install inquirer/tsx + npx，内网/离线环境访问不到 registry 就卡死在这里。

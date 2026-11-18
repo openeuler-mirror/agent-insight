@@ -20,7 +20,7 @@ import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSour
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
 import { InferenceAnalysisButton } from './InferenceAnalysisButton';
-import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
+import { inferenceAnalysisTarget, interactionUpstreamRequestIds } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
@@ -3213,9 +3213,12 @@ function LLMEventBody({ event, responseText, interactions, node }: {
 
     const usage = event.usage;
     const hasUsage = usage && (usage.total || usage.input || usage.output);
+    const upstreamRequestIds = interactionUpstreamRequestIds(it);
+    const hasInferenceIdentity = Boolean(it.inference_call_ids?.length || it.inference_attempts?.length || upstreamRequestIds.length);
 
     const hasParams = modelId || provider || temperature != null || maxTokens != null
-        || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
+        || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null
+        || hasInferenceIdentity;
 
     const snapshot = useMemo(
         () => buildLlmPromptSnapshot(
@@ -3280,6 +3283,19 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                             )}
                             {finishReason && (
                                 <LLMParam label="finish" value={finishReason} />
+                            )}
+                        </div>
+                    )}
+                    {hasInferenceIdentity && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 1rem', alignItems: 'center' }}>
+                            {upstreamRequestIds.length === 1 ? (
+                                <CopyableId label="X-Request-Id" value={upstreamRequestIds[0]} />
+                            ) : (
+                                <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)' }}>
+                                    {upstreamRequestIds.length
+                                        ? (locale === 'zh' ? `X-Request-Id ×${upstreamRequestIds.length}，见推理分析` : `X-Request-Id ×${upstreamRequestIds.length}, see inference analysis`)
+                                        : (locale === 'zh' ? 'X-Request-Id 未提供' : 'X-Request-Id not provided')}
+                                </span>
                             )}
                         </div>
                     )}

@@ -1,6 +1,6 @@
 ---
 title: "入门教程"
-description: "汇集首次接入、运行示例和首次评测的分步教程，帮助用户完成平台入门。"
+description: "汇集首次接入和首次评测的分步教程，帮助用户完成平台入门。"
 keywords: ["Agent Insight", "入门教程", "智能体接入", "首次评测"]
 changefreq: "monthly"
 ---
@@ -12,7 +12,6 @@ changefreq: "monthly"
 ## 平台公共
 
 - [5 分钟上手](./platform/01-quick-start.md)（含 OpenCode 1.x / 2.x 接入与 Skill 实验准备）
-- [内置示例端到端走查](./platform/02-example-walkthrough.md)
 
 ## 观测
 
