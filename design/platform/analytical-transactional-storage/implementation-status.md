@@ -692,14 +692,26 @@ Infra也已在独立分支2800da7d完成整域逻辑（018两控制表+CH003，�
 
 证据补充：acceptance-v2/{final-transport-http-evidence,original-ui-skill-download-evidence,final-transport-refresh-evidence}.json、original-ui-skill-download.zip、final-skill-download.jpg、final-infra-authenticated-page.jpg；consolidated-final-ui-transport-review.json为独立静态审查，consolidated-final-ui-root-recheck.json为根独立复验。当前完整字段/schema版本没有再变化，用户AGENTS.md原哈希保持。
 
-## 2026-11-18 分析更新读取一致性修复（最终回归进行中）
+## 2026-11-18 分析更新读取一致性与最终隔离回归
 
-本片针对上轮实际观察到的分析更新短暂409/503。保持后端完整快照与身份校验，通过私有TRACE_INDEXING/TRACE_READ_CHANGED识别可重新读取的索引等待与同身份版本变化；Node重新执行完整授权读取，固定origin/actor并响应取消。只重试GET，模型开始后及写入不重放；来源改绑、删除、权限撤销、事实缺失/损坏继续失败。Session缓存绑定来源身份/source/annotation版本，RAS新私有签名token区分版本变化与身份变化，旧token不放宽。最多32次，15秒等待与新尝试启动窗口从首次可信过渡错误开始，后续不续期；data GET读取预算与证据接口对齐65秒，其余接口预算保持。慢首次读取耗时超过15秒后仍可获得重试机会，mock时钟RED及修复后13项回归均保留。
+产品代码冻结为 `779dbf0c41ac3ef068396553f6fd99de61e58f29`。已提交尚未索引的快照用私有 `TRACE_INDEXING` 标识，同一身份的来源或分析版本变化用 `TRACE_READ_CHANGED` 标识；Node只对这两类GET重新授权并执行完整读取。删除、改绑、撤权、稳定事实缺失/损坏及普通服务故障仍返回真实错误，不以旧库、旧快照、部分正文或空结果兜底。写入及已开始的模型调用不重放。
 
-当前专项：Python81/81；原四个handler→实际Python索引等待→真实ClickHouse更新后均200，正文/标签为新值。独立审查的model preflight吞错、origin/取消后继续RPC及等待耗尽仍发请求三个P2已修复并复验。尚不把这些专项称最终全量结果；后续以冻结来源完整Node/Python结果及原界面复查为准。新证据独立保存在exclude/storage-core-read-transition/20261118-z7j6zhaw/，不覆盖上轮失败和通过日志。未改TSX/CSS/schema，未刷新旧58488环境或切生产。
+每个GET最多32次读取尝试（包括首次），15秒等待及新尝试启动窗口从首次可信过渡错误开始，后续不续期；慢首次读取不会提前消耗全部重试机会。原列表、筛选与task lookup的data GET使用与证据读取一致的65秒RPC预算，其他接口预算、取消、身份和响应大小限制保持。Session缓存绑定来源身份/source/annotation版本；私有session-source及RAS签名token支持identity_hash，旧服务或旧token不推断可重试。List→GenerationSources的版本不匹配也在异常返回前核对原可信身份与边界；稳定缺失或损坏仍不重试。无新增DDL、API路由或TSX/CSS改动。
 
-首轮冻结c56a048a的Python完整1455项（1276通过/179可选引擎跳过/0失败），来源222文件未变；Node完整6199项（6171通过/22跳过/6失败）。其中五项旧reliability VM夹具未隔离新增传输且缺manifest，补齐依赖后原断言保持、相邻29项通过；另一个Benchmark bootstrap的15秒子进程未正常退出（status=null），同源原超时单项重跑通过，尚未证实根因。新来源会完整重跑，以上不称最终全量通过。
+| 最终验证 | 实际结果与边界 |
+|---|---|
+| Node完整套件 | 原glob `test/**/*.test.ts` 的768个文件全部执行，无遗漏或重复；6201项，6179通过、22跳过、0失败、0取消。Node24.22.3、独立HOME/SQLite。两个旧进程启动敏感文件各自串行执行（1项/7.84秒、17项/2.23秒），其余766文件以2并行完整执行（6183项、6161通过/22跳过，983.15秒）；不改产品或测试断言、时限。原collector完整类型预检通过 |
+| Python完整套件 | 1462项，1283通过、179可选引擎跳过、0失败，1188.70秒；ResourceWarning提升为错误，223个来源文件前后相同。没有将跳过的原生引擎测试称为通过 |
+| 完整类型检查 | 同一产品来源 `tsc --noEmit --incremental false` exit0 |
+| 真实ClickHouse | 同来源原4个handler→实际Python→新建独立CH数据库；真实accepted/prepared索引等待后均200，标签和完整正文读到新版本。保留实际后端503及私有码，非mock状态码 |
+| 原HTTP服务混合读写 | 独立62632，6客户端交错更新并读取data、Session结构、完整Session和reliability，16次读取全部200；更新正文、opaque扩展及0值保留，旧Prisma的User/Execution/Session/Dataset/Skill对应表仍0行 |
+| 原界面 | Chrome经CUA实际原standalone登录admin→原Trace页→选择LLM Span，输入与更新后的输出可见。登录后的65条服务端请求均200；未将首次未登录401算作授权读取失败。内置浏览器CDP超时记录保留，最终截图来自真实Chrome原页面 |
+| 来源与数据保留 | 3223个代码/测试/资产来源与冻结快照一致；本片TSX/CSS变更0。隔离库先备份并通过integrity_check，原2条Trace、关联记录及308份既有工件逐行/逐字节保留。用户AGENTS.md原哈希保持；默认库/spool、原58488和生产未切换 |
 
-实际原HTTP环境另发现首次慢读取耗尽起窗点的问题，已补mock时钟RED并修正；原reliability实际18秒读取返回200。List→GenerationSources遇到版本更新时的EvidenceUnavailable漏过末尾身份复核，也用真实调用链正反例补齐；新7条与原模块35条通过，根集成64项通过。六路混合请求出现原15秒RPC超时502，原因尚未确认且不修改既有I/O超时，单独保留为未通过的并发验证；普通工作流及最终全量仍在复核，不能据此声称并发容量达标。
+验收入口：[原Trace界面](http://localhost:62632/trace?taskId=storage-read-update-20261118-2d53c9)，用户名admin，沿原登录方式。运行产品18个变更文件与冻结来源逐文件一致，关系库版本仍020、CH仍004（77事务表/19事实表）。原服务通过scripts/develop_start.sh启动，使用独立数据库、HOME及依赖副本；未推送远端。
 
-原浏览器正常Trace页随后实际复现多路列表/agent/framework/sourceKind/task lookup的15秒RPC超时502，故继续修正而非归为容量V2。只把精确data GET预算对齐既有证据65秒；16秒有效响应且尊重abort的同夹具基线RED502、修后14项GREEN，取消/身份/错误分类/写入预算不改。final-v3全量因该确认缺陷主动停止，1582项/911通过/665取消/6跳过/0失败，不作为完整通过结论。最终代码将重新冻结并跑完整。
+证据目录：`exclude/storage-core-read-transition/20261118-z7j6zhaw/`。权威汇总为 `final-complete-verification.json`；完整文件清单为 `final-node-complete-inventory.json`，原始结果为 `final-bootstrap-result.json`、`final-readiness-recheck-result.json`、`final-rest-stable-result.json` 和 `final-v4-python-report.json`。同源CH在 `real-ch-9ykcsjua/`，原HTTP/浏览器证据为 `acceptance-mixed-update-result.json`、`final-browser-acceptance.json`、`final-original-trace-ui.png`；备份、工件哈希及可重放脚本分别在 `runtime-before-read-fix/`、`runtime-before-list-postflight/` 和 `reproduction/`。
+
+首轮失败、默认并行上限遗漏造成的失败及主动停止的取消结果全部保留，不纳入最终通过计数。旧VM夹具仅补齐新增依赖和无身份证明的manifest，原断言不变；旧CLI15秒、MCTS250毫秒及readiness3秒用例在并行下曾失败，同源原时限复验和最终分组全量已通过，未证明底层运行缺陷的根因。正常页面15秒RPC截断有真实浏览器和16秒响应RED证据，已通过65秒读取预算及原页面/六路HTTP复验关闭；没有用放宽测试时限替代修复。
+
+本轮不声明：原生PG/openGauss完整套件或三库×CH矩阵重新执行；客户真实全库owner/附件/spool迁移及正式切换；所有原页面按钮的真实外部模型、设备、物理故障流程；千级采集端及万Span容量。此前原生库专项的旧来源结果继续保留，不能冒充本次新跑。元数据读取仍可能耗时数秒，65秒传输预算不是性能认证；第二版容量和大Trace优化仍待实施。
