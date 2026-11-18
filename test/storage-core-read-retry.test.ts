@@ -95,6 +95,15 @@ test('related Session-source reads retain the narrow transition code through the
  let reads=0;const value=await withCoreReadRetry(request(),()=>requestCore('/v1/compat/observe/session-sources?workspace_id=w',{},async()=>++reads===1?Response.json({code:'TRACE_INDEXING'},{status:503}):Response.json({value:[]})));assert.deepEqual(value.data.value,[]);assert.equal(reads,2);
 });
 
+test('original list reads allow the existing evidence I/O budget while respecting transport cancellation',async context=>{
+ context.mock.timers.enable({apis:['Date','setTimeout'],now:0});let listStarted=false;
+ const pending=handleCompatibleObserveData(request(),{fetcher:async(input,options)=>{
+  if(new URL(String(input)).pathname==='/v1/auth/me')return profile();
+  listStarted=true;return new Promise<Response>((resolve,reject)=>{const signal=options?.signal;const abort=()=>reject(signal?.reason);signal?.addEventListener('abort',abort,{once:true});setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve(Response.json({value:[{task_id:'task'}]}));},16000);});
+ }});
+ for(let turn=0;turn<50&&!listStarted;turn++)await Promise.resolve();assert.equal(listStarted,true);context.mock.timers.tick(16000);const response=await pending;assert.equal(response.status,200);assert.deepEqual(await response.json(),[{task_id:'task'}]);
+});
+
 test('persistent indexing remains an error after bounded retries',async()=>{
  let reads=0;
  await assert.rejects(withCoreReadRetry(request(),async()=>{reads++;throw Object.assign(new Error('still indexing'),{status:503,code:'TRACE_INDEXING'});}),(error:any)=>error.status===503&&error.code==='TRACE_INDEXING');assert.ok(reads>1&&reads<=32);

@@ -138,7 +138,7 @@ export async function compatibleRequest(request:Request,target:string,fields:str
   }
   const transfer=target.includes('/traces/');
   const responseLimit=target.endsWith('/session') || transfer ? 128*1024*1024 : 4*1024*1024;
-  const timeoutMs=transfer || (target.endsWith('/session') && source.get('view')!=='structure') ? 300_000 : 15_000;
+  const timeoutMs=transfer || (target.endsWith('/session') && source.get('view')!=='structure') ? 300_000 : request.method==='GET'&&target==='/v1/compat/observe/data' ? 65_000 : 15_000;
   const headers:Record<string,string>={};
   const receipt=request.headers.get('idempotency-key');
   if(target.endsWith('/traces/import') && receipt!==null) {
