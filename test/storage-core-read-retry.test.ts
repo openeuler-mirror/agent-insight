@@ -79,10 +79,16 @@ test('cancellation inside a storage response stops subsequent auth and analytics
  }),error=>error===reason);assert.equal(requests,1);
 });
 
+test('a slow initial read still receives a bounded retry window after a proven transition',async context=>{
+ context.mock.timers.enable({apis:['Date','setTimeout'],now:0});let reads=0;
+ const pending=withCoreReadRetry(request(),async()=>{if(++reads===1){context.mock.timers.tick(17900);throw coreReadChanged('changed during a cold read');}return 'current';}).then(value=>({value}),error=>({error}));
+ await Promise.resolve();await Promise.resolve();context.mock.timers.tick(100);assert.deepEqual(await pending,{value:'current'});assert.equal(reads,2);
+});
+
 test('the waiting deadline cannot start another storage attempt after its last delay',async context=>{
  context.mock.timers.enable({apis:['Date','setTimeout'],now:0});let reads=0;
- const pending=withCoreReadRetry(request(),async()=>{if(++reads>1)return 'unexpected';context.mock.timers.tick(14999);throw Object.assign(new Error('indexing'),{status:503,code:'TRACE_INDEXING'});});
- const rejected=assert.rejects(pending,(error:any)=>error.code==='TRACE_INDEXING');await Promise.resolve();await Promise.resolve();context.mock.timers.tick(1);await rejected;assert.equal(reads,1);
+ const pending=withCoreReadRetry(request(),async()=>{if(++reads>2)return 'unexpected';if(reads===2)context.mock.timers.tick(14899);throw Object.assign(new Error('indexing'),{status:503,code:'TRACE_INDEXING'});});
+ const rejected=assert.rejects(pending,(error:any)=>error.code==='TRACE_INDEXING');await Promise.resolve();await Promise.resolve();context.mock.timers.tick(100);await Promise.resolve();await Promise.resolve();context.mock.timers.tick(1);await rejected;assert.equal(reads,2);
 });
 
 test('related Session-source reads retain the narrow transition code through the transport',async()=>{

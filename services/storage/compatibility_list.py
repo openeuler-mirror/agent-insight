@@ -46,6 +46,7 @@ class LegacyTraceList:
         from .trace_analytics import MAX_EXECUTION_SOURCE_BYTES
         from .execution_metadata import record_fields
         from .trace_analytics import TraceAnalytics
+        from .trace_evidence import EvidenceUnavailable
         reader=self.analytics or TraceAnalytics(self.queries,None)
         cursor=None;result=[];scope=self.iam.scope(token);source_budget={'remaining':MAX_EXECUTION_SOURCE_BYTES};boundaries={};identities={};summary_boundaries={}
         self.iam._workspace(scope,workspace,'read')
@@ -76,7 +77,7 @@ class LegacyTraceList:
             if self.analytics and page['items']:
                 selections=[{'trace_id':row['trace_id'],'boundary':boundaries[row['trace_id']]} for row in page['items']]
                 try:snapshot=self.analytics.execution_metadata(token,workspace,selections,source_budget=source_budget)
-                except Conflict:
+                except (Conflict,EvidenceUnavailable):
                     reader._recheck(token,workspace,scope,boundaries,identities)
                     raise
                 captured={row['trace_id']:row for row in snapshot['items']}

@@ -27,17 +27,18 @@ function wait(signal:AbortSignal,milliseconds:number):Promise<void>{
 
 export async function withCoreReadRetry<T>(request:Request,read:()=>Promise<T>):Promise<T>{
  if(request.method!=='GET'||attempts.getStore())return read();
- const state:CoreReadAttempt={origin:coreServiceOrigin(),signal:request.signal,sideEffect:false};const deadline=Date.now()+15000;let lastTransition:unknown;
+ const state:CoreReadAttempt={origin:coreServiceOrigin(),signal:request.signal,sideEffect:false};let deadline:number|undefined,lastTransition:unknown;
  return attempts.run(state,async()=>{
   for(let attempt=0;;attempt++){
    request.signal.throwIfAborted();
-   if(attempt>0&&Date.now()>=deadline)throw lastTransition;
+   if(deadline!==undefined&&Date.now()>=deadline)throw lastTransition;
    if(coreServiceOrigin()!==state.origin)throw Object.assign(new Error('Storage read origin changed'),{status:503});
    try{const value=await read();request.signal.throwIfAborted();if(coreServiceOrigin()!==state.origin)throw Object.assign(new Error('Storage read origin changed'),{status:503});return value;}
    catch(error){
     request.signal.throwIfAborted();
-    const remaining=deadline-Date.now();
-    if(!isCoreReadTransition(error)||state.sideEffect||attempt>=31||remaining<=0)throw error;
+    if(!isCoreReadTransition(error)||state.sideEffect||attempt>=31)throw error;
+    deadline??=Date.now()+15000;const remaining=deadline-Date.now();
+    if(remaining<=0)throw error;
     lastTransition=error;
     await wait(request.signal,Math.min(100*(attempt+1),500,remaining));
    }
