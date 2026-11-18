@@ -3828,3 +3828,11 @@ Skill文件包完整保存base64字节与mode，正文/文件引用封存于内�
 不新增表或字段。`platform_control_records(kind=user)`的record_id/owner_principal_id/workspace_id/legacy_username/lookup_hash与私有User DTO共同绑定真实IAM key；后台恢复必须验证User工件hash，DTO.id=record_id、DTO.username=legacy_username、lookup_hash=SHA256(DTO.apiKey)，并重验active principal、实际API key owner/workspace、期限、撤销、当前write及必要历史marker。execute目的另验execute，User中任意token或旧wi key不构成凭据。
 
 既有私有bootstrap路由仅接受controller签名的固定后台枚举/精确重验，返回owner actor，不提供公开用户名换key。重验引用为user_record_id+principal_id+workspace_id+username+credential_sha256；不能切换到新key或另一个owner。Node品牌携带来源和core origin，重启由持久记录重建；显式mapping和User来源按真实scope/credential消歧。普通只读或采集端不能借该私有端口扩execute，个人模型读取仍按其真实owner。原generator tag只有当前owner、指定opencodeSessionId和三个非秘密字段的私有投影，不读取会话正文。
+
+## 离线旧库语义导入契约（第一版）
+
+固定转换器目录覆盖 96 个旧模型，实际写入复用现有领域表、私有制品、`migration_checkpoints` 和 `inbox_receipts`，不新增 DDL。目录覆盖不等于任意旧行或客户库已完成验证。稳定实体键使用 source ID、物理表与带类型主键；内容 hash 单独标识版本。每行领域写入、原始私有行、检查点与成功收据同事务，未索引事实保持 pending；同键内容变化或目标漂移拒绝覆盖。
+
+导入要求受信私有导出、显式隔离目标和旧 owner→真实 IAM principal/workspace 映射；未知/null owner、缺资产字节与歧义消息顺序必须显式补齐。历史活动状态保存但不产生认证、lease、worker 或外部执行权；集成运行门禁未验收时保持历史 fence=0。原状态通过只读投影呈现，内部 history 标志不进入原前端 DTO。Usage raw 不重计已导入 Daily，评测历史使用 migrate-phase 终态收据。
+
+旧诊断显式复测先核验 verified 原始收据、旧 snapshot 和仍一致的 Trace/资产/实验结果基线；通过后冻结当前新模型/新资产创建全新运行并保留历史 origin。证据不足或来源变更明确 Conflict，不证明旧模型配置、不恢复旧 lease。完整命令、文件与恢复契约见 [旧库迁移设计](./legacy-migration-design.md#离线旧库语义导入契约第一版)。三库/真实 ClickHouse/原界面/完整迁移演练在整合阶段集中验收，未验收不声明生产可切换。

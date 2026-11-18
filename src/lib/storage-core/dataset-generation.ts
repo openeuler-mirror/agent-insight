@@ -38,9 +38,9 @@ export async function handleCoreDatasetGeneration(request:Request,action:string,
    const config=Object.fromEntries(['name','description','platform','agentKey','from','to','limit','requestId'].filter(key=>Object.hasOwn(raw,key)).map(key=>[key,raw[key]]));
    value=await rpc('create',{config:{...config,policy:PRODUCTION_POLICY,mappingVersion:'stored-interactions-v4',processorVersion:'identity-v1',purpose:'coverage_regression'}});
    if(!value||typeof value!=='object'||!('datasetId'in value)||typeof value.datasetId!=='string')throw new Error('Invalid generation result');
-   activateGeneration(actor,value.datasetId,rpc);
+   if(!('historical_inert'in value)||value.historical_inert!==true)activateGeneration(actor,value.datasetId,rpc);
   } else if(action==='progress') {
-   value=await rpc(action,{datasetId});activateGeneration(actor,datasetId!,rpc);
+   value=await rpc(action,{datasetId});if(!value||typeof value!=='object'||!('historical_inert'in value)||value.historical_inert!==true)activateGeneration(actor,datasetId!,rpc);
   } else if(action==='catalog') {
    const params=new URL(request.url).searchParams;const now=Date.now();
    value=await rpc(action,{from:params.get('from')||new Date(now-7*86400000).toISOString(),to:params.get('to')||new Date(now).toISOString(),platform:params.get('platform')||undefined});
@@ -48,6 +48,7 @@ export async function handleCoreDatasetGeneration(request:Request,action:string,
     const catalog=platformCatalog();value={...value,platforms:value.platforms.map((row:{id:string})=>catalog.get(row.id)||{id:row.id,label:row.id==='otlp'?'OpenTelemetry':row.id})};
    }
   } else value=await rpc(action,action==='deletion'?{deletionId:datasetId}:{datasetId});
+  if(value&&typeof value==='object'&&!Array.isArray(value)&&'historical_inert'in value){const {historical_inert,...visible}=value;value=visible;}
   if(action==='release'||((action==='cancel'||action==='remove')&&value===null))return new Response(null,{status:204});
   return Response.json(value,{status:action==='create'||action==='cancel'||action==='remove'?202:200,headers:{'cache-control':'no-store'}});
  } catch(error){return failure(error);}

@@ -13,6 +13,8 @@ from .contracts import identifier, revision
 from .iam import IAMStore, Forbidden
 from .trace_evidence import EvidenceTooLarge, EvidenceUnavailable, _hash, _size
 from .dataset_generation_sources import GenerationSources, platform
+from .legacy_generation import GenerationHistoryStore
+from .legacy_history import assert_control_live
 
 LEASE_MS=30000
 MAX_CONFIG_BYTES=64*1024
@@ -57,7 +59,10 @@ class DatasetGeneration:
         column='dataset_id' if dataset is not None else 'job_id';value=dataset if dataset is not None else job
         identifier(value)
         row=con.execute('SELECT * FROM dataset_generation_jobs WHERE workspace_id=? AND '+column+'=?',(ws,value)).fetchone()
-        if not row:raise LookupError('Generation job not found')
+        if not row:
+            history=GenerationHistoryStore(self.control).find(con,ws,scope.principal_id,'job-dataset' if dataset is not None else 'job',value)
+            if history:assert_control_live(con,ws,'datasetGenerationJob',history['data']['id'])
+            raise LookupError('Generation job not found')
         if row['actor_principal_id']!=scope.principal_id:raise Forbidden('Generation belongs to another actor')
         self.datasets._get_tx(con,token,ws,row['dataset_id'],write=True,include_deleted=row['status']=='deleted')
         return dict(row)
@@ -86,13 +91,13 @@ class DatasetGeneration:
             _size(value,limit);return value
         except (OSError,KeyError,ValueError,TypeError):raise EvidenceUnavailable('Generation artifact unavailable') from None
 
-    def _config(self,raw):
+    def _config(self,raw,*,now=None):
         if not isinstance(raw,dict):raise ValueError('Generation config must be object')
         _size(raw,MAX_CONFIG_BYTES)
         name=raw.get('name');description=raw.get('description','');limit=raw.get('limit');request=raw.get('requestId')
         if not isinstance(name,str) or not 1<=len(name.strip())<=50 or not isinstance(description,str) or len(description)>200 or type(limit) is not int or not 1<=limit<=500:raise ValueError('Invalid generation config')
         if not isinstance(request,str) or not re.fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}',request):raise ValueError('UUIDv7 requestId required')
-        start=_time(raw.get('from'));end=_time(raw.get('to'));now=self.control.clock();stamp=int(request.replace('-','')[:12],16)
+        start=_time(raw.get('from'));end=_time(raw.get('to'));now=self.control.clock() if now is None else now;stamp=int(request.replace('-','')[:12],16)
         if end-start not in (86400000,7*86400000,30*86400000) or end>now+300000 or stamp>now+300000:raise ValueError('Invalid generation time window')
         if now>=stamp+86400000:raise GenerationRequestExpired('REQUEST_EXPIRED')
         for key in ('platform','agentKey'):identifier(raw.get(key))
@@ -117,7 +122,12 @@ class DatasetGeneration:
         return {'platforms':[{'id':value,'label':value} for value in all_platforms],'agents':sorted(agents.values(),key=lambda row:(row['name'],row['agentKey']))}
 
     def create(self,token,ws,raw):
-        config=self._config(raw);digest=_hash(config)
+        with self.control.read_transaction() as con:
+            scope=self._auth(con,token,ws)
+            history=GenerationHistoryStore(self.control);historical=history.replay_create(con,ws,scope.principal_id,raw)
+            if historical:return historical
+            historical_clock=history.clock(con,ws)
+        config=self._config(raw,now=historical_clock);digest=_hash(config)
         with self.control.read_transaction() as con:
             scope=self._auth(con,token,ws)
             previous=con.execute('SELECT * FROM dataset_generation_jobs WHERE workspace_id=? AND actor_principal_id=? AND request_id=?',(ws,scope.principal_id,config['requestId'])).fetchone()
@@ -159,7 +169,12 @@ class DatasetGeneration:
                 'generationConfig':config,'canCancel':status!='published','canFinish':status=='published','canReturn':status=='failed'}
 
     def progress(self,token,ws,dataset):
-        with self.control.read_transaction() as con:row=self._job(con,token,ws,dataset=dataset)
+        with self.control.read_transaction() as con:
+            scope=self._auth(con,token,ws)
+            if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone():
+                historical=GenerationHistoryStore(self.control).progress(con,ws,scope.principal_id,dataset)
+                if historical is not None:return historical
+            row=self._job(con,token,ws,dataset=dataset)
         if row['status']=='deleted':raise LookupError('Dataset deleted')
         value=self._progress(row)
         with self.control.read_transaction() as con:
@@ -170,6 +185,8 @@ class DatasetGeneration:
     def claim(self,token,ws,dataset,lease_owner):
         identifier(lease_owner);now=self.control.clock()
         with self.control.transaction() as con:
+            scope=self._auth(con,token,ws)
+            if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone() and GenerationHistoryStore(self.control).has_dataset(con,ws,scope.principal_id,dataset):return None
             row=self._job(con,token,ws,dataset=dataset)
             if row['status'] not in ('queued','running') or (row['lease_until_ms'] is not None and row['lease_until_ms']>now):return None
             head=self.datasets._get_tx(con,token,ws,dataset,write=True)
@@ -286,11 +303,22 @@ class DatasetGeneration:
 
     def release(self,token,ws,dataset):
         with self.control.transaction() as con:
+            scope=self._auth(con,token,ws)
+            if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone() and GenerationHistoryStore(self.control).has_dataset(con,ws,scope.principal_id,dataset):
+                self.datasets._get_tx(con,token,ws,dataset,write=True);return None
             row=self._job(con,token,ws,dataset=dataset)
             con.execute('UPDATE dataset_generation_jobs SET summary_hash=NULL,summary_ref=NULL,revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND job_id=?',(max(self.control.clock(),row['updated_at_ms']),ws,row['job_id']))
 
     def remove(self,token,ws,dataset,cancel_only=False,expected_revision=None):
         with self.control.transaction() as con:
+            scope=self._auth(con,token,ws);history=GenerationHistoryStore(self.control)
+            if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone() and history.has_dataset(con,ws,scope.principal_id,dataset):
+                head=self.datasets._get_tx(con,token,ws,dataset,write=True,include_deleted=True)
+                if cancel_only and head['generation_status']=='published':raise Conflict('ALREADY_COMPLETED')
+                deletion=history.deletion_id(ws,scope.principal_id,dataset)
+                if head['state']!='deleted':
+                    self.datasets._delete_tx(con,token,ws,dataset,operation_key='generation-delete:history:'+dataset,operation_kind='generation-delete',expected_revision=expected_revision)
+                return {'deletionId':deletion,'status':'deleted'}
             row=self._job(con,token,ws,dataset=dataset)
             if row['status']=='deleted':
                 head=self.datasets._get_tx(con,token,ws,dataset,write=True,include_deleted=True)
@@ -306,6 +334,9 @@ class DatasetGeneration:
 
     def deletion(self,token,ws,deletion):
         with self.control.read_transaction() as con:
+            scope=self._auth(con,token,ws)
+            historical=GenerationHistoryStore(self.control).deletion(con,ws,scope.principal_id,deletion)
+            if historical:return historical
             row=con.execute('SELECT dataset_id FROM dataset_generation_jobs WHERE workspace_id=? AND deletion_id=?',(ws,deletion)).fetchone()
             if not row:raise LookupError('Generation deletion not found')
             self._job(con,token,ws,dataset=row[0])

@@ -538,3 +538,11 @@ Usage继续实现既有UsageStorage接口。每个入队事件在已验证的请
 Node每次重新读持久User与显式映射，不缓存首次用户。私有映射的legacy_username和IAM principalUsername分别保留；同scope多alias、同用户名多scope均拒绝猜测，重复真实凭据合并。品牌WeakMap保存origin与来源引用；持久User按精确record/owner/workspace/原key hash重验，映射按当前私有文件重验。Collector重启可恢复snapshot/hooks主体；模型仍须同owner的当前execute和原model_scope/job lease检查。只读或write-only不能取得模型执行能力，管理员Trace可见性不转化为其他owner模型权限。GET Session懒模型同样仅在实际owner当前can_execute通过后恢复执行主体。旧映射继续可用。
 
 原upload的generator agent tag fallback使用`collector_agent_tag`固定私有投影：已品牌collector、actual write及controller-preparation，只按明确opencodeSessionId查当前owner，返回agentName/agentTraceSkill/user三个轻量字段；不开放会话正文/文件/全列表，不扩PREPARATION_KINDS。原标签覆盖/校验算法保留。后台claim原有write-only回pending规则不改，完整回归和真实引擎/UI验收统一后置。
+
+## 离线旧库语义导入契约（第一版）
+
+固定转换器目录覆盖 96 个旧模型，实际写入复用现有领域表、私有制品、`migration_checkpoints` 和 `inbox_receipts`，不新增 DDL。目录覆盖不等于任意旧行或客户库已完成验证。稳定实体键使用 source ID、物理表与带类型主键；内容 hash 单独标识版本。每行领域写入、原始私有行、检查点与成功收据同事务，未索引事实保持 pending；同键内容变化或目标漂移拒绝覆盖。
+
+导入要求受信私有导出、显式隔离目标和旧 owner→真实 IAM principal/workspace 映射；未知/null owner、缺资产字节与歧义消息顺序必须显式补齐。历史活动状态保存但不产生认证、lease、worker 或外部执行权；集成运行门禁未验收时保持历史 fence=0。原状态通过只读投影呈现，内部 history 标志不进入原前端 DTO。Usage raw 不重计已导入 Daily，评测历史使用 migrate-phase 终态收据。
+
+旧诊断显式复测先核验 verified 原始收据、旧 snapshot 和仍一致的 Trace/资产/实验结果基线；通过后冻结当前新模型/新资产创建全新运行并保留历史 origin。证据不足或来源变更明确 Conflict，不证明旧模型配置、不恢复旧 lease。完整命令、文件与恢复契约见 [旧库迁移设计](./legacy-migration-design.md#离线旧库语义导入契约第一版)。三库/真实 ClickHouse/原界面/完整迁移演练在整合阶段集中验收，未验收不声明生产可切换。

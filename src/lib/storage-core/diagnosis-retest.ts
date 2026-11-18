@@ -1,4 +1,7 @@
 import {createHash} from 'node:crypto';
+import {getActiveConfig} from '@/lib/storage/server-config';
+import {freezeModelSelection,runWithFrozenModelConfiguration} from './frozen-model';
+import {freezeExperimentAssets} from './experiment-assets';
 import type {Experiment,SkillOptimizationRecord} from '@prisma/client';
 import {prismaRaw} from '@/lib/storage/prisma';
 import {generateExperimentTraces} from '@/lib/engine/experiment/trace-generation';
@@ -18,11 +21,15 @@ export async function retestCoreDiagnosisCase(record:SkillOptimizationRecord,_so
  const context=requireCoreExperimentContext();const ref=parseStored<Array<{type:string;id:string}>>(record.sourceRefsJson,[]).find(item=>item.type==='diagnosis');
  if(!ref)throw new Error('诊断来源已失效，无法按原实验配置复测');
  const run=await readCoreDiagnosis(ref.id);if(run.status!=='done'||run.experiment_id!==_source.id)throw new Error('诊断来源已失效，无法按原实验配置复测');
- await verifyCoreDiagnosisSource(run.id);
+ const verified=await verifyCoreDiagnosisSource(run.id);
+ if(verified.historical_origin){
+  const model=await getActiveConfig(context.actor.username);const selection=freezeModelSelection(model);
+  return runWithFrozenModelConfiguration(context.actor.username,model,()=>runWithCoreExperimentContext({...context,frozenStartModelSelection:selection},()=>executeRetest(record,_source,files,run,true)));
+ }
  if(run.source_model_selection_consistent!==true)throw new Error('来源评测使用了不同模型配置，无法保证同配置复测');
  return runWithCoreExperimentContext({...context,frozenStartModelSelection:run.source_model_selection??null},()=>executeRetest(record,_source,files,run));
 }
-async function executeRetest(record:SkillOptimizationRecord,_source:Experiment,files:Record<string,string>,run:Awaited<ReturnType<typeof readCoreDiagnosis>>){
+async function executeRetest(record:SkillOptimizationRecord,_source:Experiment,files:Record<string,string>,run:Awaited<ReturnType<typeof readCoreDiagnosis>>,historical=false){
  const context=requireCoreExperimentContext();
  const source=(await context.rpc('read',{experiment_id:_source.id}) as {experiment:Source}).experiment;
  const frozen=run.snapshot;
@@ -31,8 +38,9 @@ async function executeRetest(record:SkillOptimizationRecord,_source:Experiment,f
  if(!config.datasetId||!config.caseIds?.length||!target?.workerId||!target.model||!target.timeoutSeconds||!evaluatorIds.length||source.type!=='single'||source.status!=='done'||source.deletedAt)throw new Error('来源实验缺少可复测配置或尚未完成');
  if(contentHash(config)!==contentHash(frozen.experiment.config))throw new Error('诊断后执行配置发生变化');
  if(contentHash(parseStored(source.evaluatorConfigsJson,{}))!==contentHash(frozen.experiment.evaluatorConfigs)||!frozen.experiment.evaluatorIds||contentHash(evaluatorIds)!==contentHash(frozen.experiment.evaluatorIds))throw new Error('诊断后评估器配置发生变化');
- if(evaluatorIds.some(id=>id.startsWith('custom-')&&!config.customEvaluatorSnapshots?.cards?.[id]))throw new Error('来源实验缺少自定义评估器快照');
- const release=config.coreAssets?.releases?.dataset;if(!release)throw new Error('来源实验缺少不可变数据集版本');
+ const currentConfig=historical?parseStored<typeof config>((await freezeExperimentAssets(context,source as unknown as Record<string,unknown>)).configSnapshotJson as string,{}):config;
+ if(evaluatorIds.some(id=>id.startsWith('custom-')&&!currentConfig.customEvaluatorSnapshots?.cards?.[id]))throw new Error('来源实验缺少自定义评估器快照');
+ const release=currentConfig.coreAssets?.releases?.dataset;if(!release)throw new Error('来源实验缺少不可变数据集版本');
  const getDataset=()=>withCoreDatasets(context.request,()=>coreDatasetRequest<{dataset:AgentDatasetRecord}>('get',{dataset_id:config.datasetId,version:release}),context.options);
  const dataset=(await getDataset()).dataset;if(!dataset)throw new Error('来源数据集不存在，无法复测');
  const fingerprint=(value:Source)=>contentHash({config:value.configSnapshotJson,evaluatorIds:value.evaluatorIdsJson,evaluatorConfigs:value.evaluatorConfigsJson,status:value.status,deletedAt:value.deletedAt,cases:value.cases.map(row=>({id:row.id,input:row.input,referenceOutput:row.referenceOutput,executionId:row.executionId,datasetInput:row.datasetInput,actualOutput:row.actualOutput,caseValuesJson:row.caseValuesJson,results:row.results.map(result=>({id:result.id,updatedAt:result.updatedAt})).sort((a,b)=>a.id.localeCompare(b.id))})).sort((a,b)=>a.id.localeCompare(b.id))});
@@ -56,7 +64,7 @@ async function executeRetest(record:SkillOptimizationRecord,_source:Experiment,f
  const claimed=await prismaRaw.skillOptimizationRecord.updateMany({where:{id:record.id,status:record.status,candidateContentHash:record.candidateContentHash},data:{status:'retesting'}});if(!claimed.count)throw new Error('复测状态已变化');
  let experimentId:string|null=null;let baseSum=0,candidateSum=0,measured=0,passed=true;
  try{
-  const created=await context.rpc('create',{experiment:{name:source.name+' · 诊断候选复测',type:source.type,agentName:source.agentName,evaluatorIdsJson:source.evaluatorIdsJson,evaluatorConfigsJson:source.evaluatorConfigsJson,sourceExperimentId:source.id,optimizationRecordId:record.id,skillName:record.skillName,skillVersion:record.baseVersion,preset:'retest',configSnapshotJson:JSON.stringify({...config,candidateHash:record.candidateContentHash,coreDiagnosisSource:{id:run.id,inputHash:run.input_hash}}),cases:cases.map(({row,caseId})=>({id:caseId,input:row.input,datasetInput:row.datasetInput,actualOutput:'',referenceOutput:row.referenceOutput,caseValuesJson:row.caseValuesJson}))},operation_key:context.operationKey+':diagnosis-retest-create',operation_request:{record_id:record.id,candidate_content_hash:record.candidateContentHash,diagnosis_id:run.id,diagnosis_input_hash:run.input_hash,source_fingerprint:sourceFingerprint}}) as {experiment:{id:string}};
+  const created=await context.rpc('create',{experiment:{name:source.name+' · 诊断候选复测',type:source.type,agentName:source.agentName,evaluatorIdsJson:source.evaluatorIdsJson,evaluatorConfigsJson:source.evaluatorConfigsJson,sourceExperimentId:source.id,optimizationRecordId:record.id,skillName:record.skillName,skillVersion:record.baseVersion,preset:'retest',configSnapshotJson:JSON.stringify({...currentConfig,candidateHash:record.candidateContentHash,coreDiagnosisSource:{id:run.id,inputHash:run.input_hash,...(historical?{historicalOrigin:true,newModelSelection:context.frozenStartModelSelection??null}:{})}}),cases:cases.map(({row,caseId})=>({id:caseId,input:row.input,datasetInput:row.datasetInput,actualOutput:'',referenceOutput:row.referenceOutput,caseValuesJson:row.caseValuesJson}))},operation_key:context.operationKey+':diagnosis-retest-create',operation_request:{record_id:record.id,candidate_content_hash:record.candidateContentHash,diagnosis_id:run.id,diagnosis_input_hash:run.input_hash,source_fingerprint:sourceFingerprint}}) as {experiment:{id:string}};
   experimentId=created.experiment.id;await prismaRaw.skillOptimizationRecord.update({where:{id:record.id},data:{retestExperimentId:experimentId}});
   for(const {row,caseId,baseline} of cases){
    await verifyCoreDiagnosisSource(run.id);

@@ -15,6 +15,7 @@ from .contracts import identifier, revision
 from .iam import Forbidden
 from .trace_evidence import TraceEvidence, EvidenceTooLarge, EvidenceUnavailable, _hash, _size
 from .compatibility import TraceNotFound
+from .legacy_history import INERT_SOURCE, control_history_key, is_historical_control, assert_control_live
 
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 MAX_PROGRESS_BYTES = 1024 * 1024
@@ -130,14 +131,26 @@ class TraceReports:
         payload = self._load(row['payload_ref'], MAX_REPORT_BYTES, row['payload_hash']) if row['payload_ref'] else None
         progress = self._load(row['progress_ref'], MAX_PROGRESS_BYTES, row['progress_hash']) if row['progress_ref'] else None
         status = row['status']; error = row['error_message']
-        if status == 'running' and row['lease_until_ms'] <= self.control.clock(): status = 'failed'; error = '后台任务已中断，请重新诊断。'
+        history = self._history(row)
+        if history: status = history['original_status']
+        elif status == 'running' and row['lease_until_ms'] <= self.control.clock(): status = 'failed'; error = '后台任务已中断，请重新诊断。'
         stats = payload.get('stats', {}) if isinstance(payload, dict) else {}
         public = {'id': row['report_id'], 'executionId': row['execution_id'], 'interactionsHash': row['interactions_hash'],
                   'status': status, 'errorMessage': error, 'generator': row['generator'], 'revision': row['revision'],
                   'ranAt': _iso(row['created_at_ms']), 'updatedAt': _iso(row['updated_at_ms']), 'evidenceHash': row['evidence_hash'],
                   'stepCount': stats.get('stepCount', 0), 'issueCount': stats.get('issueCount', 0), 'llmCallCount': stats.get('llmCallCount', 0), 'durationMs': stats.get('durationMs'),
                   'keyActionCount': len(payload.get('keyActionResults', [])) if isinstance(payload, dict) and isinstance(payload.get('keyActionResults', []), list) else 0}
+        if history: public.update(history.get('stats', {}))
         return {'row': public, 'payload': payload, 'progress': progress}
+
+    def _history(self, row):
+        with self.control.read_transaction() as con:
+            marker = con.execute('SELECT content_hash FROM inbox_receipts WHERE workspace_id=? AND source_id=? AND event_id=?',
+                (row['workspace_id'], INERT_SOURCE, control_history_key('diagnosticReport', row['report_id']))).fetchone()
+        if not marker: return None
+        value = self._load(row['evidence_ref'], 16*1024*1024).get('legacy_history')
+        if not isinstance(value, dict) or value.get('version') != 1 or value.get('source_row_hash') != marker[0]: raise EvidenceUnavailable('Historical report provenance differs')
+        return value
 
     def read(self, token, ws, ref, kind):
         self._kind(kind)
@@ -161,6 +174,7 @@ class TraceReports:
             found = con.execute('SELECT * FROM diagnostic_report_runs WHERE workspace_id=? AND actor_principal_id=? AND kind=? AND request_key=?', (ws,scope.principal_id,kind,operation['key'])).fetchone()
             if found is None: return None
             row = dict(found)
+            assert_control_live(con, ws, 'diagnosticReport', row['report_id'])
             if row['trace_id'] != route['trace_id'] or row['evidence_hash'] != expected_hash or row['interactions_hash'] != interactions_hash or row['generator'] != generator: raise Conflict('Report request key already has different input')
             current = self._row(con, ws, route['trace_id'], kind)
             if current is None or current['report_id'] != row['report_id']: raise Conflict('Report request key no longer selects the current run')
@@ -197,15 +211,17 @@ class TraceReports:
         lease = lease_token or secrets.token_urlsafe(32); now = self.control.clock()
         with self.control.transaction() as con:
             scope, route = self._boundary(con, token, ws, ref, value); trace = route['trace_id']; current = self._row(con, ws, trace, kind)
+            historical = current is not None and is_historical_control(con, ws, 'diagnosticReport', current['report_id'])
             if scope.fingerprint != prepared_scope.fingerprint: raise Forbidden('Report authorization changed while reserving')
             old = con.execute('SELECT * FROM diagnostic_report_runs WHERE workspace_id=? AND actor_principal_id=? AND kind=? AND request_key=?', (ws, scope.principal_id, kind, request_key)).fetchone() if request_key is not None else None
             if old:
                 old = dict(old)
+                assert_control_live(con, ws, 'diagnosticReport', old['report_id'])
                 if old['trace_id'] != trace or old['evidence_hash'] != expected_snapshot_hash or old['interactions_hash'] != interactions_hash or old['generator'] != generator: raise Conflict('Report request key already has different input')
                 if current is None or current['report_id'] != old['report_id']: raise Conflict('Report request key no longer selects the current run')
                 selected = old; cached = old['status'] in ('done', 'skipped'); busy = old['status'] == 'running' and old['lease_until_ms'] > now
                 if busy and lease_token is not None and old['scope_fingerprint'] == scope.fingerprint and hmac.compare_digest(_digest(lease_token), old['lease_secret_hash']): busy = False
-            elif current and current['evidence_hash'] == expected_snapshot_hash and current['interactions_hash'] == interactions_hash and current['generator'] == generator and (current['status'] == 'running' and current['lease_until_ms'] > now or not force and current['status'] in ('done', 'skipped')):
+            elif current and not historical and current['evidence_hash'] == expected_snapshot_hash and current['interactions_hash'] == interactions_hash and current['generator'] == generator and (current['status'] == 'running' and current['lease_until_ms'] > now or not force and current['status'] in ('done', 'skipped')):
                 selected = current; cached = current['status'] in ('done', 'skipped'); busy = not cached
             else:
                 rid = candidate_id
@@ -225,6 +241,7 @@ class TraceReports:
         found = con.execute('SELECT * FROM diagnostic_report_runs WHERE workspace_id=? AND report_id=?', (ws,report_id)).fetchone()
         if found is None: raise TraceNotFound('Report run not found')
         row = dict(found); scope, _ = self._trace(con, token, ws, row['trace_id'], 'execute')
+        assert_control_live(con, ws, 'diagnosticReport', report_id)
         if scope.principal_id != row['actor_principal_id'] or scope.fingerprint != row['scope_fingerprint']: raise Forbidden('Report run authorization changed')
         if not isinstance(lease_token, str) or not hmac.compare_digest(_digest(lease_token), row['lease_secret_hash']): raise Forbidden('Report publication lease required')
         head = self._row(con, ws, row['trace_id'], row['kind'])

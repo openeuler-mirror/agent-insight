@@ -460,3 +460,19 @@ Settings/SDK key保持私有owner范围，管理员Trace可见权不扩大模型
 显式私有映射继续支持旧凭据与legacy用户名；IAM principalUsername单独保存。Node每次恢复并按来源重验，品牌对象记录origin与User引用，复制对象无效，不靠进程内remember维持重启。Collector snapshot/hooks仍要求write；自动分析仍要求真实同owner actor当前execute、原model_scope及每次job检查。write-only上报不能自升execute，read-only或已撤销/过期/错owner不能充当执行者，管理员Trace权限不扩大个人模型权限。Session GET懒模型恢复仍先验证请求者自身owner/can_execute。
 
 原upload中的generator tag查询已改为已品牌collector下的私有投影，仅当前owner+明确opencodeSessionId，返回agentName/agentTraceSkill/user，不读取Session正文或全部列表。无新增DDL、前端、cookie或模型协议。当前验证限隔离SQLite+内存facts及loopback Mock模型，完整/真实引擎/CH/UI验证集中进行。
+
+## 离线旧库语义导入契约（第一版）
+
+`legacy_import.py` 在已校验的私有原始导出之上提供独立 `plan-legacy-import`、`apply-legacy-import`、`verify-legacy-import`；原 `plan-legacy` 仍为严格只读诊断，不放宽未知列、所有权或资产缺失门禁。固定转换器目录覆盖 96 个旧模型；这表示模型有明确处理入口，不表示任意旧行、所有客户库或生产切换已验收。无新增迁移 DDL，复用 `migration_checkpoints`、`inbox_receipts`、现有私有制品与各领域真实表；当前目录的总表数由正式表字典统计。
+
+三个命令均要求 `--directory`、稳定 `--source-id`、`--bindings-file`、显式隔离目标 `--config`；apply/verify 还要求 `--actors-file` 与 `--migration-id`。源导出、目标配置、主体映射、凭据必须是受信私有文件。命令不寻找默认旧库、不初始化业务服务、不执行生产切换。可用 `--model` 明确选择部分模型，但部分范围永不代表全库迁移完成。用户先通过正式 IAM 建立真实 principal/workspace，再将旧用户名显式映射；null/未知/歧义 owner 使用 `--row-bindings-file` 按稳定实体键映射，不能按名称猜归属。旧 User API key 仅在私有原始制品留档，目标使用明确提供的当前 API 凭据；不会激活旧密码或旧 key。
+
+实体身份是 `source_id + 物理表 + 带类型主键` 的 SHA-256，正文摘要只用于版本/收据。迁移 ID 固定源快照和映射/文件清单；每行领域写入、私有原始行、检查点和成功收据在同一事务提交。CH 未索引时保留 pending 检查点，重试核验实际目标后才完成收据。重放相同内容幂等；同实体内容变化、目标被用户修改、碰撞或证明缺失明确 Conflict，不覆盖目标。verify 检查真实目标字段/修订、私有字节摘要、当前 IAM、关联及可读事实，而非只数导出行。
+
+Trace 使用实际采集领域和事实流水；保留旧 Execution/Session/子 Agent/Thread/Skill origins/手工字段、原日期与业务 ID。原 Session 字符串及 Node JSON 语义保留，只有 Session 的记录不伪造 Execution。评估器、数据集、Skill 版本进入真实 private/public release、alias 和正文/附件制品。`--files-file` 以实体键提供 base64 字节；`--skill-directories-file` 只读取显式提供的目录并捕获实际字节/模式，不把旧路径当正文；缺文件、软链接、不安全路径或 hash/size 不符拒绝。只有没有外部 assetPath 且文件声明为空或仅根 `SKILL.md` 的纯正文版本可以由真实 SQL content 生成该文件。诊断消息相同时间戳不能推断先后，需 `--message-order-file` 按 sessionId 提供完整 message ID 顺序。
+
+历史 running/pending/busy、控制凭据/命令、基础设施来源、实验、Benchmark job、诊断/报告和生成任务必须 inert：原状态/时间保持，历史租约无执行权，不发模型、worker、采集或外部任务。未整合并验证运行门禁时 `HISTORY_FENCE_VERSION=0`，相关行在 plan 中明确阻断；只有集成验收后才能提升门禁版本。历史 DatasetGenerationJob 存在固定私有历史目录而不进入可领取队列；进度/原 receipt 可以读取，显式删除仍按当前 IAM 作用于真实数据集。Usage raw 仅导原始事件和永久去重收据，Daily 直接导原 count/first/last，不由 raw 二次累计。评测写真实 machine receipt/selected result/human annotation，迁移 work phase=migrate 且终态，不伪造有效评估租约。
+
+旧诊断可只读；显式复测须有 verified 导入收据、原 snapshot 字节、仍一致的真实 Trace/Session、实验/结果、数据集/评估器及 Skill 正文基线，并再次通过当前 IAM。核验从当前真实证据重建快照与旧快照逐项比较；缺证据或来源变化 Conflict，不能臆造旧模型证明。通过后冻结当前真实新模型和新资产，创建全新复测实验/RunPlan，保留历史 diagnosis ID/inputHash origin；绝不恢复旧 lease 或修改旧运行。内部 historical 标志由 Node 消费后剥离，不改变原前端 DTO/界面。
+
+本模块开发快检使用全新临时 SQLite 与内存事实，覆盖重放、目标漂移、事务中断恢复、真实领域读回、历史不执行及来源变更拒绝。三库原生、真实 ClickHouse、原界面和完整旧数据迁移演练由整合阶段集中验收；这些检查未完成前，任何输出的 `production_cutover_ready` 均为 false。

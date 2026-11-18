@@ -30,6 +30,20 @@ def main(argv=None):
     export.add_argument('--output',required=True)
     verify=commands.add_parser('verify-export',help='verify export bytes, schema and typed-row hashes')
     verify.add_argument('--directory',required=True)
+    for command in ('plan-legacy-import','apply-legacy-import','verify-legacy-import'):
+        semantic=commands.add_parser(command,help='explicit verified export and target; no service startup or production cutover')
+        semantic.add_argument('--directory',required=True)
+        semantic.add_argument('--source-id',required=True)
+        semantic.add_argument('--bindings-file',required=True)
+        semantic.add_argument('--config',required=True)
+        semantic.add_argument('--actors-file',required=command!='plan-legacy-import')
+        semantic.add_argument('--migration-id',required=command!='plan-legacy-import')
+        semantic.add_argument('--row-bindings-file')
+        semantic.add_argument('--files-file')
+        semantic.add_argument('--skill-directories-file')
+        semantic.add_argument('--message-order-file')
+        semantic.add_argument('--model',action='append',dest='selected_models')
+        semantic.add_argument('--node-binary',default='node')
     migration_plan=commands.add_parser('migration-plan',help='read-only known-prefix migration plan for explicit target')
     migration_plan.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss'])
     migration_plan.add_argument('--database')
@@ -96,6 +110,26 @@ def main(argv=None):
                 max_rows=args.max_rows,max_bytes=args.max_bytes,max_issues=args.max_issues,max_seconds=args.max_seconds)
         elif args.command=='export-legacy':
             result=export_database(args.database,args.output)
+        elif args.command in {'plan-legacy-import','apply-legacy-import','verify-legacy-import'}:
+            from .legacy_import import LegacyImport
+            from .trace_service import runtime_from_config
+            def private_json(value,limit=1024*1024):
+                if value is None:return None
+                path=Path(value)
+                if not path.is_file() or path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_size>limit:
+                    raise LegacyValidationError('Import input must be a private bounded regular JSON file')
+                with path.open() as source:return json.load(source)
+            bindings=private_json(args.bindings_file)
+            actors=private_json(args.actors_file)
+            rows=private_json(args.row_bindings_file)
+            files=private_json(args.files_file,256*1024*1024)
+            directories=private_json(args.skill_directories_file)
+            message_order=private_json(args.message_order_file)
+            runtime,_=runtime_from_config(args.config)
+            tool=LegacyImport(runtime.control,args.directory,source_id=args.source_id,bindings=bindings,actors=actors,
+                row_bindings=rows,files=files,skill_directories=directories,message_order=message_order,selected_models=args.selected_models,
+                ingest=runtime.ingest,facts=runtime.facts,node_binary=args.node_binary)
+            result=tool.plan() if args.command=='plan-legacy-import' else tool.apply(migration_id=args.migration_id) if args.command=='apply-legacy-import' else tool.verify(migration_id=args.migration_id)
         else:
             result=verify_export(args.directory)
         if args.command in {'inspect-legacy','export-legacy','verify-export'}:

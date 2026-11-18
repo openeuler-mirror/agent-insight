@@ -19,8 +19,10 @@ const running=new Set<string>();
 export interface CoreDiagnosisRun {
  id:string;status:string;errorMessage:string|null;createdAt:string;input_hash:string;snapshot:DiagnosisSnapshot;
  source_model_selection?:Record<string,unknown>|null;source_model_selection_consistent?:boolean;source_runplans?:unknown[];
+ historical_inert?:boolean;
  report:AgentDebugReportPayload|null;progress:unknown;execution_id:string;experiment_id:string|null;case_id:string|null;
 }
+function visibleDiagnosis(value:CoreDiagnosisRun){const {historical_inert,...visible}=value;return {...visible,status:visible.status==='queued'?'pending':visible.status};}
 export async function diagnosisCoreRequest<T=CoreDiagnosisRun>(action:string,payload:Record<string,unknown>={},context=requireCoreExperimentContext()):Promise<T>{
  const body=JSON.stringify({...payload,action,operation_key:payload.operation_key||context.operationKey+':diagnosis:'+action});
  if(Buffer.byteLength(body,'utf8')>24*1024*1024)throw Object.assign(new Error('Diagnosis evidence exceeds byte budget'),{status:413});
@@ -56,19 +58,19 @@ export async function submitCoreDiagnosis(snapshot:DiagnosisSnapshot,input:{requ
  const prepared=frozen.get(snapshot);if(!prepared)throw new DiagnosisError('请重新预览并确认诊断输入',409);
  if(input.expectedInputHash!==prepared.inputHash)throw new DiagnosisError('评测或执行已变化，请重新确认输入',409);
  const run=await diagnosisCoreRequest('submit',{...prepared.body,request_key:input.requestKey,expected_input_hash:input.expectedInputHash,force:input.force||false,retry_of_run_id:input.retryOfRunId||null});
- if(['queued','pending','running'].includes(run.status)){await launchCoreDiagnosis(run.id);return readCoreDiagnosis(run.id);}
- return run;
+ if(!run.historical_inert&&['queued','pending','running'].includes(run.status)){await launchCoreDiagnosis(run.id);return readCoreDiagnosis(run.id);}
+ return visibleDiagnosis(run);
 }
 export async function lookupCoreDiagnosisSubmission(experimentId:string,caseId:string,input:{resultIds:string[];requestKey:string;expectedInputHash:string;retryOfRunId?:string}):Promise<CoreDiagnosisRun|null>{
  const receipt=await diagnosisCoreRequest<{found:boolean;result?:CoreDiagnosisRun}>('lookup_submission',{source_kind:'experiment',experiment_id:experimentId,case_id:caseId,result_ids:[...new Set(input.resultIds)].sort(),request_key:input.requestKey,expected_input_hash:input.expectedInputHash,retry_of_run_id:input.retryOfRunId||null});
  if(receipt?.found===false)return null;
  if(receipt?.found!==true||!receipt.result?.id)throw Object.assign(new Error('Diagnosis submission receipt unavailable'),{status:503});
  const run=receipt.result;
- if(['queued','pending','running'].includes(run.status)){await launchCoreDiagnosis(run.id);return readCoreDiagnosis(run.id);}
- return run;
+ if(!run.historical_inert&&['queued','pending','running'].includes(run.status)){await launchCoreDiagnosis(run.id);return readCoreDiagnosis(run.id);}
+ return visibleDiagnosis(run);
 }
-export async function readCoreDiagnosis(id:string){const value=await diagnosisCoreRequest('read',{diagnosis_id:id});return {...value,status:value.status==='queued'?'pending':value.status};}
-export function verifyCoreDiagnosisSource(id:string){return diagnosisCoreRequest<{valid:true}>('verify_source',{diagnosis_id:id});}
+export async function readCoreDiagnosis(id:string){return visibleDiagnosis(await diagnosisCoreRequest('read',{diagnosis_id:id}));}
+export function verifyCoreDiagnosisSource(id:string){return diagnosisCoreRequest<{valid:true;historical_origin?:boolean}>('verify_source',{diagnosis_id:id});}
 export async function listCoreDiagnoses(experimentId:string,caseId:string){const rows=await diagnosisCoreRequest<Array<{id:string;status:string;createdAt:string}>>('list',{experiment_id:experimentId,case_id:caseId,limit:10});return rows.map(row=>({id:row.id,status:row.status==='queued'?'pending':row.status,createdAt:row.createdAt}));}
 export async function freezeCoreTraceReport(executionId:string,generatedAt:string){
  const body={source_kind:'trace-report',execution_id:executionId,generated_at:generatedAt,...await freezeCoreDiagnosisAssets()};

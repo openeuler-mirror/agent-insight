@@ -10,6 +10,7 @@ from .control import Conflict, StorageError
 from .experiments import ExperimentStore, _hash, _iso, _json
 from .iam import IAMStore, Forbidden
 from .trace_evidence import EvidenceTooLarge, EvidenceUnavailable, _size
+from .legacy_history import is_historical_control, assert_control_live
 
 MAX_BYTES=16*1024*1024
 MAX_PROGRESS=1024*1024
@@ -190,6 +191,49 @@ class DiagnosisRuns:
         self.experiments._verify_evidence(con,token,ws,plan['evidence'])
         return current
 
+    def _verify_historical_source(self,token,ws,identity):
+        from .legacy_import_diagnosis import DiagnosisHistory
+        from .platform_controls import PlatformControls
+        import base64
+        if self.evidence is None:raise Conflict('Historical diagnosis requires current Trace evidence')
+        with self.control.read_transaction() as con:
+            row,scope=self._row(con,token,ws,identity,True);self.iam._workspace(scope,ws,'write');plan=self._plan(row)
+            run=con.execute('SELECT status FROM runs WHERE workspace_id=? AND run_id=?',(ws,identity)).fetchone()
+            if not run or run[0]!='done':raise Conflict('Only completed historical diagnoses may seed a new retest')
+            old=DiagnosisHistory.verify_retest_baselines(self.control,con,token,ws,scope.principal_id,plan['legacy_history'],self.evidence.authorized.facts)
+            if old!=plan['snapshot']:raise Conflict('Historical diagnosis snapshot bytes differ from its verified source')
+            catalog=[];controls=PlatformControls(self.control)
+            for skill in old.get('skills',[]):
+                if not isinstance(skill,dict) or not isinstance(skill.get('files'),dict) or type(skill.get('version')) is not int:raise Conflict('Historical diagnosis lacks verifiable Skill bytes')
+                matching=[]
+                for parent in con.execute("SELECT * FROM platform_control_records WHERE workspace_id=? AND owner_principal_id=? AND kind='skill' AND state='active'",(ws,scope.principal_id)):
+                    data=controls._data(dict(parent))
+                    if data.get('name')==skill.get('name'):matching.append(data)
+                if len(matching)!=1:raise Conflict('Historical diagnosis Skill identity is missing or ambiguous')
+                versions=[]
+                for target in con.execute("SELECT * FROM platform_control_records WHERE workspace_id=? AND owner_principal_id=? AND kind='skillVersion' AND state='active'",(ws,scope.principal_id)):
+                    packed=controls._load(target['payload_ref'],target['payload_hash']);data=packed.get('data',{})
+                    if data.get('skillId')==matching[0]['id'] and data.get('version')==skill['version']:
+                        try:files={item['path']:base64.b64decode(item['content'],validate=True).decode('utf-8') for item in packed['files']}
+                        except (ValueError,UnicodeError,KeyError,TypeError):raise Conflict('Historical diagnosis Skill package is not a text snapshot') from None
+                        if files!=skill['files']:raise Conflict('Historical diagnosis Skill bytes differ from migrated assets')
+                        versions.append({'version':skill['version'],'files':files,'contentHash':skill.get('contentHash')})
+                if len(versions)!=1:raise Conflict('Historical diagnosis Skill version is missing or ambiguous')
+                catalog.append({'name':skill['name'],'versions':versions})
+            source=plan['source']|{'result_ids':[result['id'] for result in old.get('results',[])],'frozen_skills':catalog,'model_selection':None}
+        current,preview,_=self._prepare(token,ws,source,trusted=True)
+        def equivalent(actual,expected):
+            if isinstance(expected,dict):return isinstance(actual,dict) and all(key in actual and equivalent(actual[key],value) for key,value in expected.items() if key!='traceHash')
+            if isinstance(expected,list):return isinstance(actual,list) and len(actual)==len(expected) and all(equivalent(a,b) for a,b in zip(actual,expected))
+            return type(actual) is type(expected) and actual==expected if isinstance(expected,bool) else actual==expected
+        if not equivalent(preview['snapshot'],old):raise Conflict('Historical diagnosis evidence or source configuration changed; diagnose the current source again')
+        with self.control.read_transaction() as con:
+            latest,scope=self._row(con,token,ws,identity,True)
+            if latest!=row:raise Conflict('Historical diagnosis changed during verification')
+            DiagnosisHistory.verify_retest_baselines(self.control,con,token,ws,scope.principal_id,plan['legacy_history'],self.evidence.authorized.facts)
+            self.experiments._verify_evidence(con,token,ws,current['evidence'])
+        return {'valid':True,'historical_origin':True,'input_hash':row['input_hash'],'source_fingerprint':preview['source_fingerprint'],'snapshot':old,'source_model_selection_consistent':False,'source_model_selection':None,'source_runplans':[]}
+
     def _plan(self,row):return self._load(row['snapshot_hash'],row['snapshot_ref'])
 
     @staticmethod
@@ -200,6 +244,7 @@ class DiagnosisRuns:
 
     def _active(self,con,token,ws,body,plan=None):
         row,scope=self._row(con,token,ws,body.get('diagnosis_id') or body.get('run_id'),True);fence=self._fence(body.get('fence'))
+        assert_control_live(con,ws,'diagnosisRun',row['diagnosis_id'])
         attempt=con.execute('SELECT a.*,w.run_id,w.etag,w.status AS item_status,w.cancel_requested FROM work_attempts a JOIN work_items w ON w.workspace_id=a.workspace_id AND w.work_item_id=a.work_item_id WHERE a.workspace_id=? AND a.attempt_id=?',(ws,body.get('attempt_id'))).fetchone()
         if not attempt or attempt['run_id']!=row['diagnosis_id'] or attempt['fence']!=self._fence(body.get('fence')) or attempt['worker_id']!=body.get('lease_owner') or attempt['etag']!=fence or attempt['status']!='running' or attempt['item_status']!='running' or attempt['cancel_requested'] or attempt['lease_until_ms']<=self.control.clock():raise Conflict('Diagnosis lease is expired, cancelled or superseded')
         self._verify_tx(con,token,ws,row,plan or self._plan(row));return row,dict(attempt),scope
@@ -220,6 +265,7 @@ class DiagnosisRuns:
 
     @staticmethod
     def _source_models(plan):
+        if plan.get('legacy_history'):return {'source_runplans':[],'source_model_selection':None,'source_model_selection_consistent':False}
         plans=plan.get('plans',[]);models={_json(v['plan'].get('config',{}).get('model_selection')):v['plan'].get('config',{}).get('model_selection') for v in plans}
         descriptors=[{k:p[k] for k in ('run_id','plan_hash','inputs')}|{'model_selection':p['plan'].get('config',{}).get('model_selection')} for p in plans]
         return {'source_runplans':descriptors,'source_model_selection':next(iter(models.values())) if len(models)==1 else None,'source_model_selection_consistent':len(models)<=1}
@@ -227,6 +273,10 @@ class DiagnosisRuns:
     def _view_tx(self,con,row,scope,metadata_only=False,source_routes=None):
         identity=row['diagnosis_id'];ws=row['workspace_id'];run=con.execute('SELECT * FROM runs WHERE workspace_id=? AND run_id=?',(ws,identity)).fetchone()
         value={'id':identity,'diagnosis_id':identity,'run_id':identity,'status':run['status'],'errorMessage':None,'createdAt':_iso(row['created_at_ms']),'completedAt':_iso(run['updated_at_ms']) if run['status'] in {'done','failed','cancelled'} else None,'input_hash':row['input_hash'],'source_fingerprint':row['source_fingerprint'],'generator':row['generator'],'experiment_id':row['experiment_id'],'case_id':row['case_id']}
+        historical = is_historical_control(con,ws,'diagnosisRun',identity)
+        if historical:
+            legacy = self._plan(row)['legacy_history']
+            value.update(historical_inert=True,completedAt=legacy.get('completed_at'))
         if row['actor_principal_id']!=scope.principal_id:return value|{'gold_redacted':True,'snapshot':None,'report':None,'progress':None,'execution_id':None}
         if metadata_only:value.update(metadata_only=True,snapshot=None,report=None,progress=None,execution_id=None)
         else:
@@ -238,7 +288,8 @@ class DiagnosisRuns:
             if receipt:
                 if receipt['state']=='quarantined':raise Conflict('Diagnosis report is quarantined')
                 packet=self._load(receipt['content_hash'],receipt['artifact_ref']);value.update(report=packet.get('report'),errorMessage=packet.get('error_message'))
-        if run['status']=='running':
+        if historical:pass
+        elif run['status']=='running':
             active=con.execute("SELECT lease_until_ms FROM work_attempts a JOIN work_items w ON w.workspace_id=a.workspace_id AND w.work_item_id=a.work_item_id WHERE w.workspace_id=? AND w.run_id=? AND a.status='running' ORDER BY attempt_no DESC LIMIT 1",(ws,identity)).fetchone()
             if active and active['lease_until_ms']<=self.control.clock():value.update(status='failed',errorMessage='后台任务已中断，请重新诊断。')
         elif run['status']=='queued' and row['created_at_ms']+90000<self.control.clock():value.update(status='failed',errorMessage='后台任务未启动，请重新诊断。')
@@ -328,13 +379,17 @@ class DiagnosisRuns:
             return [self._read(token,ws,i,metadata_only=True) for i in ids]
         if action=='verify_source':
             with self.control.read_transaction() as con:
-                row,_=self._row(con,token,ws,identity,True);plan=self._plan(row);self._verify_tx(con,token,ws,row,plan)
+                historical=is_historical_control(con,ws,'diagnosisRun',identity)
+            if historical:return self._verify_historical_source(token,ws,identity)
+            with self.control.read_transaction() as con:
+                row,_=self._row(con,token,ws,identity,True);assert_control_live(con,ws,'diagnosisRun',identity);plan=self._plan(row);self._verify_tx(con,token,ws,row,plan)
             current,preview,_=self._prepare(token,ws,plan['source']|plan['config']|{'generator':plan['generator']},trusted=True)
             if preview['source_fingerprint']!=row['source_fingerprint'] or preview['input_hash']!=row['input_hash']:raise Conflict('Diagnosis source changed')
             return {'valid':True,'input_hash':row['input_hash'],'source_fingerprint':row['source_fingerprint'],'snapshot':plan['snapshot'],**self._source_models(plan)}
         if action not in {'claim','load_work','renew','complete','fail','cancel'}:raise ValueError('Unsupported DiagnosisRun action')
         with self.control.transaction() as con:
             row,scope=self._row(con,token,ws,identity,True);self.iam._workspace(scope,ws,'write');plan=self._plan(row)
+            assert_control_live(con,ws,'diagnosisRun',identity)
             if action!='cancel':self.iam._workspace(scope,ws,'execute')
             if action=='claim':
                 self._verify_tx(con,token,ws,row,plan);worker=identifier(body.get('worker_id'));lease=self.experiments._lease(body);now=self.control.clock()
@@ -367,6 +422,7 @@ class DiagnosisRuns:
 
     def _terminal_tx(self,con,row,scope,attempt,key,digest,ref,packet):
         ws=row['workspace_id'];identity=row['diagnosis_id'];state=packet['status']
+        assert_control_live(con,ws,'diagnosisRun',identity)
         now=self.control.clock();result_id=str(uuid.uuid4());receipt_id=str(uuid.uuid4())
         con.execute('INSERT INTO result_receipts(workspace_id,run_id,work_item_id,case_key,evaluator_slot,receipt_id,attempt_id,receipt_key,result_id,content_hash,artifact_ref,created_at_ms) SELECT workspace_id,run_id,work_item_id,case_key,evaluator_slot,?,?,?,?,?,?,? FROM work_items WHERE workspace_id=? AND work_item_id=?',(receipt_id,attempt['attempt_id'],key,result_id,digest,ref,now,ws,attempt['work_item_id']))
         case=con.execute('SELECT case_key FROM work_items WHERE workspace_id=? AND work_item_id=?',(ws,attempt['work_item_id'])).fetchone()[0]

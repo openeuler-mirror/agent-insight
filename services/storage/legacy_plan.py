@@ -24,7 +24,7 @@ def _finish(report, issue_counts):
     accounting['observed_source_rows']=sum(table['row_count'] for table in report['tables'])
     accounting['unscanned_observed_rows']=accounting['observed_source_rows']-accounting['scanned_rows']
     if not report['scan_complete']:report['source_content_sha256']=None
-    report['blocking_reasons']=['semantic_transformers_not_implemented']
+    report['blocking_reasons']=['needs_explicit_verified_export_import_plan']
     if report['issue_count']:report['blocking_reasons'].append('source_diagnostics_require_resolution')
     if not report['scan_complete']:report['blocking_reasons'].append('diagnostics_incomplete')
     report['issue_counts']=dict(sorted(issue_counts.items()))
@@ -95,7 +95,7 @@ def plan_database(path, *, source_id, bindings=None, max_rows=100000,
         'tables': [], 'dependencies': [],
         'row_accounting': {'scanned_rows': 0, 'limited_trace_candidate': 0,
                            'pending_conversion': 0, 'raw_retained': 0},
-        'coverage': {'semantic_import': 'not_implemented',
+        'coverage': {'semantic_import': 'use_plan-legacy-import_with_verified_export_and_explicit_target',
                      'trace_import': 'Session/Execution allowlist only; candidates are not import approval',
                      'raw_retention': 'source retained; plan does not export or copy rows',
                      'json': 'private pending transformation; no historical reconstruction',
