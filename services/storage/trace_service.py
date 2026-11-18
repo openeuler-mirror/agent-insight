@@ -500,7 +500,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 value,error=self.body(max_bytes=128*1024*1024)
                 if error:self.reply(error,{'error':'Bounded Benchmark JSON required'});return
                 action=value.get('action');verified=False
-                if action in {'dataset_import','create','start','checkpoint','dispatch_checkpoint','evaluation_prepare','retry_case','retry_evaluation','continuation_finish','load_work','load_dispatch','resume_work','claim_intents','finish_intent','classify_failure','import_submissions','prepare_evaluation_retry','prepare_case_retry','cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm'}:
+                if action in {'dataset_import','create','start','checkpoint','dispatch_checkpoint','evaluation_prepare','retry_case','retry_evaluation','continuation_finish','load_work','load_dispatch','resume_work','claim_intents','finish_intent','classify_failure','import_submissions','prepare_evaluation_retry','prepare_case_retry','cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm','cancel_control'}:
                     principal=runtime.iam.scope(token).principal_id
                     verified=verify_controller_proof(runtime.controller_key_file,'experiment-frozen-assets/v1',principal,workspace,self.request_body_hash,self.headers.get('x-storage-controller-proof'))
                     if not verified:raise Forbidden('Private Benchmark definition attestation required')

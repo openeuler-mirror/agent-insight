@@ -92,7 +92,7 @@ class BenchmarkStore:
 
     def dispatch(self,action,token,workspace_id,body=None):
         ws=identifier(workspace_id);body=copy.deepcopy(body or {});_bounded(body)
-        if action in {'cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm'}:
+        if action in {'cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm','cancel_control'}:
             from .benchmark_cancellation import dispatch
             return dispatch(self,action,token,ws,body)
         if action=='lookup_operation':

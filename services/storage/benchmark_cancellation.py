@@ -1,6 +1,7 @@
 """Finite Benchmark cancellation and cleanup authority; never reads evaluation work DTOs."""
 import copy
 import json
+import math
 import re
 import uuid
 from .contracts import identifier
@@ -10,7 +11,7 @@ from .experiments import _hash,_json,_iso
 
 class CancellationNotFound(StorageError):status=404
 
-ACTIONS=frozenset({'cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm'})
+ACTIONS=frozenset({'cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm','cancel_control'})
 
 def _head(store,con,scope,ws,exp,ordinary_cap='delete'):
     row=con.execute('SELECT * FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,exp)).fetchone()
@@ -118,6 +119,41 @@ def _pending(store,con,scope,ws,body):
         values.append(value);size+=weight
     return values
 
+
+def _control(store,con,scope,ws,head,current,body):
+    from .platform_controls import PlatformControls
+    from .legacy_history import assert_control_live
+    allowed={'action','cancellation_id','experiment_id','target_id','operation','command_id','ttl_ms','operation_key','operation_request'}
+    if set(body)-allowed or body.get('operation') not in {'lookup','create','sent'}:raise ValueError('Fixed cancellation control operation required')
+    owner=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='run' AND resource_id=?",(ws,head['experiment_id'])).fetchone()
+    if not owner or owner[0]!=scope.principal_id:raise Forbidden('Cancellation command requires actual owner')
+    grant=store.iam._workspace(scope,ws,'delete');assert_control_live(con,ws,'experiment',head['experiment_id'])
+    target=next((value for value in json.loads(current['targetsJson']) if value['jobId']==body.get('target_id')),None)
+    if not target or target['kind']!='benchmark' or target.get('confirmed') or current['status']!='pending':raise Conflict('Pending frozen client cancellation required')
+    job=con.execute('SELECT * FROM benchmark_jobs WHERE workspace_id=? AND job_id=?',(ws,target['jobId'])).fetchone()
+    if not job or job['experiment_id']!=head['experiment_id'] or job['request_hash']!=target['requestHash']:raise Conflict('Cancellation command source changed')
+    controls=PlatformControls(store.control);controls.live_only=True
+    clients=controls._read(con,scope,grant,ws,{'kind':'reliabilityClient','metadata':{'clientId':target['clientId']},'body':True},True,owner_only=True)['rows']
+    if len(clients)!=1 or clients[0]['data'].get('unboundAt') or clients[0]['data'].get('user')!=target['legacyOwner']:raise Conflict('Frozen cancellation client unavailable')
+    command_id=target.get('commandId')
+    if body.get('command_id') is not None and body['command_id']!=command_id:raise Conflict('Cancellation command binding changed')
+    commands=controls._read(con,scope,grant,ws,{'kind':'reliabilityCommand','metadata':{'commandId':command_id},'body':True},True,owner_only=True)['rows'] if command_id else []
+    if len(commands)>1:raise Conflict('Cancellation command identity is ambiguous')
+    old=commands[0] if commands else None;command=old['data'] if old else None
+    payload={'kind':'benchmark','runId':target['runId'],'requestDigest':target['requestDigest']}
+    if command and (command.get('clientId')!=target['clientId'] or command.get('user')!=target['legacyOwner'] or command.get('action')!='CANCEL_EXPERIMENT_RUN' or json.loads(command.get('payloadJson') or '{}')!=payload):raise Conflict('Cancellation command provenance differs')
+    operation=body['operation'];touched=set()
+    if operation=='create' and not command:
+        ttl=body.get('ttl_ms',30000);now=store.control.clock()
+        if not command_id or type(ttl) not in (int,float) or not math.isfinite(ttl) or ttl<5000 or ttl+now>9007199254740991:raise ValueError('Bound cancellation command TTL required')
+        command=controls._put(con,scope,grant,ws,target['legacyOwner'],{'kind':'reliabilityCommand','method':'create','data':{'commandId':command_id,'clientId':target['clientId'],'user':target['legacyOwner'],'action':'CANCEL_EXPERIMENT_RUN','payloadJson':json.dumps(payload,ensure_ascii=False,separators=(',',':')),'status':'CREATED','createdAt':_iso(now),'expiresAt':_iso(now+ttl)}},touched)
+    elif operation=='sent':
+        if not command:raise Conflict('Cancellation command is not persisted')
+        if command['status']=='CREATED':command=controls._put(con,scope,grant,ws,target['legacyOwner'],{'kind':'reliabilityCommand','method':'update','record_id':old['record_id'],'expected_revision':old['revision'],'data':{'status':'SENT','sentAt':_iso(store.control.clock()),'channel':'wss'}},touched)
+    for kind in touched:controls._bump_scope(con,ws,scope.principal_id,target['legacyOwner'],kind)
+    if touched:controls._bump_scope(con,ws,scope.principal_id,target['legacyOwner'])
+    return {'command':command}
+
 def dispatch(store,action,token,ws,body):
     store._trusted(token,ws,body)
     with store.control.transaction() as con:
@@ -129,6 +165,7 @@ def dispatch(store,action,token,ws,body):
             if action not in {'cancel_request','cancel_load'}:raise Conflict('Benchmark cleanup action requires its Benchmark cancellation')
             return {'handled':False}
         if action=='cancel_load':return {'handled':True,'experiment_deleted':head['state']=='deleted','cancellation':current,'targets':json.loads(current['targetsJson'])}
+        if action=='cancel_control':return _control(store,con,scope,ws,head,current,body)
         key,digest,old=store._receipt(con,scope,ws,action,body)
         if old:
             value=store._load(old['response_hash'],old['response_ref'])

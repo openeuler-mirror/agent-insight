@@ -40,7 +40,9 @@ class FaultInjection:
         return scope,grant,username
 
     def _rows(self,con,scope,grant,ws,kind,metadata=None):
-        return self.records._read(con,scope,grant,ws,{'kind':kind,'body':True,'metadata':metadata or {}},True,owner_only=True)['rows']
+        if kind not in {TASK,RUN,WORKER}:raise ValueError('Fixed FI control kind required')
+        reader=PlatformControls(self.control);reader.live_only=getattr(self.records,'live_only',False)
+        return reader._read(con,scope,grant,ws,{'kind':kind,'body':True,'metadata':metadata or {}},True,owner_only=True)['rows']
 
     def _find(self,con,scope,grant,ws,kind,key):
         field={TASK:'taskKey',RUN:'runId',WORKER:'workerId'}[kind]

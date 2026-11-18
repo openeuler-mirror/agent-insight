@@ -476,3 +476,8 @@ Trace 使用实际采集领域和事实流水；保留旧 Execution/Session/子 
 旧诊断可只读；显式复测须有 verified 导入收据、原 snapshot 字节、仍一致的真实 Trace/Session、实验/结果、数据集/评估器及 Skill 正文基线，并再次通过当前 IAM。核验从当前真实证据重建快照与旧快照逐项比较；缺证据或来源变化 Conflict，不能臆造旧模型证明。通过后冻结当前真实新模型和新资产，创建全新复测实验/RunPlan，保留历史 diagnosis ID/inputHash origin；绝不恢复旧 lease 或修改旧运行。内部 historical 标志由 Node 消费后剥离，不改变原前端 DTO/界面。
 
 本模块开发快检使用全新临时 SQLite 与内存事实，覆盖重放、目标漂移、事务中断恢复、真实领域读回、历史不执行及来源变更拒绝。三库原生、真实 ClickHouse、原界面和完整旧数据迁移演练由整合阶段集中验收；这些检查未完成前，任何输出的 `production_cutover_ready` 均为 false。
+
+
+控制请求嵌套在已验证请求内时，未显式传入 transport 才继承当前范围的 pinned options；每次仍重新校验实际凭据、workspace 和能力。后台主体解析保留匹配来源的401/503，未知用户名不受其他owner的失败状态影响；私有目录的failure_owners只包含来源标签及状态，不返回失效key。Trace草稿入口在读取证据前把鉴权失败转换为原公开401/403响应。
+
+设备FI使用独立的固定TASK/RUN/WORKER owner投影；其前置dc校验、clientId绑定与历史inert过滤保留，不扩展通用设备可读kind。Benchmark取消指令通过既有私有Benchmark接口的cancel_control操作处理，仅接受当前pending取消记录中的冻结client目标；实际owner和当前delete、任务request hash、确切已绑定commandId、设备未解绑及历史marker逐次校验。仅可lookup/create/sent该CANCEL_EXPERIMENT_RUN指令，原TTL、重试与迟到回调fence保留；delete-only不获得普通read/write能力。

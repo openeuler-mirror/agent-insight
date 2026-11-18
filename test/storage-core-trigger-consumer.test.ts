@@ -1,8 +1,11 @@
+import {writeFileSync} from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
+process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(database.home,'controller');writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'a'.repeat(64),{mode:0o600});
 import {prismaRaw as prisma} from '@/lib/storage/prisma';
 import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import {GET as getPoints} from '@/app/api/skills/by-name/[name]/optimization-points/route';
@@ -10,16 +13,18 @@ import {GET as getEvaluation} from '@/app/api/evaluation/[id]/route';
 test.after(async()=>{await prisma.$disconnect();database.dispose();});
 
 test('original optimization HTTP reads actual aggregate receipts, resolves history, and keeps legitimate static/feedback separate',async()=>{
- const conversion="console.log=(...args)=>console.error(...args);const fs=require('node:fs');const {buildCoreTriggerDerived}=require('./src/lib/storage-core/trigger-derived.ts');const input=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(buildCoreTriggerDerived(input.work,input.manifest,input.report)));";
+ const conversion="console.log=(...args)=>console.error(...args);const {buildCoreTriggerDerived}=require('./src/lib/storage-core/trigger-derived.ts');require('node:readline').createInterface({input:process.stdin,crlfDelay:Infinity}).on('line',line=>{const input=JSON.parse(line);process.stdout.write(JSON.stringify(buildCoreTriggerDerived(input.work,input.manifest,input.report))+String.fromCharCode(10));});";
  const script=`import json,subprocess
 from services.storage.tests.test_trigger_derived import TriggerDerivedTests
 x=TriggerDerivedTests();x.setUp()
 try:
  stages=[]
+ converter=subprocess.Popen([${JSON.stringify(process.execPath)},'--import','tsx','-e',${JSON.stringify(conversion)}],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
  for key,hit,competitor in [('miss',False,False),('clean',True,False),('competing',True,True)]:
   value,handle,result,_=x.prepared(key,hit=hit,competitor=competitor)
   work=x.invoke('load_work',**handle)
-  derived=json.loads(subprocess.check_output([${JSON.stringify(process.execPath)},'--import','tsx','-e',${JSON.stringify(conversion)}],input=json.dumps({'work':work,'manifest':work['runplan']['config']['core_trigger'],'report':result['evidence']['json']['coreTriggerResult']}).encode()))
+  converter.stdin.write(json.dumps({'work':work,'manifest':work['runplan']['config']['core_trigger'],'report':result['evidence']['json']['coreTriggerResult']})+chr(10));converter.stdin.flush()
+  derived=json.loads(converter.stdout.readline())
   result['evidence']['json']['coreTriggerDerived']=derived
   x.complete(handle,result,key+':complete')
   issues=x.invoke('derived_list',kind='issue',skill_id='skill-a',owned_only=True)
@@ -27,7 +32,9 @@ try:
   stages.append({'issues':issues,'evaluations':evaluations,'frontier':x.invoke('derived_trigger_frontier',skill_id='skill-a'),'details':{row['id']:x.invoke('derived_detail',id=row['id']) for row in evaluations},'run':value['run']['id']})
   x.now+=10
  print(json.dumps(stages))
-finally:x.doCleanups()
+finally:
+ if 'converter' in locals():converter.terminate();converter.wait()
+ x.doCleanups()
 `;
  const stages=JSON.parse(execFileSync(process.env.PYTHON||'python3',['-c',script],{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024}));
  await prisma.skill.create({data:{id:'skill-a',name:'checking',user:'legacy-alice',versions:{create:{version:0,content:'LATEST CONTENT MUST NOT REPLACE TESTED DESCRIPTION'}}}});
@@ -36,6 +43,7 @@ finally:x.doCleanups()
  const fetcher:typeof fetch=async(url,options)=>{
   if(new URL(String(url)).pathname==='/v1/auth/me')return Response.json({principal_id:'alice',username:'legacy-alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]});
   const body=JSON.parse(String(options?.body)),current=stages[stage];
+  if(new URL(String(url)).pathname==='/v1/compat/platform-control'&&body.action==='scope')return Response.json({value:{authorized:true}});
   if(body.action==='derived_list')return Response.json({value:body.kind==='issue'?current.issues:current.evaluations});
   if(body.action==='derived_lookup')return Response.json({value:current.evaluations.find((row:{id:string})=>row.id===body.id)});
   if(body.action==='derived_trigger_frontier')return Response.json({value:current.frontier});

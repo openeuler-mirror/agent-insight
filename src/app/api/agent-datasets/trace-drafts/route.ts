@@ -29,7 +29,7 @@ import { readCoreBytes } from '@/lib/storage-core/server';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
-  if (isStorageCoreEnabled()) return getCoreControlContext()?coreDraft(request):withCoreControlRequest(request,()=>coreDraft(request));
+  if (isStorageCoreEnabled()) {try{return await (getCoreControlContext()?coreDraft(request):withCoreControlRequest(request,()=>coreDraft(request)));}catch(error){return compatibilityFailure(error);}}
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();

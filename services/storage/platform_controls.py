@@ -466,13 +466,14 @@ class PlatformControls:
             if action!='background_actors' or set(body)-{'action','capability'}:raise ValueError('Fixed background enumeration required')
             rows=con.execute("SELECT * FROM platform_control_records WHERE kind='user' AND state='active' ORDER BY workspace_id,owner_principal_id,record_id LIMIT 1001").fetchall()
             if len(rows)>1000:raise StorageError('Background user enumeration exceeds budget')
-            actors=[];failures=[]
+            actors=[];failures=[];failure_owners=[]
             for row in rows:
-                try:actors.append(self._background_actor(con,row,capability))
-                except Unauthorized:failures.append(401)
-                except (Forbidden,ValueError):failures.append(403)
-                except StorageError:failures.append(503)
-            return {'actors':actors,'failures':failures}
+                try:actors.append(self._background_actor(con,row,capability));continue
+                except Unauthorized:status=401
+                except (Forbidden,ValueError):status=403
+                except StorageError:status=503
+                failures.append(status);failure_owners.append({'username':row['legacy_username'],'principal':row['owner_principal_id'],'workspace':row['workspace_id'],'status':status})
+            return {'actors':actors,'failures':failures,'failure_owners':failure_owners}
 
     def bootstrap_login(self,body):
         from .iam import _login_name, ROLE_CAPABILITIES

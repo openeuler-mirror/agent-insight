@@ -1,8 +1,11 @@
+import {writeFileSync} from 'node:fs';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
+process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(database.home,'controller');writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'a'.repeat(64),{mode:0o600});
 import {prismaRaw as prisma} from '@/lib/storage/prisma';
 import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import {GET as getPoints} from '@/app/api/skills/by-name/[name]/optimization-points/route';
@@ -60,7 +63,7 @@ finally:x.doCleanups()
  const calls:string[]=[];const fetcher:typeof fetch=async(url,options)=>{
   const path=new URL(String(url)).pathname;
   if(path==='/v1/auth/me')return Response.json({principal_id:'alice',username:'alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]});
-  assert.equal(path,'/v1/compat/experiments');const body=JSON.parse(String(options?.body));calls.push(body.action);
+  const body=JSON.parse(String(options?.body));if(path==='/v1/compat/platform-control'&&body.action==='scope')return Response.json({value:{authorized:true}});assert.equal(path,'/v1/compat/experiments');calls.push(body.action);
   if(body.action==='derived_list'){assert.equal(body.owned_only,true);return Response.json({value:actual.issues});}
   if(body.action==='derived_lookup')return Response.json({value:actual.evaluations.find((row:{id:string})=>row.id===body.id)});
   if(body.action==='derived_detail')return body.id===actual.evaluations[0].id?Response.json({value:actual.detail}):Response.json({error:'not found'},{status:404});
@@ -68,7 +71,8 @@ finally:x.doCleanups()
  };
  const headers={authorization:'Bearer api_'+'T'.repeat(43),'content-type':'application/json'};
  try{
-  const prepared=await prepareCoreExperimentStart({actor:{username:'alice'},operationKey:'public-scope',rpc:async()=>({revision:'1',experiment:{id:'public-exp',skillName:'public-checking',skillVersion:1,preset:'use-case',scope:'skill-workbench',configSnapshotJson:JSON.stringify({coreAssets:{evaluators:{judge:{card:{id:'judge'}}},releases:{}}})}})} as unknown as CoreExperimentContext,'public-exp');
+  const {withCoreControlRequest}=await import('@/lib/storage-core/control-context');
+  const prepared=await withCoreControlRequest(new Request('http://localhost/prepare',{headers}),()=>prepareCoreExperimentStart({actor:{username:'alice'},operationKey:'public-scope',rpc:async()=>({revision:'1',experiment:{id:'public-exp',skillName:'public-checking',skillVersion:1,preset:'use-case',scope:'skill-workbench',configSnapshotJson:JSON.stringify({coreAssets:{evaluators:{judge:{card:{id:'judge'}}},releases:{}}})}})} as unknown as CoreExperimentContext,'public-exp'),{fetcher});
   const publicScope=prepared.payload.config as Record<string,unknown>;assert.equal(publicScope.derived_public_business_skill_id,'public-skill');assert.deepEqual(publicScope.derived_skill_ids,['public-skill']);await validateControllerSkillScope('alice',publicScope);
   const points=await withCoreWorkbenchRoute(new Request('http://localhost/api/skills/by-name/checking/optimization-points?version=1&user=forged',{headers}),input=>getPoints(input,{params:Promise.resolve({name:'checking'})}),{fetcher});
   assert.equal(points.status,200,await points.clone().text());const dto=await points.json();assert.equal(dto.issues.length,5);assert.equal(dto.issues.some((row:{id:string})=>row.id==='old-shadow'),false);assert.equal(dto.stats.bySource.dynamic,4);assert.equal(dto.stats.bySource.static,1);

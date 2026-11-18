@@ -11,8 +11,8 @@ const LIMIT=128*1024*1024;
 const viewKey=Symbol.for('agent-insight.storage-core.benchmark-read-view');
 const globalViews=globalThis as unknown as Record<symbol,AsyncLocalStorage<PrismaClient>>;
 const views=globalViews[viewKey] ||= new AsyncLocalStorage<PrismaClient>();
-const trusted=new Set(['cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm','prepare_case_retry','prepare_evaluation_retry','import_submissions','classify_failure','claim_intents','finish_intent','resume_work','load_work','load_dispatch','dataset_import','create','start','checkpoint','dispatch_checkpoint','evaluation_prepare','retry_case','retry_evaluation','continuation_finish']);
-const reads=new Set(['cancel_load','prepare_case_retry','prepare_evaluation_retry','lookup_operation','dataset_read','dataset_load','dataset_list','read','read_view','list_jobs','load_work','load_dispatch','resume_work','artifact_read','artifact_lookup']);
+const trusted=new Set(['cancel_request','cancel_load','cancel_dispatch_bind','cleanup_confirm','cancel_control','prepare_case_retry','prepare_evaluation_retry','import_submissions','classify_failure','claim_intents','finish_intent','resume_work','load_work','load_dispatch','dataset_import','create','start','checkpoint','dispatch_checkpoint','evaluation_prepare','retry_case','retry_evaluation','continuation_finish']);
+const reads=new Set(['cancel_control','cancel_load','prepare_case_retry','prepare_evaluation_retry','lookup_operation','dataset_read','dataset_load','dataset_list','read','read_view','list_jobs','load_work','load_dispatch','resume_work','artifact_read','artifact_lookup']);
 export const usesCoreBenchmark=()=>isStorageCoreEnabled()||!!getCoreExperimentContext()||!!getCoreDatasetContext()||!!views.getStore();
 export const benchmarkCoreContext=()=>getCoreExperimentContext()||getCoreDatasetContext()||requireCoreExperimentContext();
 export async function benchmarkCoreRpc<T=unknown>(action:string,payload:Record<string,unknown>={}):Promise<T>{

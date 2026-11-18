@@ -16,6 +16,7 @@ export function runWithCoreControlActor<T>(actor:CoreControlActor,options:Compat
  return contexts.run({actor:Object.freeze({...actor}),options:Object.freeze({...options}),origin,access,...(capabilities?{capabilities}:{})},action);
 }
 export async function withCoreControlRequest<T>(request:Request,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
+ if(!options.fetcher&&!options.resolveIdentity&&getCoreControlContext())options=requireCoreControlContext().options;
  const origin=coreServiceOrigin(),transport=options.fetcher||fetch;
  const pinned:CompatibilityOptions={...options,fetcher:async(input,init)=>{if(coreServiceOrigin()!==origin||new URL(input instanceof Request?input.url:String(input)).origin!==origin)throw failure(503,'Control storage origin changed');const result=await transport(input,init);if(coreServiceOrigin()!==origin){void result.body?.cancel();throw failure(503,'Control storage origin changed');}return result;}};
  const actor=await compatibilityContext(request,pinned);if(!actor.username)throw failure(403,'Verified control owner required');

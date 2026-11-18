@@ -546,3 +546,8 @@ Node每次重新读持久User与显式映射，不缓存首次用户。私有映
 导入要求受信私有导出、显式隔离目标和旧 owner→真实 IAM principal/workspace 映射；未知/null owner、缺资产字节与歧义消息顺序必须显式补齐。历史活动状态保存但不产生认证、lease、worker 或外部执行权；集成运行门禁未验收时保持历史 fence=0。原状态通过只读投影呈现，内部 history 标志不进入原前端 DTO。Usage raw 不重计已导入 Daily，评测历史使用 migrate-phase 终态收据。
 
 旧诊断显式复测先核验 verified 原始收据、旧 snapshot 和仍一致的 Trace/资产/实验结果基线；通过后冻结当前新模型/新资产创建全新运行并保留历史 origin。证据不足或来源变更明确 Conflict，不证明旧模型配置、不恢复旧 lease。完整命令、文件与恢复契约见 [旧库迁移设计](./legacy-migration-design.md#离线旧库语义导入契约第一版)。三库/真实 ClickHouse/原界面/完整迁移演练在整合阶段集中验收，未验收不声明生产可切换。
+
+
+控制请求嵌套在已验证请求内时，未显式传入 transport 才继承当前范围的 pinned options；每次仍重新校验实际凭据、workspace 和能力。后台主体解析保留匹配来源的401/503，未知用户名不受其他owner的失败状态影响；私有目录的failure_owners只包含来源标签及状态，不返回失效key。Trace草稿入口在读取证据前把鉴权失败转换为原公开401/403响应。
+
+设备FI使用独立的固定TASK/RUN/WORKER owner投影；其前置dc校验、clientId绑定与历史inert过滤保留，不扩展通用设备可读kind。Benchmark取消指令通过既有私有Benchmark接口的cancel_control操作处理，仅接受当前pending取消记录中的冻结client目标；实际owner和当前delete、任务request hash、确切已绑定commandId、设备未解绑及历史marker逐次校验。仅可lookup/create/sent该CANCEL_EXPERIMENT_RUN指令，原TTL、重试与迟到回调fence保留；delete-only不获得普通read/write能力。
