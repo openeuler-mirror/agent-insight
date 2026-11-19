@@ -55,6 +55,14 @@ Model-dependent steps call user-configured external services. No AI model is emb
   <img src="docs/images/architecture.en.png" alt="Agent Insight architecture" />
 </p>
 
+### Agent Insight in the openJiuwen Architecture
+
+Agent Insight provides observability, evaluation, diagnosis, and optimization in openJiuwen. Its position is highlighted in the lower right of the architecture diagram.
+
+<p align="center">
+  <img src="docs/images/openjiuwen-architecture.png" alt="openJiuwen architecture with Agent Insight highlighted in the lower right" />
+</p>
+
 ## Supported Platforms
 
 | Agent platform | Collection method |
