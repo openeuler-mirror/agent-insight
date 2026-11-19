@@ -52,7 +52,7 @@ The platform has three main parts:
 Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
 <p align="center">
-  <img src="docs/images/architecture.png" alt="Agent Insight architecture" />
+  <img src="docs/images/architecture.en.png" alt="Agent Insight architecture" />
 </p>
 
 ## Supported Platforms
