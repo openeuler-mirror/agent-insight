@@ -586,6 +586,7 @@
     "test/model-connection-headers.test.ts",
     "test/model-connection-timeout.test.ts",
     "test/model-protocol.test.ts",
+    "test/model-registry-anthropic-inline.test.ts",
     "test/next-build-tsconfig.test.ts",
     "test/next-source-root.test.ts",
     "test/npm-prisma-client-sync.test.ts",
