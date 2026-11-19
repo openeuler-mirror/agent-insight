@@ -130,6 +130,19 @@ test('decode failures that previously returned silently now report 400/415 with 
   assert.equal(failures[0].contentEncoding, 'gzip');
 });
 
+test('OTLP traces accept gzip JSON and reject an invalid gzip stream', async t => {
+  setup(t);
+  t.mock.method(db, 'findUserByApiKey', async () => ({ username: 'fixture' }));
+  const headers = { 'content-encoding': 'GZip', 'x-witty-api-key': 'never-log-key' };
+  const accepted = await POST(request(headers, new Uint8Array(gzipSync(JSON.stringify(body)))));
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).persisted, 1);
+
+  const invalid = await POST(request(headers));
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: 'Invalid OTLP traces gzip payload' });
+});
+
 test('authentication rejection and filesystem failure preserve response behavior while locating the failed stage', async t => {
   const f = setup(t);
   const lookup = t.mock.method(db, 'findUserByApiKey', async () => null);

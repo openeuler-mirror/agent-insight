@@ -18,7 +18,8 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import test, { after } from "node:test"
+import { gzipSync } from "node:zlib"
 
 import otlpRoot from "@opentelemetry/otlp-transformer/build/src/generated/root"
 import { isolateTestDatabase } from "./helpers/isolated-test-db"
@@ -29,6 +30,8 @@ import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 import { decodeOtlpProtobufBody, decodeOtlpRequestWithRaw } from "@/lib/ingest/otel/decode"
 import { listOtelTraceSpoolFiles } from "@/lib/ingest/otel/spool"
 import { prismaRaw } from "@/lib/storage/prisma"
+
+after(() => prismaRaw.$disconnect())
 
 const traceRequestType = (otlpRoot as any).opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 
@@ -285,7 +288,7 @@ test("OTLP traces route rejects a mixed batch with an invalid API key without wr
   }
 })
 
-test("Langfuse public OTLP traces route accepts protobuf with matching username and API key", async () => {
+test("Langfuse public OTLP traces route accepts gzip protobuf with matching username and API key", async () => {
   const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "langfuse-proto-route-"))
   process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
@@ -303,11 +306,12 @@ test("Langfuse public OTLP traces route accepts protobuf with matching username 
       method: "POST",
       headers: {
         "content-type": "application/x-protobuf",
+        "content-encoding": "gzip",
         "authorization": `Basic ${Buffer.from(`${username}:${apiKey}`).toString("base64")}`,
         "x-langfuse-sdk-name": "python",
         "x-langfuse-public-key": username,
       },
-      body: encodeTraceRequest(buildLangfuseTraceRequest()) as BodyInit,
+      body: new Uint8Array(gzipSync(encodeTraceRequest(buildLangfuseTraceRequest()))),
     })
 
     const res = await postLangfusePublicTraces(req)
