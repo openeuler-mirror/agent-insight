@@ -122,6 +122,7 @@
     "test/opencode-plugin-distribution.test.ts",
     "test/opencode-plugin-heartbeat.test.ts",
     "test/opencode-plugin-runtime.test.ts",
+    "test/opencode-task-query.test.ts",
     "test/opencode-telemetry-index.test.ts",
     "test/opencode-uploader-concurrency.test.ts",
     "test/opencode-uploader-grouping.test.ts",

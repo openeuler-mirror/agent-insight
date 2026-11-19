@@ -6,6 +6,8 @@
 
 The trace list supports filtering by agent, framework, user tags, and keywords. Click a row to open the trace detail; browser back returns to the list with the previous filters and page preserved. After a successful import, the same back/forward behavior applies to the imported trace's detail page.
 
+OpenCode and DeepSeek Harness task content may show `OpenCode Session <session ID>` or `DeepSeek Harness Session <session ID>` before the main session's user message is available. When saved session data includes user text, the platform replaces the placeholder with the first non-empty user message.
+
 ## Batch importing traces
 
 Use **Import Trace** in the top-right corner of the trace list. You can select multiple JSON files exported from Agent Insight, or drag and drop them onto the import window. Limits: 50 MB and 500 execution nodes per file.
