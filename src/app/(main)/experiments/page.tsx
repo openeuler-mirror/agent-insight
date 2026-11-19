@@ -38,6 +38,7 @@ interface ExperimentRow {
   name: string;
   type: string;
   agentName: string;
+  agentLabel?: string;
   status: string;
   scope?: string;
   submissionSource?: string;
@@ -247,7 +248,7 @@ export default function ExperimentsPage() {
                         />}
                       </span>
                     </td>
-                    <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentName || '—'}</td>
+                    <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentLabel || r.agentName || '—'}</td>
                     <td style={TD}><TypeChip scope={r.scope} /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>

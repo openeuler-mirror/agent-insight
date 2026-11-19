@@ -56,6 +56,82 @@ function postReq(body: unknown): Request {
   });
 }
 
+test('Jiuwen experiment list and details keep the frozen Agent label after catalog deletion and configuration reuse', async (t) => {
+  const user = `${TEST_USER}-jiuwen-label`;
+  const agentName = `jiuwen-ee-${'a'.repeat(32)}`;
+  const agentLabel = 'Example Agent · workspace · group · jiuwenswarm';
+  const clientId = `${user}-client`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+    await prisma.reliabilityClient.deleteMany({ where: { user } });
+  });
+  await prisma.reliabilityClient.create({ data: {
+    clientId, user, name: 'Jiuwen fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(),
+    capabilitiesJson: JSON.stringify({
+      actions: ['RUN_EXPERIMENT_CASE'],
+      platforms: [{ id: 'jiuwenswarm', agents: [agentName], actions: ['RUN_EXPERIMENT_CASE'],
+        runExperimentCase: { version: 2, returnsTraceId: true, ready: true },
+        agentCatalog: [{ id: agentName, label: 'Example Agent · workspace · group', models: ['fixture-model'], ready: true }],
+      }],
+    }),
+  } });
+  const executionTarget = { workerId: clientId, platform: 'jiuwenswarm', agent: agentName };
+  const response = await createExperiment(postReq({
+    user, name: 'Jiuwen label snapshot', agentName, traceSource: 'generate', executionTarget,
+    configSnapshot: { traceSource: 'generate', agentName, agentLabel },
+    evaluatorIds: ['preset-agent-trace-quality'], cases: [{ input: 'fixture', actualOutput: '' }],
+  }));
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const { id } = await response.json();
+  const stored = await prisma.experiment.findUniqueOrThrow({ where: { id } });
+  const snapshot = JSON.parse(stored.configSnapshotJson || '{}');
+  assert.equal(stored.agentName, agentName);
+  assert.equal(snapshot.agentLabel, agentLabel);
+  assert.equal(snapshot.executionTarget.agent, agentName);
+
+  await prisma.reliabilityClient.delete({ where: { clientId } });
+  const copied = await createExperiment(postReq({ user, createMode: 'same-config', sourceExperimentId: id }));
+  assert.equal(copied.status, 201, JSON.stringify(await copied.clone().json()));
+  const cloneId = String((await copied.json()).id);
+  const clone = await prisma.experiment.findUniqueOrThrow({ where: { id: cloneId } });
+  assert.equal(clone.agentName, agentName);
+  assert.equal(JSON.parse(clone.configSnapshotJson || '{}').agentLabel, agentLabel);
+  assert.equal(JSON.parse(clone.configSnapshotJson || '{}').executionTarget.agent, agentName);
+  await prisma.experiment.updateMany({ where: { user }, data: { status: 'running' } });
+  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  assert.equal(listed.status, 200);
+  const { items } = await listed.json();
+  assert.equal(items.length, 2);
+  for (const item of items) {
+    assert.equal(item.agentName, agentName);
+    assert.equal(item.agentLabel, agentLabel);
+    const response = await getExperiment(new Request(`http://localhost/api/experiments/${item.id}?user=${user}`), { params: Promise.resolve({ id: item.id }) });
+    assert.equal(response.status, 200);
+    const detail = await response.json();
+    assert.equal(detail.agentName, agentName);
+    assert.equal(detail.configSnapshot.agentLabel, item.agentLabel);
+    assert.equal(detail.reusableConfig.agentName, agentName);
+    assert.equal(detail.reusableConfig.executionTarget.agent, agentName);
+  }
+});
+
+test('experiment list preserves Agent identities when label snapshots are missing or invalid', async (t) => {
+  const user = `${TEST_USER}-legacy-label`;
+  t.after(() => prisma.experiment.deleteMany({ where: { user } }));
+  const snapshots = [null, '{}', '{', 'null', '[]', '{"agentLabel":42}', '{"agentLabel":"  "}'];
+  for (const [index, configSnapshotJson] of snapshots.entries()) {
+    await prisma.experiment.create({ data: {
+      user, name: `Legacy ${index}`, agentName: `legacy-agent-${index}`, status: 'running', configSnapshotJson,
+    } });
+  }
+  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  assert.equal(listed.status, 200);
+  const { items } = await listed.json();
+  assert.equal(items.length, snapshots.length);
+  assert.deepEqual(items.map((item: { agentName: string }) => item.agentName).sort(), snapshots.map((_, index) => `legacy-agent-${index}`).sort());
+  assert.ok(items.every((item: { agentLabel?: string }) => item.agentLabel === undefined));
+});
+
 test('experiments API stores execution policy and exposes it for reuse; invalid overrides return 400', async (t) => {
   const user = `${TEST_USER}-execution-config`;
   t.after(() => prisma.experiment.deleteMany({ where: { user } }));
