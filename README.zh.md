@@ -64,6 +64,14 @@
   <img src="docs/images/architecture.png" alt="Agent-Insight 架构图" />
 </p>
 
+### Agent Insight 在 openJiuwen 架构中的位置
+
+Agent Insight 是 openJiuwen 架构中负责观测、评测、诊断和优化的组件，对应下图右下方的高亮区域。
+
+<p align="center">
+  <img src="docs/images/openjiuwen-architecture.png" alt="openJiuwen 整体架构，右下方高亮显示 Agent Insight" />
+</p>
+
 ---
 
 ## 🔌 支持平台

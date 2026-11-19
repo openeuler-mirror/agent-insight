@@ -52,7 +52,15 @@ The platform has three main parts:
 Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
 <p align="center">
-  <img src="docs/images/architecture.png" alt="Agent Insight architecture" />
+  <img src="docs/images/architecture.en.png" alt="Agent Insight architecture" />
+</p>
+
+### Agent Insight in the openJiuwen Architecture
+
+Agent Insight provides observability, evaluation, diagnosis, and optimization in openJiuwen. Its position is highlighted in the lower right of the architecture diagram.
+
+<p align="center">
+  <img src="docs/images/openjiuwen-architecture.png" alt="openJiuwen architecture with Agent Insight highlighted in the lower right" />
 </p>
 
 ## Supported Platforms
