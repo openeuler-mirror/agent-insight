@@ -172,19 +172,23 @@ export async function GET(req: Request) {
         const ids = JSON.parse(r.evaluatorIdsJson || '[]');
         evaluatorCount = Array.isArray(ids) ? ids.length : 0;
       } catch { /* 忽略脏数据 */ }
+      let snapshot: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(r.configSnapshotJson || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) snapshot = parsed;
+      } catch { /* 忽略脏数据 */ }
+      const agentLabel = typeof snapshot.agentLabel === 'string' ? snapshot.agentLabel.trim() : '';
       return {
         id: r.id,
         name: r.name,
         type: r.type,
         agentName: r.agentName ? canonicalExperimentAgentName(r.scope === 'benchmark' && r.agentName === 'pi-mcts'
           ? 'pi-mcts' : '', r.agentName) : r.agentName,
+        ...(agentLabel ? { agentLabel } : {}),
         status,
         watchMode: r.watchMode,
         scope: r.scope,
-        submissionSource: (() => {
-          try { return JSON.parse(r.configSnapshotJson || '{}').submissionSource === 'imported' ? 'imported' : 'agent'; }
-          catch { return 'agent'; }
-        })(),
+        submissionSource: snapshot.submissionSource === 'imported' ? 'imported' : 'agent',
         skillName: r.skillName,
         skillVersion: r.skillVersion,
         preset: r.preset,
