@@ -1110,11 +1110,33 @@ function isSyntheticDeltaPart(part) {
   return typeof part?.id === "string" && part.id.startsWith("delta-")
 }
 
-function preferRealParts(parts) {
+// Compare the streamed bucket with real `text` snapshots by content instead of
+// assuming a snapshot always supersedes it: a partially published snapshot (or
+// a reasoning-only snapshot, which cannot carry the answer) must not truncate
+// the streamed answer.
+function preferRealParts(parts, mid, partText, partDeltas) {
   const list = parts || []
-  const hasRealText = list.some((part) => !isSyntheticDeltaPart(part)
-    && ["text", "reasoning"].includes((part?.type || "").toLowerCase()))
-  return hasRealText ? list.filter((part) => !isSyntheticDeltaPart(part)) : list
+  const syntheticParts = list.filter(isSyntheticDeltaPart)
+  if (!syntheticParts.length) return list
+  const realTextParts = list.filter((part) => !isSyntheticDeltaPart(part)
+    && (part?.type || "").toLowerCase() === "text")
+  if (!realTextParts.length) return list
+
+  const dropped = new Set()
+  for (const synthetic of syntheticParts) {
+    const streamed = resolvePartField(synthetic, mid, partText, partDeltas)
+    if (!streamed) { dropped.add(synthetic); continue }
+    for (const real of realTextParts) {
+      const snapshot = resolvePartField(real, mid, partText, partDeltas)
+      if (!snapshot) continue
+      // Snapshot already completed (or contains) the stream: the bucket is a
+      // duplicate. Stream longer than the snapshot: the snapshot is stale, so
+      // drop it and keep the complete stream.
+      if (snapshot.includes(streamed)) dropped.add(synthetic)
+      else if (streamed.includes(snapshot)) dropped.add(real)
+    }
+  }
+  return dropped.size ? list.filter((part) => !dropped.has(part)) : list
 }
 
 // 上游是否真的给了 usage。全 0 的 token 对象（TUI 之外的部分版本、以及 CLI
@@ -1155,7 +1177,7 @@ function buildMessagesForSession(state, sid) {
     const role = info?.role
     const created = info?.time?.created
     const completed = info?.time?.completed
-    const rawParts = preferRealParts(msgParts.get(mid) || [])
+    const rawParts = preferRealParts(msgParts.get(mid) || [], mid, partText, partDeltas)
 
     let content = ""
     if (role === "user") {
@@ -1421,7 +1443,9 @@ function deriveFields(interactions) {
     llmCallCount++
     const u = m.usage
     if (u) {
-      usageReported = true
+      // 与 server 端 deriveOpencodeExecutionFields / buildAgentCallTree 保持同一判定：
+      // 全 0 的 usage 对象视为「未上报」，不能因此把 tokens 标成有效的 0。
+      if (hasReportedTokenUsage(u)) usageReported = true
       const input = Number(u.input || 0) || 0
       const rawOutput = Number(u.output || 0) || 0
       const cacheRead = Number(u.cache?.read || 0) || 0

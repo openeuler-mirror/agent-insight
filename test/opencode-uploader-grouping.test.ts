@@ -716,3 +716,56 @@ test('opencode uploader: falls back to step-finish tokens when message.updated h
   assert.equal(derived.reasoning_tokens, 5)
   assert.equal(derived.usageReported, true)
 })
+
+test('opencode uploader: a reasoning-only snapshot does not discard the streamed answer', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_reason', payload: { type: 'message.part.delta', event: { id: 'reason-d1', properties: {
+      sessionID: 'ses_reason', messageID: 'msg_reason', field: 'text', delta: '最终回答',
+    } } } },
+    // CLI published the reasoning snapshot but lost the answer's text snapshot.
+    { kind: 'event', sessionID: 'ses_reason', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_reason', messageID: 'msg_reason', sessionID: 'ses_reason', type: 'reasoning', text: 'thinking',
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_reason')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, '最终回答')
+  assert.deepEqual(messages[0].parts.map((part: { id: string }) => part.id), ['delta-text', 'prt_reason'])
+})
+
+test('opencode uploader: a stale text snapshot is superseded by the longer delta stream', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_stale', payload: { type: 'message.part.delta', event: { id: 'stale-d1', properties: {
+      sessionID: 'ses_stale', messageID: 'msg_stale', field: 'text', delta: 'complete ',
+    } } } },
+    { kind: 'event', sessionID: 'ses_stale', payload: { type: 'message.part.delta', event: { id: 'stale-d2', properties: {
+      sessionID: 'ses_stale', messageID: 'msg_stale', field: 'text', delta: 'answer',
+    } } } },
+    // The snapshot only covers a prefix; keeping it alongside the bucket would
+    // either truncate the answer or duplicate the prefix.
+    { kind: 'event', sessionID: 'ses_stale', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_stale', messageID: 'msg_stale', sessionID: 'ses_stale', type: 'text', text: 'complete ',
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_stale')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, 'complete answer')
+  assert.deepEqual(messages[0].parts.map((part: { id: string }) => part.id), ['delta-text'])
+})
+
+test('opencode uploader: an all-zero usage object is not reported as valid usage', async () => {
+  const uploader = await uploaderPromise
+  const derived = uploader.deriveFields([
+    {
+      role: 'assistant',
+      content: 'answer',
+      usage: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }, total: 0 },
+    },
+  ])
+  assert.equal(derived.usageReported, false)
+  assert.equal(derived.tokens, undefined)
+  assert.equal(derived.input_tokens, undefined)
+  assert.equal(derived.output_tokens, undefined)
+})
