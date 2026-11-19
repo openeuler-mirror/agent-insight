@@ -128,6 +128,7 @@ export function inferUserQueryFromInteractions(interactions: unknown): string | 
 export function shouldRefreshStoredQueryFromInteractions(
     query: unknown,
     framework: unknown,
+    taskId?: string,
 ): boolean {
     const current = typeof query === 'string' ? query.trim() : '';
     if (!current) return true;
@@ -136,6 +137,8 @@ export function shouldRefreshStoredQueryFromInteractions(
     if (fw === 'claudecode') {
         return /^Claude Code Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(current);
     }
+    if (fw === 'opencode' && taskId && current === `OpenCode Session ${taskId}`) return true;
+    if (fw === 'deepseek-harness' && taskId && current === `DeepSeek Harness Session ${taskId}`) return true;
     if (getAdapter(fw).isPlaceholderQuery?.(current, fw)) return true;
     return current.toLowerCase() === `${fw} session`;
 }
@@ -2882,7 +2885,9 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
         const derivedQuery = inferUserQueryFromInteractions(mergedInteractionsForSession);
-        if (derivedQuery && shouldRefreshStoredQueryFromInteractions(targetRecord.query, targetRecord.framework)) {
+        if (derivedQuery && shouldRefreshStoredQueryFromInteractions(
+            targetRecord.query, targetRecord.framework, targetRecord.task_id,
+        )) {
             targetRecord.query = derivedQuery;
         }
 

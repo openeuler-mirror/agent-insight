@@ -21,6 +21,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 
+import { isolateTestDatabase } from './helpers/isolated-test-db';
+isolateTestDatabase('deepseek-harness-otel-ingest');
 import { POST as postLogs } from '@/app/api/ingest/otel/v1/logs/route';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import {
@@ -40,8 +42,8 @@ import {
 import type { DeepSeekHarnessOtelEvent } from '@/lib/ingest/deepseek-harness-otel/types';
 import { listClaudeOtelSpoolFiles } from '@/lib/ingest/claude-otel/spool';
 import { listSources } from '@/lib/ingest/otel-consumer/sources';
-import { computeOwnSkills } from '@/lib/storage/data-service';
-import { db } from '@/lib/storage/prisma';
+import { computeOwnSkills, saveExecutionRecord, shouldRefreshStoredQueryFromInteractions } from '@/lib/storage/data-service';
+import { db, prismaRaw } from '@/lib/storage/prisma';
 
 function anyValue(value: any): any {
   if (value === null || value === undefined) return { stringValue: '' };
@@ -306,6 +308,30 @@ test('Harness aggregation rebuilds messages, usage, Tool result, and Skill invoc
   assert.equal(record.interactions[1].tool_calls[0].output, 'Skill 已加载');
   assert.equal(record.interactions[1].tool_calls[0].state, 'completed');
   assert.equal(record.session_merge_strategy, 'snapshot-replace');
+});
+
+test('Harness replaces a saved placeholder when the main user prompt arrives', async () => {
+  const sessionId = 'dsh-late-query';
+  const events = baseEvents(sessionId);
+  const earlyEvents = events.filter((event) => event.eventType !== 'user/message');
+
+  const saveSnapshot = async (snapshot: DeepSeekHarnessOtelEvent[]) => {
+    const record = aggregateDeepSeekHarnessOtelEvents(sessionId, snapshot);
+    assert.ok(record);
+    assert.equal((await saveExecutionRecord({ ...record, skip_evaluation: true })).success, true);
+    const execution = await prismaRaw.execution.findUnique({ where: { id: sessionId }, select: { query: true } });
+    const session = await prismaRaw.session.findUnique({ where: { taskId: sessionId }, select: { query: true } });
+    return [execution?.query, session?.query];
+  };
+
+  const placeholder = `DeepSeek Harness Session ${sessionId}`;
+  const prompt = '检查 Harness Skill 调用';
+  assert.deepEqual(await saveSnapshot(earlyEvents), [placeholder, placeholder]);
+  assert.deepEqual(await saveSnapshot(events), [prompt, prompt]);
+  assert.deepEqual(await saveSnapshot(earlyEvents), [prompt, prompt]);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder, 'deepseek-harness', 'dsh-other'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(`${placeholder} notes`, 'deepseek-harness', sessionId), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder, 'opencode', sessionId), false);
 });
 
 test('Harness aggregation preserves one root System Prompt from request/header', () => {
