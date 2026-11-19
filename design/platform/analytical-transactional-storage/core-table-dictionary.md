@@ -1,17 +1,24 @@
-# 核心表字段字典与首批建表契约
+# 核心表字段字典与建表契约
 
-日期：2026-11-17。001保留 **21 张事务表 + 13 张 ClickHouse 表**，002新增10张IAM表，003新增2张项目目录/归属表，004新增2张可靠采集/实体版本表，005新增4张原接口元数据表，006新增2张诊断会话/消息表，007新增2张诊断报告运行/当前指针表，008新增2张Dataset兼容head/操作回执表，009新增1张Dataset生成任务表，010新增8张实验控制索引，011新增2张评测诊断绑定索引，012新增5张Benchmark控制表，013放宽空证据制品约束且不新增表，014新增1张派生Issue解决注解表，015新增统计发布、RAS当前回执及实验Trace来源索引3表，CH002新增统计摘要与RAS事实2表，016新增1张首次采集准备封存表，017新增3张采集Thread控制表，018新增2张Infra控制表及CH003样本事实1表，019新增1张固定领域控制表，当前结构目标 **72 张事务表 + 16 张 ClickHouse 表，共88张物理核心表**。其中 schema_meta、workspaces、asset_release_seals、obs_payload_manifests 是为迁移、租户外键、发布封存和正文完整性补充的 4 张基础表；不把前稿 59 张逻辑表全部宣称为已实现。
+截至事务库迁移 `020`、ClickHouse 迁移 `004`，共 **77 张事务表 + 19 张 ClickHouse 表 = 96 张物理核心表**。同一部署从 SQLite、PostgreSQL 和 openGauss 中选一种事务后端，ClickHouse 单独承载分析事实。
 
-本字典来自同目录实现的机器目录，描述字段和 DDL 契约。新增018/019的完整回归、三库与原界面验收统一后置；下述已有引擎证据不外推为018/019已认证。SQLite、PostgreSQL 15和openGauss 7已进行真实引擎约束、业务适配与统一授权合同测试；详细发行版与驱动见实施状态。ClickHouse 25.8.12.129 已通过 macOS ARM64 单实例的 13 表建表、万 Span 分页和正文链路验证；这不等于 Linux/HA 或千级混合压测；openGauss本批认证限定7.0.0 PG兼容模式及官方Linux ARM64原生SHA256驱动，不外推其他发行版。
+| 版本 | 事务表 | ClickHouse 表 | 本次增量 |
+|---|---:|---:|---|
+| `019` / `CH003` | 72 | 16 | 固定领域控制表、Infra 样本及此前各领域表 |
+| `020` / `CH004` | **77** | **19** | Goal Plus 与协作共用 3 张语义控制表，用量新增 2 张事务表，ClickHouse 新增语义事实、用量事件和用量日报各 1 张 |
+
+字段与约束以 [SQLite](../../../services/storage/schema/sqlite)、[PostgreSQL](../../../services/storage/schema/postgresql)、[openGauss](../../../services/storage/schema/opengauss) 和 [ClickHouse](../../../services/storage/schema/clickhouse) 的迁移 SQL 为准。各引擎的验证范围、隔离验收和生产切换状态见 [实施状态](implementation-status.md)。
 
 ## 表关系总览与阅读顺序
 
-这88张表对应**72张事务控制表 + 16张ClickHouse事实表**。同一部署从SQLite/PG/openGauss选择一种事务后端，表数不乘三；ClickHouse单独承载分析事实。下图是功能分区，不将箭头当作数据库外键；各表字段已定义，也不代表所有领域业务/物化流程已经接管。
+下图按业务域分组，箭头表示控制或数据流。跨库关联由应用按身份、路由、版本和回执校验。后续逐表关系图会区分数据库外键和应用层关联。
 
 ```mermaid
 flowchart TB
-  subgraph TX[事务库：SQLite / PG / openGauss 三选一，共72表]
+  subgraph TX[事务库：SQLite / PostgreSQL / openGauss 三选一，共77表]
     CONTROL[原静态资产、设置、客户端与会话控制 1表 / 40固定kind]
+    SEMANTIC[Goal Plus 与协作共用的语义控制 3表]
+    USAGE[用量事件回执与日报当前版本 2表]
     INFRA[Infra源与Trace关联 2表]
     CONTROL -->|owner与实时capability| IAM
     CONTROL -->|版本与私有文件| ASSET
@@ -31,6 +38,9 @@ flowchart TB
     EXP[实验容器、Case、RunPlan关联、结果槽、checkpoint、审阅、回执和私有Judge归属，以及派生Issue解决注解 9表]
     BENCH[Benchmark私有数据集、实验绑定、外部任务、证据制品及操作回执 5表]
     ANALYTICS[统计发布、RAS回执、冻结Trace来源 3表]
+    SEMANTIC -->|按 workspace 和实际 owner 授权| IAM
+    SEMANTIC -->|解析 Trace 别名与生命周期| SUPPORT
+    USAGE -->|按 workspace 和实际 owner 记账| IAM
     ANALYTICS -->|继承Trace与资产权限| IAM
     ANALYTICS -->|当前选择与源版本| RUN
     BENCH -->|复用计划、lease及结果回执| RUN
@@ -50,18 +60,23 @@ flowchart TB
     RUN -->|同事务登记待投递事件| SUPPORT
     INGEST -->|同事务接收、路由、ACL及Outbox| SUPPORT
   end
-  subgraph CH[ClickHouse，共16表]
+  subgraph CH[ClickHouse 分析存储，共19表]
     TRACE[Trace / Span / 正文 / 事件与关系 6表]
     DATA[固定快照 / 数据集 3表]
     EVAL[评测结果 / 指标 / 发布 4表]
     INFRA_FACTS[Infra样本事实 1表]
-    INFRA -.->|哈希回执与来源约束| INFRA_FACTS
     STATS[统计摘要与RAS事件事实 2表]
-    ANALYTICS -.->|哈希回执控制可见性| STATS
+    SEMANTIC_FACTS[Goal Plus 与协作的不可变事实 1表]
+    USAGE_FACTS[用量事件和日报事实 2表]
     TRACE -.->|版本化输入| DATA
     DATA -.->|评测输入| EVAL
   end
-  SUPPORT -.->|Trace可靠物化与Dataset版本投影；其他领域待接管| CH
+  SUPPORT -.->|Trace 接收回执与物化| TRACE
+  SUPPORT -.->|Dataset 版本投影| DATA
+  INFRA -.->|哈希回执与来源约束| INFRA_FACTS
+  ANALYTICS -.->|哈希回执控制可见性| STATS
+  SEMANTIC -.->|发布内容哈希与版本| SEMANTIC_FACTS
+  USAGE -.->|事件幂等回执与日报当前版本| USAGE_FACTS
   ASSET -.->|数据集与评估器版本| DATA
   RUN -.->|run / result / selection 标识| EVAL
 ```
@@ -69,7 +84,7 @@ flowchart TB
 **三个关键区别：**
 
 - 事务库的PK保证一行身份唯一，UK是额外唯一性约束，IDX用于特定查询；PK/UK本身也有索引，不写额外IDX不等于完全没有索引。
-- ClickHouse下面列的是`ORDER BY`排序/替换身份键，由它形成稀疏主索引。它不提供事务库那样的唯一约束；同键旧版本可同时存在，读取最新态需`FINAL`或等价去重策略。001的13表都用`ReplacingMergeTree(version)`，按日期字段的`toYYYYMM(...)`月分区。
+- ClickHouse下面列的是`ORDER BY`排序/替换身份键，由它形成稀疏主索引。它不提供事务库那样的唯一约束；同键旧版本可同时存在，读取最新态需`FINAL`或等价去重策略。19 张表均使用 `ReplacingMergeTree`，具体版本列见下表。CH001 和 CH002 的 15 张表按月分区，CH003 和 CH004 的 4 张表未显式指定分区键。
 - 后续关系图中，**实线是已存在的数据库FK，方向为子表→被引用表；虚线是应用层逻辑关联**。跨库无外键；一个相同ID不会自动触发关联检查、级联删除或跨库JOIN。
 
 ### 事务库：每张表存什么、主键与索引
@@ -154,9 +169,26 @@ flowchart TB
 | `dataset_operation_receipts` | 实际actor一次操作的请求摘要与精确结果引用。 | `(W,actor_principal_id,operation_kind,operation_key)` | 无额外UK；IDX`(W,dataset_id,created_at_ms)`：按Dataset查回执 |
 | `dataset_generation_jobs` | Trace生成请求的冻结配置/来源、阶段、租约、fence及结果。 | `(W,job_id)` | UK`(W,dataset_id)`、`(W,actor_principal_id,request_id)`、`(W,deletion_id)`；IDX`(W,actor_principal_id,status,created_at_ms)`：按actor和状态查任务 |
 
+#### 其余事务表及逐表定义入口（39 张）
+
+本节与以上 38 张合计 77 张。各领域链接包含逐表字段、主键、外键、约束和索引。
+
+| 领域 | 表数 | 物理表 |
+|---|---:|---|
+| [Trace 元数据](#005-原接口-trace-元数据) | 4 | `trace_legacy_ids`、`trace_annotations`、`trace_tags`、`trace_tag_links` |
+| [诊断会话与报告](#006007-诊断会话消息与报告)、[诊断运行与私有 Judge](#010011-实验评测结果与诊断绑定) | 6 | `trace_diagnosis_sessions`、`trace_diagnosis_messages`、`diagnostic_report_runs`、`diagnostic_report_heads`、`diagnosis_runs`、`diagnosis_judge_traces` |
+| [实验与评测结果](#010011-实验评测结果与诊断绑定)、[派生 Issue 解决注解](#派生-issue-解决注解014) | 9 | `experiment_heads`、`experiment_runs`、`experiment_cases`、`experiment_result_slots`、`experiment_attempt_checkpoints`、`experiment_annotations`、`experiment_operation_receipts`、`experiment_judge_traces`、`experiment_derived_issue_annotations` |
+| [Benchmark](#benchmark-核心表012013) | 5 | `benchmark_dataset_heads`、`benchmark_experiment_bindings`、`benchmark_jobs`、`benchmark_artifacts`、`benchmark_operation_receipts` |
+| [统计发布、RAS 与 Trace 来源](#015--ch002统一授权统计投影) | 3 | `trace_analytics_publications`、`ras_event_receipts`、`experiment_trace_sources` |
+| [首次采集准备](#016采集准备首次封存c1a) | 1 | `collector_preparation_receipts` |
+| [采集 Thread](#017采集thread与执行成员c1b) | 3 | `collector_trace_threads`、`collector_trace_thread_events`、`collector_trace_thread_executions` |
+| [Infra](#018-infra第一版原功能适配) | 2 | `infra_sources`、`session_infra_links` |
+| [固定领域控制](#019固定l6领域记录与原接口契约) | 1 | `platform_control_records` |
+| [Goal Plus 与协作、用量](#020-goal-plus--collaboration--usage第一版等价接入) | 5 | `semantic_scopes`、`semantic_records`、`semantic_unique_keys`、`usage_event_receipts`、`usage_daily_heads` |
+
 ### ClickHouse：事实、排序键、分区与版本
 
-下表`ORDER BY`为完整有序键。日期bucket不仅用于分区，也属于替换身份；实体的bucket应固定，不能因晚到更新而换bucket。当前DDL未另建显式跳数索引、Projection或物化视图，不把字段名出现在表中当作已有专项索引。
+下表`ORDER BY`为完整有序键。含日期 bucket 的表将其同时用于分区和排序键。实体的 bucket 在首次写入后固定，后续版本沿用该值。当前DDL未另建显式跳数索引、Projection或物化视图，不把字段名出现在表中当作已有专项索引。
 
 | 表 | 一行存什么 | ORDER BY | 月分区字段 | 替换版本 |
 |---|---|---|---|---|
@@ -173,6 +205,12 @@ flowchart TB
 | `eval_metric_facts` | 某结果的某指标/维度值，含类型、单位、方法及证据引用。 | `(W,result_bucket,result_id,metric_definition_release_id,metric_key,dimension_key)` | `result_bucket` | `retry_version` |
 | `eval_result_selection_current` | 事务库结果选择的分析侧最新投影；使用selection_revision。 | `(W,run_bucket,run_id,case_key,evaluator_slot)` | `run_bucket` | `selection_revision` |
 | `eval_publication_members` | 一次分析发布批次冻结采用哪些结果/裁决及排除原因。 | `(W,publication_bucket,publication_id,ordinal)` | `publication_bucket` | `retry_version` |
+| `obs_trace_analytics` | 同一 Trace 在指定来源边界和解析版本下的统计投影。 | `(W,trace_bucket,trace_id,boundary,parser_version,projection_hash)` | `trace_bucket` | `retry_version` |
+| `obs_ras_events` | 指定所有者和任务的一条可靠性异常事件。 | `(W,event_bucket,owner_principal_id,task_id,event_key,content_hash)` | `event_bucket` | `retry_version` |
+| `infra_metric_samples` | 指定 Infra 源的一条指标采样。 | `(W,source_id,ts_ms,sample_id)` | 未指定 | `retry_version` |
+| `semantic_immutable_facts` | Goal Plus 或协作的一条不可变事实。 | `(W,owner_principal_id,kind,record_id,content_hash)` | 未指定 | `retry_version` |
+| `usage_event_facts` | 一份按内容哈希固定的原始用量事件。 | `(W,owner_principal_id,kind,record_id,content_hash)` | 未指定 | `retry_version` |
+| `usage_daily_facts` | 一份按内容哈希固定的用量日报，由事务库当前版本控制可见性。 | `(W,owner_principal_id,kind,record_id,content_hash)` | 未指定 | `retry_version` |
 
 ### default项目与workspace：归属不授予权限
 
@@ -312,7 +350,7 @@ flowchart TB
   PUB["eval_publication_<br/>members"] -.->|冻结的run/case/slot/result| RESULT
 ```
 
-图中“指标定义注册与版本协议”是未来控制面能力，历史005阶段的52表内尚无独立指标定义注册表；当前009阶段的59表同样未增加该表；不把该字段假定为指向asset_releases的已落实外键。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
+图中“指标定义注册与版本协议”是未来控制面能力，截至 020 / CH004，字段字典尚无独立的指标定义注册表，指标定义版本标识按应用层协议处理。数据集release成员固定**样本修订ID**，不是“当前样本”。评测结果与指标拆开：结论一行，多个指标/维度各一行，新增指标通常不必为每项指标加固定列。`result_selections`是事务选择真源，CH的selection是查询投影；publication成员固定某次发布的口径，不能随“当前选择”变化而改写历史发布结果。publication/指标定义完整控制协议尚未全部落地，不把CH字段预留当作已有发布服务。
 
 跨CH表读取还要知道目标的bucket；仅有`result_id`、`snapshot_id`或`release_id`通常不足以做精确分区读取。清单/发布事件需要携带路由，并校验workspace、内容hash、精确版本和可见性。此批表结构不提供跨库FK或全域ID到bucket的自动解析器，相关领域接管时须落实，不能靠全库扫描补上协议。
 
@@ -331,16 +369,11 @@ flowchart TB
 
 所有事务FK完整列名、ON DELETE规则、CHECK和各字段类型继续见下方逐表字典；图示省略了大部分业务表到`workspaces`的重复FK，不能据此省略workspace条件。
 
-## 范围与未实现项
+## 当前实现范围
 
-- 001首批事务表：`schema_meta`, `workspaces`, `asset_identities`, `asset_releases`, `asset_drafts`, `asset_release_dependencies`, `asset_release_seals`, `asset_aliases`, `runs`, `run_inputs`, `work_items`, `work_attempts`, `result_receipts`, `result_selections`, `outbox_events`, `inbox_receipts`, `trace_locators`, `snapshot_manifests`, `artifact_metadata`, `deletion_requests`, `migration_checkpoints`。
-- 002追加事务表：`iam_principals`, `iam_password_credentials`, `iam_api_credentials`, `iam_external_identities`, `iam_sessions`, `iam_groups`, `iam_group_memberships`, `iam_workspace_bindings`, `iam_resource_access`, `iam_resource_grants`。
-- 003追加事务表：`projects`, `project_workspaces`；004追加事务表：`ingest_batches`, `obs_entity_heads`。005追加事务表：`trace_legacy_ids`, `trace_annotations`, `trace_tags`, `trace_tag_links`。006追加`trace_diagnosis_sessions`、`trace_diagnosis_messages`；007追加`diagnostic_report_runs`、`diagnostic_report_heads`。上述为截至007的历史43张事务表。
-- 008追加`dataset_compat_heads`、`dataset_operation_receipts`；009追加`dataset_generation_jobs`。当前001–009合计46张事务表，连同13张CH表共59张。
-- 当前CH表：`obs_payload_manifests`, `obs_trace_current`, `obs_span_current`, `obs_payload_chunks`, `obs_events`, `obs_entity_relations`, `snapshot_nodes`, `dataset_sample_revisions`, `dataset_release_members`, `eval_result_facts`, `eval_metric_facts`, `eval_result_selection_current`, `eval_publication_members`。
-- 仍待后续批次：账号恢复与外部身份业务入口、资产异步发布、插件与指标注册、run groups、人工裁决/评论、其他领域标签、资源引用/pin、客户端控制与配置、领域会话/计划、运维遥测与汇总代次等。现有服务/API 尚未全部切换到新表。
+上方目录列出截至 `020 / CH004` 的 96 张物理核心表。逐表章节按迁移阶段保留字段及历史约束，首批 `001` 的表数仅描述对应迁移。原生引擎验证、旧库迁移及容量边界以 [实施状态](implementation-status.md) 为准。
 
-账号密码、用户组和组管理员的IAM基础库与统一授权门面已实现；显式core Web模式已接入密码登录与Trace路径，其他领域未全部接管；权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。当前workspace外键保护引用归属，不能替代Web请求鉴权。
+账号密码、用户组和组管理员的 IAM 基础库与统一授权门面已实现。权限矩阵及历史归组规则见 [总体设计 §4.2](phase2-requirements-design.md#42-账号密码登录用户组与组管理员新增明确需求)。Web 请求仍需核对当前主体、空间和资源权限。
 
 ## 公共类型与约束
 
