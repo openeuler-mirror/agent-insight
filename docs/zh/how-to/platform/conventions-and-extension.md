@@ -231,3 +231,5 @@ UT Job 与最终汇总的 Summary/HTML 增加文件并发、慢文件前 20 项�
 E2E 的账号、场景、real/mock、UT、模型 baseUrl/modelName/key 引用、资源及超时统一由 `test/e2e/config.json` 的 pr/daily profile 配置。密钥值保留在环境变量或仓库外文件；测试报告保存脱敏配置快照及哈希。配置化入口与现有服务器部署分开验收：本轮只在本地验证，119 当前服务尚未更新。操作和配置示例见 [E2E 指南](../../../../test/e2e/README.md#统一配置)。
 
 PR Actions 显式使用 `E2E_DEPENDENCY_MODE=lockfile`：固定镜像锁文件匹配时复用依赖，不匹配时在隔离目录使用当前锁文件执行禁用安装脚本的 `npm ci`，失败仍阻断；工具默认的 `image` 模式保持严格校验。编译准备失败会上传原始失败报告，汇总阶段缺少编译上下文时显示准备错误或制品上传/下载提示，不将缺失上下文伪造为成功。详见 [PR 门禁指南](../../../../test/e2e/README.md#gitcode-actions-pr-门禁)。
+
+新增默认 UT 时必须同步 `test/suites.json` 的所属模块。PR 生产编译前执行清单一致性预检，遗漏、重复及失效路径立即阻断并给出文件名；完整 UT 中仍保留相同检查，防止编译后清单漂移。

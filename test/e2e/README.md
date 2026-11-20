@@ -61,6 +61,8 @@ docker buildx build --platform linux/amd64 \
 
 ## GitCode Actions PR 门禁
 
+生产编译前先运行 `node scripts/test-suites.mjs --check`，核对所有默认 UT 均已在 `test/suites.json` 中唯一登记。缺项、重复或失效路径会提前阻断并保留具体错误，不等待编译及五组 E2E 完成后才发现；完整 UT 中的一致性检查仍然保留。新增 `.test.ts` 时需同步所属模块清单。
+
 PR 工作流显式设置 `E2E_DEPENDENCY_MODE=lockfile`：依赖锁文件与镜像一致时复用预装依赖；不一致时在隔离目录按当前锁文件运行 `npm ci --legacy-peer-deps --ignore-scripts`，需要能访问锁文件指定的包仓库。安装后核对锁文件未变化，再生成当前 Prisma Client。网络错误最多复用同一缓存重试一次，每次上限 10 分钟；完整性校验等其他错误不重试。安装失败仍阻断，不降级使用过期依赖。直接调用准备工具默认仍为 `image` 严格模式；固定镜像应定期按当前锁文件重建以避免每个 Job 重装。
 
 准备失败也会导出报告目录并保存 `BLOCKED` 原因，供 `always()` 上传步骤使用；安装日志保留最后 64 KiB 的脱敏副本 `preparation.log`。汇总缺少 `inputs/build/context.json` 时保留同次运行、同提交的编译准备错误；制品完全缺失则提示检查上传/下载日志。缺失上下文不补造，也不计为编译或测试通过。
