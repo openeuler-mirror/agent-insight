@@ -20,6 +20,7 @@ import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSour
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
 import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
+import { HarnessContextTabs } from './HarnessContextTabs';
 import { InferenceAnalysisButton } from './InferenceAnalysisButton';
 import { inferenceAnalysisTarget, interactionUpstreamRequestIds } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
@@ -1126,6 +1127,18 @@ export default function AgentTraceView({
         }, 80);
     };
 
+    const harnessRequests = framework === 'deepseek-harness'
+        ? [...nodeMap.values()].flatMap(node => node.events.flatMap((event, index) =>
+            event.kind === 'llm' && !event.treeHidden
+                ? (event.interaction?.harnessRequests ?? []).map(request => ({
+                    request,
+                    usage: event.interaction?.usage,
+                    key: eventKey(node.id, index),
+                }))
+                : [],
+        ))
+        : [];
+
     const findEventAnomalies = useCallback(
         (event: AgentEvent) => findEventAnomaliesForMarkers(event, rasMarkers),
         [rasMarkers],
@@ -1206,9 +1219,9 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
+            <div className={cn("grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]", framework === 'deepseek-harness' && "@min-[480px]/agent-trace:grid-cols-[minmax(0,55fr)_minmax(0,45fr)]")}>
                 {/* ─── Left: Unified Span Tree ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                <div className={cn("rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0", framework === 'deepseek-harness' && "@min-[480px]/agent-trace:h-full @min-[480px]/agent-trace:min-h-0")}>
                     {['qoder', 'opencode'].includes(ctxValue.framework || '') && (
                         <div className="flex justify-end px-2.5 py-1.5 border-b border-border">
                             <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'trace', rootSessionId, interactions: displayInteractions })} />
@@ -1376,7 +1389,8 @@ export default function AgentTraceView({
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                <div className={cn("rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0", framework === 'deepseek-harness' && "@min-[480px]/agent-trace:h-full @min-[480px]/agent-trace:min-h-0")}>
+                    <HarnessContextTabs entries={harnessRequests} selectedKey={selectedKey} onSelect={onJumpToKey} zh={locale === 'zh'} taskId={rootSessionId}>
                     {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
                         <div className="p-4 space-y-3">
                             <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
@@ -1427,6 +1441,7 @@ export default function AgentTraceView({
                             rootExecutionId={rootExecutionId}
                         />
                     ) : null}
+                    </HarnessContextTabs>
                 </div>
             </div>
             </div>

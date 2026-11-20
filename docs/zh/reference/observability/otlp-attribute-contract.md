@@ -326,3 +326,23 @@ Dify 原生 Workflow OTLP（非应用内 Langfuse SDK）由 `service.name=langge
 | `dify.trace_id`、`dify.agent_id` | 关联与身份元数据；不替代实际 OTLP Trace ID；Workflow 关联另用节点执行 ID |
 
 已结束的 `invoke_agent` 根 Span 提供完成证据；无根节点时保留部分轨迹。内容导出关闭时仍保留调用数、用量及状态，不生成虚构消息或工具结果。范围为已检出版本的原生 trajectory 管线；SDK 单 Agent 已实测；跨 Trace 关联使用同用户、租户、应用与 `node.execution_id` / `dify.node.execution_id` 精确匹配，并保留独立 Trace 与重试身份。详情查询的 JSON 投影不改写原始记录；已通过原生 Workflow 中两名 Agent v2 串行编排的真实 DeepSeek 运行及浏览器验证；环境为支持 Landlock ABI 8 的 Docker Desktop 4.97.0。工具 Workflow 自身的内部 Trace 仍独立保存，不递归挂到 Agent 的工具节点之下。
+
+## 历史实验 Harness 请求上下文正文契约
+
+以下为历史增强采集接口，不属于当前 Issue 381 已有数据第一版。当前看板仅使用 dsh-context 有效 facts/delta 投影，不使用 contextMembership、边界估算或原生增强事件详情回退；collector 不注册成员正文采集 hooks。详见已有数据边界设计。
+
+`assistant/message.body.contextMembership` 使用 `schemaVersion=1`，包含 `attemptId`、`sourceSessionId`、`response`、`items`。响应的源会话、事件序号和轮步必须匹配。成员记录保留 `itemId/category/contentFingerprint/sourceKind/sourceCallId` 及字节和正文覆盖状态；没有源事件序号时保留缺失状态，不按时间推断。
+
+现有 `GET /api/observe/session` 的 `view=context-body` 接受 `taskId/sourceSessionId/contextRequestId`，验证 Trace 权限和请求归属后返回独立存储的清单正文。未认证401、非所有者403、非所属请求404、正文缺失或到期410；正文响应禁止缓存。OTLP入库前分离成员text，普通事件和数据库只保留正文引用及元数据。接口与容量设计见 [Issue381正文契约](../../../../design/observability/issue-381-context-body-contract.md)。
+
+分类趋势使用 contextMembership.tokenEstimate（method、basis、approximate、total、categories），缺失时不填零。representation=captured-canonical-request 且 providerWireCaptured=false。服务商 inputTokens 为未缓存输入，outputTokens、cacheReadTokens 独立，不以分类估算代替。contextEvents 保留源会话、原生 seq/type 与关联响应，事件位置来自原始记录。正文读取额外要求 resolveUser 的有效身份，不能使用 user 查询参数作为认证。
+
+队列投递状态agentInsightDelivery仅为本地重试元数据，不发送给OTLP接收端；含attempts/status/nextAttemptAt。端点和凭据哈希隔离队列。正式回放适配由安装白名单SHA256覆盖，不更改模型、提示词和压缩策略。
+
+锁恢复以完整host/platform/PID/token、原inode及独占recovery门为证据，恢复声明也可按同协议回收。不得用mtime直接抢锁；未知归属、权限不明及恢复深度8保守拒写。正文重试不延长expiresAt，父Trace消失后API拒读，物理文件仍按TTL清理。
+
+本轮验收更新：默认0.8/0.16自动压力已以72次原生裁剪验证；新增版本仅基本请求兼容，空闲裁剪回放未通过，不扩大安装器白名单。真实七天保留从2026-11-18 17:04:41至11-25 17:04:41（北京时间）进行，结果见统一测试报告；断电/服务停止记采样缺口。
+
+### dsh-context 优先数据源
+
+启用成员采集且本宿主已加载dsh-context 0.85.1与connection服务时，分类Token优先采用facts投影，并标记来源。delta仅显示投影节点/Token变化，精确成员及正文核对仍用补采。插件缺失、不兼容、超时或源忙会回退，正文仍需独立启用，不自动安装第三方插件。源估算和服务商实际用量分开；重启Harness与平台消费者以加载新适配。Headless完整投影兼容和事件/对比人工UX评审仍待验。

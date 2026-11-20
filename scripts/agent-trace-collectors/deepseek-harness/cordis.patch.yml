@@ -15,7 +15,7 @@
 - id: session-telemetry-otel
   name: '@deepseek-ai/dsh-session-telemetry-otel'
   config:
-    mode: FULL
+    mode: !!js "process.env.AGENT_INSIGHT_DSH_LIVE === '1' ? 'DISABLED' : 'FULL'"
     shutdownTimeoutMillis: 3000
     exporter:
       url: !!js "`${String(process.env.AGENT_INSIGHT_BASE_URL || '').replace(/[/]+$/, '')}/api/ingest/otel/v1/logs`"
@@ -32,4 +32,5 @@
     - id: agent-insight-deepseek-harness-observability
       name: agent-insight-deepseek-harness-observability
       config:
+        live: !!js process.env.AGENT_INSIGHT_DSH_LIVE === '1'
         maxStringChars: !!js Number(process.env.AGENT_INSIGHT_DSH_MAX_STRING_CHARS || 32768)

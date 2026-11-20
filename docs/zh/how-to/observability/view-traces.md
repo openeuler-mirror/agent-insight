@@ -386,7 +386,7 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 
 ## DeepSeek Harness 接入
 
-Agent Insight 通过 DeepSeek Harness 官方 Session Telemetry OTLP Logs 观测执行过程，不接管 Harness 的模型选择、Tool、Skill、审批或沙箱。当前支持 macOS 与 Linux，并要求本机已有 Node.js、npm、pnpm；安装器会在找不到 `dsh` 时安装已验证的 `@deepseek-ai/dsh@0.1.0-rc.8`。
+Agent Insight 通过 DeepSeek Harness 官方 Session Telemetry OTLP Logs 观测执行过程，不接管 Harness 的模型选择、Tool、Skill、审批或沙箱。当前支持 macOS 与 Linux，并要求本机已有 Node.js、npm、pnpm；安装器会在找不到 `dsh` 时安装已验证的 `@deepseek-ai/dsh@0.2.2-rc.1`。
 
 推荐在 Agent Insight 的 **接入配置 → 客户端安装** 中勾选 **DeepSeek Harness**，复制页面生成的一键安装命令并在运行 Harness 的机器上执行。统一安装脚本会把当前服务地址与 API Key 通过子进程环境变量交给专用 Harness 安装器，不会把 API Key 拼进下载 URL；也可以使用下面的独立安装命令：
 
@@ -633,3 +633,28 @@ Trace 树和时间线会标记失败工具；父 Agent 的“含失败调用”�
 OpenCode 与 Qoder CN CLI 显式接入转发后，链路树顶部和 LLM 详情提供「推理分析」。整条 Trace 列出多个请求，LLM 仅列出已确认归属的请求；每个外部链接携带单个 UUID。重试分别保留，无法确认节点归属的请求仅在 Trace 入口展示。
 
 若模型服务在响应头返回 `X-Request-Id`，LLM 详情会额外展示服务请求 ID 并可复制；只有一条时直接显示，多条时显示数量并提示进入「推理分析」逐次查看。弹窗中每次尝试同时展示网关调用 ID 与服务 ID，并分别提供查询链接。服务未返回、响应头不可见或值冲突时显示“未提供”，不会用调用 ID 或 Trace ID 补造。服务 ID 只挂到已证明归属的 LLM，否则仅保留在 Trace 级未分配调用中。配置、适用边界及备份见[接入指南](./inference-gateway.md)，字段与支持路径见[统一推理请求关联契约](../../reference/observability/inference-correlation.md)。
+
+## DeepSeek Harness 已有数据第一版
+
+右侧提供「概览／上下文／相邻对比／事件」，左侧保留原有 SPAN 树；内容区达到 480px 时左右等高分栏并独立滚动。前次／后次保持页签，事件的「查看事件前／后上下文」才切换到上下文。
+
+分类趋势只使用 dsh-context 0.85.1 的现有 facts 投影（system/tools/user/inject/skill/assistant/tool）。分类 Token 是近似估算，不是服务商实际用量；不提供基于新增请求成员的字节或估算回退。无投影显示缺失，原有 Trace 仍可用。
+
+相邻对比仅在同源、相邻基准且有效 delta 时展示投影新增／移除节点及估算 Token 增减，不等于完整成员或逐行正文差异。未返回投影、版本不兼容、身份不匹配、无前次已采集请求和基准不相邻均保留限制；数量未知不显示为零。第一版不使用新增成员清单回退。
+
+事件使用有效 dsh-context 投影的 seq/kind/tokens、count/grossTokens、from/to 与轮步字段；默认当前区间，可切换整个会话窗口。位置不证明因果。模型 from/to 已有值时展示前后名称；缺失时切换未核实。上下文页及事件展开可查看 delta.viewNodes 和 facts.nodes.archive 的已有节点与片段；compact-checkpoint 最多 80 字符，不是完整摘要。归档 gone 表示替换节点序号，与压缩／裁剪的关联为区间近似，不保证完整清单。工具正文通常未提供。
+
+源会话、响应事件序号与轮步使用原有字段匹配，缺失时不按时间猜测。现有 INPUT/History 展示仍是 Trace 对话视角，不是逐请求最终报文。
+
+collector 不注册请求成员和正文 hooks，读取已有 dsh-context 不依赖成员采集开关。需要安装匹配版本插件及 connection 服务，并重启 Harness 加载适配；这属于已有数据接入，不能认为原有 OTLP 已包含插件投影。历史增强正文和治理接口未删除，但当前看板不提供其入口。
+
+来源核查和本版范围见 [Issue 381 已有数据边界](../../../../design/observability/issue-381-existing-source-v1.md)。此前成员回退、摘要正文及七天增强采集验收属于历史实验，不作为本版功能承诺。
+
+片段需要点击「鉴权加载已有片段」，沿用 Trace 正文权限、脱敏、配额和最多七天保留。普通投影只返回元数据，预览存储在现有正文侧存储；切换请求或页签后重新加载。复用已有片段不新增 Agent 请求采样，但会产生受治理的导出副本。完整请求、完整摘要、完整工具 schema 和逐行差异仍未提供。
+### Issue 381 在线复验补充
+
+2026-11-20 已用新的真实 Harness Headless 会话验证在线导出：模型请求 #18、#26 自动关联两个 LLM，#26 的投影新增一条历史回复及一条 bash 结果。概览先显示原节点详情，再显示上下文变化；事件选择整个会话时，空态明确指当前 Trace 已采集范围。
+
+这些是 dsh-context 既有投影节点和估算 Token，不是完整请求报文。节点片段仍需 Trace 鉴权加载；工具结果没有源正文时保持缺失提示。随后在同一会话验证模型变化 #40/#86、原生手动压缩 #50、受控调用原生裁剪方法产生的 #75，前后请求定位分别为 #26→#44、#44→#62、#70→#89。受控裁剪不是默认 0.8 自动压力路径；当前 Web profile 未启用 toolResultPruner。
+
+本条原生遥测另有包含公开 API 约束的 summary/checkpoint 正文，当前看板仅展示 dsh-context 的 80 字符预览，不能在客户页完整核对该约束。裁剪替换结果还会覆盖原工具的完成时间，导致耗时偏大；这是尚待修复的问题，不属于本次通过结论。

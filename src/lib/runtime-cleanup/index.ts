@@ -39,6 +39,10 @@ async function* guarded(category: string, create: () => Sweep): Sweep {
 export function createCleanupSweep(config: ReturnType<typeof readCleanupConfig>): Sweep {
   const now = Date.now();
   return roundRobin([
+    guarded('harness-context-bodies', async function* () {
+      const { cleanupHarnessBodies } = await import('@/lib/ingest/deepseek-harness-otel/body-store');
+      yield* cleanupHarnessBodies(undefined, now, config.dryRun);
+    }),
     guarded('logs', async function* () {
       const { cleanupLogs } = await import('./logs');
       const { cleanupRetiredRuns } = await import('./retired-runs');

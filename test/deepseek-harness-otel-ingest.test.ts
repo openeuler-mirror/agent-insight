@@ -302,6 +302,11 @@ test('Harness aggregation rebuilds messages, usage, Tool result, and Skill invoc
     version: null,
   }]);
   assert.equal(record.interactions.length, 3);
+  assert.deepEqual(record.interactions.flatMap((interaction: any) => interaction.harnessRequests ?? [])
+    .map(({ sourceSessionId, eventSequence }: { sourceSessionId: string; eventSequence: number }) => [sourceSessionId, eventSequence]), [
+    [record.task_id, 4],
+    [record.task_id, 9],
+  ]);
   assert.equal(record.interactions[1].tool_calls[0].function.name, 'skill');
   assert.equal(record.interactions[1].tool_calls[0].output, 'Skill 已加载');
   assert.equal(record.interactions[1].tool_calls[0].state, 'completed');
@@ -467,4 +472,64 @@ test('Harness framework and consumer source declare Skill and subagent-tree supp
   assert.equal(adapter.capabilities?.skillScope, 'agent-tree');
   assert.equal(adapter.sessionMergeStrategy, 'snapshot-replace');
   assert.ok(listSources().some((source) => source.id === 'deepseek-harness-otel-logs'));
+});
+
+test('Harness model changes preserve the actual model and request sequence on both steps', () => {
+  const sessionId = 'dsh-model-change';
+  const events = baseEvents(sessionId);
+  const secondResponse = events.find(event => event.sequence === 9)!;
+  secondResponse.body.message.source.model = 'deepseek-reasoner';
+  const trace = aggregateDeepSeekHarnessOtelEvents(sessionId, events);
+  assert.ok(trace);
+  assert.deepEqual(trace.interactions.flatMap((interaction: any) =>
+    (interaction.harnessRequests ?? []).map((request: any) => [request.eventSequence, interaction.model]),
+  ), [[4, 'deepseek-chat'], [9, 'deepseek-reasoner']]);
+});
+
+test('OTLP normalization preserves the source sequence and scope of a synthetic prune record', () => {
+  const id = 'dsh-prune-fixture';
+  const body = { removedSequences: [2, 3], turn: 1, step: 2 };
+  const events = normalizeDeepSeekHarnessOtlpLogs(harnessPayload(id, [
+    harnessRecord(id, 'context/prune', 8, body),
+  ]), { receivedAt: '2026-08-21T05:01:00.000Z', authenticatedUser: 'alice' });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventType, 'context/prune');
+  assert.equal(events[0].sequence, 8);
+  assert.equal(events[0].sessionId, id);
+  assert.deepEqual(events[0].body, body);
+});
+
+test('Harness LLM duration begins at step start instead of response time', () => {
+  const record = aggregateDeepSeekHarnessOtelEvents('dsh-duration', baseEvents('dsh-duration'));
+  assert.ok(record);
+  const first = record.interactions.find((interaction: any) => interaction.harnessRequests?.some((request: any) => request.eventSequence === 4));
+  assert.ok(first);
+  assert.equal(first.timeInfo.created, '2026-08-21T05:00:03.000Z');
+  assert.equal(first.timeInfo.completed, '2026-08-21T05:00:04.000Z');
+  const events = baseEvents('dsh-duration');
+  assert.equal(record.latency, Date.parse(events.at(-1)!.eventTimestamp) - Date.parse(events[0].eventTimestamp));
+});
+
+
+test('Bound member metadata survives OTLP aggregation and rejects a different response identity', () => {
+  const events = baseEvents('dsh-members');
+  const response = events.find(e => e.eventType === 'assistant/message')!;
+  const manifest = { schemaVersion: 1, sourceSessionId: 'dsh-members', bindingStatus: 'bound', identityCoverage: 'stable', membershipCoverage: 'complete-at-capture-boundary', response: { sourceSessionId: 'dsh-members', eventSequence: response.sequence, turn: response.body.turn, step: response.body.step }, items: [{ itemId: 'm', category: 'user', contentFingerprint: 'abc', bodyStatus: 'not-uploaded' }] };
+  response.body.contextMembership = manifest;
+  const record = aggregateDeepSeekHarnessOtelEvents('dsh-members', events)!;
+  const refs = record.interactions.flatMap((i: any) => i.harnessRequests ?? []);
+  assert.deepEqual(refs[0].membership, manifest);
+  response.body.contextMembership.response.eventSequence = 999;
+  const invalid = aggregateDeepSeekHarnessOtelEvents('dsh-members', events)!;
+  assert.equal(invalid.interactions.flatMap((i: any) => i.harnessRequests ?? [])[0].membership, undefined);
+});
+
+test('Native compaction prune and model selection anchor to the next response in their own source session', () => {
+ const events=baseEvents('event-position');
+ for(const [sequence,eventType] of [[12,'compaction/summary'],[13,'compaction/prune'],[14,'model/selection']] as const)events.push({...events[0],sequence,eventType,eventTimestamp:`2026-08-21T05:00:${sequence}.000Z`,body:{shadowedSeqs:[2],provider:'deepseek',model:'next'}});
+ events.push({...events[0],sequence:15,eventType:'assistant/message',eventTimestamp:'2026-08-21T05:00:15.000Z',body:{turn:2,step:1,message:{content:[{type:'text',text:'next'}]}}});
+ const record=aggregateDeepSeekHarnessOtelEvents('event-position',events)!;
+ const refs=record.interactions.flatMap((i:any)=>i.harnessRequests??[]);
+ assert.deepEqual(refs.at(-1).contextEvents.map((e:any)=>[e.eventType,e.eventSequence]),[['compaction/summary',12],['compaction/prune',13],['model/selection',14]]);
+ assert.equal(refs[0].contextEvents.length,0);
 });

@@ -5,7 +5,11 @@
   "main": "index.js",
   "files": [
     "index.js",
+    "dsh-context-source.mjs",
+    "dsh-context-details.mjs",
     "cordis.patch.yml",
+    "replay-compat.mjs",
+    "process-lock.mjs",
     "LICENSE",
     "NOTICE"
   ],

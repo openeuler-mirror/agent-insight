@@ -17,6 +17,7 @@
 import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { InvokedSkill } from '@/lib/shared/interaction-utils';
 import { readDeepSeekHarnessOtelEventsForSession } from './spool';
+import { diffCapturedHarnessRequests, validateDshContext } from './context-membership';
 import type {
   DeepSeekHarnessOtelAggregationResult,
   DeepSeekHarnessOtelEvent,
@@ -42,6 +43,17 @@ type WorkingInteraction = {
   model?: string;
   modelID?: string;
   reasoning?: string;
+  harnessRequests?: Array<{
+    sourceSessionId: string;
+    eventSequence: number;
+    turn: number;
+    step: number;
+    providerUsage?: { input: number | null; output: number | null; cacheRead: number | null };
+    membership?: Record<string, unknown>;
+        dshContext?: Record<string, any>;
+    membershipDiff?: ReturnType<typeof diffCapturedHarnessRequests>;
+    contextEvents?: Array<{ sourceSessionId: string; eventSequence: number; eventType: string; body: Record<string, unknown> }>;
+  }>;
   usage?: {
     input: number;
     output: number;
@@ -241,10 +253,23 @@ export function aggregateDeepSeekHarnessOtelEvents(
     return interaction;
   };
 
+  const contextEvents = new Map<string, Array<{ sourceSessionId: string; eventSequence: number; eventType: string; body: Record<string, unknown> }>>();
   for (const event of events) {
     const body = event.body || {};
     const source = sourceSessionId(event);
     const isSubagent = source !== rootSourceSessionId;
+    if (['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/prune', 'model/selection'].includes(event.eventType)
+      && Number.isSafeInteger(event.sequence)) {
+      const collected = contextEvents.get(source) ?? [];
+      collected.push({ sourceSessionId: source, eventSequence: event.sequence!, eventType: event.eventType,
+        body: Object.fromEntries(Object.entries(body).filter(([key]) => ['shadowedRange', 'shadowedSeqs', 'shadowedTokenCount', 'provider', 'model', 'reasoningEffort', 'status', 'outcome', 'sourceCommandId'].includes(key))) });
+      contextEvents.set(source, collected);
+    }
+
+    if (event.eventType === 'step/start') {
+      interactionForStep(event);
+      continue;
+    }
 
     if (event.eventType === 'request/header') {
       if (!model && source === rootSourceSessionId) model = text(body?.header?.config?.model) || null;
@@ -284,6 +309,30 @@ export function aggregateDeepSeekHarnessOtelEvents(
 
     if (event.eventType === 'assistant/message') {
       const interaction = interactionForStep(event);
+      // dsh-context uses the assistant/message sequence as its request row key.
+      if (typeof event.sequence === 'number' && Number.isSafeInteger(event.sequence) && event.sequence >= 0) {
+        (interaction.harnessRequests ??= []).push({
+          sourceSessionId: source,
+          eventSequence: event.sequence,
+          turn: finiteNumber(body?.turn),
+          step: finiteNumber(body?.step),
+          ...(body.usage && typeof body.usage === 'object' ? { providerUsage: {
+            input: typeof body.usage.inputTokens === 'number' ? body.usage.inputTokens : null,
+            output: typeof body.usage.outputTokens === 'number' ? body.usage.outputTokens : null,
+            cacheRead: typeof body.usage.cacheReadTokens === 'number' ? body.usage.cacheReadTokens : null,
+          } } : {}),
+          contextEvents: contextEvents.get(source) ?? [],
+          ...(body?.contextMembership?.bindingStatus === 'bound'
+            && body.contextMembership.schemaVersion === 1
+            && body.contextMembership.sourceSessionId === source
+            && body.contextMembership.response?.sourceSessionId === source
+            && body.contextMembership.response?.eventSequence === event.sequence
+            && body.contextMembership.response?.turn === body.turn
+            && body.contextMembership.response?.step === body.step
+            ? { membership: body.contextMembership } : {}),
+        });
+        contextEvents.delete(source);
+      }
       const content = visibleAssistantContent(body);
       const reasoning = messageReasoning(body);
       if (content) interaction.content = content;
@@ -391,6 +440,25 @@ export function aggregateDeepSeekHarnessOtelEvents(
   }
 
   interactions.sort((left, right) => left._orderMs - right._orderMs);
+  const projections = new Map<string, DeepSeekHarnessOtelEvent>();
+  for (const event of events) if (event.eventType === 'agent-insight/context' && event.sequence === undefined
+    && Number.isSafeInteger(event.body?.responseEventSequence)) projections.set(`${sourceSessionId(event)}:${event.body.responseEventSequence}`,event);
+  for (const interaction of interactions) for (const request of interaction.harnessRequests ?? []) {
+    const event = projections.get(`${request.sourceSessionId}:${request.eventSequence}`);
+    if (event?.body?.turn !== request.turn || event?.body?.step !== request.step) continue;
+    const projection=validateDshContext(event.body.dshContext,request.sourceSessionId,request.eventSequence,request.turn,request.step);
+    if (projection) request.dshContext=projection;
+  }
+  const previousMembership = new Map<string, Record<string, unknown>>();
+  for (const interaction of interactions) {
+    for (const request of interaction.harnessRequests ?? []) {
+      if (request.membership) {
+        const previous = previousMembership.get(request.sourceSessionId);
+        if (previous) request.membershipDiff = diffCapturedHarnessRequests(previous, request.membership);
+        previousMembership.set(request.sourceSessionId, request.membership);
+      } else previousMembership.delete(request.sourceSessionId);
+    }
+  }
   const cleanInteractions = interactions.map((interaction) => {
     const { _orderMs, _sourceSessionId, _turn, _step, ...clean } = interaction;
     return clean;
@@ -415,7 +483,7 @@ export function aggregateDeepSeekHarnessOtelEvents(
     framework: 'deepseek-harness',
     model,
     tokens: inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
-    latency: Math.max(0, lastAt - firstAt) / 1000,
+    latency: Math.max(0, lastAt - firstAt),
     timestamp: events[0].eventTimestamp,
     trace_started_at: events[0].eventTimestamp,
     trace_completed_at: events[events.length - 1].eventTimestamp,

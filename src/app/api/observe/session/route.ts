@@ -18,6 +18,8 @@ import { deriveExecutionTiming } from '@/lib/engine/observability/execution-timi
 import { collaborationTraceProjection } from '@/lib/collaboration/runtime';
 import { sessionTraceRelations } from '@/lib/trace/session-relations';
 import { resolveTraceReadScope } from '@/lib/auth/admin';
+import { resolveUser } from '@/lib/auth/auth';
+import { readHarnessBody } from '@/lib/ingest/deepseek-harness-otel/body-store';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from 'node:crypto';
 import { analyzeSession } from '@/lib/engine/evaluation/judge';
@@ -291,6 +293,9 @@ export async function GET(request: Request) {
     try {
         const scope = await resolveTraceReadScope(request);
         if (!scope.username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        if (view === 'context-body' && !(await resolveUser(request)).username) {
+            return NextResponse.json({ error: 'Context bodies require verified user identity' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
+        }
         const parsed = await loadParsedSession(taskId);
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
@@ -298,6 +303,17 @@ export async function GET(request: Request) {
         const { session, execution, thread, interactions, langfuseTraceNodes, executionSummary } = parsed;
         if (!scope.canViewAllTraces && scope.username !== parsed.owner) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         const username = scope.canViewAllTraces ? parsed.owner : scope.username;
+        if (view === 'context-body') {
+            const attempt = searchParams.get('contextRequestId') || '';
+            const source = searchParams.get('sourceSessionId') || '';
+            const belongs = interactions.some((interaction: any) => interaction.harnessRequests?.some((reference: any) =>
+                  reference.sourceSessionId === source && (reference.membership?.bodyRef === attempt || reference.dshContext?.details?.bodyRef === attempt)));
+            if (!belongs || !username) return NextResponse.json({ error: 'Context request not found' }, { status: 404 });
+            const body = readHarnessBody(username, source, attempt);
+            return NextResponse.json(body || { error: 'Context body unavailable or expired' }, {
+                status: body ? 200 : 410, headers: { 'Cache-Control': 'no-store' },
+            });
+        }
         const rawInteraction = searchParams.get('source') === 'raw';
         const difyProjection = !rawInteraction && parsed.framework === 'dify' && username && username === session.user
             ? await loadDifyWorkflowProjection(username, taskId, langfuseTraceNodes) : null;

@@ -23,6 +23,7 @@ import { qwenSkillLogToOtelEvent } from '@/lib/ingest/otel/adapters/qwencode';
 import { appendDeepSeekHarnessOtelEvents } from '@/lib/ingest/deepseek-harness-otel/spool';
 import { partitionDeepSeekHarnessOtlpLogs } from '@/lib/ingest/deepseek-harness-otel/detect';
 import { normalizeDeepSeekHarnessOtlpLogs } from '@/lib/ingest/deepseek-harness-otel/otlp-json';
+import { separateHarnessBodies } from '@/lib/ingest/deepseek-harness-otel/body-store';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { gunzipSync } from 'node:zlib';
@@ -66,6 +67,7 @@ export async function POST(req: Request) {
       receivedAt,
       authenticatedUser,
     });
+    separateHarnessBodies(harnessEvents);
     const harnessResult = appendDeepSeekHarnessOtelEvents(harnessEvents);
     const events = harnessPartition.hasRemainingResources
       ? normalizeOtlpLogs(harnessPartition.remainingBody, { receivedAt, authenticatedUser })
