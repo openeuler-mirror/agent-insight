@@ -22,16 +22,11 @@ import {projectCoreWorkbenchTaskStates,type WorkbenchCoreSnapshot,type Workbench
 export async function visibleExperimentTask<T extends {user?:string; configJson?: object; caseStatesJson?: object }>(task: T): Promise<T | null> {
   const experimentId = (task.configJson as { evalExperimentId?: unknown } | undefined)?.evalExperimentId;
   if (typeof experimentId !== 'string' || !experimentId) return task;
-  if(isStorageCoreEnabled()){
+  {
     const context=requireCoreExperimentContext();if(task.user!==context.actor.username)throw Object.assign(new Error('Task actor differs'),{status:403});
     const snapshot=await context.rpc('read',{experiment_id:experimentId}) as {gold_redacted?:boolean;experiment:WorkbenchCoreSnapshot&{deletedAt?:string}};
     if(snapshot.gold_redacted)throw Object.assign(new Error('Task-linked Experiment belongs to another actor'),{status:403});
     if(snapshot.experiment.deletedAt)return null;
     return {...task,caseStatesJson:projectCoreWorkbenchTaskStates(snapshot.experiment,(task.caseStatesJson||{}) as WorkbenchProjectedStates)};
   }
-  const experiment = await prisma.experiment.findUnique({ where: { id: experimentId }, select: { deletedAt: true } });
-  if (experiment?.deletedAt) return null;
-  const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId }, select: { caseKey: true } });
-  const deleted = new Set(cancellations.filter((row) => row.caseKey.startsWith('dataset:')).map((row) => row.caseKey.slice(8)));
-  return { ...task, caseStatesJson: Object.fromEntries(Object.entries(task.caseStatesJson || {}).filter(([key]) => !deleted.has(key))) };
 }

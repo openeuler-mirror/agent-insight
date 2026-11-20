@@ -36,7 +36,7 @@ export function projectDirectTrajectoryCase(experiment:Row,item:Row):Row{
  return {...merged,id:item.id,evaluatorRunId:experiment.id,user:experiment.user,status,rawAnalysisJson:JSON.stringify({...metadata,...raw,...watch,selectedEvaluators:metadata.selectedEvaluators,selectedEvaluatorNames:metadata.selectedEvaluatorNames}),createdAt:request.createdAt||item.createdAt,updatedAt:results.map(row=>String(row.updatedAt||'')).sort().at(-1)||experiment.updatedAt};
 }
 export async function directTrajectorySource<T>(legacy:T):Promise<PrismaClient>{
- if(!isStorageCoreEnabled())return legacy as unknown as PrismaClient;
+
  const context=requireCoreExperimentContext();
  const response=await context.rpc('read_view',{scope:'trajectory-direct'}) as {coverage:string;snapshots:ExperimentViewSnapshot[]};
  if(response?.coverage!=='complete'||!Array.isArray(response.snapshots))unavailable('Complete direct evaluation snapshot required');

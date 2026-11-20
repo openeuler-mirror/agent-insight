@@ -14,13 +14,9 @@
  * limitations under the License.
  */
 
-import type { Prisma } from '@prisma/client'
 import { createHash, randomBytes } from 'crypto'
-import { prisma } from '@/lib/storage/prisma'
 import { composeFaultPrompt, findSubmode } from '@/lib/fault-injection/compose-prompt'
 import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/engine'
-import { isFiBusinessTraceUsable } from '@/lib/fault-injection/trace-readiness'
-import { isStorageCoreEnabled } from '@/lib/storage-core/mode'
 
 import {coreFiRpc,coreFiOwner,newCoreFiId,refreshCoreFiProgress} from '@/lib/storage-core/fault-injection'
 import type {FaultInjectionTask,FaultInjectionRun} from '@prisma/client'
@@ -50,7 +46,7 @@ export async function createTaskWithRuns(input: {
   if (stable && (!/^task-[a-f0-9]{8,64}$/.test(stable.taskKey) || stable.runIds.length !== input.items.length || new Set(stable.runIds).size !== stable.runIds.length || stable.runIds.some(value => !/^ras-\d{8}T[0-9A-Za-z_-]+$/.test(value)))) throw new Error('FI stable identity is invalid')
   const stableCatalog = stable ? await listFaultsViaPython(input.platform) : undefined
   const stableHash = stable ? createHash('sha256').update(JSON.stringify({user: input.user, name: input.name || '', platform: input.platform, agent: input.agent, prompt: input.prompt, workspace: input.workspace, model: input.model || null, timeoutSeconds: input.timeoutSeconds ?? null, targetWorkerId: input.targetWorkerId || null, items: input.items, runIds: stable.runIds})).digest('hex') : undefined
-  if (isStorageCoreEnabled()) {
+  {
     const user = coreFiOwner(input.user), taskKey = stable?.taskKey || newTaskKey(), id = newCoreFiId()
     const items = input.items.map((item,index) => ({item_id:`item-${index+1}`,fault:item.fault,submode:item.submode||null,run_id:stable?.runIds[index]||newRunId(),status:'queued',phase:'queued',error:null as string|null,result:null as Record<string,unknown>|null}))
     const catalog = (stableCatalog || await listFaultsViaPython(input.platform)) as Array<{id?:string;name?:string;skillName?:string;skill_name?:string;submodes?:Array<{id:string;name:string}>}>
@@ -62,113 +58,6 @@ export async function createTaskWithRuns(input: {
     })
     return coreFiRpc<{task:FaultInjectionTask;runs:FaultInjectionRun[];items:typeof items}>('create',{task,runs})
   }
-  const create = async (store: Pick<typeof prisma, 'faultInjectionTask' | 'faultInjectionRun'>) => {
-  if (stable) {
-    const previous = await store.faultInjectionTask.findUnique({where: {taskKey: stable.taskKey}, include: {runs: true}})
-    if (previous) {
-      const saved = JSON.parse(previous.requestJson || '{}')
-      if (previous.user !== input.user || saved.coreRequestHash !== stableHash || previous.runs.length !== stable.runIds.length || previous.runs.some((row: {runId: string}) => !stable.runIds.includes(row.runId))) throw Object.assign(new Error('FI stable identity conflict'), {status: 409})
-      return {task: previous, runs: previous.runs, items: JSON.parse(previous.itemsJson)}
-    }
-  }
-  const taskKey = stable?.taskKey || newTaskKey()
-  const items = input.items.map((item, index) => ({
-    item_id: `item-${index + 1}`,
-    fault: item.fault,
-    submode: item.submode || null,
-    run_id: null as string | null,
-    status: 'queued',
-    phase: 'queued',
-    error: null as string | null,
-    result: null as Record<string, unknown> | null,
-  }))
-
-  const initialStatus = input.initialStatus || 'queued'
-  const requestJson = JSON.stringify({
-    timeoutSeconds: input.timeoutSeconds ?? null,
-    ...(stableHash ? {coreRequestHash: stableHash} : {}),
-  })
-
-  const task = await store.faultInjectionTask.create({
-    data: {
-      taskKey,
-      name: input.name || `注入任务 ${taskKey}`,
-      status: initialStatus,
-      platform: input.platform,
-      agent: input.agent,
-      prompt: input.prompt,
-      workspace: input.workspace,
-      model: input.model || null,
-      requestJson,
-      itemsJson: JSON.stringify(items),
-      progressJson: JSON.stringify({
-        total: items.length,
-        queued: items.length,
-        running: 0,
-        completed: 0,
-        failed: 0,
-        judge_skipped: 0,
-        stopped: 0,
-      }),
-      user: input.user,
-      startedAt: initialStatus === 'queued' ? null : new Date(),
-    },
-  })
-
-  const catalog = (stableCatalog || await listFaultsViaPython(input.platform)) as Array<{
-    id?: string
-    name?: string
-    skillName?: string
-    skill_name?: string
-    submodes?: Array<{ id: string; name: string }>
-  }>
-  const byFault = new Map(catalog.map((row) => [String(row.id || row.name || ''), row]))
-
-  const runs = []
-  for (const [index, item] of items.entries()) {
-    const runId = stable?.runIds[index] || newRunId()
-    item.run_id = runId
-    const faultMeta = byFault.get(item.fault)
-    const skillName =
-      faultMeta?.skillName || faultMeta?.skill_name || item.fault
-    const selected = findSubmode(faultMeta?.submodes || [], item.submode)
-    const prompt = composeFaultPrompt({
-      skillName,
-      basePrompt: input.prompt,
-      submode: selected,
-    })
-    const run = await store.faultInjectionRun.create({
-      data: {
-        runId,
-        fiTaskId: task.id,
-        itemId: item.item_id,
-        user: input.user,
-        platform: input.platform,
-        agent: input.agent,
-        fault: item.fault,
-        submode: item.submode,
-        status: 'queued',
-        queuedAt: new Date(),
-        requestJson: JSON.stringify({
-          prompt,
-          workspace: input.workspace,
-          model: input.model || null,
-          timeoutSeconds: input.timeoutSeconds ?? null,
-          targetWorkerId: input.targetWorkerId || null,
-        }),
-      },
-    })
-    runs.push(run)
-  }
-
-  const updatedTask = await store.faultInjectionTask.update({
-    where: { id: task.id },
-    data: { itemsJson: JSON.stringify(items) },
-  })
-
-  return { task: updatedTask, runs, items }
-  }
-  return stable ? prisma.$transaction((tx: Prisma.TransactionClient) => create(tx)) : create(prisma)
 }
 
 function looksLikeFiRunId(value: string): boolean {
@@ -206,132 +95,13 @@ export async function persistFiCollectIngress(input: {
     input.payload.sessionAligned !== false && isPlatformSessionId(rawTaskId)
   const sessionTaskId = sessionAligned ? rawTaskId : null
 
-  if (isStorageCoreEnabled()) {
+  {
     coreFiOwner(input.user)
     const {run}=await coreFiRpc<{run:FaultInjectionRun}>('collect',{runId:input.runId,workerId:input.workerId,claimToken:input.claimToken,data:{status:input.stopped?'stopped':sessionAligned?'completed':'failed',error:input.stopped?'stopped by user':sessionAligned?null:'session_unaligned: missing platform session id (FI runId is not a RAS join key)',sessionTaskId,faultActivated:Boolean(input.payload.faultActivated),faultActivatedAt:input.payload.faultActivatedAt!=null?new Date(input.payload.faultActivatedAt):null,injectionMethod:input.payload.injectionMethod||null,markersJson:JSON.stringify((input.payload.markers||[]).filter(marker=>!marker||typeof marker!=='object'||(marker as {kind?:unknown}).kind!=='evaluation'))}})
     return run
   }
-  const updated = await prisma.faultInjectionRun.update({
-    where: { runId: input.runId },
-    data: {
-      status: input.stopped ? 'stopped' : sessionAligned ? 'completed' : 'failed',
-      error: input.stopped
-        ? 'stopped by user'
-        : sessionAligned ? null
-          : 'session_unaligned: missing platform session id (FI runId is not a RAS join key)',
-      sessionTaskId,
-      faultActivated: Boolean(input.payload.faultActivated),
-      faultActivatedAt: input.payload.faultActivatedAt
-        ? new Date(input.payload.faultActivatedAt)
-        : null,
-      injectionMethod: input.payload.injectionMethod || null,
-      markersJson: JSON.stringify((input.payload.markers || []).filter((marker) =>
-        !marker || typeof marker !== 'object' || (marker as { kind?: unknown }).kind !== 'evaluation')),
-    },
-  })
-
-  // 实验「生成 Trace」依赖 Case.taskId；collect 对齐后立刻回填（避免评测时空轨迹）。
-  if (sessionTaskId && !isStorageCoreEnabled()) {
-    const fiKeys = Array.from(new Set([input.runId, updated.id].filter(Boolean)))
-    const trace = await loadBusinessSession(sessionTaskId, updated)
-    await prisma.experimentCase.updateMany({
-      where: {
-        fiRunId: { in: fiKeys },
-        OR: [{ taskId: null }, { taskId: '' }],
-      },
-      data: {
-        taskId: sessionTaskId,
-        ...(trace.ready && trace.execution ? { executionId: trace.execution.id } : {}),
-      },
-    })
-  }
-
-  return updated
-}
-
-/** Identity used to exclude RAS internal sessions from business Trace binding. */
-type FiTraceIdentity = { platform: string; agent: string; user?: string | null }
-
-/** Read the independent collector's business trace; never synthesize it from FI output. */
-async function loadBusinessSession(sessionTaskId: string, identity: FiTraceIdentity) {
-  const owner = identity.user ? { user: identity.user } : {}
-  const [session, execution] = await Promise.all([
-    prisma.session.findFirst({ where: { taskId: sessionTaskId, ...owner } }),
-    prisma.execution.findFirst({
-      where: { taskId: sessionTaskId, isSubagent: false, ...owner },
-      orderBy: { timestamp: 'desc' },
-      select: { id: true, agentName: true },
-    }),
-  ])
-  const ready = isFiBusinessTraceUsable({
-    platform: identity.platform, agent: identity.agent,
-    executionAgent: execution?.agentName,
-    interactions: session?.interactions, endTime: session?.endTime,
-  })
-  return {
-    execution, ready,
-  }
 }
 
 export async function refreshTaskProgress(taskId: string) {
-  if (isStorageCoreEnabled()) return refreshCoreFiProgress(taskId)
-  const task = await prisma.faultInjectionTask.findUnique({ where: { id: taskId } })
-  if (!task) return null
-  const runs = await prisma.faultInjectionRun.findMany({ where: { fiTaskId: taskId } })
-  type RunRow = (typeof runs)[number]
-  const items = JSON.parse(task.itemsJson || '[]') as Array<Record<string, unknown>>
-  for (const item of items) {
-    const run = runs.find((r: RunRow) => r.runId === item.run_id)
-    if (!run) continue
-    item.status = run.status
-    item.phase = run.status
-    item.error = run.error
-    item.result = run.outcome
-      ? {
-          outcome: run.outcome,
-          fault_containment_status: run.faultContainmentStatus,
-          reason: run.judgeReason,
-        }
-      : null
-  }
-  const progress = {
-    total: runs.length,
-    queued: runs.filter((r: RunRow) => r.status === 'queued').length,
-    running: runs.filter((r: RunRow) => ['collecting', 'judging'].includes(r.status)).length,
-    completed: runs.filter((r: RunRow) => r.status === 'completed').length,
-    // Historical judge_skipped rows remain terminal; new collections never create them.
-    judge_skipped: runs.filter((r: RunRow) => r.status === 'judge_skipped').length,
-    failed: runs.filter((r: RunRow) => r.status === 'failed').length,
-    stopped: runs.filter((r: RunRow) => r.status === 'stopped').length,
-  }
-  const finished =
-    progress.completed +
-    progress.judge_skipped +
-    progress.failed +
-    progress.stopped
-  let status = task.status
-  if (progress.running > 0) {
-    status = 'running'
-  } else if (progress.queued === progress.total && progress.total > 0) {
-    status = 'queued'
-  } else if (progress.stopped && progress.stopped + progress.failed === progress.total) {
-    status = 'stopped'
-  } else if (progress.failed && finished === progress.total) status = 'failed'
-  else if (finished === progress.total && progress.total > 0) {
-    status = 'completed'
-  } else if (progress.queued > 0) {
-    status = 'queued'
-  } else status = 'running'
-
-  return prisma.faultInjectionTask.update({
-    where: { id: taskId },
-    data: {
-      itemsJson: JSON.stringify(items),
-      progressJson: JSON.stringify(progress),
-      status,
-      startedAt:
-        status === 'running' && !task.startedAt ? new Date() : task.startedAt,
-      finishedAt: status === 'running' || status === 'queued' ? null : new Date(),
-    },
-  })
+  return refreshCoreFiProgress(taskId)
 }

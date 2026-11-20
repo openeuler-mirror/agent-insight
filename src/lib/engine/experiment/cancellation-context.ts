@@ -39,7 +39,7 @@ export function markExperimentCleanupUnconfirmed(): void {
 }
 
 export async function assertExperimentActive(experimentId: string, caseId?: string): Promise<void> {
-  if (isStorageCoreEnabled()) {
+  {
     const snapshot = await requireCoreExperimentContext().rpc('read', {experiment_id: experimentId}) as {experiment?: {scope?:string;status: string; deletedAt?: string;configSnapshotJson?:string;coreActiveCancellationIds?:string[]; cancellations?:Array<{id?:string;caseKey:string}>;cases?: Array<{id: string; deletedAt?: string;caseValuesJson?:string}>}};
     const experiment = snapshot.experiment;
     const removed=new Set(experiment?activeCoreWorkbenchCancellations(experiment).map(row=>row.caseKey):[]);
@@ -52,14 +52,6 @@ export async function assertExperimentActive(experimentId: string, caseId?: stri
       throw Object.assign(new Error('实验或 Case 已取消'), {code: 'EXPERIMENT_CANCELLED', status: 409});
     }
     return;
-  }
-  const experiment = await prisma.experiment.findUnique({ where: { id: experimentId }, select: { deletedAt: true, status: true } });
-  const row = caseId ? await prisma.experimentCase.findUnique({ where: { id: caseId }, select: { deletedAt: true } }) : null;
-  const cancelled = await prisma.experimentCancellation.findFirst({
-    where: { experimentId, caseKey: { in: ['', ...(caseId ? [caseId] : [])] } }, select: { id: true },
-  });
-  if (!experiment || experiment.deletedAt || experiment.status === 'cancelled' || row?.deletedAt || cancelled) {
-    throw Object.assign(new Error('实验或 Case 已取消'), { code: 'EXPERIMENT_CANCELLED', status: 409 });
   }
 }
 
@@ -77,7 +69,7 @@ export async function withExperimentCancellation<T>(experimentId: string, caseId
   controller.signal.throwIfAborted();
   const coreMode = isStorageCoreEnabled();
   const operationId = randomUUID();
-  if (!coreMode) await prisma.experimentLocalExecution.create({ data: { id: operationId, experimentId, caseKey: caseId || '' } });
+
   if (caseId) active.set(operationKey(experimentId, caseId), activeCaseOperations(caseId, experimentId) + 1);
   const timer = setInterval(() => void check(), 500);
   timer.unref?.();

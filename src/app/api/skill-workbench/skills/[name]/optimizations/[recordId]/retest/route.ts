@@ -29,16 +29,14 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
   }
   try {
     const body = await request.json();
-    const { username } = isStorageCoreEnabled() ? { username: requireCoreExperimentContext().actor.username } : await resolveUser(request, body.user);
+    const { username } = ({ username: requireCoreExperimentContext().actor.username });
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { name, recordId } = await context.params;
     const result = await retestOptimizationCandidate({ user: username, skillName: decodeURIComponent(name), recordId });
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof RetestError) return NextResponse.json({ error: error.message }, { status: error.status });
-    if (isStorageCoreEnabled()) return coreExperimentFailure(error);
-    console.error('[skill-workbench retest POST] failed:', error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : '候选复测失败' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
 
   },["write","execute"]);

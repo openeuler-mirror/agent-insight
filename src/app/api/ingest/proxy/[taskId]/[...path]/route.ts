@@ -292,6 +292,6 @@ async function proxyRequest(
 }
 
 export async function POST(request:Request,context:{params:Promise<{taskId:string;path:string[]}>}){
- if(!isStorageCoreEnabled())return proxyRequest(request,context);
+
  try{const identity=await resolveCollectorRequest(request,'snapshot',{},'provider');return withCoreCollectorIdentity(identity,async()=>{const {taskId}=await context.params;await collectorPrivate(identity,'model_scope',{task_id:taskId});return proxyRequest(request,context);});}catch(error){return collectorFailure(error);}
 }

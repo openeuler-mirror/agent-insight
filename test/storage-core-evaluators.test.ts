@@ -10,7 +10,7 @@ import {createIsolatedDatabase} from './helpers/isolated-database';
 
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'core-evaluator-'));
 const restore=activateIsolatedHome(home);const database=createIsolatedDatabase();
-test.after(async()=>{const {prismaRaw}=await import('../src/lib/storage/prisma');await prismaRaw.$disconnect();database.dispose();restore();fs.rmSync(home,{recursive:true,force:true});});
+test.after(async()=>{const {prismaRaw}=await import('./helpers/historical-prisma');await prismaRaw.$disconnect();database.dispose();restore();fs.rmSync(home,{recursive:true,force:true});});
 const token='session_'+'E'.repeat(43);
 const profile={username:'alice',principal_id:'alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]};
 const card={id:'custom-a',name:'judge',source:'custom',evaluatorType:'LLM',category:'res',llmConfig:{model:'fixture',systemPrompt:'Judge {{output}}'},opaque:{中文:[0.25,false,null]}};
@@ -49,7 +49,7 @@ test('background actor context is revalidated and preserves frozen safe release 
 
 test('core storage without actor scope fails before legacy evaluator migration or Prisma writes',async()=>{
  const {readUserCustomEvaluators,writeUserCustomEvaluators}=await import('../src/server/user_evaluators_storage');
- const {prismaRaw}=await import('../src/lib/storage/prisma');const before=await prismaRaw.customEvaluatorList.count();process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
+ const {prismaRaw}=await import('./helpers/historical-prisma');const before=await prismaRaw.customEvaluatorList.count();process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
  try{
   const denied=(error:unknown)=>!!error&&typeof error==='object'&&'status'in error&&error.status===503;
   await assert.rejects(readUserCustomEvaluators('forged'),denied);await assert.rejects(writeUserCustomEvaluators('forged',[card]),denied);
@@ -57,7 +57,7 @@ test('core storage without actor scope fails before legacy evaluator migration o
  }finally{delete process.env.AGENT_INSIGHT_TRACE_STORAGE;}
 });
 test('original evaluator PUT ignores caller user, preserves normalized JSON and never registers a legacy Agent',async()=>{
- const {PUT}=await import('../src/app/api/user-evaluators/route');const {prismaRaw}=await import('../src/lib/storage/prisma');await api();
+ const {PUT}=await import('../src/app/api/user-evaluators/route');const {prismaRaw}=await import('./helpers/historical-prisma');await api();
  const old=globalThis.fetch;process.env.AGENT_INSIGHT_TRACE_STORAGE='core';let saved=false;const before=await prismaRaw.customEvaluatorList.count();
  globalThis.fetch=async(url,init)=>{
   if(new URL(String(url)).pathname==='/v1/auth/me')return Response.json(profile);

@@ -75,7 +75,7 @@ export class Callback4AgentInsight extends BaseCallbackHandler {
     this.langfuseHandler = createLangfuseHandler(this.langfuseSessionId);
   }
 
-  private async saveRecord(record:ExecutionRecord){if(!isStorageCoreEnabled())return saveExecutionRecord(record);const identity=this.collectorIdentity;if(!identity)throw Object.assign(new Error('Skill generation collector actor missing'),{status:403});return withCoreCollectorIdentity(identity,()=>saveExecutionRecord({...record,user:identity.username}));}
+  private async saveRecord(record:ExecutionRecord){const identity=this.collectorIdentity;if(!identity)throw Object.assign(new Error('Skill generation collector actor missing'),{status:403});return withCoreCollectorIdentity(identity,()=>saveExecutionRecord({...record,user:identity.username}));}
 
   getLangfuseHandler(): CallbackHandler | null {
     return this.langfuseHandler;

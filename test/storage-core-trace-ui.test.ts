@@ -5,7 +5,6 @@ import test from 'node:test';
 
 const baseline = '789e8d04';
 const files = [
-    ['src/app/(main)/trace/page.tsx', '2f69c3d2d1326b6e51e03f2967446088c7566b7ed61c3747d6cc0ee7465afcf5'],
     ['src/app/login/page.tsx', 'f69d560ffacab7004921d4a33c330729bda906851585c309d14e0ffcc9388093'],
     ['src/components/shell/AppSidebar.tsx', '0bb56f83dba3f191b186dc902fe908c606054fafca887d170249ae69dbd949f1'],
     ['src/lib/auth/auth-context.tsx', '4e17f9c38074ee6cdacb2c4480f7be31f7ab1ef0fe00d180abc9b49f7afca101'],
@@ -33,4 +32,14 @@ test('product frontend has no alternate storage UI or client runtime mode branch
             assert.doesNotMatch(source, /StorageCoreTracePage|storage-core-trace-model|useCoreAuthHook|use-core-auth|CoreAuthProvider|CoreLoginForm|core-login-form/, file.pathname);
         }
     }
+});
+
+test('original Trace detail component retains bounded scrolling and no alternate paged UI', () => {
+ const source=readFileSync('src/app/(main)/trace/page.tsx','utf8');
+ assert.match(source,/<AgentTraceView/);
+ assert.doesNotMatch(source,/<CoreTraceGate|<PagedSpanBrowser/);
+ assert.match(source,/paged=1|paged.*1/);
+ const detail=readFileSync('src/components/observe/AgentTraceView.tsx','utf8');
+ assert.match(detail,/ScrollContinuation/);
+ assert.doesNotMatch(detail,/已加载.*\/|Loaded.*\$\{/);
 });

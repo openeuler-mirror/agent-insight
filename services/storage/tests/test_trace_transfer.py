@@ -38,7 +38,8 @@ class MemoryFacts:
     def write_payload_bundles(self,values):
         return [self.write_payload_bundle(value['workspace_id'],value['trace_bucket'],value['trace_id'],value['span_id'],value['sections']) for value in values]
     def read_spans(self,ws,bucket,trace,after_span_id='',limit=200,**options):
-        return [copy.deepcopy(row) for (w,t,s),row in sorted(self.spans.items()) if w==ws and t==trace and s>after_span_id][:limit]
+        parent=options.get('parent_span_id')
+        return [copy.deepcopy(row) for (w,t,s),row in sorted(self.spans.items()) if w==ws and t==trace and s>after_span_id and (parent is None or row.get('parent_span_id','')==parent)][:limit]
     def read_payload(self,ws,bucket,trace,span,revision,section,after_chunk=-1,limit=4):
         sections=self.payloads[(ws,trace,span,revision)]
         if section not in sections:return {'chunks':[],'chunk_count':0,'next_chunk':None,'complete':True,'available':False}

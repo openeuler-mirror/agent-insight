@@ -332,11 +332,12 @@ class PlatformControls:
         metadata=body.get('metadata',{})
         if not isinstance(metadata,dict) or any(field not in model['fields'] or _body_field(field) for field in metadata):raise ValueError('Fixed control metadata selector required')
         if kind=='skillVersion' and body.get('body') and not body.get('ids') and not body.get('parents') and not metadata.get('skillId'):raise Forbidden('Selected Skill versions required')
-        result=[];found_denied=False
+        result=[];found_denied=False;readable=set()
         for raw in rows:
             row=dict(raw)
             if (live_only or self.capability or getattr(self,'live_only',False)) and is_historical_control(con,workspace,kind,row['record_id']):continue
             if not self._can_read(con,scope,grant,row,private=kind in SECRET_KINDS,preparation=preparation):found_denied=True;continue
+            readable.add(row['record_id'])
             data=json.loads(row['metadata_json'])
             if any(data.get(field) not in value if isinstance(value,list) else data.get(field)!=value for field,value in metadata.items()):continue
             if body.get('body'):data=self._data(row)
@@ -345,7 +346,7 @@ class PlatformControls:
                 for field in fields:
                     if field in full:data[field]=full[field]
             result.append({'record_id':row['record_id'],'revision':str(row['revision']),'owner_principal_id':row['owner_principal_id'],'data':data,**({'file_bundle':self._file_bundle(row)} if kind=='skillVersion' and (body.get('body') or any(field in {'files','assetPath'} for field in fields)) else {})})
-        if body.get('ids') and not result and (found_denied or any(self._row(con,workspace,kind,identity) and not ((live_only or self.capability or getattr(self,'live_only',False)) and is_historical_control(con,workspace,kind,identity)) for identity in body['ids'])):raise Forbidden('Control record belongs to another actor')
+        if body.get('ids') and not result and (found_denied or any(identity not in readable and self._row(con,workspace,kind,identity) and not ((live_only or self.capability or getattr(self,'live_only',False)) and is_historical_control(con,workspace,kind,identity)) for identity in body['ids'])):raise Forbidden('Control record belongs to another actor')
         if len(_json(result).encode())>MAX_BYTES:raise StorageError('Control response exceeds byte budget')
         return {'rows':result,'scope_revision':str(self._scope_revision(con,workspace,scope.principal_id,kind))}
 

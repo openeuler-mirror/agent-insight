@@ -56,7 +56,7 @@ async function resolve(request:Request,input:CollectorIdentityInput,options:Comp
  if(directActors.some(actor=>actor.principal!==directActors[0].principal||actor.workspace!==directActors[0].workspace))throw failure(403,'Collector API credentials identify different scopes');
  let device:{clientId:string;user:string}|undefined;
  if(input.authorizationKind!=='provider'&&input.framework?.toLowerCase()==='opencode'&&(request.headers.has('x-agent-insight-client-id')||/^Bearer\s+dc_/i.test(authorization?.trim()||''))){
-  try{const {authenticateDevice}=await import('@/lib/reliability/client-registry');device=await authenticateDevice(request);}
+  try{const {authenticateCoreControlDevice}=await import('./control-auth');device=await authenticateCoreControlDevice(request,options);}
   catch(error){if(![401,403,404].includes(statusOf(error)||0))throw error;invalid=error;}
  }
  let deviceActor:CoreBackgroundActor|undefined;

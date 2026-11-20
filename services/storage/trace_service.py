@@ -221,6 +221,20 @@ class TraceRuntime:
         self.stop=threading.Event();self.worker=None;self.last_worker_error=None
         self.login_lock=threading.Lock();self.login_attempts=[]
 
+    def readiness(self):
+        state = {'status': 'unavailable', 'schema_version': None, 'clickhouse': 'unavailable',
+                 'worker_enabled': self.worker is not None}
+        try:
+            plan = self.control.migration_plan()
+            state['schema_version'] = plan['current_version']
+            if plan['pending']:
+                return 503, state
+            analytical = self.facts.check_schema()
+        except Exception:
+            return 503, state
+        return 200, {**state, 'status': 'ready', 'clickhouse': analytical,
+                     'worker_error': self.last_worker_error}
+
     def profile(self, token):
         with self.control.read_transaction() as con:
             scope=self.iam._scope(con,token)
@@ -732,7 +746,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 if index is not None:
                     if not re.fullmatch(r'[0-9]{1,8}',index):raise ValueError('invalid interaction index')
                     index=int(index)
-                result=reads.session(token,workspace,route['trace_id'],view=view,index=index)
+                result=reads.session_page(token,workspace,route['trace_id'],params.get('cursor'),params.get('spanId'),index or 0) if params.get('paged')=='1' else reads.session(token,workspace,route['trace_id'],view=view,index=index)
                 annotations=metadata.properties(token,workspace,route['trace_id'])
                 for key in ('label','query'):
                     if key in annotations.get('override_fields',[]):result[key]=annotations.get(key)
@@ -778,8 +792,8 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 if not re.fullmatch(r'-?[0-9]{1,20}',value):raise ValueError('invalid number')
                 return int(value)
             if self.command=='GET' and pieces==['v1','health']:
-                plan=runtime.control.migration_plan()
-                self.reply(200,{'status':'ready','schema_version':plan['current_version'],'worker_enabled':runtime.worker is not None,'worker_error':runtime.last_worker_error});return
+                status, health = runtime.readiness()
+                self.reply(status, health);return
             if self.command=='POST' and pieces==['v1','compat','platform-control-capability']:
                 from .controller_protocol import verify_controller_proof
                 from .platform_controls import PlatformControls
@@ -913,9 +927,13 @@ def runtime_from_config(path):
         cls=PostgreSQLControlStore if backend=='postgresql' else OpenGaussControlStore
         control=cls.from_dsn(config['control']['dsn'],schema=config['control']['schema'],artifact_directory=config['control']['artifacts'])
     else:raise ValueError('unknown transactional backend')
+    pending_limit=config.get('max_pending_ingest_batches',256)
+    if type(pending_limit) is not int or not 1<=pending_limit<=10000:raise ValueError('max_pending_ingest_batches must be between 1 and 10000')
+    control.max_pending_ingest_batches=pending_limit
     plan=control.migration_plan()
     if plan['current_version']!=len(load_migrations(backend)) or plan['pending']:raise ValueError('explicit schema upgrade is required before service startup')
     facts=ClickHouseStore(**config['clickhouse'])
+    facts.check_schema()
     runtime=TraceRuntime(control,facts,cursor_secret=bytes.fromhex(config['cursor_secret_hex']),default_workspace=config.get('default_workspace'),controller_key_file=config.get('controller_key_file'))
     return runtime,config
 

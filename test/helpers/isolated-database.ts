@@ -35,6 +35,9 @@ export function createIsolatedDatabase() {
       '--schema', path.resolve('prisma/schema.prisma'), '--skip-generate',
     ], { env: { ...process.env, CHECKPOINT_DISABLE: '1' }, encoding: 'utf8', timeout: 120_000 })
     assert.equal(result.status, 0, result.error?.message || result.stderr || 'Temporary test database initialization failed')
+    const controller = path.join(home, 'controller-key')
+    fs.writeFileSync(controller, 'a'.repeat(64), { mode: 0o600 })
+    process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE = controller
     return { home, dispose }
   } catch (error) {
     dispose()

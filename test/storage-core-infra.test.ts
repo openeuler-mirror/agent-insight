@@ -71,7 +71,7 @@ test('original Infra routes use current IAM and private HTTP with source secrets
   response=await sources.DELETE(req('/api/observe/infra/sources?id='+source.id,'DELETE'));assert.equal((await response.json()).deleted,1);
   response=await history.GET(req('/api/observe/infra/history?sourceId='+source.id));assert.equal((await response.json()).count,0);
   response=await sources.POST(req('/api/observe/infra/sources','POST',{endpoint:source.endpoint}));assert.notEqual((await response.json()).source.id,source.id);
-  const {prismaRaw}=await import('@/lib/storage/prisma');assert.equal(await prismaRaw.infraSource.count(),0);assert.equal(await prismaRaw.infraMetricSample.count(),0);await prismaRaw.$disconnect();
+  const {prismaRaw}=await import('./helpers/historical-prisma');assert.equal(await prismaRaw.infraSource.count(),0);assert.equal(await prismaRaw.infraMetricSample.count(),0);await prismaRaw.$disconnect();
  }finally{globalThis.fetch=originalFetch;if(child.exitCode===null)child.kill('SIGTERM');await exited;for(const key of Object.keys(process.env))if(!(key in oldEnv))delete process.env[key];Object.assign(process.env,oldEnv);}
 });
 test.after(()=>database.dispose({preserveFiles:true}));

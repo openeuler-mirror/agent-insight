@@ -3,7 +3,7 @@ import test from 'node:test';
 import {execFileSync} from 'node:child_process';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
-import {prisma} from '@/lib/storage/prisma';
+import {prisma} from './helpers/historical-prisma';
 import {GET} from '@/app/api/experiments/[id]/route';
 import {withCoreExperimentReadRoute,withCoreExperiments} from '@/lib/storage-core/experiments';
 import {GET as submissionContent} from '@/app/api/benchmark/v1/artifacts/[artifactId]/content/route';

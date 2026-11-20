@@ -137,8 +137,7 @@ const EVALUATOR_LABELS: Record<string, string> = {
 };
 
 function generateRunId(): string {
-    if(isStorageCoreEnabled())return 'trun_'+createHash('sha256').update(requireCoreExperimentContext().operationKey).digest('hex').slice(0,32);
-    return `trun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return 'trun_'+createHash('sha256').update(requireCoreExperimentContext().operationKey).digest('hex').slice(0,32);
 }
 
 const CUSTOM_EVALUATOR_VARIABLE_RE = /\{\{\s*(input|dataset_input|output|reference_output|trajectory)\s*\}\}/g;
@@ -921,9 +920,7 @@ export async function POST(request: Request) {
         // 归属修复(往后自动):平台服务端跑出来的执行 trace 默认记在服务账号(admin)名下,这里把
         // 本次评测引用的"被执行 trace"归还给评测发起人。只动服务账号拥有的 trace(不碰别人已拥有的)。
         // fire-and-forget,不阻塞评测响应;失败也不影响主流程。
-        if(!isStorageCoreEnabled())void Promise.all(created.map(c =>
-            reattributeServiceTraceOwner((c.taskId || c.executionId || '').trim(), user).catch(() => false)
-        ));
+
 
         const runnableIds = created
             .filter(c => c.taskId || c.executionId)
@@ -2141,89 +2138,9 @@ async function derivePointsAfterDone(
 
 /** 并发执行（concurrency=RUN_CONCURRENCY），失败的行单独标 failed，不影响其他 */
 async function runEvaluations(user: string, evaluatorRunId: string, resultIds: string[]) {
-    if(isStorageCoreEnabled()){
+    {
         const context=requireCoreExperimentContext();const snapshot=await context.rpc('read',{experiment_id:evaluatorRunId,case_ids:resultIds}) as {experiment:{cases:Array<{id:string;directTrajectory:{rawAnalysisJson:string}}>}};
         for(const item of snapshot.experiment.cases){const metadata=safeParseRecord(item.directTrajectory.rawAnalysisJson);const evaluators=(metadata.selectedEvaluators as string[]).map(id=>'__direct_trajectory__:'+id);await startCoreExperiment(context,evaluatorRunId,{caseIds:[item.id],evaluatorIds:evaluators});}
         await activateExperimentWork(context,evaluatorRunId);return;
     }
-
-    const startedAt = Date.now();
-    console.log(`[trajectory-eval] run ${evaluatorRunId} started: ${resultIds.length} traces, concurrency=${RUN_CONCURRENCY}`);
-
-    const queue = [...resultIds];
-    let activeCount = 0;
-    let doneCount = 0;
-    let failCount = 0;
-
-    await new Promise<void>(resolveAll => {
-        const tryStartNext = () => {
-            // 被「终止」后:不再派发新行,并清空剩余队列,让下面的收尾条件能成立(否则 promise 永挂)。
-            if (getTrajectoryEvalRunSignal(evaluatorRunId)?.aborted) queue.length = 0;
-            while (activeCount < RUN_CONCURRENCY && queue.length > 0) {
-                const id = queue.shift()!;
-                activeCount++;
-                runOneEvaluation(user, id)
-                    .then(() => {
-                        doneCount++;
-                        console.log(`[trajectory-eval]   ✓ ${id} done (${doneCount}+${failCount}/${resultIds.length})`);
-                    })
-                    .catch(async err => {
-                        failCount++;
-                        const stage = err instanceof StagedEvaluationError ? err.stage : 'unknown';
-                        const msg = err?.message || 'unknown error';
-                        const diagnostic = buildDiagnosticFromError(err);
-                        console.error(`[trajectory-eval]   ✗ ${id} failed [${stage}]: ${msg}`);
-                        const existing = await prisma.trajectoryEvalResult
-                            .findUnique({ where: { id }, select: { rawAnalysisJson: true } })
-                            .catch(() => null);
-                        await prisma.trajectoryEvalResult
-                            .update({
-                                where: { id },
-                                data: {
-                                    status: 'failed',
-                                    errorMessage: msg,
-                                    rawAnalysisJson: mergeDiagnosticIntoRawAnalysis(existing?.rawAnalysisJson, diagnostic),
-                                },
-                            })
-                            .catch(e2 => console.error(`[trajectory-eval] failed to mark ${id} as failed: ${e2.message}`));
-                    })
-                    .finally(() => {
-                        activeCount--;
-                        // 终止后清空剩余队列,保证"queue 空 && 无在跑"的收尾条件最终成立。
-                        if (getTrajectoryEvalRunSignal(evaluatorRunId)?.aborted) queue.length = 0;
-                        if (queue.length === 0 && activeCount === 0) {
-                            resolveAll();
-                        } else {
-                            tryStartNext();
-                        }
-                    });
-            }
-        };
-        tryStartNext();
-    });
-
-    // 兜底：只恢复本轮队列里确实残留的行，避免误伤同一 run 中刚追加/仍在运行的评测。
-    try {
-        const stuck = await prisma.trajectoryEvalResult.updateMany({
-            where: {
-                id: { in: resultIds },
-                evaluatorRunId,
-                updatedAt: { lt: new Date(startedAt) },
-                status: { in: ['pending', 'running'] },
-            },
-            data: {
-                status: 'failed',
-                errorMessage: '[recover] 进程异常或评测器未返回，已自动标 failed',
-            },
-        });
-        if (stuck.count > 0) {
-            console.warn(`[trajectory-eval] run ${evaluatorRunId} recovered ${stuck.count} stuck rows.`);
-            failCount += stuck.count;
-        }
-    } catch (e) {
-        console.error(`[trajectory-eval] failed to recover stuck rows: ${(e as Error).message}`);
-    }
-
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-    console.log(`[trajectory-eval] run ${evaluatorRunId} finished: ${doneCount} done, ${failCount} failed, ${elapsed}s`);
 }

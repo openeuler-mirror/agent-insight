@@ -113,10 +113,10 @@ export async function GET(
         if (!user || !taskId) {
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
         }
-        if(isStorageCoreEnabled())await assertCoreBatchScope('read');
+        await assertCoreBatchScope('read');
         const task = await prisma.batchEvalTask.findFirst({ where: { id: taskId, user } });
         if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-        const visible = await (isStorageCoreEnabled()?projectCoreBatchTask:visibleExperimentTask)({
+        const visible = await ((projectCoreBatchTask))({
             ...task,
             configJson: JSON.parse(task.configJson || '{}'),
             caseStatesJson: JSON.parse(task.caseStatesJson || '{}'),
@@ -125,8 +125,7 @@ export async function GET(
         return visible ? NextResponse.json(visible) : NextResponse.json({ error: 'Task deleted' }, { status: 404 });
     } catch (err) {
         console.error('[BATCH_TASKS_GET_ONE] Failed:', err);
-        if(isStorageCoreEnabled())return coreExperimentFailure(err);
-        return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
+        return coreExperimentFailure(err);
     }
 }
 
@@ -153,7 +152,7 @@ export async function PATCH(
         let priorRecord: BatchEvalTask | undefined;
         let priorConfig: Record<string,unknown> = {};
         let priorStates: Record<string,unknown> = {};
-        if(isStorageCoreEnabled()){
+        {
             await assertCoreBatchScope('patch');
             const task=await prisma.batchEvalTask.findFirst({where:{id:taskId,user}});
             if(!task)return NextResponse.json({error:'Task not found'},{status:404});
@@ -161,10 +160,10 @@ export async function PATCH(
             if((priorConfig.coreDatasetOperation as {phase?:string;cancelRequested?:boolean}|undefined)?.phase==='prepared'&&!(priorConfig.coreDatasetOperation as {cancelRequested?:boolean}).cancelRequested)throw Object.assign(new Error('Batch preparation is already running'),{status:409});
         }
         const data: Record<string, string> = {};
-        if (configJson !== undefined) data.configJson = JSON.stringify(isStorageCoreEnabled()?preserveCoreBatchBindings(priorConfig,configJson):configJson);
-        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(isStorageCoreEnabled()?{
+        if (configJson !== undefined) data.configJson = JSON.stringify((preserveCoreBatchBindings(priorConfig,configJson)));
+        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(({
             ...Object.fromEntries(Object.entries(caseStatesJson as Record<string,unknown>).map(([key])=>[key,{status:'pending'}])),...priorStates,
-        }:caseStatesJson);
+        }));
         if (traceEvalStatesJson !== undefined) data.traceEvalStatesJson = JSON.stringify(traceEvalStatesJson);
 
         if (Object.keys(data).length === 0) {
@@ -186,11 +185,10 @@ export async function PATCH(
             caseStatesJson: JSON.parse(updated.caseStatesJson || '{}'),
             traceEvalStatesJson: JSON.parse(updated.traceEvalStatesJson || '{}'),
         };
-        return NextResponse.json(isStorageCoreEnabled()?await projectCoreBatchTask(parsed):parsed);
+        return NextResponse.json((await projectCoreBatchTask(parsed)));
     } catch (err) {
         console.error('[BATCH_TASKS_PATCH] Failed:', err);
-        if(isStorageCoreEnabled())return coreExperimentFailure(err);
-        return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+        return coreExperimentFailure(err);
     }
 }
 
@@ -224,7 +222,7 @@ export async function POST(
         if (!user || !taskId) {
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
         }
-        if(isStorageCoreEnabled()){
+        {
             await assertCoreBatchScope(action);
             const task=await prisma.batchEvalTask.findFirst({where:{id:taskId,user}});
             if(!task)return NextResponse.json({error:'Task not found'},{status:404});
@@ -306,8 +304,7 @@ export async function POST(
         return NextResponse.json({ ok: true, taskId, startedAt: Date.now() });
     } catch (err) {
         console.error('[BATCH_TASKS_POST] Failed:', err);
-        if(isStorageCoreEnabled())return coreExperimentFailure(err);
-        return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+        return coreExperimentFailure(err);
     }
 }
 

@@ -8,11 +8,11 @@ import ts from 'typescript';
 
 function load(file:string,dependencies:Record<string,unknown>){const module={exports:{}};const code=ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;vm.runInNewContext(code,{module,exports:module.exports,require:(name:string)=>{if(!(name in dependencies))throw Error('Unexpected dependency '+name);return dependencies[name];},process,Request,Response,URL,URLSearchParams,Buffer,Map,Set,Date,JSON,Promise,structuredClone,setTimeout,clearTimeout,setInterval,clearInterval,setImmediate,console:{warn:()=>{},error:()=>{},log:()=>{}}});return module.exports as Record<string,Function>;}
 
-function startupFixture(core:boolean){
+function startupFixture(ready=true){
  const legacy:string[]=[];let starts=0;let analyticsStarts=0;let collectorStarts=0;let logStarts=0;const noop=async()=>{};
  const api=load('src/instrumentation-node.ts',{
-  'node:fs':{existsSync:()=>false},'node:path':path,'child_process':{spawn:()=>{throw Error('unexpected subprocess');}},'@/lib/env':{getAgentInsightHome:()=>'/isolated'},
-  '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},'@/lib/storage-core/experiment-background':{startCoreExperimentBackground:()=>{starts++;}},
+  'node:fs':{existsSync:()=>false},'node:path':path,'child_process':{spawn:()=>{throw Error('unexpected subprocess');}},'@/lib/env':{getAgentInsightHome:()=>'/isolated',loadAgentInsightEnv:()=>{}},
+  '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>true},'../scripts/storage-core-preflight.cjs':{preflight:async()=>{if(!ready)throw Error('ClickHouse unavailable');}},'@/lib/storage-core/experiment-background':{startCoreExperimentBackground:()=>{starts++;}},
   '@/lib/storage-core/collector-worker':{startCoreCollectorWorker:()=>{collectorStarts++;}},'@/lib/storage-core/collector-logs':{startCoreCollectorLogs:()=>{logStarts++;}},
   '@/lib/storage-core/analytics':{startCoreAnalyticsBackground:()=>{analyticsStarts++;}},
   '@/lib/engine/experiment/cancellation-service':{startExperimentCancellationWatchdog:()=>legacy.push('cancel-watchdog')},
@@ -31,7 +31,7 @@ function startupFixture(core:boolean){
 
 test('core startup preserves old evaluation, grayscale and benchmark data without starting their legacy reapers',async()=>{const fixture=startupFixture(true);await fixture.api.setupNodeRuntime();assert.deepEqual(fixture.legacy,[]);assert.equal(fixture.starts,1);assert.equal(fixture.analyticsStarts,1);assert.equal(fixture.collectorStarts,1);assert.equal(fixture.logStarts,1);});
 
-test('legacy startup retains its original reapers, resumers and watchers',async()=>{const fixture=startupFixture(false);await fixture.api.setupNodeRuntime();assert.equal(fixture.starts,0);assert.equal(fixture.analyticsStarts,0);assert.equal(fixture.collectorStarts,0);assert.equal(fixture.logStarts,0);for(const name of ['cancel-watchdog','trajectoryEvalResult','skillTriggerEvalRun','grayscale','benchmark-watchdog','benchmark-reap','benchmark-resume','benchmark-eval-watchdog','benchmark-eval-reap','benchmark-eval-resume','benchmark-eval-continue','experiment-watch'])assert.ok(fixture.legacy.includes(name),name);});
+test('unavailable analytical storage prevents all background workers from starting',async()=>{const fixture=startupFixture(false);await assert.rejects(fixture.api.setupNodeRuntime(),/ClickHouse unavailable/);assert.equal(fixture.starts,0);assert.equal(fixture.analyticsStarts,0);assert.equal(fixture.collectorStarts,0);assert.equal(fixture.logStarts,0);assert.deepEqual(fixture.legacy,[]);});
 
 test('restart identity loading authenticates configured credentials and keeps the legacy model owner separate',async()=>{
  const {configuredCoreBackgroundActors}=await import('@/lib/storage-core/compat');

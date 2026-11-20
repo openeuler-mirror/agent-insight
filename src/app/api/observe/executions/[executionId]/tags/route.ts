@@ -39,64 +39,17 @@ function toErrorResponse(error: unknown) {
 type RouteContext = { params: Promise<{ executionId: string }> };
 
 export async function GET(request: Request, context: RouteContext) {
-  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
-  try {
-    const { executionId } = await context.params;
-    const { searchParams } = new URL(request.url);
-    return NextResponse.json({ tags: await getExecutionTraceTags(executionId, searchParams.get('user') || '') });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
+  return handleCompatibleTraceTags(request, (await context.params).executionId);
 }
 
 export async function PUT(request: Request, context: RouteContext) {
-  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
-  try {
-    const { executionId } = await context.params;
-    const body = await request.json();
-    const user = String(body.user || '').trim();
-    const tags = await replaceExecutionTraceTags(executionId, user, body.tagIds);
-
-    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.tag.bind' });
-
-    return NextResponse.json({ tags });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
+  return handleCompatibleTraceTags(request, (await context.params).executionId);
 }
 
 export async function POST(request: Request, context: RouteContext) {
-  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
-  try {
-    const { executionId } = await context.params;
-    const body = await request.json();
-    const user = String(body.user || '').trim();
-    const tags = await addExecutionTraceTags(executionId, user, body.tagIds);
-
-    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.tag.bind' });
-
-    return NextResponse.json({ tags });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
+  return handleCompatibleTraceTags(request, (await context.params).executionId);
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
-  if (isStorageCoreEnabled()) return handleCompatibleTraceTags(request, (await context.params).executionId);
-  try {
-    const { executionId } = await context.params;
-    const { searchParams } = new URL(request.url);
-    const user = searchParams.get('user') || '';
-    const tags = await removeExecutionTraceTag(
-      executionId,
-      user,
-      searchParams.get('tagId') || '',
-    );
-
-    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.tag.unbind' });
-
-    return NextResponse.json({ tags });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
+  return handleCompatibleTraceTags(request, (await context.params).executionId);
 }

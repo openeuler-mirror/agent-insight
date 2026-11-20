@@ -32,10 +32,9 @@ export async function GET(
   try {
     const { id } = await params;
     const core = isStorageCoreEnabled();
-    const { username } = core ? { username: null } : await resolveUser(request);
+    const { username } = ({ username: null });
 
-    const evaluation = core
-      ? await withCoreExperiments(request, async () => {
+    const evaluation = (await withCoreExperiments(request, async () => {
           const actor=requireCoreExperimentContext().actor.username;
           const staticEvaluation=await prismaRaw.evaluation.findFirst({
             where:{id,type:'static',executionId:null,OR:[{user:actor},{user:null}],Skill:{OR:[{user:actor},{user:null},{visibility:'public'}]}},
@@ -44,14 +43,11 @@ export async function GET(
           if(staticEvaluation)return {...staticEvaluation,Execution:null};
           const detail = await requireCoreExperimentContext().rpc('derived_detail', { id }) as { evaluation: Record<string, unknown>; issues: unknown[]; skill: unknown; execution: unknown };
           return { ...detail.evaluation, issues: detail.issues, Skill: detail.skill, Execution: detail.execution };
-        }) as Awaited<ReturnType<typeof loadLegacyEvaluation>>
-      : await loadLegacyEvaluation(id);
+        }) as Awaited<ReturnType<typeof loadLegacyEvaluation>>);
 
     return evaluationResponse(evaluation, username, core);
   } catch (e: any) {
-    if (isStorageCoreEnabled()) return coreExperimentFailure(e);
-    console.error('[Evaluation Detail] error:', e);
-    return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 500 });
+    return coreExperimentFailure(e);
   }
 }
 

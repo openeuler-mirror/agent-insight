@@ -41,21 +41,7 @@ export async function GET(
   try {
     const { experimentId } = await params
     const url = new URL(req.url)
-    if(isStorageCoreEnabled())return await withCoreExperiments(req,async()=>NextResponse.json(await getBenchmarkExperimentResult({experimentId,user:requireCoreExperimentContext().actor.username,page:positiveInteger(url.searchParams.get('page'),1,1_000_000),pageSize:positiveInteger(url.searchParams.get('pageSize'),20,100),status:url.searchParams.get('status')||undefined,verdict:url.searchParams.get('verdict')||undefined})))
-    const { username } = await resolveUser(req, url.searchParams.get('user'))
-    if (!username) {
-      throw new BenchmarkProtocolError('USER_REQUIRED', '缺少用户身份', 401)
-    }
-    const page = positiveInteger(url.searchParams.get('page'), 1, 1_000_000)
-    const pageSize = positiveInteger(url.searchParams.get('pageSize'), 20, 100)
-    return NextResponse.json(await getBenchmarkExperimentResult({
-      experimentId,
-      user: username,
-      page,
-      pageSize,
-      status: url.searchParams.get('status') || undefined,
-      verdict: url.searchParams.get('verdict') || undefined,
-    }))
+    return await withCoreExperiments(req,async()=>NextResponse.json(await getBenchmarkExperimentResult({experimentId,user:requireCoreExperimentContext().actor.username,page:positiveInteger(url.searchParams.get('page'),1,1_000_000),pageSize:positiveInteger(url.searchParams.get('pageSize'),20,100),status:url.searchParams.get('status')||undefined,verdict:url.searchParams.get('verdict')||undefined})))
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/experiments/detail')
   }

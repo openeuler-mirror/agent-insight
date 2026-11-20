@@ -74,15 +74,7 @@ export async function waitForBenchmarkImagePreparation(): Promise<void> {
 }
 
 export function refreshBenchmarkImagePreparation(): Promise<void> {
-  if(isStorageCoreEnabled())return Promise.reject(Object.assign(new Error('Typed Benchmark image preparation required'),{status:503}))
-  if (refreshing) { refreshAgain = true; return refreshing }
-  refreshing = (async () => {
-    do {
-      refreshAgain = false
-      await refreshWindows()
-    } while (refreshAgain)
-  })().finally(() => { refreshing = null })
-  return refreshing
+  return Promise.reject(Object.assign(new Error('Typed Benchmark image preparation required'),{status:503}))
 }
 
 async function refreshWindows(): Promise<void> {

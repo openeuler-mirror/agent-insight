@@ -3,7 +3,7 @@ import {withCoreControlRequest,requireCoreControlContext} from './control-contex
 import {withCoreControlDevice} from './control-auth';
 import {requireCoreControlCapabilities} from './control-repository';
 export async function withCoreControlRoute<T extends Response>(request:Request,action:()=>Promise<T>,capabilities:string[]=[]):Promise<T|Response>{
- if(!isStorageCoreEnabled())return action();
+
  try{
   if(/^Bearer dc_/.test(request.headers.get('authorization')||'')){if(capabilities.some(value=>['execute','publish','delete'].includes(value)))throw Object.assign(new Error('Device control cannot become an execution actor'),{status:403});return await withCoreControlDevice(request,action);}
   let identity=request;const queryKey=new URL(request.url).searchParams.get('apiKey');if(!request.headers.has('x-witty-api-key')&&!request.headers.has('authorization')&&queryKey){const headers=new Headers(request.headers);headers.set('x-witty-api-key',queryKey);identity=new Request(request.url,{method:'GET',headers});}
@@ -11,7 +11,7 @@ export async function withCoreControlRoute<T extends Response>(request:Request,a
  }catch(error){const status=typeof (error as any)?.status==='number'?(error as any).status:502;return Response.json({error:status===401?'Authentication required':status===403?'Forbidden':status===409?'Data changed; reload and retry':'Storage request failed'},{status,headers:{'cache-control':'no-store'}});}
 }
 export async function withCoreControlInternalRoute<T extends Response>(request:Request,action:()=>Promise<T>):Promise<T|Response>{
- if(!isStorageCoreEnabled())return action();
+
  try{
   const {assertInternalCaller}=await import('@/lib/reliability/internal-guard');assertInternalCaller(request);
   const body=await request.clone().json();if(new URL(request.url).pathname.endsWith('/control-presence')&&body.connected!==true)return action();

@@ -32,7 +32,7 @@ export function createCollaborationHandlers({ service, authenticate }: Collabora
         context.user = username;
         const now = Date.now();
         for (const [name, entry] of buckets) if (now - entry.start >= 60000) buckets.delete(name);
-        const actor=isStorageCoreEnabled()?getCoreControlContext()?.actor:null;const bucketKey=actor?actor.workspace+'\0'+actor.principal:username;
+        const actor=(getCoreControlContext()?.actor);const bucketKey=actor?actor.workspace+'\0'+actor.principal:username;
         const bucket = buckets.get(bucketKey) ?? { start: now, count: 0 };
         if (bucket.count >= 120 || (!buckets.has(bucketKey) && buckets.size >= 10000)) throw new CollaborationError(429, 'RATE_LIMITED', '请求过于频繁，请稍后原样重试');
         bucket.count++; buckets.set(bucketKey, bucket);

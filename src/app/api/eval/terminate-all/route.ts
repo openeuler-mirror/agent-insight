@@ -40,11 +40,11 @@ export async function POST(request: Request) {
     if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,POST);
     try {
         const body = await request.json().catch(() => ({}));
-        const user = isStorageCoreEnabled()?requireCoreExperimentContext().actor.username:String(body?.user || '').trim();
+        const user = (requireCoreExperimentContext().actor.username);
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
 
         let cancelledEvalRows = 0;
-        if(isStorageCoreEnabled()){
+        {
             const context=requireCoreExperimentContext();
             const value=await context.rpc('read_view',{scope:'trajectory-direct'}) as {coverage:string;snapshots:Array<{experiment:{id:string;user:string;cases:Array<{directTrajectory?:{status:string};results:Array<{status:string}>}>}}>};
             if(value?.coverage!=='complete'||!Array.isArray(value.snapshots))throw Object.assign(new Error('Complete direct evaluation snapshot required'),{status:503});
@@ -60,15 +60,7 @@ export async function POST(request: Request) {
         const abortedEvalRuns = abortTrajectoryEvalRunsForUser(user);
         const batch = await abortBatchRunsForUser(user);
 
-        if(!isStorageCoreEnabled())try {
-            const r = await prismaRaw.trajectoryEvalResult.updateMany({
-                where: { user, status: { in: ['running', 'pending'] } },
-                data: { status: 'failed', errorMessage: '已终止：用户中止了该批次评测' },
-            });
-            cancelledEvalRows = r.count;
-        } catch (e) {
-            console.warn('[terminate-all] eval rows DB cleanup failed:', e);
-        }
+
 
         console.warn(
             `[terminate-all] user=${user} killedOpencode=${killedOpencode} evalRuns=${abortedEvalRuns} ` +

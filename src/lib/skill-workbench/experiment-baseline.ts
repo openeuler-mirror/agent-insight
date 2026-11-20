@@ -73,7 +73,7 @@ async function loadBaselines(user: string, experiments: Array<{
     select: { id: true, caseStatesJson: true },
   }) : [];
   const taskMap = new Map(tasks.map((task) => [task.id, task.caseStatesJson]));
-  if(isStorageCoreEnabled()){
+  {
     const context=requireWorkbenchActor(user);
     for(const {experiment,snapshot} of parsed){
       if(!snapshot.grayscaleTaskId)continue;

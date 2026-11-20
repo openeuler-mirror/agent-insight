@@ -102,12 +102,7 @@ export async function GET(
       stats: result.stats,
     });
   } catch (err) {
-    if(isStorageCoreEnabled())return coreExperimentFailure(err);
-    console.error('[optimization-points] Error:', err);
-    return NextResponse.json(
-      { error: 'Failed to load optimization points', detail: (err as Error)?.message },
-      { status: 500 },
-    );
+    return coreExperimentFailure(err);
   }
 
   },["read"]);

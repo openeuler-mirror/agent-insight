@@ -292,34 +292,7 @@ export async function authenticateDevice(req: Request): Promise<{
   clientId: string
   user: string
 }> {
-  if(isStorageCoreEnabled())return authenticateCoreControlDevice(req)
-  const auth = req.headers.get('authorization') || ''
-  const match = /^Bearer\s+(.+)$/i.exec(auth.trim())
-  if (!match) {
-    throw new ReliabilityError('DEVICE_UNAUTHORIZED', '缺少设备凭证', 401)
-  }
-  const credentialHash = sha256(match[1].trim())
-  const cred = await prisma.reliabilityClientCredential.findUnique({
-    where: { credentialHash },
-  })
-  if (!cred || cred.revokedAt) {
-    throw new ReliabilityError('DEVICE_UNAUTHORIZED', '设备凭证无效或已撤销', 401)
-  }
-  const headerClientId = req.headers.get('x-agent-insight-client-id')
-  if (headerClientId && !hashEquals(headerClientId, cred.clientId)) {
-    throw new ReliabilityError('DEVICE_CLIENT_MISMATCH', '设备凭证与 clientId 不匹配', 403)
-  }
-  const client = await prisma.reliabilityClient.findUnique({
-    where: { clientId: cred.clientId },
-  })
-  if (!client) {
-    throw new ReliabilityError('CLIENT_NOT_FOUND', '客户端不存在', 404)
-  }
-  await prisma.reliabilityClientCredential.update({
-    where: { credentialHash },
-    data: { lastUsedAt: new Date() },
-  })
-  return { clientId: client.clientId, user: client.user }
+  return authenticateCoreControlDevice(req)
 }
 
 export function normalizeCapabilities(raw: unknown): ClientCapabilities {

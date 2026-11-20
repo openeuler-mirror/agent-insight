@@ -21,13 +21,5 @@ import { resolveUser } from '@/lib/auth/auth';
 import { prisma } from '@/lib/storage/prisma';
 
 export async function GET(req: Request):Promise<Response> {
-  if(isStorageCoreEnabled()){try{return await withCoreExperiments(req,async()=>{const rows=await requireCoreExperimentContext().rpc('cancellations',{limit:100}) as Array<Record<string,unknown>>;return NextResponse.json({cancellations:rows.map(row=>Object.fromEntries(['id','experimentId','caseKey','status','error','updatedAt'].map(key=>[key,row[key]??null])))});});}catch(error){return coreExperimentFailure(error);}}
-  const experimentReads=experimentReadSource(prisma);
-  const { username } = await resolveUser(req, new URL(req.url).searchParams.get('user'));
-  if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
-  const cancellations = await experimentReads.experimentCancellation.findMany({
-    where: { user: username, status: 'pending' }, orderBy: { updatedAt: 'desc' }, take: 100,
-    select: { id: true, experimentId: true, caseKey: true, status: true, error: true, updatedAt: true },
-  });
-  return NextResponse.json({ cancellations });
+  {try{return await withCoreExperiments(req,async()=>{const rows=await requireCoreExperimentContext().rpc('cancellations',{limit:100}) as Array<Record<string,unknown>>;return NextResponse.json({cancellations:rows.map(row=>Object.fromEntries(['id','experimentId','caseKey','status','error','updatedAt'].map(key=>[key,row[key]??null])))});});}catch(error){return coreExperimentFailure(error);}}
 }

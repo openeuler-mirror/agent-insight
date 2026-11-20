@@ -263,6 +263,7 @@ test('start.sh integration: first worker generation, reuse, source change, force
     f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
   }
   for (const file of ['migrations/check-diagnosis-schema.cjs', 'prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')
+  f.write('scripts/storage-core-preflight.cjs', '')
   f.write('home/.env', '')
   f.write('public/logo.svg', 'logo')
   f.write('prisma/schema.prisma', 'schema')
@@ -341,5 +342,5 @@ if (process.argv[3] === 'generate') {
   const commands = fs.readFileSync(calls, 'utf8').trim().split('\n')
   assert.equal(commands.filter(s => s === 'build').length, 5)
   assert.equal(commands.filter(s => s === 'prisma generate').length, 1)
-  assert.equal(commands.filter(s => s === 'prisma db push --skip-generate').length, 7)
+  assert.equal(commands.filter(s => s.includes('db push')).length, 0)
 })

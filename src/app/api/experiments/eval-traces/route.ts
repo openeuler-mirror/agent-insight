@@ -356,12 +356,6 @@ export async function POST(req: Request):Promise<Response> {
       { status: 202 },
     );
   } catch (error) {
-    if(isStorageCoreEnabled())return coreExperimentFailure(error);
-    if (error instanceof GenerationError) return generationErrorResponse(error);
-    console.error('[eval-traces POST Error]', error);
-    if (error instanceof EvaluatorContextValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
-    return NextResponse.json({ error: 'Failed to evaluate traces via experiment' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
 }

@@ -290,7 +290,8 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
 }
 
 export async function GET(request: Request) {
-  if(!isStorageCoreEnabled())return sessionRequest(request);
+
+  if(new URL(request.url).searchParams.get('paged')==='1')return handleCompatibleSession(request);
   try{return await withCoreReadRetry(request,()=>withCoreSessionRead(request,async()=>{
     const taskId=new URL(request.url).searchParams.get('taskId');
     if(taskId&&!await readCoreStoredSession(taskId))return handleCompatibleSession(request);

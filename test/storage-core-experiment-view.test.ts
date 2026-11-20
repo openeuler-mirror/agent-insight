@@ -67,3 +67,14 @@ test('current execution metadata remains private in the default Case DTO',async(
  const row=await view.experimentCase.findUnique({where:{id:'case'}});assert.equal(JSON.stringify(row).includes('coreExecution'),false);
  const selected=await (view.experimentCase as unknown as {findUnique:(input:unknown)=>Promise<{coreExecution:unknown}>}).findUnique({where:{id:'case'},select:{coreExecution:true}});assert.deepEqual(selected.coreExecution,coreExecution);
 });
+
+test('control string equality and membership honor insensitive mode without changing exact-case filters',async()=>{
+ const {controlMatches}=await import('@/lib/storage-core/experiment-view');
+ const row={name:'Änalysis'};
+ assert.equal(controlMatches(row,{name:{equals:'ÄNALYSIS',mode:'insensitive'}}),true);
+ assert.equal(controlMatches(row,{name:{in:['other','änalysis'],mode:'insensitive'}}),true);
+ assert.equal(controlMatches(row,{name:{not:'änalysis',mode:'insensitive'}}),false);
+ assert.equal(controlMatches(row,{name:{notIn:['änalysis'],mode:'insensitive'}}),false);
+ assert.equal(controlMatches(row,{name:'änalysis'}),false);
+ assert.equal(controlMatches({name:null},{name:{equals:'null',mode:'insensitive'}}),false);
+});

@@ -73,7 +73,7 @@ function aggregate(rows: FleetRow[], missing: Set<string>) {
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const executionReader = analytics ?? prisma.execution;
         const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
@@ -187,8 +187,6 @@ export async function GET(req: Request) {
             buckets,
         });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Fleet Trends Error]', error);
-        return NextResponse.json({ error: 'Failed to load fleet trends' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

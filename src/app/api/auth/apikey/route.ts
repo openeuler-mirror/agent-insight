@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       }
 
       const refresh=()=>syncLocalUserExternalAccount(user,externalAccount||undefined);
-      const refreshedUser = isStorageCoreEnabled()?await withCoreControlRequest(request,refresh):await refresh();
+      const refreshedUser = (await withCoreControlRequest(request,refresh));
       return NextResponse.json({
         username: refreshedUser.username,
         apiKey: refreshedUser.apiKey,

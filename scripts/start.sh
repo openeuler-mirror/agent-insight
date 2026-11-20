@@ -34,7 +34,7 @@ FORCE_REBUILD=""
 
 start_usage() {
   cat <<'EOF'
-Usage: [AGENT_INSIGHT_PORT=3000] [DATABASE_URL=...] bash scripts/start.sh [--port PORT] [--force-rebuild]
+Usage: [AGENT_INSIGHT_PORT=3000] bash scripts/start.sh [--port PORT] [--force-rebuild]
 
 Reuses a verified unchanged build; otherwise rebuilds with cache preserved.
 --force-rebuild always rebuilds, keeping the incremental cache.
@@ -90,7 +90,6 @@ case "$AGENT_INSIGHT_HOME" in /*) ;; *) AGENT_INSIGHT_HOME="$PWD/$AGENT_INSIGHT_
 RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
 AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
-DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
 
 load_agent_insight_env() {
   local name
@@ -121,52 +120,7 @@ load_agent_insight_env() {
     export "${overrides[@]}"
   fi
 
-  if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
-    export DATABASE_URL="file:$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
-  elif [[ "$DATABASE_URL" == file:\~* ]]; then
-    export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
-  fi
-}
 
-check_sqlite_database_target() {
-  [[ "${DATABASE_URL:-}" == file:* ]] || return 0
-  local database_path="${DATABASE_URL#file:}"
-  database_path="${database_path%%\?*}"
-  if [ -z "$database_path" ]; then
-    echo "Error: DATABASE_URL 没有 SQLite 文件路径：$DATABASE_URL" >&2
-    exit 1
-  fi
-  if [[ "$database_path" != /* ]]; then
-    echo "Warning: SQLite 使用相对路径，无法可靠预检实际文件位置：$database_path" >&2
-    echo "建议改用绝对路径，例如 DATABASE_URL=\"file:$AGENT_INSIGHT_STORAGE_DIR/test.db\"。" >&2
-    return 0
-  fi
-
-  local database_dir
-  database_dir="$(dirname "$database_path")"
-  if [ ! -d "$database_dir" ]; then
-    echo "Error: SQLite 数据库父目录不存在：$database_dir" >&2
-    echo "当前用户：$(id -un 2>/dev/null || echo unknown)" >&2
-    echo "请先创建并授权该目录，或把 DATABASE_URL 改到当前用户可写的绝对路径。" >&2
-    echo "例如：mkdir -p \"$database_dir\"" >&2
-    exit 1
-  fi
-  if [ ! -x "$database_dir" ] || [ ! -w "$database_dir" ]; then
-    echo "Error: 当前用户无法进入或写入 SQLite 数据库目录：$database_dir" >&2
-    echo "当前用户：$(id -un 2>/dev/null || echo unknown)" >&2
-    echo "请修复目录属主/权限，或修改 DATABASE_URL。" >&2
-    exit 1
-  fi
-  if [ -e "$database_path" ] && [ ! -f "$database_path" ]; then
-    echo "Error: SQLite 数据库目标存在但不是普通文件：$database_path" >&2
-    exit 1
-  fi
-  if [ -f "$database_path" ] && { [ ! -r "$database_path" ] || [ ! -w "$database_path" ]; }; then
-    echo "Error: 当前用户无法读写 SQLite 数据库文件：$database_path" >&2
-    echo "当前用户：$(id -un 2>/dev/null || echo unknown)" >&2
-    echo "请修复文件属主/权限，或修改 DATABASE_URL。" >&2
-    exit 1
-  fi
 }
 
 ensure_goal_plus_watcher() {
@@ -239,7 +193,7 @@ find_pid_on_port() {
   echo "$pid"
 }
 
-# Check for OpenGauss configuration in ~/.agent-insight/.env
+# Load the Web configuration before checking both storage dependencies.
 load_agent_insight_env
 
 if [ -n "${PORT:-}" ]; then
@@ -254,13 +208,7 @@ if [ "${#PLATFORM_PORT}" -gt 5 ] || [ "$PLATFORM_PORT" -lt 1 ] || [ "$PLATFORM_P
 fi
 echo "Checking port $PLATFORM_PORT..."
 
-if [[ "${DATABASE_URL:-}" == file:* ]]; then
-  echo "SQLite database target: ${DATABASE_URL#file:}"
-  check_sqlite_database_target
-  node scripts/migrations/check-diagnosis-schema.cjs || exit 1
-else
-  echo "Using custom database configuration."
-fi
+echo "Storage: Core transactional backend + ClickHouse"
 
 STAGE_MILLISECONDS=$START_MILLISECONDS
 CURRENT_STAGE="configuration"
@@ -297,28 +245,8 @@ if command -v flock >/dev/null 2>&1; then
 fi
 stage_done
 
-stage_begin "OpenGauss initialization"
-if [ -n "$DB_HOST" ]; then
-  echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
-  echo "Initializing OpenGauss database with project schema..."
-  
-  # Ensure psycopg2 is installed
-  if ! python3 -c "import psycopg2" >/dev/null 2>&1; then
-    echo "psycopg2 not found. Installing psycopg2-binary..."
-    pip3 install psycopg2-binary
-  fi
-  
-  # Run the initialization script
-  python3 scripts/init_opengauss.py
-  if [ $? -ne 0 ]; then
-    echo "OpenGauss initialization failed! Aborting."
-    exit 1
-  fi
-  echo "OpenGauss initialized successfully."
-else
-  echo "No OpenGauss configuration (DB_HOST) found. Skipping OpenGauss init."
-fi
-
+stage_begin "Storage Core readiness"
+node scripts/storage-core-preflight.cjs || exit 1
 stage_done
 stage_begin "stop old service and release port"
 
@@ -378,26 +306,6 @@ stage_done
 
 # 4. Build
 echo "-----------------------------------"
-stage_begin "database schema sync"
-
-echo "Syncing database schema..."
-if [[ "${DATABASE_URL:-}" == file:* ]]; then
-  if ! node scripts/prepare-ras-sqlite-schema.js; then
-    echo "  ⛔ Agent RAS SQLite schema 预检失败，已停止启动以避免重复事件被错误合并。"
-    exit 1
-  fi
-fi
-# 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
-# 其余潜在破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
-if ! sh scripts/db_push.sh --skip-generate; then
-  echo ""
-  echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
-  echo "     直接启动 server 会让运行时撞到 schema/code 不一致。"
-  echo "     退出脚本。修好后重新跑 bash scripts/start.sh。"
-  exit 1
-fi
-
-stage_done
 stage_begin "Prisma Client check/generate"
 if node scripts/start-build-state.cjs prisma-check; then
   echo "Prisma Client unchanged; skipping generation."

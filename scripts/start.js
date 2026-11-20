@@ -119,8 +119,6 @@ async function run(options) {
   const port = getPort(options)
   const dataRoot = getDataRoot()
   const fileEnv = loadEnvFile(path.join(dataRoot, '.env'))
-  const dbUrl = resolveStartupDatabaseUrl(fileEnv, process.env, dataRoot)
-  const dbPath = dbUrl.startsWith('file:') ? dbUrl.slice(5) : dbUrl
   process.env.AGENT_INSIGHT_HOME = dataRoot
 
   console.log('=== Starting Agent-Insight Service ===\n')
@@ -137,81 +135,11 @@ async function run(options) {
     process.exit(1)
   }
 
-  process.env.DATABASE_URL = dbUrl
   const standaloneServer = path.join(PACKAGE_ROOT, '.next', 'standalone', 'server.js')
   const standaloneDir = path.dirname(standaloneServer)
 
-  if (fileEnv.DB_HOST) {
-    console.log('OpenGauss configuration detected (DB_HOST=' + fileEnv.DB_HOST + ')')
-    console.log('Initializing OpenGauss database with project schema...')
-
-    try {
-      execSync(`${pythonCmd} -c "import psycopg2"`, { stdio: 'pipe' })
-    } catch {
-      console.log('psycopg2 not found. Installing psycopg2-binary...')
-      try {
-        execSync(`${pipCmd} install psycopg2-binary`, { stdio: 'inherit' })
-      } catch {
-        console.log('Warning: Could not install psycopg2-binary. OpenGauss init may fail.')
-      }
-    }
-
-    const initScript = path.join(PACKAGE_ROOT, 'scripts', 'init_opengauss.py')
-    if (fs.existsSync(initScript)) {
-      try {
-        const initEnv = { ...process.env, ...fileEnv }
-        execSync(`${pythonCmd} "${initScript}"`, {
-          stdio: 'inherit',
-          cwd: PACKAGE_ROOT,
-          env: initEnv
-        })
-        console.log('✓ OpenGauss initialized successfully')
-      } catch (initError) {
-        console.error('Warning: OpenGauss initialization failed:', initError.message)
-        console.error(`You may need to run it manually: ${pythonCmd} scripts/init_opengauss.py`)
-      }
-    } else {
-      console.log('Warning: init_opengauss.py not found, skipping OpenGauss init')
-    }
-    console.log()
-  }
-
-  try {
-    console.log('Generating Prisma client...')
-    await runCommand('npx prisma generate', {
-      cwd: PACKAGE_ROOT,
-      env: { ...process.env, DATABASE_URL: dbUrl }
-    })
-    syncGeneratedPrismaClient(
-      PACKAGE_ROOT,
-      fs.existsSync(standaloneServer) ? standaloneDir : undefined
-    )
-    console.log('✓ Prisma client generated')
-    console.log()
-
-    console.log('Syncing database schema...')
-    await runCommand('node scripts/prepare-ras-sqlite-schema.js', {
-      cwd: PACKAGE_ROOT,
-      env: { ...process.env, DATABASE_URL: dbUrl }
-    })
-    await runCommand('npx prisma db push --skip-generate', {
-      cwd: PACKAGE_ROOT,
-      env: { ...process.env, DATABASE_URL: dbUrl }
-    })
-    console.log('✓ Database schema synced')
-    console.log()
-  } catch (error) {
-    console.error('❌ Database initialization failed:', error.message)
-    console.error('')
-    console.error('   若报错提示 data loss / --accept-data-loss，说明现有数据库')
-    console.error(`   ${dbPath}`)
-    console.error('   里有新 schema 需要删除的数据（prisma 拒绝破坏性变更）。恢复方式：')
-    console.error('   1) 备份后原地迁移（接受丢弃冲突项）：')
-    console.error(`        cp "${dbPath}" "${dbPath}.bak"`)
-    console.error(`        DATABASE_URL="${dbUrl}" npx prisma db push --accept-data-loss`)
-    console.error('   2) 全新开始：把旧库移走后重新 start，会自动建新库。')
-    process.exit(1)
-  }
+  const { preflight } = require('./storage-core-preflight.cjs')
+  await preflight({ ...fileEnv, ...process.env })
 
   const isStandalone = fs.existsSync(standaloneServer)
   const nextDir = path.join(PACKAGE_ROOT, '.next')
@@ -278,7 +206,6 @@ async function run(options) {
 
   const env = {
     ...runtimeEnv,
-    DATABASE_URL: dbUrl,
     PORT: port.toString(),
     HOSTNAME: '0.0.0.0',
     AGENT_INSIGHT_PACKAGE_ROOT: PACKAGE_ROOT,

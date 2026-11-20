@@ -67,9 +67,15 @@ test('core ingest bounds actual request bytes, decoded gzip, and serialized inte
  const r=await m.handleCoreIngest(request('/api/ingest/otel/v1/traces',{method:'POST',headers,body:' '.repeat(8*1024*1024+1)}),async()=>{calls++;throw Error('unexpected');});assert.equal(r.status,413);assert.equal(calls,0);
 });
 
-test('mode-off routes keep legacy entrypoints and core mode branches before identity resolution',async()=>{
- const {isStorageCoreEnabled}=await import('../src/lib/storage-core/mode');assert.equal(isStorageCoreEnabled({}),false);assert.equal(isStorageCoreEnabled({NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE:'core'}),true);
- for(const file of ['observe/data','observe/session','ingest/otel/v1/traces']) {const text=fs.readFileSync(new URL('../src/app/api/'+file+'/route.ts',import.meta.url),'utf8');assert.match(text,/isStorageCoreEnabled\(\)/);assert.match(text,file==='ingest/otel/v1/traces'?/handleCoreCollectorTraces/:/handleCompatible/);assert.ok(text.indexOf('if (isStorageCoreEnabled())')<text.indexOf('await resolveUser(')||!text.includes('await resolveUser('));}
+test('all storage modes use Core and legacy mode is rejected',async()=>{
+ const {isStorageCoreEnabled}=await import('../src/lib/storage-core/mode');
+ assert.equal(isStorageCoreEnabled({}),true);
+ assert.throws(()=>isStorageCoreEnabled({AGENT_INSIGHT_TRACE_STORAGE:'legacy'}),/Legacy storage/);
+ for(const file of ['observe/data','observe/session','ingest/otel/v1/traces']) {
+  const source=fs.readFileSync(new URL('../src/app/api/'+file+'/route.ts',import.meta.url),'utf8');
+  assert.match(source,file==='ingest/otel/v1/traces'?/handleCoreCollectorTraces/:/handleCompatible/);
+  assert.doesNotMatch(source,/if\s*\(\s*!?isStorageCoreEnabled\(\)\s*\)/);
+ }
 });
 
 test('auth responses whitelist profile fields and never expose nested credential fields',async()=>{

@@ -153,13 +153,11 @@ async function resolveVersion(user: string, skillName: string, source: Deploymen
       && typeof (ref.executionId || ref.id) === 'string')
     sourceExecutionId = directExecution ? String(directExecution.executionId || directExecution.id) : null
     if (!sourceExecutionId && diagnosisId) {
-      if(isStorageCoreEnabled()){
+      {
         const context=requireCoreExperimentContext()
         if(context.actor.username!==user)throw new ReliabilityError('SOURCE_FORBIDDEN','部署主体不一致',403)
         sourceExecutionId=(await readCoreDiagnosis(diagnosisId)).execution_id||null
-      }else sourceExecutionId = (await prismaRaw.diagnosisRun.findFirst({
-        where: { id: diagnosisId, user }, select: { executionId: true },
-      }))?.executionId || null
+      }
     }
   } else {
     version = Number(source.skillVersion)
@@ -194,7 +192,7 @@ async function resolveVersion(user: string, skillName: string, source: Deploymen
 }
 
 async function resolveDestination(user: string, skillName: string, sourceExecutionId: string): Promise<ResolvedDestination> {
-  const evidence=isStorageCoreEnabled()?await readCoreDeploymentSource(user,sourceExecutionId):null
+  const evidence=(await readCoreDeploymentSource(user,sourceExecutionId))
   const execution=evidence?{id:evidence.execution.id,clientId:typeof evidence.execution.clientId==='string'?evidence.execution.clientId:null,framework:evidence.execution.framework??null}:await prismaRaw.execution.findFirst({
     where: { id: sourceExecutionId, user },
     select: { id: true, clientId: true, framework: true },

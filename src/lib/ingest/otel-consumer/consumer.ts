@@ -934,42 +934,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
 }
 
 export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): void {
-  if(isStorageCoreEnabled())throw Object.assign(new Error('Legacy spool has no verified collector provenance; use the authenticated core receiver'),{status:409});
-  stopOtelSpoolConsumer();
-  const sources = options.sources || listSources();
-  const processLocks = acquireConsumerProcessLocks(sources.map(source => source.spoolDir()));
-  if (!processLocks) {
-    (options.warn || console.error)('[OTelConsumer] spool is owned by another process', {
-      sources: sources.map(source => source.id),
-    });
-    return;
-  }
-  const state = createState(options, sources, processLocks);
-
-  if (state.startMode === 'live') {
-    state.liveDiscovery = new LiveSpoolDiscovery(state.sources, state.cutoff, state.maxTrackedSessions,
-      (candidate, sessionId, bytes, receivedAt) => admitLiveFile(state, candidate.source, candidate.file, sessionId, bytes, receivedAt),
-      Date.now, state.warn);
-    state.unsubscribeReceipts = subscribeSpoolReceipts(notice => state.liveDiscovery?.receive(notice));
-  } else if (state.seedOnStart) {
-    for (const source of state.sources) {
-      try {
-        seedToEof(source.spoolDir(), source.listFiles());
-      } catch (err) {
-        state.warn('[OTelConsumer] checkpoint seed failed', {
-          source: source.id,
-          message: (err as Error)?.message || String(err),
-        });
-      }
-    }
-  }
-
-  state.interval = setInterval(() => {
-    void runOtelSpoolConsumerTick(state);
-  }, state.tickMs);
-  globalThis.__otelSpoolConsumer = state;
-  void runOtelSpoolConsumerTick(state);
-  state.log('[OTelConsumer] started', { sources: state.sources.map((source) => source.id), startMode: state.startMode, cutoff: new Date(state.cutoff).toISOString() });
+  throw Object.assign(new Error('Legacy spool has no verified collector provenance; use the authenticated core receiver'),{status:409});
 }
 
 export function stopOtelSpoolConsumer(): void {

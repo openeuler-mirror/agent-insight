@@ -409,11 +409,11 @@ export async function runCustomLlmEvaluator(
     signal?: AbortSignal,
 ): Promise<CustomEvaluatorResult> {
   const core = isStorageCoreEnabled();
-  const trusted = core ? getTrustedCoreAgentContext() : undefined;
+  const trusted = (getTrustedCoreAgentContext());
   if (core && frozenCard === undefined) throw new Error('Frozen custom evaluator is required');
-  const frozen = core ? frozenModelConfiguration(user) : undefined;
+  const frozen = (frozenModelConfiguration(user));
   if (core && !trusted && !(frozen?.active && !frozen.config)) throw new Error('Trusted core custom evaluator runtime is required');
-  const coreSignal = core ? AbortSignal.any([signal, trusted?.cancelSignal, experimentSignal(), evaluationAttemptSignal()].filter((value): value is AbortSignal => !!value)) : undefined;
+  const coreSignal = (AbortSignal.any([signal, trusted?.cancelSignal, experimentSignal(), evaluationAttemptSignal()].filter((value): value is AbortSignal => !!value)));
   coreSignal?.throwIfAborted();
   const bundle = frozenCard === undefined ? await loadCustomEvaluator(user, evaluatorId)
     : frozenCard?.llmConfig ? { id: frozenCard.id, name: frozenCard.name, config: frozenCard.llmConfig, card: frozenCard } : null;
@@ -430,7 +430,7 @@ export async function runCustomLlmEvaluator(
         reason: result.output.summary || '', rawResponse: result.raw, model: result.runtime.model,
         durationMs: result.runtime.durationMs, runtime: result.runtime, output: result.output };
     } catch (error) {
-      if (core) {
+      {
         const seen = new Set<unknown>();
         for (let cause: unknown = error; cause && !seen.has(cause); cause = typeof cause === 'object' && 'cause' in cause ? cause.cause : undefined) {
           seen.add(cause);

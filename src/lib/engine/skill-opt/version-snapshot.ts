@@ -40,11 +40,7 @@ export interface SkillVersionRowLite {
 }
 
 export function resolveVersionStorageRoot(skillId: string, version: number, assetPath: string | null): string {
-  if(isStorageCoreEnabled())return materializedControlSkillDirectory(skillId,version);
-  if (assetPath) {
-    return resolveRuntimeAssetPath(assetPath);
-  }
-  return getSkillVersionStorageDir(skillId, version);
+  return materializedControlSkillDirectory(skillId,version);
 }
 
 export function loadSkillVersionSnapshot(args: {

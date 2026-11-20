@@ -196,12 +196,7 @@ export function judgeComparability(
 export async function computePairs(
   experimentId: string,
 ): Promise<{ pairs: RawPair[]; groupByKey: Map<string, { group: { id: string; key: string; variableValue: string }; dimension: VariableDimension }> }> {
-  const experiment = isStorageCoreEnabled()
-    ? (await requireCoreExperimentContext().rpc('read',{experiment_id:experimentId}) as {experiment:{id:string;type:string;agentName:string;groups:Array<{id:string;key:string;variableValue:string}>}}).experiment
-    : await prisma.experiment.findUnique({
-      where: { id: experimentId },
-      include: { groups: true },
-    });
+  const experiment = ((await requireCoreExperimentContext().rpc('read',{experiment_id:experimentId}) as {experiment:{id:string;type:string;agentName:string;groups:Array<{id:string;key:string;variableValue:string}>}}).experiment);
   if (!experiment) throw new Error(`experiment ${experimentId} not found`);
   if (experiment.type === 'single' || !experiment.agentName) {
     return { pairs: [], groupByKey: new Map() };
@@ -288,28 +283,10 @@ export async function createComparisonExperiment(params: CreateComparisonParams)
     throw new Error('对比实验不支持 watchMode');
   }
 
-  if(isStorageCoreEnabled()){
+  {
     const context=requireCoreExperimentContext();if(context.actor.username!==user)throw Object.assign(new Error('Comparison actor differs'),{status:403});
     return createCoreExperimentRecord({user,name,agentName,type:'llm',scope:'',status:'draft',skillName:'',skillVersion:null,preset:null,skillContextJson:null,sourceExperimentId:null,optimizationRecordId:null,watchMode:false,watchEnabledAt:null,evaluatorIdsJson:JSON.stringify(evaluatorIds),evaluatorConfigsJson:params.evaluatorConfigsJson??'{}',configSnapshotJson:JSON.stringify(params.configSnapshot||{}),groups:groups.map(group=>({id:randomUUID(),key:group.key,variableValue:group.value})),cases:[]});
   }
-
-  const experiment = await prisma.experiment.create({
-    data: {
-      user,
-      name,
-      agentName,
-      type: 'llm',
-      configSnapshotJson: JSON.stringify({ ...params.configSnapshot, customEvaluatorSnapshots: params.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds) }),
-      scope: '',
-      evaluatorIdsJson: JSON.stringify(evaluatorIds),
-      evaluatorConfigsJson: params.evaluatorConfigsJson ?? '{}',
-      status: 'draft',
-      groups: {
-        create: groups.map((g) => ({ key: g.key, variableValue: g.value })),
-      },
-    },
-  });
-  return { id: experiment.id };
 }
 
 // ─── autoPairGroups ─────────────────────────────────────────────────────────
@@ -319,7 +296,7 @@ export async function createComparisonExperiment(params: CreateComparisonParams)
  * 空组校验：任一组 0 条候选 → throw（指明哪组）。
  */
 export async function autoPairGroups(experimentId: string): Promise<RawPair[]> {
-  const coreContext=isStorageCoreEnabled()?requireCoreExperimentContext():null;
+  const coreContext=(requireCoreExperimentContext());
   const pairRequest=coreContext?{experiment_id:experimentId,request:coreExperimentOperationRequest(coreContext)}:null;
   if(coreContext&&await lookupCoreExperimentOperation(coreContext,'case_upsert_many',coreContext.operationKey+':pair',pairRequest!))return [];
   const { pairs, groupByKey } = await computePairs(experimentId);
@@ -329,7 +306,7 @@ export async function autoPairGroups(experimentId: string): Promise<RawPair[]> {
   const groupA = groupByKey.get(groupAKey)!.group;
   const groupB = groupByKey.get(groupBKey)!.group;
 
-  if(isStorageCoreEnabled()){
+  {
     const context=requireCoreExperimentContext();const source=await context.rpc('read',{experiment_id:experimentId}) as {revision:string;gold_redacted?:boolean;experiment:{groups:Array<{id:string;key:string;variableValue:string}>;cases?:Array<Record<string,unknown>>}};
     if(source.gold_redacted)throw Object.assign(new Error('Comparison pairing requires private source ownership'),{status:403});
     if(JSON.stringify(source.experiment.groups)!==JSON.stringify([...groupByKey.values()].map(value=>value.group)))throw Object.assign(new Error('Comparison groups changed before pairing'),{status:409});
@@ -338,51 +315,6 @@ export async function autoPairGroups(experimentId: string): Promise<RawPair[]> {
     if(cases.length){const saved=await context.rpc('case_upsert_many',{experiment_id:experimentId,expected_revision:source.revision,cases,operation_key:context.operationKey+':pair',operation_request:pairRequest}) as {case_ids:string[]};if(!Array.isArray(saved.case_ids)||saved.case_ids.length!==cases.length||saved.case_ids.some(id=>typeof id!=='string'||!id))throw Object.assign(new Error('Comparison pair receipt unavailable'),{status:503});}
     return pairs;
   }
-
-  for (const p of pairs) {
-    if (p.status !== '可比') continue;
-    // A 侧 case
-    if (p.a) {
-      await prisma.experimentCase.upsert({
-        where: {
-          experimentId_taskId_groupId: {
-            experimentId,
-            taskId: p.a.taskId ?? p.a.id,
-            groupId: groupA.id,
-          },
-        },
-        update: { executionId: p.a.id, input: p.taskInput },
-        create: {
-          experimentId,
-          groupId: groupA.id,
-          executionId: p.a.id,
-          taskId: p.a.taskId ?? p.a.id,
-          input: p.taskInput,
-        },
-      });
-    }
-    // B 侧 case
-    if (p.b) {
-      await prisma.experimentCase.upsert({
-        where: {
-          experimentId_taskId_groupId: {
-            experimentId,
-            taskId: p.b.taskId ?? p.b.id,
-            groupId: groupB.id,
-          },
-        },
-        update: { executionId: p.b.id, input: p.taskInput },
-        create: {
-          experimentId,
-          groupId: groupB.id,
-          executionId: p.b.id,
-          taskId: p.b.taskId ?? p.b.id,
-          input: p.taskInput,
-        },
-      });
-    }
-  }
-  return pairs;
 }
 
 // ─── getComparisonDetail ────────────────────────────────────────────────────
@@ -474,7 +406,7 @@ export async function getComparisonDetail(
   const casePage = Math.min(casePageRaw, casePages);
   const {pairs}=await computePairs(experimentId);
   const visibleInputs=new Set([...pairs.filter(pair=>pair.status==='可比').slice((casePage-1)*casePageSize,casePage*casePageSize),...pairs.filter(pair=>pair.status!=='可比')].map(pair=>pair.taskInput));
-  const coreExecutions=isStorageCoreEnabled()?await readCoreComparisonExecutions(allCases.flatMap(item=>item.executionId?[item.executionId]:[]),allCases.flatMap(item=>item.executionId&&!item.actualOutput&&visibleInputs.has(item.input||'')?[item.executionId]:[])):null;
+  const coreExecutions=(await readCoreComparisonExecutions(allCases.flatMap(item=>item.executionId?[item.executionId]:[]),allCases.flatMap(item=>item.executionId&&!item.actualOutput&&visibleInputs.has(item.input||'')?[item.executionId]:[])));
 
   // Execution 回填表（case.actualOutput 为空时用 execution.finalResult 兜底，与单组路由同款）
   const execFallback = new Map<string, string>();
@@ -661,61 +593,13 @@ export async function startComparisonRun(
   experimentId: string,
   user: string,
 ): Promise<StartComparisonRunResult | null> {
-  if(isStorageCoreEnabled()){
+  {
     const context=requireCoreExperimentContext();if(context.actor.username!==user)throw Object.assign(new Error('Comparison actor differs'),{status:403});
     const source=await context.rpc('read',{experiment_id:experimentId}) as {experiment:{status:string}};
     if(source.experiment.status==='running')return {status:'running',alreadyRunning:true};
     const {startCoreExperiment}=await import('@/lib/storage-core/experiment-assets');await startCoreExperiment(context,experimentId);
     const {activateExperimentWork}=await import('@/lib/storage-core/experiment-worker');return {status:'running',completion:activateExperimentWork(context,experimentId,{concurrency:comparisonEngineConfig.concurrency})};
   }
-  const { assertExperimentActive } = await import('./cancellation-context');
-  await assertExperimentActive(experimentId);
-  const running = getComparisonRunningSet();
-  if (running.has(experimentId)) {
-    return { status: 'running', alreadyRunning: true };
-  }
-
-  const experiment = await prisma.experiment.findUnique({
-    where: { id: experimentId },
-    include: { groups: true },
-  });
-  if (!experiment) return null;
-
-  if (experiment.status === 'running') {
-    return { status: 'running', alreadyRunning: true };
-  }
-
-  running.add(experimentId);
-  await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
-
-  // 为每个 (case × evaluator) upsert pending 行
-  let evaluatorIds: string[] = [];
-  try {
-    const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
-    if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
-  } catch { /* 忽略脏数据 */ }
-
-  const cases = await prisma.experimentCase.findMany({
-    where: { experimentId, deletedAt: null },
-    select: { id: true },
-  });
-  const resultIds: string[] = [];
-  for (const c of cases) {
-    for (const evaluatorId of evaluatorIds) {
-      const row = await prisma.experimentEvalResult.upsert({
-        where: { caseId_evaluatorId: { caseId: c.id, evaluatorId } },
-        create: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
-        update: { status: 'pending', score: null, errorMessage: null },
-        select: { id: true },
-      });
-      resultIds.push(row.id);
-    }
-  }
-
-  const completion = comparisonRunAllRows(experimentId, user, resultIds).finally(() => {
-    running.delete(experimentId);
-  });
-  return { status: 'running', completion };
 }
 
 /**
@@ -727,110 +611,7 @@ export async function rescanComparison(
   experimentId: string,
   user: string,
 ): Promise<{ newPairsCount: number; downgradedPairs: number }> {
-  if(isStorageCoreEnabled())return rescanCoreComparison(experimentId,user);
-  const { assertExperimentActive } = await import('./cancellation-context');
-  await assertExperimentActive(experimentId);
-  const experiment = await prisma.experiment.findUnique({
-    where: { id: experimentId },
-    include: { groups: { orderBy: { key: 'asc' } } },
-  });
-  if (!experiment) throw new Error(`experiment ${experimentId} not found`);
-  if (experiment.status === 'running') {
-    throw new Error('experiment is running (409)');
-  }
-
-  // 重算配对
-  const { pairs, groupByKey } = await computePairs(experimentId);
-  const groupKeys = Array.from(groupByKey.keys());
-  const groupAKey = groupKeys[0];
-  const groupBKey = groupKeys[1] ?? groupKeys[0];
-  const groupA = groupByKey.get(groupAKey)!.group;
-  const groupB = groupByKey.get(groupBKey)!.group;
-
-  // 现有 case（按 input + groupId 索引）
-  interface CaseRef { id: string; input: string; groupId: string | null }
-  const existingCases: CaseRef[] = await prisma.experimentCase.findMany({
-    where: { experimentId },
-    select: { id: true, input: true, groupId: true },
-  });
-  const existingIndex = new Map<string, Set<string>>();
-  for (const c of existingCases) {
-    const key = `${c.input || ''}|${c.groupId || ''}`;
-    if (!existingIndex.has(key)) existingIndex.set(key, new Set());
-    existingIndex.get(key)!.add(c.id);
-  }
-
-  let evaluatorIds: string[] = [];
-  try {
-    const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
-    if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
-  } catch { /* 忽略脏数据 */ }
-
-  // 找新可比配对（之前未配对、现在两侧都有 trace 且受控字段一致）
-  const newResultIds: string[] = [];
-  let newPairsCount = 0;
-  let downgradedPairs = 0;
-
-  for (const p of pairs) {
-    const aKey = `${p.taskInput}|${groupA.id}`;
-    const bKey = `${p.taskInput}|${groupB.id}`;
-    const hadCasesA = existingIndex.has(aKey);
-    const hadCasesB = existingIndex.has(bKey);
-
-    if (p.status === '可比') {
-      // 新可比配对（之前无 case）
-      if (!hadCasesA && p.a) {
-        const c = await prisma.experimentCase.create({
-          data: {
-            experimentId, groupId: groupA.id, executionId: p.a.id,
-            taskId: p.a.taskId ?? p.a.id, input: p.taskInput,
-          },
-          select: { id: true },
-        });
-        for (const evaluatorId of evaluatorIds) {
-          const r = await prisma.experimentEvalResult.create({
-            data: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
-            select: { id: true },
-          });
-          newResultIds.push(r.id);
-        }
-      }
-      if (!hadCasesB && p.b) {
-        const c = await prisma.experimentCase.create({
-          data: {
-            experimentId, groupId: groupB.id, executionId: p.b.id,
-            taskId: p.b.taskId ?? p.b.id, input: p.taskInput,
-          },
-          select: { id: true },
-        });
-        for (const evaluatorId of evaluatorIds) {
-          const r = await prisma.experimentEvalResult.create({
-            data: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
-            select: { id: true },
-          });
-          newResultIds.push(r.id);
-        }
-      }
-      if (!hadCasesA || !hadCasesB) newPairsCount++;
-    } else {
-      // 降级：之前有 case（可比）但现在不可比/未配对
-      if (hadCasesA && hadCasesB) downgradedPairs++;
-    }
-  }
-
-  // 增量评测
-  if (newResultIds.length > 0) {
-    const running = getComparisonRunningSet();
-    running.add(experimentId);
-    await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } });
-    try {
-      await comparisonRunAllRows(experimentId, user, newResultIds);
-    } finally {
-      running.delete(experimentId);
-    }
-  }
-
-  return { newPairsCount, downgradedPairs };
+  return rescanCoreComparison(experimentId,user);
 }
 
 function comparisonCaseId(experimentId:string,groupId:string,taskId:string){return 'comparison-'+createHash('sha256').update(JSON.stringify([experimentId,groupId,taskId])).digest('hex').slice(0,40);}

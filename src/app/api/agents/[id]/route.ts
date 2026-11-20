@@ -1,6 +1,7 @@
-import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
 import {deleteCoreControlAgent} from '@/lib/storage-core/control-agent';
 import {withCoreControlRoute} from '@/lib/storage-core/control-route';
+import {requireCoreControlContext} from '@/lib/storage-core/control-context';
+import {compatibilityFailure} from '@/lib/storage-core/compat';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -18,9 +19,7 @@ import {withCoreControlRoute} from '@/lib/storage-core/control-route';
  */
 
 import { NextResponse } from 'next/server';
-import { prismaRaw } from '@/lib/storage/prisma';
 import { addDeletedOpencodeSessionIds } from '@/lib/ingest/opencode-deleted-sessions';
-import { resolveUser } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
@@ -36,104 +35,17 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       return NextResponse.json({ error: 'Missing agent ID' }, { status: 400 });
     }
 
-    if(isStorageCoreEnabled()){
+    {
       const deleted=await deleteCoreControlAgent(request,id);
       if(!deleted)return NextResponse.json({error:'Agent not found'},{status:404});
       const tombstoned=addDeletedOpencodeSessionIds(deleted.opencodeSessions);
+      if(isUsageEnabled())recordUsageEvent({user:requireCoreControlContext().actor.username,featureKey:'agents',eventKey:'agent.delete'});
       return NextResponse.json({success:true,deletedTraces:deleted.deletedTraces,tombstonedSessions:tombstoned});
     }
-
-    // 0. 查找对应的 Agent 以获取其 name 和 platform
-    const agent = await (prismaRaw as any).registeredAgent.findUnique({
-      where: { id }
-    });
-    if (!agent) {
-      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
-    }
-
-    // 1. 获取所有关联的 Executions
-    // 针对 user 字段额外加上 { user: '' } 防止空字符串的脏数据匹配不到
-    const executionWhere = {
-      OR: [
-        { agentId: id },
-        {
-          agentName: agent.name,
-          framework: agent.platform,
-          ...(agent.user ? { OR: [{ user: agent.user }, { user: null }, { user: '' }] } : {})
-        }
-      ]
-    };
-
-    const executions = await (prismaRaw as any).execution.findMany({
-      where: executionWhere,
-      select: { id: true, taskId: true, framework: true },
-    });
-    const executionIds = executions.map((e: any) => e.id);
-    const deletedOpencodeSessionIds = executions
-      .filter((e: any) => (e.framework || agent.platform) === 'opencode')
-      .flatMap((e: any) => [e.taskId, e.id])
-      .filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0);
-
-    const transaction = [];
-
-    if (executionIds.length > 0) {
-      // 2. 清理 Evaluation 及其关联的 SkillIssue
-      const evals = await (prismaRaw as any).evaluation.findMany({
-        where: { executionId: { in: executionIds } },
-        select: { id: true },
-      });
-      const evalIds = evals.map((e: any) => e.id);
-      
-      if (evalIds.length > 0) {
-        transaction.push((prismaRaw as any).skillIssue.deleteMany({ where: { evaluationId: { in: evalIds } } }));
-        transaction.push((prismaRaw as any).evaluation.deleteMany({ where: { executionId: { in: executionIds } } }));
-      }
-
-      // 3. 清理 FaultDiagnosisSession 及其关联的 Messages
-      const diagSessions = await (prismaRaw as any).faultDiagnosisSession.findMany({
-        where: { executionId: { in: executionIds } },
-        select: { id: true },
-      });
-      const diagSessionIds = diagSessions.map((s: any) => s.id);
-
-      if (diagSessionIds.length > 0) {
-        transaction.push((prismaRaw as any).faultDiagnosisMessage.deleteMany({ where: { sessionId: { in: diagSessionIds } } }));
-        transaction.push((prismaRaw as any).faultDiagnosisSession.deleteMany({ where: { id: { in: diagSessionIds } } }));
-      }
-
-      // 4. 清理其他关联表
-      transaction.push((prismaRaw as any).executionMatch.deleteMany({ where: { executionId: { in: executionIds } } }));
-      transaction.push((prismaRaw as any).trajectoryEvalResult.deleteMany({ where: { executionId: { in: executionIds } } }));
-      
-      // 5. 最后清理 Execution
-      // 直接复用查询条件进行删除，避免 executionIds 数组过长触发 SQLite 绑定变量超限
-      transaction.push((prismaRaw as any).execution.deleteMany({
-        where: executionWhere
-      }));
-    }
-
-    // 6. 删除 Agent 本身
-    transaction.push((prismaRaw as any).registeredAgent.delete({ where: { id } }));
-
-    await (prismaRaw as any).$transaction(transaction);
-    const tombstoned = addDeletedOpencodeSessionIds(deletedOpencodeSessionIds);
-
-    // 删除已经成功；解析身份只为打统计，绝不能让它把成功结果变成 500，
-    // 因此单独 try 包住，并且只在统计开启时才多做这一次查询。
-    if (isUsageEnabled()) {
-      try {
-        const { username } = await resolveUser(request);
-        recordUsageEvent({ user: username, featureKey: 'agents', eventKey: 'agent.delete' });
-      } catch (e) {
-        console.warn('[agents][DELETE] usage record skipped:', e);
-      }
-    }
-
-    return NextResponse.json({ success: true, deletedTraces: executionIds.length, tombstonedSessions: tombstoned });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`[agents][DELETE] error for id ${agentIdForLog}:`, msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return compatibilityFailure(error);
   }
 
   },["write","delete"]);

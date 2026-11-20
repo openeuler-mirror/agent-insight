@@ -28,7 +28,7 @@ import type { HardwareProfile } from '@/lib/infra/types';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req?:Request):Promise<Response> {
+export async function GET(req:Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>GET(req));
   const sources = await listInfraSources();
 

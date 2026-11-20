@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {isolateTestDatabase} from './helpers/isolated-test-db';
+import {controlRecordSnapshot} from './helpers/control-record-snapshot';
+import {withCoreCollectorIdentity} from '@/lib/storage-core/collector-identity';
+import {runWithCoreControlActor} from '@/lib/storage-core/control-context';
 isolateTestDatabase('collector-preparation');
 import * as service from '../src/lib/storage/data-service';
 
@@ -134,12 +137,12 @@ test('capture selects only related static assets, retains no credentials and per
  await assert.rejects(api.captureCoreCollectorPreparation({...identity},reservation),(error:any)=>error.status===403);
 });
 
-test('legacy shared quick preparation reads the actual scoped Skill active version through its bound adapter',async()=>{
- const {prismaRaw}=await import('../src/lib/storage/prisma');
+test('Core shared quick preparation reads the actual scoped Skill active version through its bound adapter',async()=>{
+ const {prismaRaw}=await import('./helpers/historical-prisma');
  const name='collector-preparation-active',user='collector-preparation-owner';
  const skill=await prismaRaw.skill.create({data:{name,user,activeVersion:3,versions:{create:[{version:3,content:'active'},{version:4,content:'latest'}]}}});
  try{
-  const {quickData}=await service.prepareUploadQuickData({task_id:'task',framework:'pi-agent',skill:name,interactions:[]},user);
+  const auth=await collectorTestIdentity(user);let quickData;try{({quickData}=await auth.run(()=>service.prepareUploadQuickData({task_id:'task',framework:'pi-agent',skill:name,interactions:[]},user)));}finally{auth.restore();}
   assert.equal(quickData.skill_version,3);
  }finally{await prismaRaw.skillVersion.deleteMany({where:{skillId:skill.id}});await prismaRaw.skill.delete({where:{id:skill.id}});}
 });
@@ -152,25 +155,6 @@ test('a rejected smaller snapshot retains the original preceding Thread write pl
  assert.equal(value.thread.events[0].executionId,'task');assert.equal(value.snapshot.execution.traceThreadId,null);assert.deepEqual(value.post_hooks,[]);
 });
 
-test('legacy saves use a real default timestamp for falsy public JSON timestamps on create and update',async()=>{
- const {prismaRaw}=await import('../src/lib/storage/prisma');
- const user='collector-falsy-timestamps';
- try{
-  for(const [index,timestamp] of [null,'',0].entries()){
-   const task='collector-falsy-'+index;const started=Date.now();
-   await service.saveExecutionRecord({task_id:task,framework:'pi-agent',user,query:'before',timestamp,skip_evaluation:true} as any);
-   const created=await prismaRaw.execution.findUniqueOrThrow({where:{id:task}});
-   assert(created.timestamp.getTime()>=started&&created.timestamp.getTime()<=Date.now());
-   const updatedAfter=Date.now();
-   await service.saveExecutionRecord({task_id:task,framework:'pi-agent',user,query:'after',force_query_update:true,timestamp,skip_evaluation:true} as any);
-   const updated=await prismaRaw.execution.findUniqueOrThrow({where:{id:task}});
-   assert.equal(updated.query,'after');assert(updated.timestamp.getTime()>=updatedAfter&&updated.timestamp.getTime()<=Date.now());
-  }
-  await assert.rejects(service.saveExecutionRecord({task_id:'collector-genuinely-invalid-time',framework:'pi-agent',user,query:'invalid new input',timestamp:'not-a-date',skip_evaluation:true}),(error:any)=>error.name==='PrismaClientValidationError');
-  assert.equal(await prismaRaw.execution.findUnique({where:{id:'collector-genuinely-invalid-time'}}),null);
- }finally{await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});}
-});
-
 test('falsy core timestamps use the sealed clock including zero instead of a new clock or null',async()=>{
  const core=await import('../src/lib/storage-core/collector-preparation');
  for(const timestamp of [null,'',0])for(const received_at_ms of [0,Date.parse(at)]){
@@ -178,20 +162,6 @@ test('falsy core timestamps use the sealed clock including zero instead of a new
   const frozen:any={version:1,actor:{principal:'p',workspace:'w',username:'alice'},binding:core.collectorPreparationBinding(reservation),configs:[],skills:[],active_skill_versions:{},evaluation_results:{},settings:{autoEvaluationEnabled:false},allow_snapshot_shrink:true,execution_match:null,thread_id:null};
   const result:any=await core.prepareCoreCollectorSnapshot(reservation,frozen);assert.equal(result.snapshot.execution.timestamp,new Date(received_at_ms).toISOString());
  }
-});
-
-test('metadata-only legacy updates leave a pre-existing malformed Session body byte-for-byte intact',async()=>{
- const {prismaRaw}=await import('../src/lib/storage/prisma');
- const user='collector-corrupt-old-session',task='collector-corrupt-old';const raw='{"original_corrupt_json":';
- try{
-  await service.saveExecutionRecord({task_id:task,framework:'pi-agent',user,query:'before',interactions:[],skip_evaluation:true});
-  await prismaRaw.session.update({where:{taskId:task},data:{interactions:raw}});
-  await service.saveExecutionRecord({task_id:task,framework:'pi-agent',user,query:'after',force_query_update:true,skip_evaluation:true});
-  assert.equal((await prismaRaw.execution.findUniqueOrThrow({where:{id:task}})).query,'after');
-  assert.equal((await prismaRaw.session.findUniqueOrThrow({where:{taskId:task}})).interactions,raw);
-  const plan=service.prepareExecutionSession({record:{task_id:task},interactions:null,existingSession:{taskId:task,interactions:raw},defaultTimestamp:at});
-  assert.equal(plan.session.interactions,raw);assert.equal(plan.create,null);assert.equal(plan.update,null);
- }finally{await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});}
 });
 
 test('metadata-only core updates retain the already validated Session body without reparsing old storage',async()=>{
@@ -211,26 +181,6 @@ test('repeated headless completion retains the trusted prior Session clock and c
 });
 
 const collectorGraphNode=(spanId:string,startedAt=0)=>({traceId:'fixture-trace',spanId,parentSpanId:null,sourceParentSpanId:null,displayParentSpanId:null,name:spanId,kind:'span' as const,startedAt,completedAt:startedAt+1,durationMs:1,status:'success' as const,visibility:'visible' as const,input:{zero:0,nil:null}});
-for(const framework of ['pi-agent','langfuse-langgraph'])for(const graphKind of ['malformed','valid'])for(const mode of ['metadata','messages','incoming-graph']){
- test(`legacy ${framework} ${mode} preserves unrelated ${graphKind} stored graph bytes`,async()=>{
-  const {prismaRaw}=await import('../src/lib/storage/prisma');
-  const suffix=`${framework}-${graphKind}-${mode}`,user='collector-graph-'+suffix,task='collector-graph-'+suffix;
-  const oldNodes=[collectorGraphNode('old')],newNodes=[collectorGraphNode('new',2)];
-  const graphRaw=graphKind==='malformed'?'{"original_broken_graph":':JSON.stringify(oldNodes,null,2);
-  const oldBody=JSON.stringify([{id:'old',role:'user',content:'old body',timestamp:at}]);
-  const newBody=[{id:'new',role:'user',content:'new complete source',timestamp:at}];
-  try{
-   await service.saveExecutionRecord({task_id:task,framework,user,query:'before',interactions:[],skip_evaluation:true});
-   await prismaRaw.session.update({where:{taskId:task},data:{interactions:oldBody,langfuseTraceNodes:graphRaw}});
-   await service.saveExecutionRecord({task_id:task,framework,user,query:'after',force_query_update:true,skip_evaluation:true,session_merge_strategy:'snapshot-replace',...(mode!=='metadata'?{interactions:newBody}:{}),...(mode==='incoming-graph'?{langfuseTraceNodes:newNodes}:{})});
-   const stored=await prismaRaw.session.findUniqueOrThrow({where:{taskId:task}});
-   assert.equal((await prismaRaw.execution.findUniqueOrThrow({where:{id:task}})).query,'after');
-   assert.equal(stored.interactions,mode==='metadata'?oldBody:JSON.stringify(newBody));
-   if(framework==='langfuse-langgraph'&&mode==='incoming-graph')assert.deepEqual(JSON.parse(stored.langfuseTraceNodes!),graphKind==='valid'?[...oldNodes,...newNodes]:newNodes);
-   else assert.equal(stored.langfuseTraceNodes,graphRaw);
-  }finally{await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});}
- });
-}
 
 test('shared Session preparation preserves storage representation and only merges requested canonical LF graph updates',async()=>{
  const core=await import('../src/lib/storage-core/collector-preparation');
@@ -253,42 +203,25 @@ test('shared Session preparation preserves storage representation and only merge
  assert.throws(()=>service.prepareExecutionSession({record:{task_id:'task',framework:'langfuse-langgraph',langfuseTraceNodes:[null] as any},interactions:messages,existingSession:{taskId:'task',startTime:at,langfuseTraceNodes:'bad old graph'},defaultTimestamp:at}),TypeError);
 });
 
-for(const previousPi of [false,true])for(const variant of ['missing','null','empty']){
- test(`legacy framework ${variant} with ${previousPi?'existing Pi':'new source'} selects the original effective shrink capability`,async()=>{
-  const {prismaRaw}=await import('../src/lib/storage/prisma');
-  const user=`collector-framework-${previousPi}-${variant}`,task=user;
-  const oldBody=[{id:'one',role:'user',content:'old one',timestamp:at},{id:'two',role:'assistant',content:'old two',timestamp:at}];
-  const newBody=[{id:'one',role:'user',content:'new one',timestamp:at}];
-  try{
-   if(previousPi)await service.saveExecutionRecord({task_id:task,framework:'pi-agent',user,query:'before',interactions:oldBody,skip_evaluation:true});
-   const data:any={task_id:task,user,query:'after',force_query_update:true,interactions:newBody,session_merge_strategy:'snapshot-replace',skip_evaluation:true};
-   if(variant!=='missing')data.framework=variant==='null'?null:'';
-   await service.saveExecutionRecord(data);
-   const execution=await prismaRaw.execution.findUniqueOrThrow({where:{id:task}}),session=await prismaRaw.session.findUniqueOrThrow({where:{taskId:task}});
-   const skipped=previousPi&&variant!=='missing';
-   assert.deepEqual(JSON.parse(session.interactions!),skipped?oldBody:newBody);
-   assert.equal(execution.query,skipped?'before':'after');assert.equal(execution.framework,previousPi?'pi-agent':variant==='empty'?'':null);
-  }finally{await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});}
- });
-}
-
 async function collectorTestIdentity(user:string){
  const {resolveCoreCollectorIdentity}=await import('../src/lib/storage-core/collector-identity');
  const previous=process.env.AGENT_INSIGHT_STORAGE_CORE_URL;process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:58763';let calls=0;
- const fetcher:typeof fetch=async(input)=>{
+ const {prismaRaw}=await import('./helpers/historical-prisma');const control=controlRecordSnapshot('collector-principal',{registeredAgent:[],skill:await prismaRaw.skill.findMany(),skillVersion:await prismaRaw.skillVersion.findMany(),userSettings:await prismaRaw.userSettings.findMany(),config:await prismaRaw.config.findMany()});const reads:any[]=[];
+ const fetcher:typeof fetch=async(input,init)=>{
   calls++;const url=new URL(String(input));assert.equal(url.origin,'http://127.0.0.1:58763');
   if(url.pathname==='/v1/auth/me')return Response.json({principal_id:'collector-principal',username:user,workspace_id:'collector-workspace',workspaces:[{workspace_id:'collector-workspace'}]});
+  if(url.pathname==='/v1/compat/platform-control'){const body=JSON.parse(String(init?.body));reads.push(body);return control(body);}
   if(url.pathname==='/v1/compat/experiments')return Response.json({value:{match:null,attribution:null}});
   assert.equal(url.pathname,'/v1/compat/collector-source');return Response.json({value:{authorized:true,operation:'snapshot',principal_id:'collector-principal',workspace_id:'collector-workspace'}});
  };
  try{
   const identity=await resolveCoreCollectorIdentity(new Request('http://isolated/upload',{headers:{'x-witty-api-key':'api_'+'q'.repeat(43)}}),{operation:'snapshot'},{fetcher});
-  return {identity,calls:()=>calls,restore:()=>{if(previous===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous;}};
+  return {identity,reads,run:<T>(action:()=>Promise<T>)=>withCoreCollectorIdentity(identity,(actor,options)=>runWithCoreControlActor(actor,options||{},action)),calls:()=>calls,restore:()=>{if(previous===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous;}};
  }catch(error){if(previous===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous;throw error;}
 }
 
-test('real branded capture and static Prisma distinguish missing framework from explicit null and empty for old/new sources',async()=>{
- const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('../src/lib/storage/prisma');
+test('branded capture and Core static records distinguish missing framework from explicit null and empty for old/new sources',async()=>{
+ const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('./helpers/historical-prisma');
  const user='collector-capture-framework';await prismaRaw.userSettings.create({data:{user,settingsJson:JSON.stringify({autoEvaluationEnabled:false})}});
  const auth=await collectorTestIdentity(user);
  const oldBody=[{id:'one',role:'user',content:'old one',timestamp:at},{id:'two',role:'assistant',content:'old two',timestamp:at}],newBody=oldBody.slice(0,1);
@@ -305,66 +238,55 @@ test('real branded capture and static Prisma distinguish missing framework from 
 });
 
 test('capture selects the incoming natural Thread binding and preserves the original old-to-new association change',async()=>{
- const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('../src/lib/storage/prisma');
+ const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('./helpers/historical-prisma');
  const user='collector-thread-switch',task='collector-thread-switch';await prismaRaw.userSettings.create({data:{user,settingsJson:JSON.stringify({autoEvaluationEnabled:false})}});const auth=await collectorTestIdentity(user);
  try{
-  await service.saveExecutionRecord({task_id:task,framework:'codex',user,query:'before',timestamp:at,interactions:[],skip_evaluation:true,traceThread:{sourceThreadId:'old-thread'}});
-  const old=await prismaRaw.execution.findUniqueOrThrow({where:{id:task}});const next=await prismaRaw.traceThread.create({data:{framework:'codex',sourceThreadId:'new-thread',user}});
+  const old={traceThreadId:'old-thread-id'},next={id:'new-thread-id'};
   const data={task_id:task,framework:'codex',query:'after',timestamp:at,force_query_update:true,interactions:[],traceThread:{sourceThreadId:'new-thread'}};
   const reservation:any={trace_id:'trace',task_id:task,execution_id:task,operation_key:'switch',operation:'snapshot',state:'reserved',input_hash:'a'.repeat(64),base_revision:'1',source_revision:'1',received_at_ms:Date.parse(at),completed_at_ms:null,operation_request:{data},provenance:{legacy_username:user},snapshot:{execution:{id:task,taskId:task,framework:'codex',timestamp:at,traceThreadId:old.traceThreadId},session:{taskId:task,startTime:at,interactions:[]}}};
   const frozen=await core.captureCoreCollectorPreparation(auth.identity,reservation,{threadId:next.id});const result:any=await core.prepareCoreCollectorSnapshot(reservation,frozen);
-  await service.saveExecutionRecord({...data,user,skip_evaluation:true});assert.equal((await prismaRaw.execution.findUniqueOrThrow({where:{id:task}})).traceThreadId,next.id);assert.equal(await prismaRaw.traceThread.count({where:{user}}),2);
+  assert.equal(await prismaRaw.traceThread.count({where:{user}}),0);
   assert.equal(frozen.thread_id,next.id);assert.equal(result.thread.thread.id,next.id);assert.equal(result.thread.thread.sourceThreadId,'new-thread');assert.equal(result.snapshot.execution.traceThreadId,next.id);
   const withoutLookup=await core.captureCoreCollectorPreparation(auth.identity,reservation);assert.notEqual(withoutLookup.thread_id,old.traceThreadId);assert.equal(withoutLookup.thread_id,(await core.captureCoreCollectorPreparation(auth.identity,reservation)).thread_id);
  }finally{auth.restore();await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.traceThread.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});await prismaRaw.userSettings.delete({where:{user}});}
 });
 
 test('core Thread planning uses the original raw-stage framework condition and never inherits permission to write a new Thread',async()=>{
- const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('../src/lib/storage/prisma');
+ const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('./helpers/historical-prisma');
  const user='collector-thread-raw-condition',task=user;await prismaRaw.userSettings.create({data:{user,settingsJson:JSON.stringify({autoEvaluationEnabled:false})}});const auth=await collectorTestIdentity(user);
  try{
-  await service.saveExecutionRecord({task_id:task,framework:'codex',user,query:'before',timestamp:at,interactions:[],skip_evaluation:true,traceThread:{sourceThreadId:'existing-thread'}});
-  const old=await prismaRaw.execution.findUniqueOrThrow({where:{id:task}});
+  const old={traceThreadId:'existing-thread-id'};
   const data={task_id:task,query:'after',timestamp:at,force_query_update:true,interactions:[],traceThread:{sourceThreadId:'ignored-new-thread'}};
   const reservation:any={trace_id:'trace',task_id:task,execution_id:task,operation_key:'raw-condition',operation:'snapshot',state:'reserved',input_hash:'a'.repeat(64),base_revision:'1',source_revision:'1',received_at_ms:Date.parse(at),completed_at_ms:null,operation_request:{data},provenance:{legacy_username:user},snapshot:{execution:{id:task,taskId:task,framework:'codex',timestamp:at,traceThreadId:old.traceThreadId},session:{taskId:task,startTime:at,interactions:[]}}};
   const frozen=await core.captureCoreCollectorPreparation(auth.identity,reservation);const result:any=await core.prepareCoreCollectorSnapshot(reservation,frozen);
-  await service.saveExecutionRecord({...data,user,skip_evaluation:true});assert.equal(await prismaRaw.traceThread.count({where:{user}}),1);assert.equal((await prismaRaw.execution.findUniqueOrThrow({where:{id:task}})).traceThreadId,old.traceThreadId);
+  assert.equal(await prismaRaw.traceThread.count({where:{user}}),0);
   assert.equal(result.thread,null);assert.equal(result.snapshot.execution.traceThreadId,old.traceThreadId);assert.equal(result.post_hooks.find((hook:any)=>hook.kind==='reconcile_trace_thread').threadId,old.traceThreadId);
  }finally{auth.restore();await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.traceThread.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});await prismaRaw.userSettings.delete({where:{user}});}
 });
 
 test('real static capture reads lightweight owner names and only selected Skill ID/version bodies with original JS case selection',async()=>{
- const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw,db}=await import('../src/lib/storage/prisma');
+ const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('./helpers/historical-prisma');
  const user='collector-capture-read-scope';await prismaRaw.userSettings.create({data:{user,settingsJson:JSON.stringify({autoEvaluationEnabled:false})}});
  const seeds=[] as any[];
  for(const name of ['Änalysis','änalysis','related-two','unrelated-a','unrelated-b','fallback-skill'])seeds.push(await prismaRaw.skill.create({data:{name,user,activeVersion:name==='fallback-skill'?77:0,versions:{create:[{version:0,content:'BODY '+name+' v0'},{version:2,content:'BODY '+name+' v2'}]}}}));
- const expected=await db.findSkill('ÄNALYSIS',user);assert(expected);
+ const expected=seeds.find(row=>row.name.toLowerCase()==='änalysis');assert(expected);
  const config=await prismaRaw.config.create({data:{query:'related query',skill:expected.name,datasetType:'routing',routingIntent:'related query',routingAnchors:'["related query"]',expectedSkills:JSON.stringify([{skill:expected.name,version:0},{skill:'related-two',version:2}]),standardAnswer:'',user}});
- const auth=await collectorTestIdentity(user);const reads:any[]=[];
- const adapter=db as any,originalClient=adapter.client;
- const skillDelegate=prismaRaw.skill as any,versionDelegate=prismaRaw.skillVersion as any,skillFind=skillDelegate.findMany,versionFind=versionDelegate.findMany;
- const observe=(kind:string,args:any,rows:any[])=>{reads.push({kind,args:structuredClone(args),rows:structuredClone(rows)});return rows;};
- adapter.client=originalClient.$extends({query:{skill:{async findMany({args,query}:any){return observe('legacy-skill',args,await query(args));}}}});
- skillDelegate.findMany=async(args:any)=>observe('skill',args,await Reflect.apply(skillFind,skillDelegate,[args]));
- versionDelegate.findMany=async(args:any)=>observe('skill-version',args,await Reflect.apply(versionFind,versionDelegate,[args]));
+ const auth=await collectorTestIdentity(user);
  try{
   for(const [skill,query,expectedVersion] of [['ÄNALYSIS','related query',0],['fallback-skill','unmatched',2]] as const){
    const reservation:any={trace_id:'trace',task_id:'task',execution_id:'task',operation_key:skill,operation:'snapshot',state:'reserved',input_hash:'a'.repeat(64),base_revision:'0',source_revision:'0',received_at_ms:Date.parse(at),completed_at_ms:null,operation_request:{data:{task_id:'task',framework:'pi-agent',skill,query,interactions:[]}},provenance:{legacy_username:user},snapshot:null};
    const frozen=await core.captureCoreCollectorPreparation(auth.identity,reservation);const result:any=await core.prepareCoreCollectorSnapshot(reservation,frozen);assert.equal(result.snapshot.execution.skillVersion,expectedVersion);
    if(skill==='ÄNALYSIS')assert.equal(frozen.skills.find(row=>row.name.toLowerCase()==='änalysis')!.id,expected.id);
   }
-  assert(reads.length>0);assert.equal(reads.some(read=>read.kind==='legacy-skill'&&read.rows.some((row:any)=>row.versions?.some((version:any)=>typeof version.content==='string'))),false,'No all-owner Skill body reads');
-  const selected=new Set([expected.id,seeds.find(row=>row.name==='related-two').id,seeds.find(row=>row.name==='fallback-skill').id]);
-  for(const read of reads){
-   if(read.kind==='skill'){assert.equal(read.args.include,undefined);assert.equal(read.args.select.versions,undefined);assert.equal(read.args.select.content,undefined);}
-   if(read.kind==='skill-version'&&read.args.select.content){assert(selected.has(read.args.where.skillId));assert(Array.isArray(read.args.where.version.in));assert(read.rows.length<=read.args.where.version.in.length);}
-  }
-  assert(reads.some(read=>read.kind==='skill-version'&&read.args.select.content));
- }finally{adapter.client=originalClient;skillDelegate.findMany=skillFind;versionDelegate.findMany=versionFind;auth.restore();await prismaRaw.config.delete({where:{id:config.id}});await prismaRaw.skillVersion.deleteMany({where:{skillId:{in:seeds.map(row=>row.id)}}});await prismaRaw.skill.deleteMany({where:{user}});await prismaRaw.userSettings.delete({where:{user}});}
+  const selected=new Set(seeds.filter(row=>[expected.id,seeds.find(row=>row.name==='related-two').id,seeds.find(row=>row.name==='fallback-skill').id].includes(row.id)).map(row=>row.id));
+  const bodies=auth.reads.filter(read=>read.kind==='skillVersion'&&read.fields?.includes('content'));
+  assert(bodies.length>0);for(const read of bodies){assert(read.ids?.length>0);const versions=await prismaRaw.skillVersion.findMany({where:{id:{in:read.ids}}});assert(versions.every(row=>selected.has(row.skillId)));}
+ }finally{auth.restore();await prismaRaw.config.delete({where:{id:config.id}});await prismaRaw.skillVersion.deleteMany({where:{skillId:{in:seeds.map(row=>row.id)}}});await prismaRaw.skill.deleteMany({where:{user}});await prismaRaw.userSettings.delete({where:{user}});}
+
 });
 
 test('capture retains exact-case routing version lookup separately from JS-folded business Skill selection',async()=>{
- const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('../src/lib/storage/prisma');const user='collector-case-routing',task=user;
+ const core=await import('../src/lib/storage-core/collector-preparation');const {prismaRaw}=await import('./helpers/historical-prisma');const user='collector-case-routing',task=user;
  await prismaRaw.userSettings.create({data:{user,settingsJson:JSON.stringify({autoEvaluationEnabled:false})}});
  const skills=[] as any[];for(const [name,activeVersion] of [['Mixed',0],['mixed',2]] as const)skills.push(await prismaRaw.skill.create({data:{name,user,activeVersion,versions:{create:[{version:0,content:'zero '+name},{version:2,content:'two '+name}]}}}));
  const config=await prismaRaw.config.create({data:{query:'case query',skill:'mixed',datasetType:'routing',routingIntent:'case query',routingAnchors:'["case query"]',expectedSkills:'[{"skill":"mixed","version":2}]',standardAnswer:'',user}});const auth=await collectorTestIdentity(user);
@@ -372,8 +294,8 @@ test('capture retains exact-case routing version lookup separately from JS-folde
   const data={task_id:task,framework:'pi-agent',query:'case query',timestamp:at,interactions:[{role:'assistant',content:'load business Skill',timestamp:at,tool_calls:[{id:'skill',name:'skill',arguments:'{"name":"mixed"}'}]}]};
   const reservation:any={trace_id:'trace',task_id:task,execution_id:task,operation_key:'case-routing',operation:'snapshot',state:'reserved',input_hash:'a'.repeat(64),base_revision:'0',source_revision:'0',received_at_ms:Date.parse(at),completed_at_ms:null,operation_request:{data},provenance:{legacy_username:user},snapshot:null};
   const frozen=await core.captureCoreCollectorPreparation(auth.identity,reservation);const result:any=await core.prepareCoreCollectorSnapshot(reservation,frozen);
-  const {quickData}=await service.prepareUploadQuickData(data,user);assert.equal(quickData.skill_version,0);await service.saveExecutionRecord({...quickData,user});const actual=await prismaRaw.execution.findUniqueOrThrow({where:{id:task}});assert.equal(actual.isSkillCorrect,true);
-  assert.equal(result.snapshot.execution.isSkillCorrect,actual.isSkillCorrect);assert.equal(result.record.routing_evaluation.is_correct,true);assert.equal(frozen.skills.find(row=>row.name.toLowerCase()==='mixed')!.id,skills[0].id);
+  const {quickData}=await auth.run(()=>service.prepareUploadQuickData(data,user));assert.equal(quickData.skill_version,0);assert.equal(await prismaRaw.execution.findUnique({where:{id:task}}),null);
+  assert.equal(result.snapshot.execution.isSkillCorrect,true);assert.equal(result.record.routing_evaluation.is_correct,true);assert.equal(frozen.skills.find(row=>row.name.toLowerCase()==='mixed')!.id,skills[0].id);
  }finally{auth.restore();await prismaRaw.execution.deleteMany({where:{user}});await prismaRaw.session.deleteMany({where:{user}});await prismaRaw.registeredAgent.deleteMany({where:{user}});await prismaRaw.config.delete({where:{id:config.id}});await prismaRaw.skillVersion.deleteMany({where:{skillId:{in:skills.map(row=>row.id)}}});await prismaRaw.skill.deleteMany({where:{user}});await prismaRaw.userSettings.delete({where:{user}});}
 });
 
@@ -382,4 +304,11 @@ test('an uncorrelated pending Codex execution stops before even a thread-only pl
  const reservation:any={trace_id:'trace',task_id:'session',execution_id:'pending:child',operation_key:'pending',operation:'snapshot',state:'reserved',input_hash:'a'.repeat(64),base_revision:'0',source_revision:'0',received_at_ms:Date.parse(at),completed_at_ms:null,operation_request:{data:{task_id:'session',framework:'codex',threadOnly:true,traceThread:{sourceThreadId:'never-created',events:[{eventKey:'event',kind:'interrupt',startedAt:at}]}}},provenance:{legacy_username:'alice'},snapshot:null};
  const frozen:any={version:1,actor:{principal:'p',workspace:'w',username:'alice'},binding:core.collectorPreparationBinding(reservation),thread_id:'never-created'};
  const value:any=await core.prepareCoreCollectorSnapshot(reservation,frozen);assert.equal(value.disposition,'pending_parent');assert.equal(value.skipped,true);assert.equal(value.thread,null);assert.equal(value.snapshot,null);assert.deepEqual(value.post_hooks,[]);
+});
+
+test('unscoped legacy Trace writes are rejected without creating old records',async()=>{
+ const {prismaRaw}=await import('./helpers/historical-prisma');
+ const before=await prismaRaw.execution.count();
+ for(const timestamp of [null,'',0,'not-a-date'])await assert.rejects(service.saveExecutionRecord({task_id:'retired-write',user:'forged',timestamp,framework:'pi-agent',interactions:[]} as any),(error:any)=>error.status===403);
+ assert.equal(await prismaRaw.execution.count(),before);assert.equal(await prismaRaw.session.findUnique({where:{taskId:'retired-write'}}),null);
 });

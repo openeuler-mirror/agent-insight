@@ -19,10 +19,9 @@
 //   → scoreDimensions（消费问题汇总产出错误维）→ bucketTrends → 组装 QualityReport。
 // 请求路径只读，不触发任何评测。
 
-import { prisma } from '@/lib/storage/prisma';
 import type { QualityReport, QualityReportInput, WindowKind, ScoringPolicy, DimScore } from './types';
 import { DEFAULT_POLICY, MAX_ERROR_PARSE_TRACES, MAX_PROBLEM_ITEMS } from './config';
-import { collectTraces, type CollectResult } from './trace-collector';
+import { type CollectResult } from './trace-collector';
 import { scoreDimensions } from './dimension-scorer';
 import { bucketTrends } from './trend-bucketer';
 import {
@@ -52,97 +51,6 @@ function emptyReport(input: QualityReportInput): QualityReport {
     };
 }
 
-/** 加载 T 范围内的未解决 SkillIssue（经 Evaluation.executionId 关联；失败降级为空，不影响读路径）。 */
-async function loadSkillIssueRows(executionIds: string[]): Promise<SkillIssueRowLite[]> {
-    if (!executionIds.length) return [];
-    try {
-        const rows = await prisma.skillIssue.findMany({
-            where: { resolvedAt: null, Evaluation: { executionId: { in: executionIds } } },
-            select: {
-                dedupKey: true, severity: true, summary: true, suggestedFix: true,
-                category: true, version: true,
-                Skill: { select: { name: true } },
-                Evaluation: { select: { executionId: true } },
-            },
-        });
-        type Row = {
-            dedupKey: string; severity: string; summary: string; suggestedFix: string | null;
-            category: string | null; version: number | null;
-            Skill: { name: string } | null; Evaluation: { executionId: string | null } | null;
-        };
-        return (rows as Row[]).map((r) => ({
-            dedupKey: r.dedupKey,
-            severity: r.severity,
-            summary: r.summary,
-            suggestedFix: r.suggestedFix,
-            category: r.category,
-            version: typeof r.version === 'number' ? r.version : null,
-            skillName: r.Skill?.name ?? '',
-            executionId: r.Evaluation?.executionId ?? null,
-        })).filter((r) => r.skillName);
-    } catch (e) {
-        console.warn('[quality] skillIssue join failed, falling back to JSON snapshot only:', e);
-        return [];
-    }
-}
-
-/**
- * 加载 T 范围内已完成的智能诊断报告（join AgentDebugReport，status=done），
- * 解析 reportJson 为 DiagnosisLite。失败/表缺失降级为空 Map，不影响读路径。
- */
-async function loadDiagnoses(executionIds: string[]): Promise<Map<string, DiagnosisLite>> {
-    const map = new Map<string, DiagnosisLite>();
-    if (!executionIds.length) return map;
-    try {
-        const rows = await prisma.agentDebugReport.findMany({
-            where: { executionId: { in: executionIds }, status: 'done' },
-            select: { executionId: true, reportJson: true },
-        });
-        for (const r of rows) {
-            if (!r.reportJson) continue;
-            try {
-                const p = JSON.parse(r.reportJson);
-                const rc = p?.rootCause;
-                const fatal = p?.triage?.fatalDiagnosis;
-                if (!rc && !fatal) continue;
-                map.set(r.executionId, {
-                    module: rc?.criticalModule ?? 'system',
-                    category: p?.triage?.category,
-                    errorType: rc?.criticalErrorType ?? fatal?.errorType,
-                    summary: rc?.summary ?? fatal?.summary,
-                    guidance: rc?.correctionGuidance ?? fatal?.recommendation,
-                    confidence: typeof rc?.confidence === 'number' ? rc.confidence : undefined,
-                });
-            } catch { /* 单条解析失败跳过 */ }
-        }
-    } catch (e) {
-        console.warn('[quality] agentDebugReport join failed, diagnosis enrichment skipped:', e);
-    }
-    return map;
-}
-
-/** 为含错误信号的 trace 批量加载原始 interactions（按需，控成本）。 */
-async function loadInteractions(taskIds: string[]): Promise<Map<string, unknown[]>> {
-    const map = new Map<string, unknown[]>();
-    if (!taskIds.length) return map;
-    try {
-        const sessions = await prisma.session.findMany({
-            where: { taskId: { in: taskIds } },
-            select: { taskId: true, interactions: true },
-        });
-        for (const s of sessions) {
-            if (!s.taskId || !s.interactions) continue;
-            try {
-                const arr = JSON.parse(s.interactions);
-                if (Array.isArray(arr)) map.set(s.taskId, arr);
-            } catch { /* skip malformed */ }
-        }
-    } catch (e) {
-        console.warn('[quality] interactions load failed, structured errors degraded:', e);
-    }
-    return map;
-}
-
 export interface QualityReportSource {
     collection: CollectResult;
     structuredErrors: StructuredTraceErrors[];
@@ -153,26 +61,22 @@ export interface QualityReportSource {
 export async function buildQualityReport(
     input: QualityReportInput,
     policy: ScoringPolicy = DEFAULT_POLICY,
-    source?: QualityReportSource,
+    source: QualityReportSource,
 ): Promise<QualityReport> {
     // 1. 圈定 T
-    const { traces, truncated } = source?.collection ?? await collectTraces({
-        user: input.user, agent: input.agent, from: input.from, to: input.to, filters: input.filters,
-    });
+    if (!source) throw Object.assign(new Error('Core quality source required'), { status: 503 });
+    const { traces, truncated } = source.collection;
     if (!traces.length) return emptyReport(input);
 
     // 2. 按需加载交互（仅含错误信号的 trace，且封顶）+ SkillIssue 表行（并行）
     const errorish = traces
         .filter((t) => (t.toolCallErrorCount ?? 0) > 0 || (t.failures?.length ?? 0) > 0)
         .slice(0, MAX_ERROR_PARSE_TRACES);
-    const [interactionsByTrace, skillIssueRows, diagnosesByTrace] = source ? [new Map<string, unknown[]>(), source.skillIssueRows, source.diagnosesByTrace] : await Promise.all([
-        loadInteractions(errorish.map((t) => t.taskId).filter((x): x is string => Boolean(x))),
-        loadSkillIssueRows(traces.map((t) => t.executionId)),
-        loadDiagnoses(traces.map((t) => t.executionId)),
-    ]);
+    const interactionsByTrace = new Map<string, unknown[]>();
+    const { skillIssueRows, diagnosesByTrace } = source;
 
     // 3. 统一问题汇总（先于错误维）+ 诊断增强 + Skill 拖累榜
-    const summary = buildProblemSummary({ traces, interactionsByTrace, skillIssueRows, diagnosesByTrace, ...(source ? {structuredErrors: source.structuredErrors.filter(row => errorish.some(trace => trace.executionId === row.executionId))} : {}) });
+    const summary = buildProblemSummary({ traces, interactionsByTrace, skillIssueRows, diagnosesByTrace, structuredErrors: source.structuredErrors.filter(row => errorish.some(trace => trace.executionId === row.executionId)) });
     const skillDrag = buildSkillDrag(skillIssueRows, traces);
     const { moduleFingerprint, diagnosisCoverage } = summarizeDiagnoses(traces, diagnosesByTrace);
 

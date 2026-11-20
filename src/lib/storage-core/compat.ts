@@ -184,7 +184,7 @@ export async function handleCompatibleObserveData(request:Request,options:Compat
  return compatibleRequest(request,'/v1/compat/observe/data',DATA_FIELDS,options);
 }
 export function handleCompatibleSession(request:Request,options:CompatibilityOptions={}) {
- return compatibleRequest(request,'/v1/compat/observe/session',['taskId','view','index','source'],options);
+ return compatibleRequest(request,'/v1/compat/observe/session',['taskId','view','index','source','paged','cursor','spanId'],options);
 }
 
 export async function handleCompatibleIngest(request:Request,options:CompatibilityOptions={}) {

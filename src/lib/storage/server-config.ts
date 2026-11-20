@@ -64,9 +64,9 @@ export interface UserSettings {
 const settingsWrites = new Map<string, Promise<void>>();
 
 async function writeUserSettings<T>(user: string, write: () => Promise<T>): Promise<T> {
-    if(isStorageCoreEnabled()){const context=requireCoreControlContext();if(context.actor.username!==user)throw Object.assign(new Error('Settings owner differs'),{status:403});user=[context.origin,context.actor.workspace,context.actor.principal,user].join('\0');}
+    {const context=requireCoreControlContext();if(context.actor.username!==user)throw Object.assign(new Error('Settings owner differs'),{status:403});user=[context.origin,context.actor.workspace,context.actor.principal,user].join('\0');}
     const previous = settingsWrites.get(user) ?? Promise.resolve();
-    const result = previous.catch(() => {}).then(isStorageCoreEnabled()?()=>controlClient.$transaction(write):write);
+    const result = previous.catch(() => {}).then((()=>controlClient.$transaction(write)));
     const settled = result.then(() => {}, () => {});
     settingsWrites.set(user, settled);
     try { return await result; }
@@ -190,8 +190,7 @@ export async function getStoredUserSettings(user?: string | null): Promise<UserS
             }
         }
     } catch (e) {
-        if(isStorageCoreEnabled())throw e;
-        console.error('Failed to load user settings:', e);
+        throw e;
     }
 
     const mergedConfigs = [...defaultConfigs, ...userConfigs];

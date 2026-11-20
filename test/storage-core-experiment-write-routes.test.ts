@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
-import {prisma} from '@/lib/storage/prisma';
+import {prisma} from './helpers/historical-prisma';
 import {createExperimentReadView} from '@/lib/storage-core/experiment-view';
 import {runWithCoreExperimentContext,type CoreExperimentContext} from '@/lib/storage-core/experiments';
 const previous=process.env.AGENT_INSIGHT_TRACE_STORAGE;process.env.AGENT_INSIGHT_TRACE_STORAGE='core';
@@ -12,7 +12,7 @@ function fixture(path:string,body:Record<string,unknown>={},method='POST'){
  const calls:Array<{action:string;payload:Record<string,unknown>}> = [];
  const experiment={id:'core-exp',user:'verified-owner',name:'原实验',type:'single',agentName:'build',scope:'',status:'draft',deletedAt:null,evaluatorIdsJson:'["preset-result-answer"]',evaluatorConfigsJson:null,configSnapshotJson:JSON.stringify({coreAssets:{schemaVersion:1,evaluators:{'preset-result-answer':{card:{id:'preset-result-answer'},origin:'builtin'}},releases:{}}}),cases:[] as Array<Record<string,unknown>>,groups:[],comments:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
  const request=new Request('http://localhost'+path,{method,headers:{authorization:'Bearer api_'+'R'.repeat(43),'content-type':'application/json'},...(method==='DELETE'?{}:{body:JSON.stringify(body)})});
- const context:CoreExperimentContext={request,body,operationKey:'original-operation',actor:{token:'api_'+'R'.repeat(43),workspace:'w',principal:'owner',username:'verified-owner'},options:{fetcher:async()=>Response.json({principal_id:'owner',username:'verified-owner',workspace_id:'w',workspaces:[{workspace_id:'w'}]})},readView:createExperimentReadView([{coverage:'complete',experiment,executions:[],sessions:[],cancellations:[]}]),rpc:async(action,payload={})=>{
+ const context:CoreExperimentContext={request,body,operationKey:'original-operation',actor:{token:'api_'+'R'.repeat(43),workspace:'w',principal:'owner',username:'verified-owner'},options:{fetcher:async(url,init)=>{if(new URL(String(url)).pathname==='/v1/auth/me')return Response.json({principal_id:'owner',username:'verified-owner',workspace_id:'w',workspaces:[{workspace_id:'w'}]});assert.equal(new URL(String(url)).pathname,'/v1/compat/platform-control');const body=JSON.parse(String(init?.body));assert.equal(body.action,'records_read');assert.equal(body.kind,'userSettings');return Response.json({value:{rows:[],scope_revision:'0'}});}},readView:createExperimentReadView([{coverage:'complete',experiment,executions:[],sessions:[],cancellations:[]}]),rpc:async(action,payload={})=>{
   calls.push({action,payload});if(action==='cancellation_route')return {kind:'ordinary'};if(action==='read')return {experiment,revision:'1'};if(action==='update'){Object.assign(experiment,payload.changes);return {experiment,revision:'2'};}
   if(action==='case_upsert'){const row={...(payload.case as Record<string,unknown>),id:'added-case'};experiment.cases.push(row);return {experiment,case_id:row.id};}
   if(action==='start'){experiment.status='running';return {experiment,run_id:'immutable-run'};}if(action==='claim')return null;return {experiment};
@@ -116,6 +116,6 @@ test('the original Benchmark Case retry POST returns its 202 DTO and keeps the l
   const duplicate=await f.run(()=>POST(f.request,retryParams));assert.equal(duplicate.status,409);assert.equal((await duplicate.json()).code,'case_retry_in_progress');assert.equal(benchmarkCalls.filter(action=>action==='retry_case').length,1);
   release();await new Promise(resolve=>setImmediate(resolve));const replay=await f.run(()=>POST(f.request,retryParams));assert.equal(replay.status,202);assert.deepEqual(await replay.json(),value);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(benchmarkCalls.filter(action=>action==='prepare_case_retry').length,1);assert.equal(f.calls.some(call=>['retry','start','execute_start'].includes(call.action)),false);
-  for(const table of ['experiment','experimentCase','experimentEvalResult','benchmarkCaseRun','benchmarkEvaluation'] as const)assert.equal(await prisma[table].count(),0);
+  for(const table of ['experiment','experimentCase','experimentEvalResult','benchmarkCaseRun','benchmarkEvaluation'] as const)assert.equal(await (prisma[table] as {count():Promise<number>}).count(),0);
  }finally{release();await new Promise(resolve=>setImmediate(resolve));if(old===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=old;await rm(directory,{recursive:true,force:true});}
 });

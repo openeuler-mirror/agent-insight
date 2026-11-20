@@ -57,6 +57,20 @@ class ObservationTests(unittest.TestCase):
     def rows(self,table):
         with self.control.read_transaction() as con: return [dict(row) for row in con.execute('SELECT * FROM '+table)]
 
+    def test_pending_limit_rejects_new_batches_but_keeps_idempotent_receipts(self):
+        self.control.max_pending_ingest_batches=1
+        first=self.service.accept(self.tokens['alice'],'w',packet(),receipt_key='first')
+        duplicate=self.service.accept(self.tokens['alice'],'w',packet(),receipt_key='first')
+        self.assertEqual(first['batch_id'],duplicate['batch_id'])
+        self.assertTrue(duplicate['duplicate'])
+        with self.assertRaises(Conflict) as caught:
+            self.service.accept(self.tokens['alice'],'w',packet(span='2'*16),receipt_key='second')
+        self.assertEqual(caught.exception.code,'QUEUE_LIMIT')
+        self.assertEqual(len(self.rows('ingest_batches')),1)
+        self.service.work_once('worker')
+        accepted=self.service.accept(self.tokens['alice'],'w',packet(span='2'*16),receipt_key='second')
+        self.assertFalse(accepted['duplicate'])
+
     def test_explicit_tool_role_with_usage_does_not_invent_llm_or_tool_name(self):
         for key in ('legacy.role','role'):
             with self.subTest(key=key):

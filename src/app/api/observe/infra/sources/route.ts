@@ -27,7 +27,7 @@ import { metricsUrl, normalizeEndpoint } from '@/lib/ingest/vllm/scrape';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req?:Request):Promise<Response> {
+export async function GET(req:Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>GET(req));
   const sources = await listInfraSources();
   // legacy 路由无鉴权，两个模式都只返回凭证摘要。

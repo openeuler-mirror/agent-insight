@@ -980,51 +980,7 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ):Promise<Response> {
-  if(isStorageCoreEnabled()){const {id}=await params;return coreExperimentWriteRoute(req,()=>patchCoreExperimentRoute(id));}
-
-  try {
-    const { id } = await params;
-    const body = await req.json().catch(() => ({}));
-    const { username } = await resolveUser(req, body?.user);
-    if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
-
-    if (body && Object.prototype.hasOwnProperty.call(body, 'name')) {
-      if (body.watchMode !== undefined) {
-        return NextResponse.json({ error: '一次只能修改一个实验字段' }, { status: 400 });
-      }
-      const name = typeof body.name === 'string' ? body.name.trim() : '';
-      if (!name || name.length > 120) {
-        return NextResponse.json({ error: '实验名称须为 1～120 个字符' }, { status: 400 });
-      }
-      const updated = await prisma.experiment.updateMany({
-        where: { id, user: username, deletedAt: null },
-        data: { name },
-      });
-      if (updated.count === 0) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
-      return NextResponse.json({ success: true, name });
-    }
-
-    if (body?.watchMode !== false) {
-      return NextResponse.json({ error: 'only supports watchMode:false (stop watching)' }, { status: 400 });
-    }
-
-    const exp = await prisma.experiment.findFirst({
-      where: { id, user: username },
-      select: { id: true },
-    });
-    if (!exp) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
-
-    await prisma.experiment.update({
-      where: { id },
-      data: { watchMode: false, watchEnabledAt: null },
-    });
-    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.watch.stop' });
-
-    return NextResponse.json({ success: true, watchMode: false });
-  } catch (error) {
-    console.error('[Experiment PATCH Error]', error);
-    return NextResponse.json({ error: 'Failed to update experiment' }, { status: 500 });
-  }
+  {const {id}=await params;return coreExperimentWriteRoute(req,()=>patchCoreExperimentRoute(id));}
 }
 
 // 创建页启动失败时的补偿操作。只允许删除仍未启动的内部 draft；如果 run 已经
@@ -1033,64 +989,5 @@ export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ):Promise<Response> {
-  if(isStorageCoreEnabled()){const {id}=await params;return coreExperimentWriteRoute(req,()=>deleteCoreExperimentRoute(req,id));}
-
-  try {
-    const { id } = await params;
-    const url = new URL(req.url);
-    const { username } = await resolveUser(req, url.searchParams.get('user'));
-    if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
-
-    const experiment = await prisma.experiment.findFirst({
-      where: { id, user: username },
-      select: { status: true, scope: true, configSnapshotJson: true },
-    });
-    if (!experiment) {
-      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
-    }
-    if (url.searchParams.get('stop') === 'true') {
-      const { deleteExperimentExecution } = await import('@/lib/engine/experiment/cancellation-service');
-      const result = await deleteExperimentExecution(username, id);
-      return NextResponse.json({ deleted: true, cancellation: result }, { status: result.status === 'completed' ? 200 : 202 });
-    }
-    if (experiment.status !== 'draft') {
-      return NextResponse.json({
-        error: 'experiment has already started',
-        status: experiment.status,
-      }, { status: 409 });
-    }
-
-    let grayscaleTaskId = '';
-    if (experiment.scope === 'skill-workbench') {
-      try {
-        const snapshot = JSON.parse(experiment.configSnapshotJson || '{}') as { grayscaleTaskId?: unknown };
-        grayscaleTaskId = typeof snapshot.grayscaleTaskId === 'string' ? snapshot.grayscaleTaskId : '';
-      } catch { /* ignore malformed rollback metadata */ }
-    }
-    const rollbackTask = grayscaleTaskId
-      ? await prisma.grayscaleTask.findFirst({ where: { id: grayscaleTaskId, user: username } })
-      : null;
-    const rollbackTaskConfig = rollbackTask ? parseJsonValue(rollbackTask.configJson) : null;
-    const canDeleteTask = rollbackTask
-      && rollbackTaskConfig
-      && typeof rollbackTaskConfig === 'object'
-      && !Array.isArray(rollbackTaskConfig)
-      && (rollbackTaskConfig as { evalExperimentId?: unknown }).evalExperimentId === id;
-    const deleted = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const result = await tx.experiment.deleteMany({
-        where: { id, user: username, status: 'draft' },
-      });
-      if (result.count > 0 && canDeleteTask) {
-        await tx.grayscaleTask.deleteMany({ where: { id: grayscaleTaskId, user: username } });
-      }
-      return result;
-    });
-    if (deleted.count === 0) {
-      return NextResponse.json({ error: 'experiment has already started' }, { status: 409 });
-    }
-    return NextResponse.json({ deleted: true });
-  } catch (error) {
-    console.error('[Experiment DELETE Error]', error);
-    return NextResponse.json({ error: 'Failed to rollback experiment' }, { status: 500 });
-  }
+  {const {id}=await params;return coreExperimentWriteRoute(req,()=>deleteCoreExperimentRoute(req,id));}
 }

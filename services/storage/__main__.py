@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 
 from .control import SQLiteControlStore, StorageError
+from .clickhouse import ClickHouseError
 from .legacy import inventory_database, export_database, verify_export, LegacyValidationError
 
 
@@ -137,7 +138,7 @@ def main(argv=None):
             result = {key:result[key] for key in ('format_version','status','integrity_status','source_schema_sha256','source_content_sha256','unclassified_tables') if key in result} | {'tables': [{key:table[key] for key in ('name','row_count','rows_sha256','classification') if key in table} for table in tables]}
         print(json.dumps(result,ensure_ascii=False,sort_keys=True))
         return 0
-    except (StorageError,LegacyValidationError,OSError,ValueError) as exc:
+    except (StorageError,LegacyValidationError,ClickHouseError,OSError,ValueError) as exc:
         print(json.dumps({'error':type(exc).__name__,'message':str(exc)},ensure_ascii=False),file=sys.stderr)
         return 1
 

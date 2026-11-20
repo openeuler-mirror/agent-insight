@@ -21,4 +21,27 @@ test('fixed control facade bounds selected Skill bodies and commits original mul
   const value=await controlClient.$transaction(async(tx:any)=>{const settings=await tx.userSettings.upsert({where:{user:'alice'},create:{user:'alice',settingsJson:'{}'},update:{settingsJson:'{}'}});await tx.userSettings.update({where:{id:settings.id},data:{settingsJson:'{"autoEvaluationEnabled":true}'}});return settings.id;});
   assert.equal(typeof value,'string');const batches=calls.filter(call=>call.action==='records_batch');assert.equal(batches.length,1);assert.equal(batches[0].operations.length,1);assert.equal(batches[0].operations[0].method,'create');assert.match(batches[0].operations[0].data.settingsJson,/true/);
  },{fetcher});
+ const count=await withCoreControlRequest(new Request('http://localhost/skills?workspace_id=w',{headers:{authorization:'Bearer api_'+'a'.repeat(43)}}),()=>controlClient.skill.count(),{fetcher});
+ assert.equal(count,2);
+});
+
+test('mutation DTOs use committed timestamps without expanding selected fields',async()=>{
+ const directory=await mkdtemp(path.join(tmpdir(),'control-commit-'));
+ process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:49020';
+ process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(directory,'controller');
+ await writeFile(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'b'.repeat(64),{mode:0o600});
+ const committedAt='2026-11-20T00:00:00.000Z';
+ const fetcher:typeof fetch=async(input,init)=>{
+  if(new URL(String(input)).pathname==='/v1/auth/me')return Response.json({principal_id:'alice',username:'alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]});
+  const body=JSON.parse(String(init?.body));
+  if(body.action==='records_read')return Response.json({value:{scope_revision:'0',rows:[]}});
+  assert.equal(body.action,'records_batch');
+  return Response.json({value:{results:body.operations.map((operation:any)=>({...operation.data,updatedAt:committedAt})),scope_revision:'1'}});
+ };
+ await withCoreControlRequest(new Request('http://localhost/control',{headers:{authorization:'Bearer api_'+'b'.repeat(43)}}),async()=>{
+  const record=await controlClient.skillTriggerEvalSet.create({data:{user:'alice',skillName:'checking',version:1,itemsJson:'[]'},select:{updatedAt:true}});
+  assert.deepEqual(Object.keys(record),['updatedAt']);assert.equal(record.updatedAt.toISOString(),committedAt);
+  const nested=await controlClient.$transaction(async(tx:any)=>({record:await tx.userSettings.create({data:{user:'alice',settingsJson:'{}'},select:{id:true,updatedAt:true}})}));
+  assert.equal(nested.record.updatedAt.toISOString(),committedAt);assert.deepEqual(Object.keys(nested.record).sort(),['id','updatedAt']);
+ },{fetcher});
 });

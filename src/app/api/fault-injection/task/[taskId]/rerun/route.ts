@@ -35,12 +35,7 @@ async function handlePOST(
     const decoded = decodeURIComponent(taskId)
     const body = await req.json().catch(() => ({}))
 
-    const source = isStorageCoreEnabled() ? await findCoreFiTask(decoded) : await prisma.faultInjectionTask.findFirst({
-      where: {
-        OR: [{ taskKey: decoded }, { id: decoded }],
-        ...(username ? { user: username } : {}),
-      },
-    })
+    const source = (await findCoreFiTask(decoded))
     if (!source) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
     const items = JSON.parse(source.itemsJson || '[]') as Array<{
@@ -78,9 +73,7 @@ async function handlePOST(
       needsWorker: true,
     })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

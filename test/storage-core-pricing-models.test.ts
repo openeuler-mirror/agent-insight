@@ -72,12 +72,12 @@ test('core price-admin display uses verified actor username and cannot be elevat
   }
 });
 
-test('legacy pricing GET preserves distinct Prisma query and previous auth path', async () => {
+test('pricing ignores retired database rows and always reads authorized Core facets', async () => {
   const api = route({core: false, legacyModels: [{model: 'zeta'}, {model: ' none '}, {model: 'alpha'}, {model: null}]});
   const response = await api.GET(request('?user=legacy-hint'));
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).observed, [{model: 'alpha', hasPricing: true, source: 'builtin'}, {model: 'zeta', hasPricing: false, source: null}]);
-  assert.deepEqual(api.counts(), {oldReads: 1, authReads: 1, coreReads: 0, hint: 'legacy-hint'});
+  assert.deepEqual(api.counts(), {oldReads: 0, authReads: 0, coreReads: 1, hint: undefined});
 });
 
 test('core helper requests only model facets with authenticated token/workspace, ignoring forged owner/admin filters', async () => {

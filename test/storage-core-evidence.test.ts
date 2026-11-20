@@ -35,7 +35,7 @@ test('evidence helper rejects missing evidence, mismatched scope and backend fai
 
 function route(core:boolean,result:unknown={evidence,username:'alice'},failure?:number){
  const exports:Record<string,unknown>={};let oldReads=0;let usage=0;let normalizations=0;
- const control=controlVmFixture({actor:{token,workspace:'w',principal:'alice',username:'alice'},enabled:core});
+ const control=controlVmFixture({actor:{token,workspace:'w',principal:'alice',username:'alice'},enabled:core,authenticate:async(request)=>{if(!request.headers.has('authorization'))throw Object.assign(new Error('Authentication required'),{status:401});return {token,workspace:'w',principal:'alice',username:'alice'};}});
  const dependencies:Record<string,unknown>={
   '@/lib/storage-core/control-context':control.context,
   'next/server':{NextResponse:Response},
@@ -71,9 +71,9 @@ test('core draft retains explicit null overrides and existing Claude Code normal
  assert.equal(data.draft.values.input,'');assert.equal(data.draft.values.output,'');assert.equal(h.counts().normalizations,1);assert.equal(h.counts().oldReads,0);
 });
 
-test('mode off preserves the original legacy draft route',async()=>{
+test('an unscoped draft cannot reopen retired legacy storage',async()=>{
  const h=route(false);const response=await h.post(new Request('http://localhost/api/agent-datasets/trace-drafts',{method:'POST',body:JSON.stringify({user:'alice',taskId:'legacy-task'})}));
- assert.equal(response.status,200);assert.equal(h.counts().oldReads,2);assert.equal((await response.json()).draft.traceSource.executionId,'legacy-execution');
+ assert.equal(response.status,401);assert.equal(h.counts().oldReads,0);assert.equal(h.counts().usage,0);
 });
 
 test('evidence transport failures are unavailable and never expose upstream details',async()=>{

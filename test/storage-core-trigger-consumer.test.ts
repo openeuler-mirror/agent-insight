@@ -6,7 +6,8 @@ import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
 process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(database.home,'controller');writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'a'.repeat(64),{mode:0o600});
-import {prismaRaw as prisma} from '@/lib/storage/prisma';
+import {prismaRaw as prisma} from './helpers/historical-prisma';
+import {controlRecordSnapshot} from './helpers/control-record-snapshot';
 import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import {GET as getPoints} from '@/app/api/skills/by-name/[name]/optimization-points/route';
 import {GET as getEvaluation} from '@/app/api/evaluation/[id]/route';
@@ -40,10 +41,11 @@ finally:
  await prisma.skill.create({data:{id:'skill-a',name:'checking',user:'legacy-alice',versions:{create:{version:0,content:'LATEST CONTENT MUST NOT REPLACE TESTED DESCRIPTION'}}}});
  for(const source of ['static','feedback','trigger'] as const){const evaluation=await prisma.evaluation.create({data:{id:'old-'+source,type:source,skillId:'skill-a',version:0,user:'legacy-alice',status:'ok'}});await prisma.skillIssue.create({data:{id:'old-'+source+'-issue',evaluationId:evaluation.id,source,skillId:'skill-a',version:0,user:'legacy-alice',dedupKey:'old-'+source,severity:'low',summary:'old '+source,suggestedFix:'retain legitimate '+source}});}
  const before={mode:process.env.AGENT_INSIGHT_TRACE_STORAGE,url:process.env.AGENT_INSIGHT_STORAGE_CORE_URL};process.env.AGENT_INSIGHT_TRACE_STORAGE='core';process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19000';let stage=0;
+ const control=controlRecordSnapshot('alice',{skill:await prisma.skill.findMany(),skillVersion:await prisma.skillVersion.findMany(),evaluation:await prisma.evaluation.findMany(),skillIssue:await prisma.skillIssue.findMany()});
  const fetcher:typeof fetch=async(url,options)=>{
   if(new URL(String(url)).pathname==='/v1/auth/me')return Response.json({principal_id:'alice',username:'legacy-alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]});
   const body=JSON.parse(String(options?.body)),current=stages[stage];
-  if(new URL(String(url)).pathname==='/v1/compat/platform-control'&&body.action==='scope')return Response.json({value:{authorized:true}});
+  if(new URL(String(url)).pathname==='/v1/compat/platform-control')return control(body);
   if(body.action==='derived_list')return Response.json({value:body.kind==='issue'?current.issues:current.evaluations});
   if(body.action==='derived_lookup')return Response.json({value:current.evaluations.find((row:{id:string})=>row.id===body.id)});
   if(body.action==='derived_trigger_frontier')return Response.json({value:current.frontier});

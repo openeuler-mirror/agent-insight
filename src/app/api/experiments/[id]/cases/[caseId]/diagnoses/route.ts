@@ -26,7 +26,6 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   return diagnosisRequestResponse(request, async () => {
     const user = await diagnosisUser(request);
     const { id, caseId } = await context.params;
-    if (isStorageCoreEnabled()) return { runs: await listCoreDiagnoses(id, caseId) };
-    return { runs: await prismaRaw.diagnosisRun.findMany({ where: { user, experimentId: id, caseId }, select: { id: true, status: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 10 }) };
+    return { runs: await listCoreDiagnoses(id, caseId) };
   });
 }

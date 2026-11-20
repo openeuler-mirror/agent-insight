@@ -37,7 +37,7 @@ export async function GET(req: Request) {
         const name = (url.searchParams.get('name') || '').trim();
         if (!name) return NextResponse.json({ error: '缺少 name 参数' }, { status: 400 });
 
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const executionReader = analytics ?? prisma.execution;
         const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
@@ -169,8 +169,6 @@ export async function GET(req: Request) {
             trend, topModels, toolMix, errTypes, slowTraces,
         });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Fleet Agent]', error);
-        return NextResponse.json({ error: 'Failed to load agent stats' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

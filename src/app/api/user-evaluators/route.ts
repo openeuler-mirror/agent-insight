@@ -69,7 +69,7 @@ function validateCustomEvaluators(raw: unknown[]): string | null {
 }
 
 export async function GET(request: Request) {
-  return isStorageCoreEnabled() ? withCoreEvaluatorRoute(request, evaluatorGET) : evaluatorGET(request);
+  return (withCoreEvaluatorRoute(request, evaluatorGET));
 }
 async function evaluatorGET(request: Request) {
   try {
@@ -92,7 +92,7 @@ async function evaluatorGET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  return isStorageCoreEnabled() ? withCoreEvaluatorRoute(request, evaluatorPUT) : evaluatorPUT(request);
+  return (withCoreEvaluatorRoute(request, evaluatorPUT));
 }
 async function evaluatorPUT(request: Request) {
   try {

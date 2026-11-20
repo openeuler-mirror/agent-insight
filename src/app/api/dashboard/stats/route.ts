@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { withCoreControlRoute } from '@/lib/storage-core/control-route';
 import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
 
 
@@ -60,8 +60,12 @@ function timeAgo(ts: Date, now: Date): string {
 }
 
 export async function GET(req: Request) {
+    return withCoreControlRoute(req, () => stats(req), ['read']);
+}
+
+async function stats(req: Request) {
     try {
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const executionReader = analytics ?? prisma.execution;
         const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
@@ -299,8 +303,6 @@ export async function GET(req: Request) {
             availablePlatforms,
         });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Dashboard Stats Error]', error);
-        return NextResponse.json({ error: 'Failed to load dashboard stats' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

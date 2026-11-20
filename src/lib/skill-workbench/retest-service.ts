@@ -77,7 +77,7 @@ export async function retestOptimizationCandidate(input: {
   skillName: string;
   recordId: string;
 }) {
-  if (isStorageCoreEnabled()) input = { ...input, user: requireCoreExperimentContext().actor.username };
+  input = { ...input, user: requireCoreExperimentContext().actor.username };
   const record = await prismaRaw.skillOptimizationRecord.findFirst({
     where: { id: input.recordId, user: input.user, skillName: input.skillName },
   });
@@ -88,13 +88,11 @@ export async function retestOptimizationCandidate(input: {
     throw new RetestError(`候选当前状态 ${record.status} 不能复测`);
   }
   if (record.sourceKind === 'diagnosis') {
-    const source = record.sourceExperimentId && (isStorageCoreEnabled()
-      ? (await requireCoreExperimentContext().rpc('read', { experiment_id: record.sourceExperimentId }) as { experiment: Experiment }).experiment
-      : await prismaRaw.experiment.findFirst({ where: { id: record.sourceExperimentId, user: input.user, deletedAt: null } }));
+    const source = record.sourceExperimentId && (((await requireCoreExperimentContext().rpc('read', { experiment_id: record.sourceExperimentId }) as { experiment: Experiment }).experiment));
     if (!source) throw new RetestError('该诊断缺少可复测的来源实验');
     if (isStorageCoreEnabled() || source.scope !== 'skill-workbench') {
       try { return await retestDiagnosisCase(record, source, candidateFiles); }
-      catch (error) { if (isStorageCoreEnabled()) throw error; throw new RetestError(error instanceof Error ? error.message : '诊断候选复测失败'); }
+      catch (error) { throw error; }
     }
   }
   const evidenceInput = { ...input, baseVersion: record.baseVersion, files: candidateFiles, sourceExperimentId: record.sourceExperimentId };
@@ -150,7 +148,7 @@ export async function retestOptimizationCandidate(input: {
   }
   const datasetId = snapshot.datasetId as string;
   const caseIds = snapshot.caseIds as string[];
-  const dataset = isStorageCoreEnabled()?await readWorkbenchFrozenDataset(input.user,source.id,datasetId):await findAgentDataset(input.user,datasetId);
+  const dataset = (await readWorkbenchFrozenDataset(input.user,source.id,datasetId));
   if (!dataset) throw new RetestError('来源实验的数据集已不存在');
   const caseMap = new Map(dataset.cases.map((item) => [item.id, item]));
   const orderedCases = caseIds.map((id) => caseMap.get(id)).filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -179,11 +177,11 @@ export async function retestOptimizationCandidate(input: {
         baseVersion: record.baseVersion,
         candidateHash: record.candidateContentHash,
       }),
-      configSnapshotJson: JSON.stringify({ ...snapshot,...(isStorageCoreEnabled()?{grayscaleTaskId:undefined}:{}), candidateHash: record.candidateContentHash }),
+      configSnapshotJson: JSON.stringify({ ...snapshot,...(({grayscaleTaskId:undefined})), candidateHash: record.candidateContentHash }),
       sourceExperimentId: source.id,
       optimizationRecordId: record.id,
     };
-  const retest=isStorageCoreEnabled()?await (async()=>{const context=requireCoreExperimentContext();const payload={experiment:{...retestData,id:'retest-exp-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey,record.id,record.candidateContentHash])).digest('hex').slice(0,40),cases:[]}};const receipt=await context.rpc('create',{...payload,operation_key:context.operationKey+':local-retest-create',operation_request:payload}) as {experiment:{id:string}};return receipt.experiment;})():await prismaRaw.experiment.create({data:retestData});
+  const retest=(await (async()=>{const context=requireCoreExperimentContext();const payload={experiment:{...retestData,id:'retest-exp-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey,record.id,record.candidateContentHash])).digest('hex').slice(0,40),cases:[]}};const receipt=await context.rpc('create',{...payload,operation_key:context.operationKey+':local-retest-create',operation_request:payload}) as {experiment:{id:string}};return receipt.experiment;})());
   await transitionSkillOptimizationRecord({
     user: input.user, skillName: input.skillName, recordId: record.id, to: 'retesting',
   });
@@ -214,7 +212,7 @@ export async function retestOptimizationCandidate(input: {
           recordTraceAs: 'skill-workbench-retest',
         });};
         const run = await withBackgroundOpencodeSlot(async()=>{
-          if(!isStorageCoreEnabled())return execute();
+
           const context=requireCoreExperimentContext();const modelId=snapshot.runtime?.modelConfigId;const model=modelId?(await getUserSettings(input.user)).configs.find(value=>value.id===modelId):undefined;
           if(modelId&&!model)throw new RetestError('冻结模型配置不可用',503);
           return executeCoreWorkbenchLocalCase({...context,...(model?{frozenStartModelSelection:freezeModelSelection(model)}:{})},{user:input.user,experimentId:retest.id,datasetId,datasetCaseId:item.id,query:item.input,referenceOutput:item.expectedOutput,signal:new AbortController().signal,skillRun:{recordId:record.id,round},executionRequest:{candidateHash:record.candidateContentHash,skill:{name:input.skillName,files:candidateFiles},modelConfigId:modelId},onCaseCreated:async id=>{coreCaseId=id;}},execute);
@@ -237,8 +235,7 @@ export async function retestOptimizationCandidate(input: {
     }
     const candidateScore = average(scores);
     const passed = allPassed && candidateScore != null && candidateScore >= sourceScore;
-    if(isStorageCoreEnabled())await requireCoreExperimentContext().rpc('reconcile',{experiment_id:retest.id});
-    else await prismaRaw.experiment.update({ where: { id: retest.id }, data: { status: 'done' } });
+    await requireCoreExperimentContext().rpc('reconcile',{experiment_id:retest.id});
     const latestRecord = await prismaRaw.skillOptimizationRecord.findUnique({
       where: { id: record.id },
       select: { sourceRefsJson: true },
@@ -267,8 +264,7 @@ export async function retestOptimizationCandidate(input: {
       user: input.user, skillName: input.skillName, recordId: record.id, to: 'retest_failed',
       errorMessage: error instanceof Error ? error.message : String(error),
     }).catch(() => undefined);
-    if(isStorageCoreEnabled())await requireCoreExperimentContext().rpc('reconcile',{experiment_id:retest.id}).catch(()=>undefined);
-    else await prismaRaw.experiment.updateMany({ where: { id: retest.id }, data: { status: 'failed' } }).catch(() => undefined);
+    await requireCoreExperimentContext().rpc('reconcile',{experiment_id:retest.id}).catch(()=>undefined);
     throw error;
   }
 }

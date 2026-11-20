@@ -32,32 +32,9 @@ function toErrorResponse(error: unknown) {
 }
 
 export async function GET(request: Request) {
-  if (isStorageCoreEnabled()) return handleCompatibleTags(request);
-  try {
-    const { searchParams } = new URL(request.url);
-    const { username, canViewAllTraces } = await resolveTraceReadScope(request);
-    if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
-    const kind = searchParams.get('kind');
-    return NextResponse.json(await listTraceTags(username, kind, { allUsers: canViewAllTraces }));
-  } catch (error) {
-    return toErrorResponse(error);
-  }
+  return handleCompatibleTags(request);
 }
 
 export async function POST(request: Request) {
-  if (isStorageCoreEnabled()) return handleCompatibleTags(request);
-  try {
-    const body = await request.json();
-    const user = String(body.user || '').trim();
-    const tag = await createTraceTag(user, body);
-
-    // 只有版本标签属于「版本管理」功能；其他 kind 的标签不计。
-    if ((tag as { kind?: string })?.kind === 'version') {
-      recordUsageEvent({ user, featureKey: 'version-management', eventKey: 'version.tag.create' });
-    }
-
-    return NextResponse.json(tag, { status: 201 });
-  } catch (error) {
-    return toErrorResponse(error);
-  }
+  return handleCompatibleTags(request);
 }

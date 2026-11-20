@@ -33,12 +33,7 @@ async function handleGET(
     const { taskId } = await ctx.params
     const decoded = decodeURIComponent(taskId)
 
-    const task = isStorageCoreEnabled() ? await findCoreFiTask(decoded,true) : await prisma.faultInjectionTask.findFirst({
-      where: {
-        OR: [{ taskKey: decoded }, { id: decoded }],
-      },
-      include: { runs: { orderBy: { createdAt: 'asc' } } },
-    })
+    const task = (await findCoreFiTask(decoded,true))
 
     if (!task) {
       return NextResponse.json({ error: 'not found', taskId: decoded }, { status: 404 })
@@ -79,10 +74,7 @@ async function handleGET(
       },
     })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[FI task detail]', message)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

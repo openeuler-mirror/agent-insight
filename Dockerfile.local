@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM node:20-bookworm-slim AS builder
+ARG BASE_NODE_IMAGE=node:20-bookworm-slim
+FROM ${BASE_NODE_IMAGE} AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
     AGENT_INSIGHT_HOME=/tmp/agent-insight-build
@@ -30,7 +31,10 @@ COPY .env.example ./
 
 # 本地工作区可能正处于调整依赖、lockfile 尚未同步的中间状态；只在 builder 内解析，
 # 不会回写宿主机。正式发布前仍应同步 package-lock.json 并通过 npm ci。
-RUN npm install --no-audit --no-fund
+ARG NPM_CONFIG_LOGLEVEL=notice
+ARG NPM_CONFIG_FETCH_RETRIES=2
+ARG NPM_CONFIG_FETCH_TIMEOUT=300000
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
 
 COPY . .
 
@@ -38,7 +42,7 @@ RUN npm run build \
     && npm pack --pack-destination /tmp
 
 
-FROM node:20-bookworm-slim
+FROM ${BASE_NODE_IMAGE}
 
 ARG LOCAL_BUILD_ID=local
 

@@ -59,7 +59,7 @@ export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
         // 身份由前端 ?user= 携带；不读则 username=null 会越权返回全量执行记录。
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const { username } = analytics ?? await resolveUser(req, url.searchParams.get('user') || undefined);
 
         const agent = (url.searchParams.get('agent') || '').trim();
@@ -113,8 +113,6 @@ export async function GET(req: Request) {
         if (analytics) await analytics.validate();
         return NextResponse.json({ records: rows, total });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Quality Executions Error]', error);
-        return NextResponse.json({ error: 'Failed to list executions' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

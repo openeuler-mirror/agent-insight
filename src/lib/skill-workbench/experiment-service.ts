@@ -118,7 +118,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
       include: { _count: { select: { cases: { where: { deletedAt: null } } } } },
     }),
   ]);
-  const archived=isStorageCoreEnabled()?new Set(await readArchivedCoreVerificationIds(user)):new Set<string>();
+  const archived=(new Set(await readArchivedCoreVerificationIds(user)));
   const experiments=loadedExperiments.filter(experiment=>!archived.has(experiment.id));
   const taskIds = experiments.map((experiment) => {
     const snapshot = parseJson<{ grayscaleTaskId?: string }>(experiment.configSnapshotJson, {});
@@ -127,7 +127,7 @@ export async function listWorkbenchExperiments(user: string, skillName: string, 
   const tasks = taskIds.length ? await prismaRaw.grayscaleTask.findMany({ where: { id: { in: taskIds }, user } }) : [];
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
   const currentTaskStates=new Map<string,WorkbenchProjectedStates>();
-  if(isStorageCoreEnabled())for(const experiment of experiments){
+  for(const experiment of experiments){
     const configuration=parseJson<{grayscaleTaskId?:string}>(experiment.configSnapshotJson,{});const task=configuration.grayscaleTaskId?taskMap.get(configuration.grayscaleTaskId):null;if(!task)continue;
     const snapshot=await requireCoreExperimentContext().rpc('read',{experiment_id:experiment.id}) as {gold_redacted?:boolean;experiment:WorkbenchCoreSnapshot};
     if(snapshot.gold_redacted)throw Object.assign(new Error('Workbench Task Experiment belongs to another actor'),{status:403});
@@ -191,7 +191,7 @@ export async function createWorkbenchExperiment(input: {
   agentTimeoutSeconds?: number;
   executionConcurrency?: number;
 }) {
-  if(isStorageCoreEnabled()){requireWorkbenchActor(input.user);const resumed=await resumeCoreWorkbenchHandoff(input.user);if(resumed){await finishCoreWorkbenchLinks(input.user,resumed);return {kind:'created' as const,...resumed};}}
+  {requireWorkbenchActor(input.user);const resumed=await resumeCoreWorkbenchHandoff(input.user);if(resumed){await finishCoreWorkbenchLinks(input.user,resumed);return {kind:'created' as const,...resumed};}}
   if (input.sessionId) {
     const session = await prismaRaw.skillWorkbenchSession.findFirst({
       where: {
@@ -288,7 +288,7 @@ export async function createWorkbenchExperiment(input: {
     retryLimit: isTriggerExperiment ? 1 : 2,
   };
   const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(input.user, evaluatorIds);
-  if(isStorageCoreEnabled()){
+  {
     if(activeModel&&runtime.model)runtime.model={...runtime.model,baseUrl:freezeModelSelection(activeModel)?.baseUrl as string|null};
     const name=input.name?.trim().slice(0,120)||defaultSkillExperimentName(input.skillName,input.preset,input.version);
     const experiment={user:input.user,name,type:input.preset==='skill-ab'?'skill':'single',agentName:input.agentName?.trim()||input.skillName,evaluatorIdsJson:JSON.stringify(evaluatorIds),evaluatorConfigsJson,status:'draft',scope:'skill-workbench',skillName:input.skillName,skillVersion:input.version,preset:input.preset,skillContextJson:JSON.stringify({...(input.sessionId?{sessionId:input.sessionId}:{}),skillName:input.skillName,versionA:versionA?.version??null,versionB:versionB?.version??null}),cases:isTriggerExperiment?triggerExperimentCaseData('',dataset.id,selectedCases).map(({experimentId:_id,...row})=>row):[]};
@@ -300,136 +300,6 @@ export async function createWorkbenchExperiment(input: {
     await finishCoreWorkbenchLinks(input.user,created);
     return {kind:'created' as const,...created};
   }
-  const created = await prismaRaw.$transaction(async (tx) => {
-    const experiment = await tx.experiment.create({
-      data: {
-        user: input.user,
-        name: input.name?.trim().slice(0, 120) || defaultSkillExperimentName(input.skillName, input.preset, input.version),
-        type: input.preset === 'skill-ab' ? 'skill' : 'single',
-        agentName: input.agentName?.trim() || input.skillName,
-        evaluatorIdsJson: JSON.stringify(evaluatorIds),
-        evaluatorConfigsJson,
-        status: 'draft',
-        scope: 'skill-workbench',
-        skillName: input.skillName,
-        skillVersion: input.version,
-        preset: input.preset,
-        skillContextJson: JSON.stringify({
-          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-          skillName: input.skillName,
-          versionA: versionA?.version ?? null,
-          versionB: versionB?.version ?? null,
-        }),
-      },
-    });
-    const task = await tx.grayscaleTask.create({
-      data: {
-        user: input.user,
-        skillId: skill.id,
-        skillName: input.skillName,
-        skillVersion: boundVersion.version,
-        skillVersionId: boundVersion.id,
-        taskName: `${experiment.name} · ${experiment.id.slice(-6)}`,
-        configJson: JSON.stringify({
-          skillId: skill.id,
-          versionAId: versionA?.id || '__NONE__',
-          versionBId: versionB?.id || '__NONE__',
-          boundSide,
-          linkedDatasetIds: [dataset.id],
-          evaluators: evaluatorIds,
-          runCount: selectedCases.length,
-          repeatRounds: 1,
-          autoEval: true,
-          recordTriggerDetails: input.preset === 'trigger',
-          triggerRouting: input.preset === 'trigger',
-          evalExperimentId: experiment.id,
-          evaluationBatchTitle: experiment.name,
-          modelConfigId: runtime.modelConfigId,
-          executionTarget,
-          requiresClientExecution: Boolean(executionTarget),
-          triggerSkills,
-          skillSnapshots: executionTarget ? {
-            a: versionA ? { name: skill.name, version: versionA.version, files: resolveSkillVersionFiles(skill.id, versionA.version, versionA.files, versionA.content) } : null,
-            b: versionB ? { name: skill.name, version: versionB.version, files: resolveSkillVersionFiles(skill.id, versionB.version, versionB.files, versionB.content) } : null,
-          } : undefined,
-          modelOptions: runtime.modelOptions,
-          interactionPolicy: runtime.interactionPolicy,
-          timeoutMs: runtime.timeoutMs,
-          idleTimeoutMs: runtime.idleTimeoutMs,
-          executionConcurrency: runtime.executionConcurrency,
-          abPairConcurrency: runtime.abPairConcurrency,
-          evaluationConcurrency: runtime.evaluationConcurrency,
-          triggerConcurrency: runtime.triggerConcurrency,
-          agentMaxConcurrency: runtime.agentMaxConcurrency,
-          ...(input.preset === 'skill-ab' ? {} : { executionSides: ['b'] }),
-        }),
-      },
-    });
-    if (isTriggerExperiment) {
-      await tx.experimentCase.createMany({ data: triggerExperimentCaseData(experiment.id, dataset.id, selectedCases) });
-    }
-    const configSnapshot = {
-      customEvaluatorSnapshots,
-      schemaVersion: 1,
-      preset: input.preset,
-      datasetId: dataset.id,
-      caseIds: selectedCases.map((item) => item.id),
-      evaluatorIds,
-      versionAId: versionA?.id || '__NONE__',
-      versionBId: versionB?.id || '__NONE__',
-      boundSide,
-      baselineSide: versionA ? 'a' : 'b',
-      executionSides: input.preset === 'skill-ab' ? ['a', 'b'] : ['b'],
-      traceSource: input.traceSource || 'generate',
-      traceGenerationTarget: executionTarget || (input.traceSource === 'existing' ? null : input.traceGenerationTarget ?? null),
-      executionTarget,
-      agentName: input.agentName?.trim() || input.skillName,
-      repeatRounds: 1,
-      runtime,
-      executionConcurrency: runtime.executionConcurrency,
-      grayscaleTaskId: task.id,
-    };
-    const updated = await tx.experiment.update({
-      where: { id: experiment.id }, data: { configSnapshotJson: JSON.stringify(configSnapshot) },
-    });
-    if (input.optimizationRecordId && input.sessionId) {
-      const record = await tx.skillOptimizationRecord.findFirst({
-        where: {
-          id: input.optimizationRecordId,
-          sessionId: input.sessionId,
-          user: input.user,
-          skillName: input.skillName,
-          baseVersion: input.version,
-          status: { in: ['pending_retest', 'retest_failed', 'retest_cancelled'] },
-        },
-      });
-      if (record) {
-        const sourceRefs = parseJson<unknown[]>(record.sourceRefsJson, []);
-        await tx.skillOptimizationRecord.update({
-          where: { id: record.id },
-          data: {
-            sourceExperimentId: updated.id,
-            sourceRefsJson: JSON.stringify([
-              ...sourceRefs,
-              { type: 'experiment', id: updated.id, name: updated.name, preset: updated.preset },
-            ]),
-          },
-        });
-      }
-    }
-    return { experiment: updated, grayscaleTask: task, configSnapshot };
-  });
-  if (input.sessionId) {
-    await createOrReuseSkillWorkbenchTask({
-      user: input.user,
-      sessionId: input.sessionId,
-      type: 'experiment',
-      skillName: input.skillName,
-      version: input.version,
-      targetRef: created.experiment.id,
-    });
-  }
-  return { kind: 'created' as const, ...created };
 }
 
 async function finishCoreWorkbenchLinks(user:string,created:{experiment:{id:string;name:string;skillName:string;skillVersion:number|null;preset:string|null};configSnapshot:Record<string,unknown>}){
@@ -450,94 +320,7 @@ async function finishCoreWorkbenchLinks(user:string,created:{experiment:{id:stri
 }
 
 export async function cloneWorkbenchExperimentFromFrozenConfig(user: string, sourceExperimentId: string) {
-  if(isStorageCoreEnabled())return cloneCoreWorkbenchExperiment(user,sourceExperimentId);
-  const source = await prismaRaw.experiment.findFirst({
-    where: { id: sourceExperimentId, user, scope: 'skill-workbench', deletedAt: null },
-    select: {
-      id: true, skillName: true, skillVersion: true, preset: true,
-      agentName: true, configSnapshotJson: true, evaluatorIdsJson: true, evaluatorConfigsJson: true,
-    },
-  });
-  if (!source || !WORKBENCH_EXPERIMENT_PRESETS.includes(source.preset as WorkbenchExperimentPreset)) {
-    throw new Error('原 Skill 实验不存在或不支持同配置运行');
-  }
-  const snapshot = parseJson<Record<string, unknown>>(source.configSnapshotJson, {});
-  const datasetId = typeof snapshot.datasetId === 'string' ? snapshot.datasetId : '';
-  const executionTarget = snapshot.executionTarget as SkillExecutionTarget | null;
-  if (!source.skillName || source.skillVersion == null || !datasetId || !executionTarget || !snapshot.grayscaleTaskId) {
-    throw new Error('原 Skill 实验缺少冻结的数据集或客户端配置，请通过复用同配置重新确认');
-  }
-  const sourceTask = await prismaRaw.grayscaleTask.findFirst({
-    where: { id: String(snapshot.grayscaleTaskId), user }, select: { configJson: true },
-  });
-  const sourceTaskConfig = parseJson<Record<string, unknown>>(sourceTask?.configJson || null, {});
-  if (sourceTaskConfig.evalExperimentId !== source.id || !sourceTaskConfig.executionTarget || (
-    source.preset === 'trigger' ? !sourceTaskConfig.triggerSkills : !sourceTaskConfig.skillSnapshots
-  )) throw new Error('原 Skill 实验缺少冻结的 Skill 文件或运行目标，请通过复用同配置重新确认');
-  const cancelled = await prismaRaw.experimentCancellation.findMany({
-    where: { experimentId: source.id, caseKey: { startsWith: 'dataset:' } },
-    select: { caseKey: true },
-  });
-  const caseIds = visibleWorkbenchCaseIds(snapshot.caseIds, new Set(cancelled.map((item) => item.caseKey.slice(8))));
-  if (!caseIds?.length) throw new Error('原 Skill 实验没有可复用的 Case');
-  const preset = source.preset as WorkbenchExperimentPreset;
-  const versionBId = typeof snapshot.versionBId === 'string' ? snapshot.versionBId : '';
-  const versionBEnabled = versionBId !== '__NONE__';
-  const compareVersion = preset === 'skill-ab' && versionBEnabled
-    ? await prismaRaw.skillVersion.findFirst({ where: { id: versionBId }, select: { version: true } }).then((row) => row?.version)
-    : undefined;
-  if (preset === 'skill-ab' && versionBEnabled && compareVersion == null) throw new Error('原 A/B 实验的对照版本已失效');
-  const runtime = snapshot.runtime && typeof snapshot.runtime === 'object'
-    ? snapshot.runtime as Record<string, unknown> : {};
-  const timeoutSeconds = Number(runtime.timeoutMs) / 1_000;
-  snapshot.customEvaluatorSnapshots = await customEvaluatorsForReuse(user, parseJson<string[]>(source.evaluatorIdsJson, []), snapshot);
-  const result = await createWorkbenchExperiment({
-    frozenCustomEvaluators: await customEvaluatorsForReuse(user, parseJson<string[]>(source.evaluatorIdsJson, []), snapshot),
-    user,
-    skillName: source.skillName,
-    version: source.skillVersion,
-    preset,
-    datasetId,
-    caseIds,
-    compareVersion,
-    versionAEnabled: snapshot.versionAId !== '__NONE__',
-    versionBEnabled,
-    name: defaultSkillExperimentName(source.skillName, preset, source.skillVersion),
-    agentName: source.agentName,
-    evaluatorIds: parseJson<string[]>(source.evaluatorIdsJson, []),
-    traceSource: snapshot.traceSource === 'existing' ? 'existing' : 'generate',
-    executionTarget,
-    executionConcurrency: Number(snapshot.executionConcurrency ?? runtime.executionConcurrency) || 1,
-    ...(Number.isInteger(timeoutSeconds) ? { agentTimeoutSeconds: timeoutSeconds } : {}),
-  });
-  if (result.kind !== 'created') throw new Error('原 Skill 实验配置已失效，请通过复用同配置重新确认');
-  await prismaRaw.$transaction([
-    prismaRaw.grayscaleTask.update({
-      where: { id: result.grayscaleTask.id },
-      data: { configJson: JSON.stringify({
-        ...sourceTaskConfig,
-        boundSide: result.configSnapshot.boundSide,
-        evalExperimentId: result.experiment.id,
-        evaluationBatchTitle: result.experiment.name,
-        runCount: caseIds.length,
-      }) },
-    }),
-    prismaRaw.experiment.update({
-      where: { id: result.experiment.id },
-      data: {
-        sourceExperimentId: source.id,
-        evaluatorConfigsJson: source.evaluatorConfigsJson,
-        configSnapshotJson: JSON.stringify({ ...snapshot, boundSide: result.configSnapshot.boundSide, caseIds, grayscaleTaskId: result.grayscaleTask.id }),
-      },
-    }),
-  ]);
-  return {
-    id: result.experiment.id,
-    scope: 'skill-workbench',
-    grayscaleTaskId: result.grayscaleTask.id,
-    caseIds: result.configSnapshot.caseIds as string[],
-    evaluatorIds: parseJson<string[]>(source.evaluatorIdsJson, []),
-  };
+  return cloneCoreWorkbenchExperiment(user,sourceExperimentId);
 }
 
 export async function generateWorkbenchTriggerDataset(input: {

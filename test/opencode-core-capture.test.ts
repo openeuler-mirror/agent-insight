@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
+import {startIsolatedControlCore} from './helpers/isolated-control-core';
 
 test('trusted core capture has an independent persistent per-actor runtime without plugin or OTEL credentials',async t=>{
- const fixture=createIsolatedDatabase();const binary=path.join(fixture.home,'fake-opencode');
+ const fixture=createIsolatedDatabase();const coreStore=await startIsolatedControlCore(['bootstrap-owner']);const {bootstrapCoreControlUser}=await import('@/lib/storage-core/control-auth');for(const user of ['core-fixture.actor','core-fixture_actor','group-stop-owner','group-stop-other'])await bootstrapCoreControlUser(user);const binary=path.join(fixture.home,'fake-opencode');
  fs.writeFileSync(binary,`#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path');
 const data=process.env.XDG_DATA_HOME;fs.mkdirSync(data,{recursive:true});
@@ -16,7 +17,7 @@ require('node:http').createServer((req,res)=>res.end(JSON.stringify({pid:process
  const keys=['OPENCODE_BIN','AGENT_INSIGHT_API_KEY','AGENT_INSIGHT_HOST','AGENT_INSIGHT_OPENCODE_OTEL_ENABLE','OTEL_TRACES_EXPORTER'];
  const previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
  Object.assign(process.env,{OPENCODE_BIN:binary,AGENT_INSIGHT_API_KEY:'fixture-inherited-upload-key',AGENT_INSIGHT_HOST:'http://fixture-upload',AGENT_INSIGHT_OPENCODE_OTEL_ENABLE:'true',OTEL_TRACES_EXPORTER:'otlp'});
- t.after(()=>{for(const[key,value]of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}fixture.dispose();});
+ t.after(async()=>{for(const[key,value]of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}await coreStore.dispose();fixture.dispose();});
  const manager=await import('../src/lib/engine/skill-generation/opencode-agent-cli/opencode-manager');
  const read=async(url:string):Promise<{pid:number;data:string;home:string;config:string;history:string;capture?:string;key:string|null;host:string|null;sdkDisabled?:string;traces?:string}> => (await fetch(url)).json();
  const user='core-fixture.actor';const other='core-fixture_actor';

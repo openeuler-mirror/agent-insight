@@ -51,9 +51,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ nam
     if (!result) return NextResponse.json({ error: 'Skill、版本不存在或无访问权限' }, { status: 404 });
     return NextResponse.json(result);
   } catch (error) {
-    if(isStorageCoreEnabled())return coreExperimentFailure(error);
-    console.error('[skill-workbench experiments GET] failed:', error);
-    return NextResponse.json({ error: '加载 Skill 实验失败' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
 
   },["read"]);
@@ -134,8 +132,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     console.error('[skill-workbench experiments POST] failed:', error);
     if (error instanceof EvaluatorRunConfigValidationError) return NextResponse.json({ error: error.message }, { status: 400 });
     if (error instanceof TraceGenerationError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.httpStatus });
-    if(isStorageCoreEnabled())return coreExperimentFailure(error);
-    return NextResponse.json({ error: '创建 Skill 实验失败' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
 
   },["write"]);

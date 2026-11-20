@@ -77,7 +77,7 @@ export function buildAnalyticsProjection(input: {evidence: {snapshot_hash: strin
       if(typeof name==='string'&&name)row.executionSkills.push({skillName:name,version:typeof (raw as Row)?.version==='number'?(raw as Row).version as number:null});
     }
   }
-  const structured = clusterErrorSteps([{executionId: row.id, steps: buildFaultPathSteps(interactions, 'zh')}]);
+  const structured = clusterErrorSteps([{executionId: row.id, steps: buildFaultPathSteps(interactions, 'zh', {includeLlmHistory: false})}]);
   const errors: StructuredTraceErrors[] = [{executionId: row.id, clusters: structured.clusters.map(cluster => ({key:cluster.key,node:cluster.node,errorCode:cluster.errorCode,object:cluster.object,count:cluster.count,attribution:cluster.attribution}))}];
   const candidate = /subagent|build_team|coordinator/.test(JSON.stringify(interactions));
   const edges: [string,string][] = [];

@@ -39,46 +39,7 @@ export async function PATCH(
   ctx: { params: Promise<{ name: string }> },
 ): Promise<Response> {
   return withCoreControlRoute(req,async()=>{
-  if(isStorageCoreEnabled())return handleCoreIssueResolution(req,(await ctx.params).name);
-  const { name } = await ctx.params;
-  const skillName = decodeURIComponent(String(name || '').trim());
-  if (!skillName) return NextResponse.json({ error: 'skill name required' }, { status: 400 });
-
-  let body: { user?: string; ids?: string[]; threadId?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
-  }
-
-  const user = String(body.user || '').trim();
-  const ids = Array.isArray(body.ids) ? body.ids.filter(x => typeof x === 'string' && x.length > 0) : [];
-  if (!user) return NextResponse.json({ error: 'user required' }, { status: 400 });
-  if (ids.length === 0) return NextResponse.json({ error: 'ids required' }, { status: 400 });
-
-  // 取这些 SkillIssue 关联的 Skill.name 做一致性校验——防止跨 skill 误改
-  const candidates = await prismaRaw.skillIssue.findMany({
-    where: { id: { in: ids }, user, resolvedAt: null },
-    select: { id: true, Skill: { select: { name: true } } },
-  });
-
-  const validIds = candidates
-    .filter(c => c.Skill?.name === skillName)
-    .map(c => c.id);
-
-  if (validIds.length === 0) {
-    return NextResponse.json({ resolvedCount: 0 });
-  }
-
-  const result = await prismaRaw.skillIssue.updateMany({
-    where: { id: { in: validIds }, user, resolvedAt: null },
-    data: {
-      resolvedAt: new Date(),
-      resolvedRunId: body.threadId || null,
-    },
-  });
-
-  return NextResponse.json({ resolvedCount: result.count });
+  return handleCoreIssueResolution(req,(await ctx.params).name);
 
   },["write"]);
 }

@@ -114,7 +114,7 @@ export * from "./types";
 export { createSupervisorAgent } from "./supervisor/createSupervisorAgent";
 
 async function generationCollector(options?:GenerationOptions){
- if(!isStorageCoreEnabled())return undefined;const active=options?.collectorIdentity||getActiveCoreCollectorIdentity();if(active)return active;
+ const active=options?.collectorIdentity||getActiveCoreCollectorIdentity();if(active)return active;
  const {getDefaultIngestUser}=await import('@/lib/storage/data-service');const username=getDefaultIngestUser();if(!username)throw Object.assign(new Error('Skill generation requires an explicit trusted collector actor'),{status:403});
  const {configuredCoreBackgroundActorForUser}=await import('@/lib/storage-core/compat');return collectorIdentityForBackgroundActor(await configuredCoreBackgroundActorForUser(username),{operation:'snapshot'});
 }

@@ -34,17 +34,5 @@ export type WorkerCaller = {
 }
 
 export async function resolveWorkerCaller(req: Request): Promise<WorkerCaller | null> {
-  if (isStorageCoreEnabled()) {const context=requireCoreControlContext();return {username:context.actor.username,clientId:context.device?.clientId||null}}
-  const { username } = await resolveUser(req)
-  if (username) return { username, clientId: null }
-
-  if (req.headers.get('authorization')) {
-    try {
-      const device = await authenticateDevice(req)
-      return { username: device.user, clientId: device.clientId }
-    } catch {
-      return null
-    }
-  }
-  return null
+  {const context=requireCoreControlContext();return {username:context.actor.username,clientId:context.device?.clientId||null}}
 }

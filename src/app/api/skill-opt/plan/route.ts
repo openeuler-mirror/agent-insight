@@ -284,8 +284,7 @@ export async function POST(req: NextRequest):Promise<Response> {
       if (dup) return NextResponse.json({ plan: serializePlan(dup), reused: true });
     }
     console.error('[skill-opt plan POST] failed:', err?.message || err);
-    if(isStorageCoreEnabled())return coreExperimentFailure(err);
-    return NextResponse.json({ error: err?.message || 'merge operator failed' }, { status: 500 });
+    return coreExperimentFailure(err);
   }
 
   },["write"]);

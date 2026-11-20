@@ -269,7 +269,7 @@ async function loadLatestTaskCompletionScores(user: string, executions: any[]): 
   const taskIds = Array.from(new Set(executions.flatMap(execution => [cleanOptional(execution?.taskId),cleanOptional(execution?.coreTraceId)]).filter(Boolean))) as string[];
   if (!executionIds.length && !taskIds.length) return buildLatestTaskCompletionScoreLookup([]);
 
-  if(isStorageCoreEnabled()){
+  {
     const context=requireCoreExperimentContext();
     if(context.actor.username!==user)throw new TraceTagError(403,'version analysis actor differs');
     const view=await context.rpc('list_view') as {coverage?:string;snapshots?:Array<{source_available?:boolean;experiment:{user:string;cases:Array<{executionId:string|null;taskId:string|null;results:Array<TaskCompletionResultCandidate&{evaluatorId:string;status:string}>}>}}>};
@@ -289,44 +289,6 @@ async function loadLatestTaskCompletionScores(user: string, executions: any[]): 
     }
     return buildLatestTaskCompletionScoreLookup(candidates);
   }
-
-  const select = {
-    id: true,
-    score: true,
-    humanScore: true,
-    updatedAt: true,
-    case: { select: { executionId: true, taskId: true } },
-  };
-  const rows: TaskCompletionResultCandidate[] = [];
-  const batchSize = 400;
-  for (let offset = 0; offset < executionIds.length; offset += batchSize) {
-    rows.push(...await (prismaRaw as any).experimentEvalResult.findMany({
-      where: {
-        evaluatorId: TASK_COMPLETION_EVALUATOR_ID,
-        status: 'done',
-        case: {
-          experiment: { user },
-          executionId: { in: executionIds.slice(offset, offset + batchSize) },
-        },
-      },
-      select,
-    }));
-  }
-  for (let offset = 0; offset < taskIds.length; offset += batchSize) {
-    rows.push(...await (prismaRaw as any).experimentEvalResult.findMany({
-      where: {
-        evaluatorId: TASK_COMPLETION_EVALUATOR_ID,
-        status: 'done',
-        case: {
-          experiment: { user },
-          executionId: null,
-          taskId: { in: taskIds.slice(offset, offset + batchSize) },
-        },
-      },
-      select,
-    }));
-  }
-  return buildLatestTaskCompletionScoreLookup(rows);
 }
 
 function toTrace(
@@ -432,67 +394,7 @@ function summarizeQuestions(rows: any[], taskCompletionScores: TaskCompletionSco
 }
 
 async function loadVersionRows(user: string, filters: VersionAnalysisFilters): Promise<{ tags: any[]; rows: any[]; meta: VersionCompareResponse['meta'] }> {
-  if(isStorageCoreEnabled())return loadCoreVersionRows(user,filters);
-  assertSupported();
-  await ensureTraceTagTables();
-  const clean = cleanUser(user);
-  const tags = await (prismaRaw as any).tag.findMany({
-    where: { user: clean, kind: 'version' },
-    orderBy: [{ name: 'asc' }],
-  });
-  if (!tags.length) {
-    return {
-      tags: [],
-      rows: [],
-      meta: {
-        user: clean,
-        agent: cleanOptional(filters.agent),
-        framework: cleanOptional(filters.framework),
-        from: parseDateParam(filters.from, 'from')?.toISOString() ?? null,
-        to: parseDateParam(filters.to, 'to')?.toISOString() ?? null,
-        questionKey: cleanOptional(filters.questionKey),
-      },
-    };
-  }
-  const rows = await (prismaRaw as any).executionTag.findMany({
-    where: {
-      user: clean,
-      tagId: { in: tags.map((tag: any) => tag.id) },
-      execution: buildExecutionWhere(clean, filters),
-    },
-    include: {
-      tag: true,
-      execution: {
-        select: {
-          id: true,
-          taskId: true,
-          query: true,
-          framework: true,
-          agentName: true,
-          timestamp: true,
-          tokens: true,
-          inputTokens: true,
-          outputTokens: true,
-          latency: true,
-          cost: true,
-          finalResult: true,
-        },
-      },
-    },
-    orderBy: { createdAt: 'asc' },
-  });
-  return {
-    tags,
-    rows,
-    meta: {
-      user: clean,
-      agent: cleanOptional(filters.agent),
-      framework: cleanOptional(filters.framework),
-      from: parseDateParam(filters.from, 'from')?.toISOString() ?? null,
-      to: parseDateParam(filters.to, 'to')?.toISOString() ?? null,
-      questionKey: cleanOptional(filters.questionKey),
-    },
-  };
+  return loadCoreVersionRows(user,filters);
 }
 
 type CoreVersionRow = {
@@ -534,7 +436,7 @@ async function loadCoreVersionRows(user:string,filters:VersionAnalysisFilters){
 function coreSessionEndTimes(rows:CoreVersionRow[]){return new Map<string,string>(rows.filter(row=>row.execution.taskId&&row.execution.coreCompletedAt).map(row=>[row.execution.taskId!,row.execution.coreCompletedAt!]));}
 
 async function refreshCoreVersionRows<T extends CoreVersionRow>(user:string,filters:VersionAnalysisFilters,rows:T[]):Promise<T[]>{
-  if(!isStorageCoreEnabled())return rows;
+
   const current=await loadCoreVersionRows(user,filters);const allowed=new Set(current.rows.map(row=>JSON.stringify([row.tagId,row.execution.id])));
   return rows.filter(row=>allowed.has(JSON.stringify([row.tagId,row.execution.id])));
 }
@@ -549,7 +451,7 @@ export async function getVersionCompare(filters: VersionAnalysisFilters): Promis
   const rowsForMetrics = selectedQuestionKey
     ? rows.filter(row => normalizeVersionQuestionKey(row.execution?.query) === selectedQuestionKey)
     : rows;
-  const sessionEndByTaskId = isStorageCoreEnabled()?coreSessionEndTimes(rows):await loadSessionEndTimes(user, rows.map(row => row.execution?.taskId).filter(Boolean));
+  const sessionEndByTaskId = (coreSessionEndTimes(rows));
   const summary = summarizeOverall(tags, rows, sessionEndByTaskId, taskCompletionScores);
   const tracesByTag = new Map<string, VersionAnalysisTrace[]>();
   for (const row of rowsForMetrics) {
@@ -566,11 +468,11 @@ export async function getVersionCompare(filters: VersionAnalysisFilters): Promis
 }
 
 export async function getVersionTagTraces(tagIdInput: string, filters: VersionAnalysisFilters & { limit?: string | null }): Promise<VersionTracesResponse> {
-  if(!isStorageCoreEnabled()){assertSupported();await ensureTraceTagTables();}
+
   const user = cleanUser(filters.user);
   const tagId = String(tagIdInput || '').trim();
   if (!tagId) throw new TraceTagError(400, 'tag id is required');
-  const core=isStorageCoreEnabled()?await loadCoreVersionRows(user,filters):null;
+  const core=(await loadCoreVersionRows(user,filters));
   const tag = core?core.tags.find(row=>row.id===tagId):await (prismaRaw as any).tag.findFirst({ where: { id: tagId, user, kind: 'version' } });
   if (!tag) throw new TraceTagError(404, 'version tag not found');
   const limitRaw = Number.parseInt(String(filters.limit || ''), 10);
@@ -607,7 +509,7 @@ export async function getVersionTagTraces(tagIdInput: string, filters: VersionAn
     : rows;
   const taskCompletionScores = await loadLatestTaskCompletionScores(user, filteredRows.map((row: any) => row.execution));
   const visibleRows=await refreshCoreVersionRows(user,filters,filteredRows);
-  const sessionEndByTaskId = isStorageCoreEnabled()?coreSessionEndTimes(visibleRows):await loadSessionEndTimes(user, visibleRows.map((row: any) => row.execution?.taskId).filter(Boolean));
+  const sessionEndByTaskId = (coreSessionEndTimes(visibleRows));
   const traces = visibleRows
     .map((row: any) => toTrace(row, sessionEndByTaskId, taskCompletionScores))
     .sort((a: VersionAnalysisTrace, b: VersionAnalysisTrace) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());

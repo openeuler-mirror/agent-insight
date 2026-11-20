@@ -12,7 +12,7 @@ import ts from 'typescript';
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'core-dataset-adapter-'));
 const restore=activateIsolatedHome(home);
 const database=createIsolatedDatabase();
-test.after(async()=>{const {prismaRaw}=await import('../src/lib/storage/prisma');await prismaRaw.$disconnect();database.dispose();restore();fs.rmSync(home,{recursive:true,force:true});});
+test.after(async()=>{const {prismaRaw}=await import('./helpers/historical-prisma');await prismaRaw.$disconnect();database.dispose();restore();fs.rmSync(home,{recursive:true,force:true});});
 const token='session_'+'D'.repeat(43);
 const profile={username:'alice',principal_id:'alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]};
 const record={id:'dataset',user:'alice',name:'同名',description:'',targetAgent:'',targetSkill:'',tags:[],fields:[],cases:[{id:'case',input:'完整输入',expectedOutput:'答案',evaluationFocus:'',tags:[],trajectory:'',values:{'小数':0.25,flag:false}}],datasetKind:'ideal_output' as const,createdAt:'2026-11-13T00:00:00Z',updatedAt:'2026-11-13T00:00:00Z'};
@@ -98,7 +98,7 @@ test('ambiguous submission retries exactly the same Dataset operation and body',
  }});assert.equal(bodies.length,2);assert.equal(bodies[0],bodies[1]);assert.equal(JSON.parse(bodies[0]).expected_revision,'7');assert.equal(JSON.parse(bodies[0]).operation_request.ifMatch,snapshot.etag);
 });
 test('core mode without a trusted repository scope rejects reads and writes before Prisma',async()=>{
- const storage=await import('../src/server/agent_datasets_storage');const {prismaRaw}=await import('../src/lib/storage/prisma');
+ const storage=await import('../src/server/agent_datasets_storage');const {prismaRaw}=await import('./helpers/historical-prisma');
  process.env.AGENT_INSIGHT_TRACE_STORAGE='core';const before=await prismaRaw.agentEvalDataset.count();
  try{
   const rejected=(cause:unknown)=>Boolean(cause&&typeof cause==='object'&&'status'in cause&&cause.status===503);
@@ -118,7 +118,7 @@ test('builtin catalog projection keeps stable Case IDs while applying new catalo
  },{fetcher:async(url)=>new URL(String(url)).pathname==='/v1/auth/me'?Response.json(profile):Response.json({value:[]})});
 });
 test('the shared Dataset repository reads and writes core without touching legacy rows',async()=>{
- const {prismaRaw}=await import('../src/lib/storage/prisma');
+ const {prismaRaw}=await import('./helpers/historical-prisma');
   await prismaRaw.agentEvalDataset.create({data:{id:'legacy-sentinel',user:'alice',name:'Old Dataset'}});
   const storage=await import('../src/server/agent_datasets_storage');const m=await api();const actions:string[]=[];
   await m.withCoreDatasets(request('POST',{},record),async()=>{
@@ -133,7 +133,7 @@ test('the shared Dataset repository reads and writes core without touching legac
 });
 test('the original Dataset POST binds the authenticated actor and never writes Prisma in core mode',async()=>{
  const {POST}=await import('../src/app/api/agent-datasets/route');
- const {prismaRaw}=await import('../src/lib/storage/prisma');
+ const {prismaRaw}=await import('./helpers/historical-prisma');
  const originalFetch=globalThis.fetch;process.env.AGENT_INSIGHT_TRACE_STORAGE='core';process.env.AGENT_INSIGHT_USAGE_ENABLED='0';
  let saves=0;
  globalThis.fetch=async(url,options)=>{

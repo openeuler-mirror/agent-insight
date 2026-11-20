@@ -182,3 +182,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 4. **回到本清单追加一行**,填齐上表各列。
 
 | JiuwenSwarm 企业版 WebSocket 实验 | [设计](evaluation/jiuwen-enterprise-websocket/phase2-design.md) / [计划](evaluation/jiuwen-enterprise-websocket/phase3-plan.md) | 本地登录、授权 Agent 发现与选择，沿用 #588 WS 下发 | Feature | 2026-11-10 | 开发中 | — |
+
+| 超大 Trace 增量读取 | [设计](observability/large-trace-loading/phase2-requirements-design.md) / [计划](observability/large-trace-loading/phase3-development-plan.md) | 摘要、Span 分页与正文分块 | Feature | 2026-11-20 | 开发中 | — |
+
+- [唯一存储运行架构](platform/analytical-transactional-storage/core-only-runtime.md)：事务后端三选一 + 必需 ClickHouse，关闭旧业务库运行入口；实施与验收中。

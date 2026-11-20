@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
-import {prisma} from '@/lib/storage/prisma';
+import {prisma} from './helpers/historical-prisma';
 import {withCoreExperiments,withCoreExperimentReadRoute,requireCoreExperimentContext} from '@/lib/storage-core/experiments';
 import {createComparisonExperiment,autoPairGroups,getComparisonDetail,rescanComparison} from '@/lib/engine/experiment/comparison-runner';
 import {cloneExperimentFromFrozenConfig} from '@/lib/engine/experiment/reuse-config';
@@ -24,7 +24,7 @@ try:
         item['execution'].update(agentName='comparison-http-agent',model=model,query='same question',skill='frozen-skill',skillVersion=2,skills=['frozen-skill'],invokedSkills=[{'name':'frozen-skill','version':2}],cost=(index+1)*1.25,latency=(index+1)*1111,toolCallCount=index+7,isAnswerCorrect=index==1,finalResult='answer-'+str(index))
         source=bundle([item]);source['rootExecutionId']=identity
         imported=case.transfer.import_bundle(case.token,'w',source);case.drain();case.transfer.mark_completed(case.token,'w',imported)
-    runtime=TraceRuntime(case.control,case.facts,cursor_secret=b'isolated-comparison-http-cursor',default_workspace='w')
+    runtime=TraceRuntime(case.control,case.facts,cursor_secret=b'isolated-comparison-http-cursor',default_workspace='w',controller_key_file=os.environ['AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE'])
     server=create_server(runtime,port=0)
     worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
     with os.fdopen(os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'w') as out:json.dump({'origin':'http://127.0.0.1:'+str(server.server_port),'token':case.token},out)

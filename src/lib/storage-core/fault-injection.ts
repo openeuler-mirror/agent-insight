@@ -20,7 +20,7 @@ function requestIdentity(request:Request):Request {
  const headers=new Headers(request.headers);headers.set('authorization','Bearer '+matches[0].slice(name.length));return new Request(request,{headers});
 }
 export async function withCoreFiRequest(request:Request,action:()=>Promise<Response>,options:CompatibilityOptions={}):Promise<Response>{
- if(!isStorageCoreEnabled())return action();
+
  try {
   const origin=coreServiceOrigin(),transport=options.fetcher||fetch;
   const fetcher:typeof fetch=async(input,init)=>{if(coreServiceOrigin()!==origin||new URL(input instanceof Request?input.url:String(input)).origin!==origin)throw fail('FI storage origin changed');const response=await transport(input,init);if(coreServiceOrigin()!==origin){void response.body?.cancel();throw fail('FI storage origin changed');}return response;};
@@ -70,6 +70,5 @@ export async function refreshCoreFiProgress(taskId:string){return(await coreFiRp
 export const newCoreFiId=()=> 'fi_'+randomUUID().replaceAll('-','');
 
 export async function resolveFiUser(request:Request){
- if(isStorageCoreEnabled())return {username:coreFiOwner(),apiKey:null};
- return (await import('@/lib/auth/auth')).resolveUser(request);
+ return {username:coreFiOwner(),apiKey:null};
 }

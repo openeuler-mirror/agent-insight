@@ -33,35 +33,9 @@ async function handlePOST(req: Request) {
       return NextResponse.json({ error: 'taskIds required' }, { status: 400 })
     }
 
-    if (isStorageCoreEnabled()) return NextResponse.json(await coreFiRpc('stop',{taskIds}))
-
-    const tasks = await prisma.faultInjectionTask.findMany({
-      where: {
-        OR: [{ taskKey: { in: taskIds } }, { id: { in: taskIds } }],
-        ...(username ? { user: username } : {}),
-      },
-    })
-
-    for (const task of tasks) {
-      if (!['running', 'queued'].includes(task.status)) continue
-
-      // queued → stopped immediately; collecting → stopRequested for Worker
-      await prisma.faultInjectionRun.updateMany({
-        where: { fiTaskId: task.id, status: 'queued' },
-        data: { status: 'stopped', stopRequested: true, error: 'stopped by user' },
-      })
-      await prisma.faultInjectionRun.updateMany({
-        where: { fiTaskId: task.id, status: { in: ['collecting', 'judging'] } },
-        data: { stopRequested: true },
-      })
-      await refreshTaskProgress(task.id).catch(() => undefined)
-    }
-
-    return NextResponse.json({ ok: true, count: tasks.length })
+    return NextResponse.json(await coreFiRpc('stop',{taskIds}))
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

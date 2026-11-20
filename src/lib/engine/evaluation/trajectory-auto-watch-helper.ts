@@ -108,7 +108,7 @@ export async function loadTrajectoryCandidateAgentMap(
     const out = new Map<string, string>();
     if (!safeUser || uniqueTaskIds.length === 0) return out;
 
-    if(isStorageCoreEnabled()){
+    {
         const context=requireCoreExperimentContext();if(safeUser!==context.actor.username)throw Object.assign(new Error('Trace actor mismatch'),{status:403});
         for(const taskId of uniqueTaskIds){
             try{
@@ -119,18 +119,6 @@ export async function loadTrajectoryCandidateAgentMap(
         }
         return out;
     }
-    const records = await readRecords(
-        safeUser,
-        { taskIds: uniqueTaskIds },
-        { attachEvaluations: false },
-    );
-    for (const record of records) {
-        const taskId = normalizeAutoWatchAgent(record.task_id);
-        if (!taskId || out.has(taskId)) continue;
-        const agent = resolveTrajectoryCandidateExecutionAgent(record);
-        if (agent) out.set(taskId, agent);
-    }
-    return out;
 }
 
 export async function resolveSingleTrajectoryCandidateAgent(

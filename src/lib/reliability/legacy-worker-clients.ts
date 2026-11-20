@@ -110,10 +110,7 @@ export async function listLegacyWorkerClients(
   opts?: { status?: string; keyword?: string },
 ): Promise<LegacyWorkerClient[]> {
   const cutoff = new Date(Date.now() - workerOnlineMs())
-  const workers = isStorageCoreEnabled() ? (coreFiOwner(user),await listCoreFiWorkers()) : await prisma.faultInjectionWorker.findMany({
-    where: { user },
-    orderBy: { lastSeenAt: 'desc' },
-  })
+  const workers = ((coreFiOwner(user),await listCoreFiWorkers()))
 
   let items = (workers as LegacyWorkerRow[]).map((worker): LegacyWorkerClient => {
     const platforms = platformsFromInventory(worker.inventoryJson)

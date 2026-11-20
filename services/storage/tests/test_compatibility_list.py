@@ -3,6 +3,25 @@ from services.storage.tests.test_trace_service import TraceQueryTests
 
 
 class CompatibilityListTests(TraceQueryTests):
+    def test_native_page_enriches_only_selected_trace_ids(self):
+        from unittest.mock import patch
+        api=self.compatible()
+        with patch.object(self.facts,'read_trace_page',return_value=['c','a'],create=True) as select:
+            self.facts.calls=[]
+            result=api.read(self.tokens['admin'],'w',{'paginated':'1','listPart':'records','page':'2','pageSize':'1'})
+            self.assertEqual([row['task_id'] for row in result['records']],['c'])
+            self.assertTrue(result['hasMore'])
+            self.assertEqual(select.call_args.args[2:5],(2,1,'desc'))
+            queried={value for _,values in self.facts.calls for key,value in values.items() if key.startswith('trace_')}
+            self.assertEqual(queried,{'c'})
+
+    def test_native_page_preserves_complex_filter_fallback(self):
+        from unittest.mock import patch
+        api=self.compatible()
+        with patch.object(self.facts,'read_trace_page',side_effect=AssertionError('unsupported filter used fast page'),create=True):
+            page=api.read(self.tokens['admin'],'w',{'paginated':'1','listPart':'records','status':'failed'})
+            self.assertEqual([row['task_id'] for row in page['records']],['b'])
+
     def test_exact_trace_selection_never_scans_other_trace_summaries(self):
         from unittest.mock import patch
         api=self.compatible();baseline=api.read(self.tokens['admin'],'w',{})

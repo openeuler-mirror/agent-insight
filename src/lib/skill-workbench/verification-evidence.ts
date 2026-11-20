@@ -43,7 +43,7 @@ export async function readArchivedCoreVerificationIds(user:string):Promise<strin
 }
 
 export async function cleanupOptimizationVerificationExperiments(input: { user: string; recordId: string }) {
-  if(isStorageCoreEnabled()){
+  {
     requireWorkbenchActor(input.user);
     const record=await prismaRaw.skillOptimizationRecord.findFirst({where:{id:input.recordId,user:input.user}});if(!record||record.status==='retesting')return 0;
     const tasks=await prismaRaw.skillWorkbenchTask.findMany({where:{sessionId:record.sessionId,type:'optimization',resultId:record.id},select:{status:true,createdAt:true,updatedAt:true}});
@@ -57,55 +57,14 @@ export async function cleanupOptimizationVerificationExperiments(input: { user: 
     const changed=await prismaRaw.skillOptimizationRecord.updateMany({where:{id:record.id,user:input.user,status:record.status,sourceRefsJson:record.sourceRefsJson,candidateFilesJson:record.candidateFilesJson},data:{sourceRefsJson:JSON.stringify(sourceRefs),...(record.retestExperimentId&&archived.includes(record.retestExperimentId)?{retestExperimentId:null}:{})}});
     if(!changed.count)throw Object.assign(new Error('Verification archive record changed'),{status:409});return fresh.length;
   }
-  return prismaRaw.$transaction(async (tx) => {
-    const record = await tx.skillOptimizationRecord.findFirst({ where: { id: input.recordId, user: input.user } });
-    if (!record || record.status === 'retesting') return 0;
-    const tasks = await tx.skillWorkbenchTask.findMany({ where: { sessionId: record.sessionId, type: 'optimization', resultId: record.id },
-      select: { status: true, createdAt: true, updatedAt: true } });
-    if (tasks.some((task) => ['pending', 'running'].includes(task.status))) return 0;
-    const settledTasks = tasks.filter((task) => ['done', 'failed', 'cancelled'].includes(task.status));
-    if (record.status === 'optimizing' && !settledTasks.length) return 0;
-    const experiments = await tx.experiment.findMany({ where: { user: input.user, optimizationRecordId: record.id,
-      skillName: record.skillName, skillVersion: record.baseVersion, scope: 'skill-workbench', preset: 'retest',
-      deletedAt: null, status: { in: ['done', 'partial', 'failed', 'cancelled'] } } });
-    const ids = experiments.filter((experiment) => {
-      try {
-        const snapshot = JSON.parse(experiment.configSnapshotJson || '{}');
-        return experiment.id !== record.sourceExperimentId && snapshot.verificationOnly === true
-          && (snapshot.verificationPurpose === 'optimization' || snapshot.verificationPurpose == null
-            && settledTasks.some((task) => task.createdAt <= experiment.createdAt && experiment.createdAt <= task.updatedAt));
-      } catch { return false; }
-    }).map((experiment) => experiment.id);
-    if (!ids.length) return 0;
-    const refs = JSON.parse(record.sourceRefsJson || '[]') as VerificationRef[];
-    const archivedIds = [...new Set([...refs.filter((ref) => ref.type === 'verification-cleanup')
-      .flatMap((ref) => ref.experimentIds || []), ...ids])];
-    const sourceRefs = refs.filter((ref) => ref.type !== 'verification-cleanup').map((ref) =>
-      ref.type === 'verification-result' && ref.experimentId && archivedIds.includes(ref.experimentId)
-        ? { ...ref, experimentDeleted: true } : ref);
-    sourceRefs.push({ type: 'verification-cleanup', experimentIds: archivedIds });
-    // Keep immutable verification rows for hash checks; user deletion/cancellation still invalidates evidence.
-    await tx.experiment.updateMany({ where: { id: { in: ids }, user: input.user, deletedAt: null },
-      data: { deletedAt: new Date(), watchMode: false, watchEnabledAt: null } });
-    await tx.skillOptimizationRecord.update({ where: { id: record.id }, data: {
-      sourceRefsJson: JSON.stringify(sourceRefs),
-      ...(record.retestExperimentId && archivedIds.includes(record.retestExperimentId) ? { retestExperimentId: null } : {}),
-    } });
-    return ids.length;
-  });
 }
 
 export async function verificationRowsHash(experimentId: string) {
-  if(isStorageCoreEnabled()){
+  {
     const context=requireCoreExperimentContext();const snapshot=await context.rpc('read',{experiment_id:experimentId}) as {experiment:{cases:Array<Record<string,unknown>>}};
     const rows=snapshot.experiment.cases.filter(row=>!row.deletedAt).sort((a,b)=>String(a.id).localeCompare(String(b.id))).map(row=>({id:row.id,executionId:row.executionId,datasetInput:row.datasetInput,input:row.input,referenceOutput:row.referenceOutput,actualOutput:row.actualOutput,results:(row.results as Array<Record<string,unknown>>||[]).sort((a,b)=>String(a.evaluatorId).localeCompare(String(b.evaluatorId))).map(result=>({evaluatorId:result.evaluatorId,status:result.status,verdict:result.verdict,score:result.score,pointsJson:result.pointsJson,humanScore:result.humanScore,coreResult:result.coreResult}))}));
     return verificationHash(rows);
   }
-  const rows = await prismaRaw.experimentCase.findMany({ where: { experimentId, deletedAt: null },
-    orderBy: { id: 'asc' }, select: { id: true, executionId: true, datasetInput: true, input: true,
-      referenceOutput: true, actualOutput: true, results: { orderBy: { evaluatorId: 'asc' },
-        select: { evaluatorId: true, status: true, verdict: true, score: true, pointsJson: true, humanScore: true } } } });
-  return verificationHash(rows);
 }
 
 export async function findCandidateVerification(input: {
@@ -137,11 +96,11 @@ export async function findCandidateVerification(input: {
         evaluators: source.evaluatorIdsJson, configs: source.evaluatorConfigsJson })) continue;
       if (proof.baselineHash !== await verificationRowsHash(source.id)
         || proof.resultsHash !== await verificationRowsHash(experiment.id)) continue;
-      if(isStorageCoreEnabled()){
+      {
         const context=requireCoreExperimentContext();const snapshots=await Promise.all([source.id,experiment.id].map(async id=>await context.rpc('read',{experiment_id:id}) as {experiment:WorkbenchCoreSnapshot}));
         if(snapshots.some(value=>activeCoreWorkbenchCancellations(value.experiment).length))continue;
-      }else if (await experimentReads.experimentCancellation.count({ where: { experimentId: { in: [source.id, experiment.id] } } })) continue;
-      const dataset = isStorageCoreEnabled()?await readWorkbenchFrozenDataset(input.user,source.id,proof.datasetId):await findAgentDataset(input.user,proof.datasetId);
+      }
+      const dataset = (await readWorkbenchFrozenDataset(input.user,source.id,proof.datasetId));
       if (!dataset || !Array.isArray(proof.caseIds) || proof.inputHash !== verificationHash(proof.caseIds.map((id: string) => dataset.cases.find((item) => item.id === id)))) continue;
       const result = proof.result as BehavioralResult;
       if (!result || result.experimentId !== experiment.id || !Array.isArray(result.perCase)) continue;

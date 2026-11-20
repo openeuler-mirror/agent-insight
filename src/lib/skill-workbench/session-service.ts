@@ -183,7 +183,7 @@ export function resolveSkillVersionFiles(skillId: string, version: number, files
         if (entries.length > 0) return Object.fromEntries(entries);
       }
     } catch(error) {
-      if(isStorageCoreEnabled())throw error;
+      throw error;
       // Legacy versions may only have content; fall through to a canonical SKILL.md snapshot.
     }
   }

@@ -22,7 +22,5 @@ import { traceIdentity, generationErrorResponse } from '@/server/trace-datasets/
 import { getTraceDatasetManager } from '@/server/trace-datasets/manager';
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request, { params }: { params: Promise<{ deletionId: string }> }) {
-  if (isStorageCoreEnabled()) return handleCoreDatasetGeneration(request, 'deletion', (await params).deletionId);
-  try { const owner = (await traceIdentity(request))!; return NextResponse.json(await (await getTraceDatasetManager()).deletion(owner, (await params).deletionId)); }
-  catch (error) { return generationErrorResponse(error); }
+  return handleCoreDatasetGeneration(request, 'deletion', (await params).deletionId);
 }

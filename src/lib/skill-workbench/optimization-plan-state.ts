@@ -57,7 +57,7 @@ export async function applyCompletedOptimizationPlan(input: {
     && typeof (item as { id?: unknown }).id === 'string' ? [(item as { id: string }).id] : []);
   const canResolve = (issue: { id: string; source: string; ruleId: string | null }) => verifiedIds.has(issue.id)
     || Boolean(quality && record && quality.contentHash === record.candidateContentHash && issue.source === 'static' && issue.ruleId && !issue.ruleId.startsWith('dim:') && !remainingRules.has(issue.ruleId));
-  if(isStorageCoreEnabled()){
+  {
     requireWorkbenchActor(input.user);
     const session=planIds.length?await prismaRaw.skillWorkbenchSession.findFirst({where:{id:input.workbenchSessionId,user:input.user,optSessionId:{not:null}},select:{optSessionId:true}}):null;
     const plan=session?.optSessionId?await prismaRaw.skillOptPlan.findFirst({where:{id:{in:planIds},sessionId:session.optSessionId},include:{items:true}}):null;
@@ -83,77 +83,4 @@ export async function applyCompletedOptimizationPlan(input: {
       return {planId:plan.id,appliedItems,resolvedIssues:staticCount+resolved.newly_resolved};
     });
   }
-  if (!planIds.length) {
-    if (!record) return { planId: null, appliedItems: 0, resolvedIssues: 0 };
-    const issues = await prismaRaw.skillIssue.findMany({ where: { user: input.user, version: record.baseVersion,
-      Skill: { name: record.skillName }, id: { in: [...new Set([...requestedIds, ...verifiedIds])] } } });
-    const resolved = await prismaRaw.skillIssue.updateMany({ where: { id: { in: issues.filter(canResolve).map((issue) => issue.id) }, user: input.user, resolvedAt: null },
-      data: { resolvedAt: new Date(), resolvedRunId: input.resolvedRunId } });
-    return { planId: null, appliedItems: 0, resolvedIssues: resolved.count };
-  }
-
-  return prismaRaw.$transaction(async (tx) => {
-    const session = await tx.skillWorkbenchSession.findFirst({
-      where: { id: input.workbenchSessionId, user: input.user, optSessionId: { not: null } },
-      select: { optSessionId: true },
-    });
-    if (!session?.optSessionId) return { planId: null, appliedItems: 0, resolvedIssues: 0 };
-
-    const plan = await tx.skillOptPlan.findFirst({
-      where: { id: { in: planIds }, sessionId: session.optSessionId },
-      include: { items: true },
-    });
-    if (!plan) return { planId: null, appliedItems: 0, resolvedIssues: 0 };
-
-    const appliedItems = plan.items.filter((item) => (
-      (item.route === 'core' || item.route === 'reference')
-      && (item.status === 'pending' || item.status === 'applied')
-    ));
-    const pendingItemIds = appliedItems.filter((item) => item.status === 'pending').map((item) => item.id);
-    if (pendingItemIds.length) {
-      await tx.skillOptPlanItem.updateMany({
-        where: { id: { in: pendingItemIds }, planId: plan.id, status: 'pending' },
-        data: { status: 'applied' },
-      });
-    }
-
-    const sourceIssueIds = [...new Set(appliedItems.flatMap((item) => parseIssueIds(item.sourceIssueIds)))];
-    const sourceIssues = sourceIssueIds.length
-      ? await tx.skillIssue.findMany({
-        where: {
-          id: { in: sourceIssueIds },
-          skillId: plan.skillId,
-          version: plan.baseVersion,
-          user: input.user,
-        },
-        select: { id: true, source: true, ruleId: true },
-      })
-      : [];
-    const resolvedIds = sourceIssues.filter(canResolve).map((issue) => issue.id);
-    const resolvedIssues = resolvedIds.length
-      ? (await tx.skillIssue.updateMany({
-        where: {
-          skillId: plan.skillId,
-          version: plan.baseVersion,
-          user: input.user,
-          id: { in: resolvedIds },
-          resolvedAt: null,
-        },
-        data: { resolvedAt: new Date(), resolvedRunId: input.resolvedRunId },
-      })).count
-      : 0;
-
-    const openItems = await tx.skillOptPlanItem.count({
-      where: {
-        planId: plan.id,
-        route: { in: ['core', 'reference'] },
-        status: { in: ['pending', 'conflict'] },
-      },
-    });
-    if (openItems === 0 && plan.status !== 'applied') {
-      await tx.skillOptPlan.update({ where: { id: plan.id }, data: { status: 'applied' } });
-    }
-
-    return { planId: plan.id, appliedItems: pendingItemIds.length, resolvedIssues };
-  });
 }

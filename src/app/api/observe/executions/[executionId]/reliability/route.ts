@@ -31,7 +31,7 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ executionId: string }> },
 ) {
-  if(!isStorageCoreEnabled())return readReliability(req,params)
+
   try{return await withCoreReadRetry(req,()=>readReliability(req,params))}
   catch(error){return analyticsFailure(error)}
 }
@@ -51,7 +51,7 @@ async function readReliability(req:Request,params:Promise<{executionId:string}>)
     let executionSnapshot: string | null = null
     let executionIdentity: Record<string,unknown> | null = null
     let execution: {id: string; taskId: string | null; finalResult: string | null} | null = null
-    if (core) {
+    {
       try {
         const {evidence} = await readTraceExecution(req, {executionId: id})
         executionSnapshot = evidence.snapshot_hash
@@ -60,23 +60,11 @@ async function readReliability(req:Request,params:Promise<{executionId:string}>)
       } catch (error) {
         if ((error as {status?: number})?.status !== 404) throw error
       }
-    } else execution = await prisma.execution.findUnique({
-      where: { id },
-      select: { id: true, taskId: true, finalResult: true },
-    })
+    }
 
     const taskId = execution?.taskId || ''
     const coreEvents = core && taskId ? await readCoreRasEvents(req, [taskId], {limit: 200, order: 'asc'}) : null
-    const events = core ? coreEvents?.events || [] : await prisma.rasAnomalyEvent.findMany({
-      where: {
-        OR: [
-          { executionId: id },
-          ...(taskId ? [{ taskId }] : []),
-        ],
-      },
-      orderBy: { ts: 'asc' },
-      take: 200,
-    })
+    const events = (coreEvents?.events || [])
 
     const rows: RasEventRow[] = events.map((event: {
       id: string
@@ -178,8 +166,6 @@ async function readReliability(req:Request,params:Promise<{executionId:string}>)
       evaluation: null,
     })
   } catch (error) {
-    if (isStorageCoreEnabled()) throw error
-    console.error('[observe reliability GET]', error)
-    return NextResponse.json({ error: 'failed to load reliability detail' }, { status: 500 })
+    throw error
   }
 }

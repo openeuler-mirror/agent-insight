@@ -32,28 +32,9 @@ async function handlePOST(req: Request) {
       return NextResponse.json({ error: 'taskIds required' }, { status: 400 })
     }
 
-    if (isStorageCoreEnabled()) return NextResponse.json(await coreFiRpc('delete',{taskIds}))
-
-    const tasks = await prisma.faultInjectionTask.findMany({
-      where: {
-        OR: [{ taskKey: { in: taskIds } }, { id: { in: taskIds } }],
-        ...(username ? { user: username } : {}),
-      },
-    })
-
-    let deleted = 0
-    for (const task of tasks) {
-      if (task.status === 'running') continue
-      await prisma.faultInjectionRun.deleteMany({ where: { fiTaskId: task.id } })
-      await prisma.faultInjectionTask.delete({ where: { id: task.id } })
-      deleted += 1
-    }
-
-    return NextResponse.json({ ok: true, deleted })
+    return NextResponse.json(await coreFiRpc('delete',{taskIds}))
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

@@ -61,7 +61,7 @@ function inferLegacyFields(candidates: unknown[]): DatasetField[] {
 }
 
 export async function POST(request: Request) {
-  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, backflowPOST) : backflowPOST(request);
+  return (withCoreDatasetRoute(request, backflowPOST));
 }
 async function backflowPOST(request: Request) {
   try {

@@ -83,34 +83,7 @@ export const LLM_DIMENSION: VariableDimension = {
     { field: 'skillVersion' },
   ],
   async queryCandidateTraces(agent, model): Promise<TraceCandidate[]> {
-    if(isStorageCoreEnabled())return readCoreComparisonCandidates(agent,model);
-    const rows = await prisma.execution.findMany({
-      where: { agentName: agent, model },
-      select: {
-        id: true,
-        taskId: true,
-        query: true,
-        model: true,
-        agentName: true,
-        skill: true,
-        skillVersion: true,
-        timestamp: true,
-      },
-      orderBy: { timestamp: 'desc' },
-    });
-    return rows.map((r: {
-      id: string; taskId: string | null; query: string | null; model: string | null;
-      agentName: string | null; skill: string | null; skillVersion: number | null; timestamp: Date;
-    }) => ({
-      id: r.id,
-      taskId: r.taskId,
-      query: r.query,
-      model: r.model,
-      agentName: r.agentName,
-      skill: r.skill,
-      skillVersion: r.skillVersion,
-      timestamp: r.timestamp,
-    }));
+    return readCoreComparisonCandidates(agent,model);
   },
 };
 

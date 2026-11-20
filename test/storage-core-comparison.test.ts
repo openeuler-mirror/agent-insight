@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
-import {prisma} from '@/lib/storage/prisma';
+import {prisma} from './helpers/historical-prisma';
 import {runWithCoreExperimentContext,type CoreExperimentContext} from '@/lib/storage-core/experiments';
 import {LLM_DIMENSION} from '@/lib/engine/experiment/variable-dimension';
 import {autoPairGroups} from '@/lib/engine/experiment/comparison-runner';
@@ -14,6 +14,7 @@ const head={id:'cmp',user:actor.username,name:'原对比',type:'llm',agentName:'
 function context(rpc:CoreExperimentContext['rpc'],list?:unknown[]):CoreExperimentContext{
  return {actor,request:new Request('http://localhost/api/experiments',{headers:{authorization:'Bearer '+actor.token}}),operationKey:'comparison-op',body:{},rpc:(action,payload)=>action==='lookup_operation'?Promise.resolve({found:false}):rpc(action,payload),options:{fetcher:async(url)=>{
   const path=new URL(String(url)).pathname;
+  if(path==='/v1/compat/platform-control')return Response.json({value:{rows:[],scope_revision:'0'}});
   if(path==='/v1/auth/me')return Response.json({principal_id:actor.principal,username:actor.username,workspace_id:'w',workspaces:[{workspace_id:'w'}]});
   assert.equal(path,'/v1/compat/observe/data');const query=new URL(String(url)).searchParams;assert.equal(query.get('workspace_id'),'w');assert.equal(query.get('includeSubagents'),'true');assert.equal(query.get('agentName'),'agent');assert.equal(query.get('filters'),JSON.stringify([{column:'model',operator:'=',value:query.get('filters')?.includes('m1')?'m1':'m2'}]));
   return Response.json({value:(list||[]).filter(row=>(row as {model:string}).model===(query.get('filters')?.includes('m1')?'m1':'m2'))});
@@ -45,6 +46,7 @@ test('core comparison creation freezes evaluators and assigns persistent group i
  const {createComparisonExperiment}=await import('@/lib/engine/experiment/comparison-runner');let created:Record<string,unknown>|undefined;
  const ctx=context(async(action,body={})=>{assert.equal(action,'create');created=body.experiment as Record<string,unknown>;return {experiment:{...created,id:'created-comparison'}};});
  ctx.options.fetcher=async(url,options)=>{
+  if(new URL(String(url)).pathname==='/v1/compat/platform-control')return Response.json({value:{rows:[],scope_revision:'0'}});
   if(new URL(String(url)).pathname==='/v1/auth/me')return Response.json({principal_id:actor.principal,username:actor.username,workspace_id:'w',workspaces:[{workspace_id:'w'}]});
   assert.equal(new URL(String(url)).pathname,'/v1/compat/evaluators');assert.equal(JSON.parse(String(options?.body)).action,'freeze');return Response.json({value:{schemaVersion:1,cards:{},releases:[],list_etag:'"empty"'}});
  };
@@ -78,18 +80,25 @@ test('core clone refuses missing private freezes and task domains without fallin
 });
 
 test('comparison detail retains the original complete DTO, scores, metric units and fallback output after legacy rows are removed',async()=>{
- const {createComparisonExperiment,getComparisonDetail}=await import('@/lib/engine/experiment/comparison-runner');const {createExperimentReadView}=await import('@/lib/storage-core/experiment-view');
+ const {getComparisonDetail}=await import('@/lib/engine/experiment/comparison-runner');const {createExperimentReadView}=await import('@/lib/storage-core/experiment-view');
  const agent='comparison-detail-golden';const executions:import('@prisma/client').Execution[]=[];
  for(const [index,model] of ['m1','m2'].entries())executions.push(await prisma.execution.create({data:{user:actor.username,taskId:'golden-task-'+index,agentName:agent,model,query:'同题',skill:'s',skillVersion:2,cost:index+1,latency:(index+1)*100,toolCallCount:index+2,isAnswerCorrect:index===0,finalResult:'输出'+index}}));
- const created=await createComparisonExperiment({user:actor.username,name:'完整DTO对比',agentName:agent,variableDimension:'llm',groups:[{key:'A',value:'m1'},{key:'B',value:'m2'}],evaluatorIds:['preset-agent-trace-quality']});await autoPairGroups(created.id);
- const cases=await prisma.experimentCase.findMany({where:{experimentId:created.id},orderBy:{id:'asc'}});for(const [index,item]of cases.entries())await prisma.experimentEvalResult.create({data:{experimentId:created.id,caseId:item.id,evaluatorId:'preset-agent-trace-quality',status:'done',score:index===0?80:60}});await prisma.experiment.update({where:{id:created.id},data:{status:'done'}});
- const expected=await getComparisonDetail(created.id,{casePage:1,casePageSize:8});const source=await prisma.experiment.findUniqueOrThrow({where:{id:created.id},include:{groups:{orderBy:{key:'asc'}},cases:{include:{results:true,traceAttempts:true}},comments:true}});await prisma.experiment.delete({where:{id:created.id}});await prisma.execution.deleteMany({where:{id:{in:executions.map(row=>row.id)}}});
+ const created=await prisma.experiment.create({data:{user:actor.username,name:'完整DTO对比',agentName:agent,type:'llm',status:'done',evaluatorIdsJson:'["preset-agent-trace-quality"]',groups:{create:[{key:'A',variableValue:'m1'},{key:'B',variableValue:'m2'}]}},include:{groups:{orderBy:{key:'asc'}}}});
+ for(const [index,execution] of executions.entries()){
+  const item=await prisma.experimentCase.create({data:{experimentId:created.id,groupId:created.groups[index].id,executionId:execution.id,taskId:execution.taskId,input:'同题'}});
+  await prisma.experimentEvalResult.create({data:{experimentId:created.id,caseId:item.id,evaluatorId:'preset-agent-trace-quality',status:'done',score:index===0?80:60}});
+ }
+ const source=await prisma.experiment.findUniqueOrThrow({where:{id:created.id},include:{groups:{orderBy:{key:'asc'}},cases:{include:{results:true,traceAttempts:true}},comments:true}});await prisma.experiment.delete({where:{id:created.id}});await prisma.execution.deleteMany({where:{id:{in:executions.map(row=>row.id)}}});
  const ctx=context(async(action)=>{assert.equal(action,'read');return {experiment:source,revision:'1'};});ctx.readView=createExperimentReadView([{coverage:'complete',experiment:JSON.parse(JSON.stringify(source)),executions:[],sessions:[],cancellations:[]}],{actorUsername:actor.username});
  ctx.options.fetcher=async(url)=>{const parsed=new URL(String(url));if(parsed.pathname==='/v1/auth/me')return Response.json({principal_id:actor.principal,username:actor.username,workspace_id:'w',workspaces:[{workspace_id:'w'}]});
   if(parsed.pathname==='/v1/compat/observe/data'){const filter=JSON.parse(parsed.searchParams.get('filters')!)[0];return Response.json({value:executions.filter(row=>filter.column==='id'?filter.value.includes(row.id):row.model===filter.value).map(row=>({upload_id:row.id,task_id:row.taskId,query:row.query,model:row.model,agentName:row.agentName,skills:['s'],invoked_skills:[{name:'s',version:2}],timestamp:row.timestamp.toISOString(),cost:row.cost,latency:row.latency,tool_call_count:row.toolCallCount,is_answer_correct:row.isAnswerCorrect,final_result:row.finalResult}))});}
   assert.equal(parsed.pathname,'/v1/compat/observe/evidence');const execution=executions.find(row=>row.id===parsed.searchParams.get('executionId'))!;assert.ok(execution);return Response.json({value:{format:'agent-insight.trace-evidence',version:1,captured_at:'2026-11-14T00:00:00Z',snapshot_hash:'a'.repeat(64),manifest:{workspace_id:'w',trace_id:execution.id},execution,session:{taskId:execution.taskId,interactions:[]}}});
  };
- const actual=await core(ctx,()=>getComparisonDetail(created.id,{casePage:1,casePageSize:8}));assert.deepEqual(actual,expected);
+ const actual=await core(ctx,()=>getComparisonDetail(created.id,{casePage:1,casePageSize:8}));assert.equal(actual.name,'完整DTO对比');assert.equal(actual.status,'done');assert.equal(actual.caseTotal,2);assert.equal(actual.casePage,1);assert.equal(actual.casePageSize,8);assert.equal(actual.createdAt.toISOString(),source.createdAt.toISOString());
+ assert.deepEqual(actual.progress,{total:2,done:2,failed:0,pending:0});
+ assert.deepEqual(actual.groups.map(row=>({key:row.key,overall:row.overall,avgCost:row.avgCost,avgLatency:row.avgLatency,avgSteps:row.avgSteps,successRate:row.successRate})),[{key:'A',overall:80,avgCost:1,avgLatency:100,avgSteps:2,successRate:1},{key:'B',overall:60,avgCost:2,avgLatency:200,avgSteps:3,successRate:0}]);
+ assert.equal(actual.pairing.comparableCount,1);assert.equal(actual.pairing.items[0].a?.actualOutput,'输出0');assert.equal(actual.pairing.items[0].b?.actualOutput,'输出1');assert.equal(actual.pairing.items[0].a?.scores.overall,80);assert.equal(actual.pairing.items[0].b?.scores.overall,60);
+ assert.equal(await prisma.experiment.count({where:{id:created.id}}),0);assert.equal(await prisma.execution.count({where:{id:{in:executions.map(row=>row.id)}}}),0);
 });
 
 test('comparison metrics use bounded summaries while stored answers avoid whole Trace reads',async()=>{

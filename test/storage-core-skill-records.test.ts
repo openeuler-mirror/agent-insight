@@ -43,6 +43,7 @@ function setup(routeName:'skills/logs'|'skills/[id]/runs',options:{error?:number
  ].map(record=>({...record,routing_evaluation:routing(record),outcome_evaluation:{status:'available',score:record.answer_score??null,skill_breakdown:[{skill:'primary',version:record.skill_version??null,score:record.answer_score??null,is_correct:record.is_answer_correct??null}]}}));}};
  const deps:Record<string,unknown>={
   'next/server':{NextResponse:Response},
+  '@/lib/storage-core/control-route':{withCoreControlRoute:async(_request:Request,action:()=>Promise<Response>)=>action()},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>!options.legacy},
   '@/lib/storage-core/analytics':{readCoreAnalytics:async()=>{if(options.error)throw Object.assign(Error('storage'),{status:options.error});return source;},analyticsFailure:(error:{status?:number})=>Response.json({error:'storage'},{status:error.status||503})},
   '@/lib/storage/data-service':data,

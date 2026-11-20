@@ -21,7 +21,7 @@ export async function withCoreControlRequest<T>(request:Request,action:()=>Promi
  const pinned:CompatibilityOptions={...options,fetcher:async(input,init)=>{if(coreServiceOrigin()!==origin||new URL(input instanceof Request?input.url:String(input)).origin!==origin)throw failure(503,'Control storage origin changed');const result=await transport(input,init);if(coreServiceOrigin()!==origin){void result.body?.cancel();throw failure(503,'Control storage origin changed');}return result;}};
  const actor=await compatibilityContext(request,pinned);if(!actor.username)throw failure(403,'Verified control owner required');
  if(coreServiceOrigin()!==origin)throw failure(503,'Control storage origin changed');
- return runWithCoreControlActor({...actor,username:actor.username},pinned,()=>{requireCoreControlContext().request=request;return action();});
+ return runWithCoreControlActor({...actor,username:actor.username},pinned,async()=>{requireCoreControlContext().request=request;return await action();});
 }
 export async function withVerifiedCoreControlActor<T>(actor:CoreBackgroundActor,action:()=>Promise<T>,options:CompatibilityOptions={}):Promise<T>{
  if(!isVerifiedCoreBackgroundActor(actor))throw failure(403,'Verified background control actor required');
@@ -33,6 +33,6 @@ export async function withVerifiedCoreControlActor<T>(actor:CoreBackgroundActor,
  },options);
 }
 
-export function runWithCoreControlCapability<T>(actor:CoreControlActor,capability:{device?:CoreControlContext['device'];install?:CoreControlContext['install']},action:()=>T):T{
- return runWithCoreControlActor(actor,{},()=>{Object.assign(requireCoreControlContext(),capability);return action();});
+export function runWithCoreControlCapability<T>(actor:CoreControlActor,capability:{device?:CoreControlContext['device'];install?:CoreControlContext['install']},action:()=>T,options:CompatibilityOptions={}):T{
+ return runWithCoreControlActor(actor,options,()=>{Object.assign(requireCoreControlContext(),capability);return action();});
 }

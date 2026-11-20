@@ -54,7 +54,7 @@ export async function syncLocalUserExternalAccount(
 }
 
 export async function findOrCreateLocalUser(username: string, rawExternalAccount?: string) {
-  if(isStorageCoreEnabled()){
+  {
     const user=await bootstrapCoreControlUser(username,rawExternalAccount);
     return withCoreControlRequest(new Request('http://localhost/internal/local-user',{headers:{authorization:'Bearer '+user.apiKey}}),async()=>{
       const synced=await syncLocalUserExternalAccount(user,rawExternalAccount);
@@ -62,29 +62,4 @@ export async function findOrCreateLocalUser(username: string, rawExternalAccount
       return synced;
     });
   }
-  const externalAccount = String(rawExternalAccount || '').trim();
-  let user = await db.findUserByUsername(username);
-  let isNewUser = false;
-
-  if (!user) {
-    const apiKey = 'wi_' + crypto.randomBytes(24).toString('hex');
-    try {
-      user = await db.createUser({
-        username,
-        apiKey,
-        ...(externalAccount ? { externalAccount } : {}),
-      });
-      isNewUser = true;
-    } catch (error: any) {
-      if (!isDuplicateUsernameError(error)) throw error;
-      user = await db.findUserByUsername(username);
-      if (!user) throw error;
-    }
-  }
-
-  if (!user) throw new Error('Failed to retrieve or create user');
-  user = await syncLocalUserExternalAccount(user, externalAccount);
-  if (isNewUser) await seedBuiltinExampleForUser(user.username);
-
-  return user;
 }

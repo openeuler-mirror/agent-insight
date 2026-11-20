@@ -31,9 +31,7 @@ export async function POST(
 ) {
   try {
     const { evaluationId } = await params
-    if(isStorageCoreEnabled()){const context=coreBenchmarkCallbackContext(req);return NextResponse.json(await completeCoreBenchmarkEvaluation(context,evaluationId,await coreBenchmarkCallbackJson<BenchmarkEvaluationCompletion>(req)))}
-    const completion = await req.json() as BenchmarkEvaluationCompletion
-    return NextResponse.json(await completeBenchmarkEvaluation({ evaluationId, completion }))
+    {const context=coreBenchmarkCallbackContext(req);return NextResponse.json(await completeCoreBenchmarkEvaluation(context,evaluationId,await coreBenchmarkCallbackJson<BenchmarkEvaluationCompletion>(req)))}
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/evaluations/complete')
   }

@@ -96,9 +96,9 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
   };
   if (typeof version === 'number') where.version = version;
   if (!includeResolved) where.resolvedAt = null;
-  if(core)where.source={in:['static','feedback']};
+  where.source={in:['static','feedback']};
 
-  const rows: Prisma.SkillIssueGetPayload<{include:{Evaluation:{select:{ranAt:true;type:true;runId:true;executionId:true;Execution:{select:{taskId:true}}}}}}>[] = await prisma.skillIssue.findMany({
+  const controls: Prisma.SkillIssueGetPayload<{include:{Evaluation:{select:{ranAt:true;type:true;runId:true;executionId:true}}}}>[] = await prisma.skillIssue.findMany({
     where,
     include: {
       Evaluation: {
@@ -107,16 +107,15 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
           type: true,
           runId: true,
           executionId: true,
-          Execution: { select: { taskId: true } },
         },
       },
     },
     orderBy: [
       { dedupKey: 'asc' },
-      { Evaluation: { ranAt: 'asc' } },
     ],
   });
-  if(core){
+  const rows: Prisma.SkillIssueGetPayload<{include:{Evaluation:{select:{ranAt:true;type:true;runId:true;executionId:true;Execution:{select:{taskId:true}}}}}}>[] = controls.map(row=>({...row,Evaluation:{...row.Evaluation,Execution:null}}));
+  {
     let issues=await readCoreDerivedIssues({user:user!,skillId,version});
     if(!includeResolved&&issues.some(issue=>!issue.resolvedAt&&(issue.source==='trigger'||issue.Evaluation.type==='trigger'))){
       const frontier=await requireCoreExperimentContext().rpc('derived_trigger_frontier',{skill_id:skillId,...(version!==undefined?{version}:{})}) as {versions:Array<{version:number;evaluation_ids:string[]}>};

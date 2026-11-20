@@ -15,122 +15,15 @@
  */
 
 import { loadAgentInsightEnv } from '@/lib/env';
+import { controlClient } from '@/lib/storage-core/control-repository';
+import { getDatabaseAdapter } from '@/lib/storage/db-interface';
+import type { ExtendedPrismaClient } from '@/lib/storage/prisma-client';
+
 loadAgentInsightEnv();
 
-import { PrismaClient } from '@prisma/client';
-import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
-import {withControlDelegates} from '@/lib/storage-core/control-repository';
-import { getDatabaseAdapter, DatabaseAdapter } from '@/lib/storage/db-interface';
-import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
-
-const globalForPrisma = global as unknown as { prisma: ExtendedPrismaClient };
-
-const legacyPrisma = globalForPrisma.prisma || createPrismaClient();
-export const prismaRaw = isStorageCoreEnabled() ? withControlDelegates(legacyPrisma) : legacyPrisma;
-
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = legacyPrisma;
-
-export const db: DatabaseAdapter = getDatabaseAdapter();
-
-export const prisma = isStorageCoreEnabled() ? prismaRaw : process.env.DB_HOST ? createPrismaCompatibleWrapper(db) : prismaRaw;
-
-function createPrismaCompatibleWrapper(adapter: DatabaseAdapter): any {
-    const client = adapter.getClient();
-    
-    if (client instanceof PrismaClient) {
-        return client;
-    }
-    
-    return {
-        user: {
-            findUnique: async (args: any) => {
-                if (args.where?.apiKey) return adapter.findUserByApiKey(args.where.apiKey);
-                if (args.where?.externalAccount) return adapter.findUserByExternalAccount(args.where.externalAccount);
-                if (args.where?.username) return adapter.findUserByUsername(args.where.username);
-                return null;
-            },
-            findFirst: async (args: any) => {
-                if (args.where?.externalAccount) return adapter.findUserByExternalAccount(args.where.externalAccount);
-                if (args.where?.username) return adapter.findUserByUsername(args.where.username);
-                return null;
-            }
-        },
-        skill: {
-            findFirst: async (args: any) => {
-                const name = args.where?.name;
-                const user = args.where?.OR?.[0]?.user ?? args.where?.OR?.[1]?.user;
-                return adapter.findSkill(name, user);
-            },
-            findMany: async (args: any) => {
-                return adapter.findSkills(args.where || {});
-            },
-            findUnique: async (args: any) => {
-                return adapter.findSkill(args.where?.name, args.where?.user);
-            },
-            delete: async (args: any) => {
-                console.warn('[OpenGaussAdapter] skill.delete not fully implemented');
-                return null;
-            }
-        },
-        skillVersion: {
-            findFirst: async (args: any) => {
-                if (args.where?.skillId) {
-                    return adapter.findLatestSkillVersion(args.where.skillId);
-                }
-                return null;
-            }
-        },
-        config: {
-            findMany: async (args: any) => {
-                return adapter.findConfigs(args.where || {});
-            }
-        },
-        session: {
-            findUnique: async (args: any) => {
-                if (args.where?.taskId) return adapter.findSessionByTaskId(args.where.taskId);
-                return null;
-            },
-            update: async (args: any) => {
-                if (args.where?.id) return adapter.updateSession(args.where.id, args.data);
-                return null;
-            },
-            upsert: async (args: any) => {
-                const taskId = args.where?.taskId;
-                if (!taskId) return null;
-                return adapter.upsertSession(taskId, args.create, args.update);
-            }
-        },
-        execution: {
-            findUnique: async (args: any) => {
-                if (args.where?.id) return adapter.findExecutionById(args.where.id);
-                return null;
-            },
-            upsert: async (args: any) => {
-                return adapter.upsertExecution(args);
-            },
-            findMany: async (args: any) => {
-                return adapter.findExecutions(args.where, args.orderBy);
-            },
-            update: async (args: any) => {
-                if (args.where?.id) return adapter.updateExecution(args.where.id, args.data);
-                return null;
-            }
-        },
-        debugHistory: {
-            findMany: async (args: any) => {
-                // For now, return empty if not implemented in adapter
-                // In SQLite mode, this wrapper won't be used
-                console.warn('[PrismaWrapper] debugHistory.findMany not implemented in adapter');
-                return [];
-            },
-            create: async (args: any) => {
-                console.warn('[PrismaWrapper] debugHistory.create not implemented in adapter');
-                return null;
-            },
-            deleteMany: async (args: any) => {
-                console.warn('[PrismaWrapper] debugHistory.deleteMany not implemented in adapter');
-                return { count: 0 };
-            }
-        }
-    };
-}
+export const prismaRaw = new Proxy({}, {
+  get: (_target, key) => controlClient[key],
+  set: (_target, key, value) => Reflect.set(controlClient, key, value),
+}) as ExtendedPrismaClient;
+export const prisma: any = prismaRaw;
+export const db = getDatabaseAdapter();

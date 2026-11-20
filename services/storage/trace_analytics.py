@@ -612,7 +612,36 @@ class TraceAnalytics:
         budget=source_budget if source_budget is not None else {'remaining':MAX_EXECUTION_SOURCE_BYTES}
         reader=GenerationSources(self.queries,self.authorized,source_budget=budget);result=[]
         for item in items:
-            trace=item['trace_id'];begin,summary,rows,heads,_=reader._boundary(token,workspace,trace)
+            trace=item['trace_id']
+            route=self.queries.route(token,workspace,trace)
+            if not route['source_namespace'].startswith(('trace.bundle.','agent.record.','collector.source.v1')):
+                from .compatibility import LegacyTraceReads
+                payloads=LegacyTraceReads(self.queries,self.authorized)
+                roots=[];after=''
+                while True:
+                    page=self.authorized.read_spans(token,workspace,route['trace_bucket'],trace,parent_span_id='',after_span_id=after,limit=200)
+                    roots.extend(page)
+                    if len(roots)>1000:raise AnalyticsTooLarge('Execution has too many roots')
+                    if len(page)<200:break
+                    after=page[-1]['span_id']
+                candidates={}
+                for row in roots:
+                    attributes=payloads._section(token,workspace,route,row,'attributes') or '{}'
+                    source={'row':row,'sections':{'attributes':attributes}}
+                    fields=TraceEvidence._fields(source,analytics_fields=True)
+                    attrs=json.loads(attributes);attrs={**attrs.get('resource',{}),**attrs.get('span',{})}
+                    for camel,snake in (('answerScore','answer_score'),('skillScore','skill_score'),('judgmentReason','judgment_reason'),('isSkillCorrect','is_skill_correct'),('expectedSkillVersion','expected_skill_version')):
+                        for name in ('legacy.'+snake,snake,camel):
+                            if name in attrs:fields[camel]=attrs[name];break
+                    for key,value in select_execution(fields).items():candidates.setdefault(key,[]).append(value)
+                execution={}
+                for key,values in candidates.items():
+                    if len({_json(value) for value in values})!=1:raise AnalyticsUnavailable('Root execution metadata is ambiguous')
+                    execution[key]=values[0]
+                self._recheck(token,workspace,scope,{trace:boundaries[trace]})
+                result.append({'trace_id':trace,'boundary':item['boundary'],'execution':execution})
+                continue
+            begin,summary,rows,heads,_=reader._boundary(token,workspace,trace)
             execution,_,capsule,_=reader._metadata(begin,summary,rows,heads)
             if not capsule:
                 candidates={}
@@ -651,7 +680,40 @@ class TraceAnalytics:
         scope=self.iam.scope(token);self._recheck(token,workspace,scope,boundaries)
         reader=GenerationSources(self.queries,self.authorized);result=[];source_bytes=0
         for item in items:
-            trace=item['trace_id'];begin,summary,rows,heads,_=reader._boundary(token,workspace,trace)
+            trace=item['trace_id']
+            route=self.queries.route(token,workspace,trace)
+            native=not route['source_namespace'].startswith(('trace.bundle.','agent.record.','collector.source.v1'))
+            registrations={};roots=[]
+            def consume(span,heads,summary):
+                nonlocal source_bytes
+                if not span.get('parent_span_id'):
+                    roots.append(span)
+                    if len(roots)>1000:raise AnalyticsTooLarge('Agent metadata has too many roots')
+                if not item['registrations']:return
+                source=reader._source(span,heads[span['span_id']]);source_bytes+=len(_json(source).encode('utf-8'))
+                if source_bytes>128*1024*1024:raise AnalyticsTooLarge('Agent metadata sources exceed byte budget')
+                attrs=json.loads(source['sections']['attributes']);resource=attrs.get('resource',{});attrs=attrs.get('span',{})
+                text=source['sections'].get('legacy_interaction')
+                raw=_legacy_value(json.loads(text)) if text else {}
+                if not text:
+                    for key in ('agent_insight.raw_interaction','agent_insight.interaction','legacy.interaction'):
+                        candidate=attrs.get(key)
+                        if isinstance(candidate,str):
+                            try:candidate=json.loads(candidate)
+                            except ValueError:candidate={}
+                        if isinstance(candidate,dict) and candidate:raw=candidate;break
+                if not isinstance(raw,dict):raw={'role':'trace'}
+                projected=LegacyTraceReads(self.queries,self.authorized)._metadata(span,0,summary)
+                projected.update(raw)
+                if not text:
+                    agent=resource.get('agent.name') or resource.get('service.name')
+                    if agent and 'agent' not in raw:projected['agent']=agent
+                    if span['kind']!='tool' and isinstance(attrs.get('legacy.role'),str) and 'role' not in raw:projected['role']=attrs['legacy.role']
+                registration={key:projected[key] for key in ('role','agent','subagent_name') if isinstance(projected.get(key),str)}
+                registrations[_json(registration)]=registration
+                if len(registrations)>10000:raise AnalyticsTooLarge('Agent registration set exceeds budget')
+            begin,summary,rows,heads,_=reader._boundary(token,workspace,trace,consume=consume if native else None)
+            if native:rows=roots
             execution,session,capsule,identity=reader._metadata(begin,summary,rows,heads)
             agent_id=execution.get('agentId') if capsule else None
             if not capsule:
@@ -668,7 +730,9 @@ class TraceAnalytics:
                  'timestamp':execution.get('timestamp') or datetime.datetime.fromtimestamp(int(summary['started_at_ms'])/1000,datetime.timezone.utc).isoformat()}
             if item['registrations']:
                 interactions=[]
-                if capsule and capsule['primary']=='langfuse_node':
+                if native:
+                    interactions=list(registrations.values())
+                elif capsule and capsule['primary']=='langfuse_node':
                     interactions=session.get('interactions',[]) if session else []
                     if not isinstance(interactions,list):raise AnalyticsUnavailable('Original Agent registrations are invalid')
                 elif capsule and capsule['primary']=='carrier':pass

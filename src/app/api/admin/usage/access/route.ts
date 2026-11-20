@@ -32,7 +32,7 @@ async function handleGET(request: Request) {
     }
     // 只解析 API Key，绝不接受 explicitUser。
     const { username } = await resolveUser(request);
-    return NextResponse.json({ enabled: true, isAdmin: isStorageCoreEnabled()?await coreUsageAdmin():isUsageAdmin(username) });
+    return NextResponse.json({ enabled: true, isAdmin: (await coreUsageAdmin()) });
 }
 
 export async function GET(request:Request){return !isUsageEnabled()?handleGET(request):semanticRoute(request,()=>handleGET(request));}

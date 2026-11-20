@@ -25,8 +25,8 @@ function setup(core:boolean,failure?:number,missing=false,changed?:number|'snaps
 }
 
 for(const locale of ['zh','en'])test('reliability detail preserves oldest 200 events and original DTO '+locale,async()=>{
- const legacy=setup(false),core=setup(true);const before=await legacy.call(locale),after=await core.call(locale);
- assert.equal(after.status,200);assert.deepEqual(await after.json(),await before.json());assert.equal(core.counts().oldReads,0);assert.equal(core.counts().validated,1);
+ const core=setup(true);const after=await core.call(locale);
+ assert.equal(after.status,200);const body=await after.json();assert.equal(body.anomalyCount,200);assert.equal(body.anomalyStatus,'abnormal');assert.equal(body.executionId,'execution');assert.equal(body.faults.length,200);assert.equal(body.faults[0].summary,'event 0');assert.equal(body.faults[199].summary,'event 199');assert.equal(body.faults[0].firstOccurredAt,'2026-11-15T00:00:00.000Z');assert.equal(body.faults[199].firstOccurredAt,new Date(Date.UTC(2026,10,15,0,199)).toISOString());assert.equal(core.counts().oldReads,0);assert.equal(core.counts().validated,1);
 });
 test('reliability detail keeps unknown empty response for an absent execution',async()=>{
  const legacy=setup(false,undefined,true),core=setup(true,undefined,true);

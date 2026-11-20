@@ -231,7 +231,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
           startTime: toDate(s.startTime) ?? new Date(),
           endTime: toDate(s.endTime) ?? null,
       };
-      if(!isStorageCoreEnabled())await p.session.create({data:sessionData});
+
 
       const metrics: Record<string, unknown> = {};
       for (const f of EXEC_METRIC_FIELDS) if (e[f] != null) metrics[f] = e[f];
@@ -256,14 +256,14 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
           timestamp: toDate(e.timestamp) ?? new Date(),
           ...metrics,
       };
-      if(isStorageCoreEnabled()){
+      {
         const context=requireCoreControlContext(),id='builtin-execution-'+randomUUID();
         const array=(value:unknown):unknown[]=>Array.isArray(value)?value:typeof value==='string'?JSON.parse(value)||[]:[];
         const execution={...Object.fromEntries(['endpoint','skillVersion','parentExecutionId','agentSessionId','subagentType','subagentName'].map(field=>[field,null])),...executionData,id,rootExecutionId:id,skills:array(executionData.skills),invokedSkills:array(executionData.invokedSkills),observedAgents:[]};
         const session={...sessionData,interactions:array(sessionData.interactions)};
         const bundle={format:'agent-insight.trace-bundle',version:1,exportedAt:new Date().toISOString(),rootExecutionId:id,executions:[{execution,session}]};
         await requestCore('/v1/compat/observe/traces/import?'+new URLSearchParams({workspace_id:context.actor.workspace}),{token:context.actor.token,method:'POST',body:JSON.stringify({bundle}),headers:{'idempotency-key':'builtin-example:'+id},timeoutMs:300000},context.options.fetcher||fetch);
-      }else await p.execution.create({data:executionData});
+      }
     }
   } catch (err) {
     console.warn(`[builtin-example] seed failed for user ${u}:`, (err as Error)?.message || err);

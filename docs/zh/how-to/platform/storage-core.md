@@ -5,9 +5,61 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 # 启用隔离的 Storage Core Trace 链路
 
+## 唯一存储运行方式
+
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 020（77 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+
+Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
+
+事务库保存权限、路由、控制状态、版本、回执与发布水位；Trace/Span/正文及各类分析事实由 ClickHouse 保存。字典规定的资产制品与可靠投递文件继续保留。旧数据库只作为显式离线迁移输入；正常启动不执行旧 Prisma db push，也不自动迁移或删除旧数据。构建期间生成 Prisma 历史 DTO 类型不连接业务数据库。
+
+控制记录的创建和更新返回事务库提交后的值（包括 `updatedAt`），条件更新与重复回执使用同一版本。已授权记录不满足筛选条件时返回空结果；越权读取仍拒绝。静态 Skill 评估和反馈只读取控制记录，动态评估、Trace 与派生问题通过对应 Core 分析接口读取，禁止跨回旧 Execution 表。设备认证沿用请求绑定的 Core 连接，并在响应后校验连接目标未改变。
+
+仪表盘和质量分析读取注册信息时使用同一已验证的 Core 事务上下文，报告的 Trace、轨迹评分和诊断数据只来自 Core 分析快照；缺少快照明确失败，不读取旧表。请求回调直接返回延迟查询时，身份范围持续到查询完成。Agent 删除成功后沿用原用量事件，拒绝或失败不计数。
+
+本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 500 条滚动追加及“加载中…”提示保持。
+
+
+下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
+
+## Docker 隔离联调
+
+仓库根目录的 `docker-compose.storage-core.yml` 将原 Next.js 页面、Python Storage Core 和 ClickHouse 放在独立的 Compose 项目中。三个数据卷分别保存 Web 制品、新事务库及 ClickHouse 数据；Web 默认只发布到本机 `127.0.0.1:3000`（可用 AGENT_INSIGHT_PORT 覆盖），Storage Core 只监听共享网络命名空间内的 `127.0.0.1:4319`。本流程用于新数据链路验证，不导入默认业务库或执行生产切换。
+
+在 Docker daemon 已启动的环境中，从仓库根目录运行：
+
+```bash
+export CLICKHOUSE_PASSWORD='为本次隔离环境设置的强密码'
+docker compose -f docker-compose.storage-core.yml up -d --build
+docker compose -f docker-compose.storage-core.yml ps
+docker compose -f docker-compose.storage-core.yml logs --tail=100 storage-core
+```
+
+首次启动会在新卷中显式初始化 SQLite 001–020 与 ClickHouse 001–004，并生成私有 controller key 和服务配置。再次启动只校验已有版本、表集合和配置；需要升级或更换密码时，先备份并按显式迁移流程处理，不会重建已有库。使用原 `/login` 创建隔离用户后，通过 `/api/ingest/otel/v1/traces` 上报测试 Trace，并检查原 `/trace` 页面或 `/api/observe/data` 及 ClickHouse 对应事实。旧采集兼容接口返回接收结果，batch 回执仅适用于直接调用 Storage Core `/v1/ingest/otlp` 的流程。保留同一个 `CLICKHOUSE_PASSWORD` 才能重启已有卷。停止服务使用 `docker compose -f docker-compose.storage-core.yml down`；不要加 `-v`，以保留验收数据。
+
+此 Compose 路径选择 SQLite 作为事务后端，仅证明该组合的隔离链路；PostgreSQL/openGauss、真实旧库迁移、生产容量与高可用仍需另行验证。容器内运行时初始化与原源码操作指南如下。
+
 **产品兼容状态（2026-11-15）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；Dataset版本/Trace回流/批量生成已按本页流程接管；实验/评测结果与DiagnosisRun逐项接管，当前覆盖及剩余Workbench/Benchmark等消费者以实施状态为准。仅在隔离目标验证，不用于生产切换。
 
-模式开关只影响服务端。Trace接口使用当前IAM权限，配置缺失、身份未映射或后端故障明确失败，不回落旧Trace库。其他领域仍有既有数据路径，当前不是全产品切库。完整契约见[参考](../../reference/platform/storage-core.md)，实际覆盖见[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)。
+正常业务请求仅访问 Core。配置缺失、权限不足和后端故障明确失败，不使用旧业务库或 JSON 文件兜底。
+
+## 生成超大模拟 Trace
+
+在已启动的本机 standalone 登录环境中运行以下脚本。它通过 Web 登录取得指定用户身份，再直接调用 Storage Core 的 OTLP 接口，每批等待 ClickHouse 回执为 `indexed`。此路径用于准备数据库测试数据，不覆盖 Web 采集兼容层的吞吐性能。
+
+```bash
+python3 scripts/simulate-large-trace.py \
+  --username 'your-test-user@example.com' \
+  --web-url http://127.0.0.1:3000 \
+  --core-url http://127.0.0.1:4319 \
+  --state-file /absolute/path/to/private/large-trace.json
+```
+
+默认创建一条 21,001 Span 的 Trace：1 个根节点、21,000 个 LLM 子节点，每条输出 1,024 个 ASCII 字符。输出及 Token 计数均为模拟值，不会调用真实模型。可用 `--spans`、`--batch-size`（默认 500）和 `--output-chars` 调整规模；每请求仍受 4 MiB / 4096 Span 限制。输出高度可压缩，不能据此推算真实模型数据的压缩率。
+
+后台错误聚类跳过逐个 LLM 节点的完整历史输入拼接，避免大 Trace 的历史文本被平方级重复复制；错误输出与分类保持，详情调用仍保留默认历史内容。
+
+状态文件保存 Trace ID、固定时间、逐批耗时和进度，不保存凭据。中断后用相同参数及状态文件重跑可续传，已完成批次不会重新创建；换一个状态文件才会生成新 Trace。结束时校验 Span 数与 owner，并打印原 `/trace?taskId=...` 页面链接。批次耗时包括 HTTP、事务提交、索引与轮询，不能当作纯 ClickHouse 查询延迟。测试数据保留供页面及数据库性能检查。 21,001 Span / 每条 1 KiB 输出的本机实测已通过核心索引与正文读回，但旧 `/api/observe/data` 对该 Trace 返回 413；页面入口 200 不代表列表和详情已支持此规模。
 
 ## 1. 准备独立目标
 
@@ -19,7 +71,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–019，当前schema_version=19。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–020，当前schema_version=20。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -44,12 +96,14 @@ from services.storage.iam import IAMStore
 from services.storage.clickhouse import ClickHouseStore
 
 root = Path('/absolute/path/to/isolated-core')
-control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至015
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至020
 facts = ClickHouseStore('http://127.0.0.1:8123',
     database='agent_insight_core_isolated', user='default',
     password=getpass.getpass('ClickHouse password (empty if configured): '))
 facts.initialize_new_database()
 facts.initialize_analytics_schema()
+facts.initialize_infra_schema()
+facts.initialize_semantic_usage_schema()
 iam = IAMStore(control)
 iam.create_principal('operator', 'operator', 'Operator')
 password = getpass.getpass('New IAM password (15..1024 characters): ')
@@ -88,22 +142,21 @@ private_json(root / 'trace-service.json', {
 python3 -m services.storage.trace_service --config /absolute/path/to/isolated-core/trace-service.json
 ```
 
-服务只绑定127.0.0.1。`GET http://127.0.0.1:4319/v1/health`报告schema_version、worker_enabled和有限错误类型，不提供凭据或正文；ready仅表示服务/控制schema可用，仍需实际上报验证CH。worker_enabled=false可用于暂停物化的隔离恢复测试，不会把accepted当indexed。
+服务只绑定127.0.0.1。`GET http://127.0.0.1:4319/v1/health`报告schema_version、worker_enabled和有限错误类型，不提供凭据或正文；ready表示事务schema及ClickHouse必需结构/读取权限检查通过，仍需实际上报验证写入与索引。worker_enabled=false可用于暂停物化的隔离恢复测试，不会把accepted当indexed。
 
-为Next另建独立`AGENT_INSIGHT_HOME`和Prisma壳库；**不要把DATABASE_URL指向core.db**。现有其他页面/启动脚本仍可能初始化壳库。确认端口可用及当前worktree的.next归属后：
+为 Next 设置独立 AGENT_INSIGHT_HOME 保存配置和制品，不需要 Prisma 壳库。通过项目 develop_start.sh 启动开发服务；已有业务数据请按离线迁移流程处理。
 
 ```bash
 AGENT_INSIGHT_HOME=/absolute/path/to/isolated-web \
-DATABASE_URL=file:/absolute/path/to/isolated-web/data/legacy-shell.db \
 AGENT_INSIGHT_PORT=4320 \
-AGENT_INSIGHT_TRACE_STORAGE=core \
+AGENT_INSIGHT_BIND_HOST=127.0.0.1 \
 AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319 \
 AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=/absolute/path/to/isolated-core/identity-mapping.json \
 AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=/absolute/path/to/isolated-core/controller-key \
 bash scripts/develop_start.sh
 ```
 
-以上均为服务端变量，变更后重启Next；旧`NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE`仅作为服务端兼容别名，不再控制前端。loopback origin不能包含路径、查询或凭据。Next和存储进程需共享可达网络命名空间。
+`AGENT_INSIGHT_BIND_HOST=127.0.0.1`让本机开发服务只接受本机连接；不设置时启动脚本沿用原来的全网卡监听。其余变量均为服务端配置，变更后重启Next；旧`NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE`仅作为服务端兼容别名，不再控制前端。loopback origin不能包含路径、查询或凭据。Next和存储进程需共享可达网络命名空间。
 
 浏览器继续使用原`/login`及现有Key。配置端必须先核验既有身份，再建立明确的旧Key→IAM主体/空间绑定；不按payload.user、同名账号或邮箱域自动推断。`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`指定绝对路径的0600普通JSON文件，格式如下（全部为占位值）：
 
@@ -133,7 +186,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 ## 5. 按页检查 Trace
 
-进入原`/trace`，列表、筛选、打标及详情继续使用旧DTO。兼容层逐页读取CH结构（每次最多200 Span），为原执行链路返回完整轻量结构，最多100000 Span/16MiB；这会读取全部结构，不能声称结构也仅按点击读取。普通OTLP结构不读正文，点击后才按固定interaction索引及payload_revision装载单Span正文，正文section每页最多4块。
+进入原`/trace`，列表、筛选、打标及详情继续使用旧DTO。原列表按页请求 Trace；打开详情先请求最多 500 条轻量 Span，在原列表滚动接近底部时再请求下一批，直到加载完。已加载结构追加展示，正文仍按点击加载；加载提示仅显示“加载中…”。普通OTLP结构不读正文，点击后才按固定interaction索引及payload_revision装载单Span正文，正文section每页最多4块。
 
 原Trace bundle导入/导出保持v1格式及执行树/旧ID，导入最多50MiB/500个execution。全树先校验，冲突ID及嵌套引用一并重映射；成功仅在全部batch indexed后返回。`Idempotency-Key`可用于同一次导入恢复，不能复用给不同内容。导出及完整会话响应上限128MiB。原Langfuse页面直接消费完整nodes，因此兼容读取需要其完整正文；该特例不能计入普通OTLP的懒加载证明。未覆盖的业务能力及失败边界见实施状态。
 
@@ -143,7 +196,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 ## 全量测试的隔离前提
 
-存储专项与应用`npm run test`是不同门槛。应用全量须在专用HOME、AGENT_INSIGHT_HOME与SQLite目标运行，清除DB_*及core模式配置；不得指向日常业务库。测试中新增/修复的数据库用例复用`createIsolatedDatabase`，先建临时schema再导入Prisma，结束断开连接并恢复环境；隔离helper也清除继承的关系库配置，并固定空DB_HOST防止dotenv重新选择远端。
+存储专项与应用`npm run test`是不同门槛。应用全量须在专用HOME、AGENT_INSIGHT_HOME与SQLite目标运行，清除继承的 DB_* 和日常 Core 地址及凭据，使用测试自己的隔离 Core 配置；不得指向日常业务库。测试中新增/修复的数据库用例复用`createIsolatedDatabase`，仅历史样本建立临时 schema，并通过 test/helpers/historical-prisma.ts 访问；运行代码仍使用 Core，结束断开连接并恢复环境；隔离helper也清除继承的关系库配置，并固定空DB_HOST防止dotenv重新选择远端。
 
 完整环境包括可用的Node LTS、Python的PyYAML/pydantic2、PowerShell7，以及Trae采集器编译产物。先用已安装、验证过的运行时，在该次测试进程设置PATH、PYTHON、AGENT_INSIGHT_FI_PYTHON、AGENT_INSIGHT_RAS_PYTHON；不要通过全局改配置或安装未获授权的依赖消除错误。PowerShell解析也使用临时HOME，避免宿主缓存/配置影响。Trae编译可使用仓库已有esbuild执行原compile参数，构建JS不代表完成VSIX打包或IDE验收。
 
@@ -197,10 +250,10 @@ core模式下，原优化点GET和完成优化后的resolve PATCH携带当前登
 
 按原页面检查 Dashboard、Fleet 趋势/排行/Agent/可靠性、Quality Agent列表/执行记录/报告以及Task统计。用另一普通账号与伪造user参数验证隔离，组管理员范围由真实IAM决定；检查原生Agent无注册行时的平台筛选、当前0分评测、未解决Issue与当前诊断、真实RAS anomaly/action_result。新RAS采集POST要求write API Key，可以write-only；读统计要求read。
 
-只在专用数据库验证，不指向默认业务库或生产库。第一版按原功能的HTTP、界面与全套测试验收；万级Span专项及增量/水位和千级容量优化留到第二版，不作为本版交付范围。旧库96模型计划仍不apply。
+只在专用数据库验证，不指向默认业务库或生产库。第一版按原功能的HTTP、界面与全套测试验收；万级 Span 已采用 500 条滚动分页；增量水位及千级并发容量尚未完成验证。旧库96模型计划仍不apply。
 
 
-Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认列表统计、版本趋势和完整执行输出，包含空结果、0值和无Session历史执行。原静态配置与注册记录继续保留；仅调用统计来自授权新存储。旧登录名映射到不同IAM规范用户名时，也应只发现本人的Agent。此片不迁移Skill runs/logs、Agent删除或资产配置写操作，不能据此移除旧控制数据库。
+Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认列表统计、版本趋势和完整执行输出，包含空结果、0值和无Session历史执行。原静态配置与注册记录继续保留；仅调用统计来自授权新存储。旧登录名映射到不同IAM规范用户名时，也应只发现本人的Agent。此片不迁移Skill runs/logs、Agent删除或资产配置写操作，此阶段的历史验收不代表当前全领域回归通过；当前运行时已禁止旧控制数据库访问。
 
 
 ## 019 控制数据接入后的验收边界
@@ -226,3 +279,11 @@ Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认�
 先对一致的旧SQLite副本执行export-legacy，再使用独立的plan-legacy-import、apply-legacy-import及verify-legacy-import。每步明确指定导出目录、稳定source ID、owner绑定及隔离目标配置；apply/verify另外提供当前actor凭据和migration ID。原plan-legacy仍是严格只读清点工具，它自身没有apply，不与新语义导入命令混用。
 
 先解决计划中的owner、附件及来源/目标冲突；按原receipt重复apply恢复pending，等待实际CH indexed后再verify。不要把第一轮“接收成功但pending”当作迁移完成。完成后再次apply应只重放、无新增，核对源字节/内容未变、原历史状态可读且未产生执行命令。47条样本演练只覆盖对应样本，不替代客户真实全库计划；不切生产。
+
+### 超大 Trace 按需读取
+
+`/trace` 使用原表格、统计卡片、筛选项和页码控件。默认时间排序的普通列表在 ClickHouse 执行 LIMIT/OFFSET，仅对当前页补充元数据；复杂筛选仍使用既有兼容查询，返回当前页，统计独立加载。
+
+Core 详情首次读取 500 个 Span 结构，向下滚动到已加载内容末尾追加下一批 500 条。原 Span 树、工具栏和正文面板保持。请求期间仅显示“加载中…”，结束后隐藏；不显示已加载数量/总数。节点统计仍基于已加载部分。Span 以时间和稳定 ID 排序，游标绑定权限、Trace 与修订；修订变化返回 409，需要刷新。点击节点按 Span ID 读取正文。较小的旧格式 Trace 保留原兼容转换。
+
+已校验 21,001 Span 共 43 批无重复、无遗漏，并在 Chrome 原树中验证追加到 1,500 条。全局搜索、全量分析及复杂来源的超大 Trace 尚需进一步验收，不能将本次结果视为这些路径均通过。

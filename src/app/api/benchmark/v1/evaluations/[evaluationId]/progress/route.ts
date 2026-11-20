@@ -31,9 +31,7 @@ export async function POST(
 ) {
   try {
     const { evaluationId } = await params
-    if(isStorageCoreEnabled()){const context=coreBenchmarkCallbackContext(req);return NextResponse.json(await benchmarkCallbackRpc(context,'progress',{job_id:evaluationId,progress:await coreBenchmarkCallbackJson(req)}))}
-    const progress = await req.json() as BenchmarkEvaluationProgress
-    return NextResponse.json(await recordBenchmarkEvaluationProgress({ evaluationId, progress }))
+    {const context=coreBenchmarkCallbackContext(req);return NextResponse.json(await benchmarkCallbackRpc(context,'progress',{job_id:evaluationId,progress:await coreBenchmarkCallbackJson(req)}))}
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/evaluations/progress')
   }

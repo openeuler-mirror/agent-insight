@@ -24,7 +24,7 @@ import { pollOnce } from '@/lib/infra/poller';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(req?:Request):Promise<Response> {
+export async function POST(req:Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>POST(req));
   const result = await pollOnce();
   return NextResponse.json(result);

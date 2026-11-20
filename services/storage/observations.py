@@ -501,7 +501,6 @@ class ObservationIngest:
         if any(span['row']['source_namespace']=='collector.source.v1' for span in spans):raise Forbidden('Private collector source attestation required')
         packet_hash=hashlib.sha256(data).hexdigest()
         receipt_key=packet_hash if receipt_key is None else identifier(receipt_key)
-        _,packet_ref=self.control.persist_artifact({'encoding':'otlp-json/v1','json':raw})
         now=self.control.clock();trace_ids=sorted({span['row']['trace_id'] for span in spans})
         with self.control.transaction() as con:
             scope=self.iam._scope(con,credential);self.iam._workspace(scope,workspace_id,'write');resolve_project(con,workspace_id)
@@ -509,6 +508,8 @@ class ObservationIngest:
             if old:
                 if old['packet_hash']!=packet_hash: raise Conflict('receipt key has different content')
                 return {'batch_id':old['batch_id'],'state':old['state'],'trace_ids':json.loads(old['trace_ids_json']),'duplicate':True}
+            self.control.require_ingest_capacity(con,workspace_id)
+            _,packet_ref=self.control.persist_artifact({'encoding':'otlp-json/v1','json':raw})
             schema_version=con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0]
             for trace_id in trace_ids:
                 span=next(s for s in spans if s['row']['trace_id']==trace_id);row=span['row']

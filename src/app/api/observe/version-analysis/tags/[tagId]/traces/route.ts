@@ -25,19 +25,13 @@ export const dynamic = 'force-dynamic';
 type RouteContext = { params: Promise<{ tagId: string }> };
 
 function toErrorResponse(error: unknown) {
-  if(isStorageCoreEnabled())return coreExperimentFailure(error);
-  if (error instanceof TraceTagError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
-  }
-  console.error('[version-analysis/tag/traces] request failed:', error);
-  return NextResponse.json({ error: 'failed to load version traces' }, { status: 500 });
+  return coreExperimentFailure(error);
 }
 
 export async function GET(request: Request, context: RouteContext) {
-  if(isStorageCoreEnabled()){
+  {
     try{return await withCoreExperiments(request,()=>{const url=new URL(request.url);url.searchParams.set('user',requireCoreExperimentContext().actor.username);return tracesRequest(new Request(url,{headers:request.headers}),context);});}catch(error){return coreExperimentFailure(error);}
   }
-  return tracesRequest(request,context);
 }
 async function tracesRequest(request:Request,context:RouteContext){
   try {

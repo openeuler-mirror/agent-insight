@@ -56,7 +56,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'No user ID returned from organization' }, { status: 400 });
     }
     
-    let user = isStorageCoreEnabled()?await bootstrapCoreControlUser(String(userId)):await db.findUserByUsername(userId);
+    let user = (await bootstrapCoreControlUser(String(userId)));
     if (!user) {
       const apiKey = `sk-${crypto.randomBytes(16).toString('hex')}`;
       user = await db.createUser({ username: userId, apiKey });

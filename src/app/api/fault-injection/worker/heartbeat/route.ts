@@ -64,9 +64,7 @@ async function handlePOST(req: Request) {
       lastSeenAt: worker.lastSeenAt.toISOString(),
     })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

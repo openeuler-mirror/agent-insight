@@ -80,6 +80,5 @@ export function loadAgentInsightEnv(): void {
   assertSupportedHomeEnv();
   process.env.AGENT_INSIGHT_HOME = root;
 
-  // 总会拿到一个绝对路径(含未设置时的默认),让 server / 脚本 / 任意入口都一致地落到同一个库。
-  process.env.DATABASE_URL = resolveDefaultDatabaseUrl(process.env.DATABASE_URL);
+
 }

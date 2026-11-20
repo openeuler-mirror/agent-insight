@@ -123,18 +123,18 @@ async function handleGET(
 ) {
   try {
   const core = isStorageCoreEnabled()
-  const sourceRequest=core ? requireCoreControlContext().request || req : req
-  const username = core ? coreFiOwner() : (await resolveUser(req)).username
+  const sourceRequest=(requireCoreControlContext().request || req)
+  const username = (coreFiOwner())
   if (core && !username) throw Object.assign(new Error('Verified FI owner required'), {status: 403})
   const { runId } = await ctx.params
-  const run = core ? await findCoreFiRun(runId) : await prisma.faultInjectionRun.findUnique({ where: { runId } })
+  const run = (await findCoreFiRun(runId))
   if (!run) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   let interactions: unknown[] = []
   let sessionModel: string | null = null
   let sourceSnapshot: string | null = null
   if (run.sessionTaskId) {
-    if (core) {
+    {
       try {
         const {evidence} = await readTraceEvidence(sourceRequest, {taskId: run.sessionTaskId})
         if(evidence.execution.user!==run.user)throw Object.assign(new Error('FI business Trace owner differs'),{status:403})
@@ -144,16 +144,6 @@ async function handleGET(
       } catch (error) {
         if ((error as {status?: number})?.status !== 404) throw error
       }
-    } else {
-    const session = await prisma.session.findUnique({ where: { taskId: run.sessionTaskId } })
-    if (session?.interactions) {
-      try {
-        interactions = JSON.parse(session.interactions)
-      } catch {
-        interactions = []
-      }
-    }
-    sessionModel = asNonEmptyString(session?.model)
     }
   }
 
@@ -161,7 +151,7 @@ async function handleGET(
   let taskKey: string | null = null
   let taskName: string | null = null
   if (run.fiTaskId) {
-    const task = core ? await findCoreFiTask(run.fiTaskId) : await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
+    const task = (await findCoreFiTask(run.fiTaskId))
     model = asNonEmptyString(task?.model)
     taskKey = task?.taskKey || null
     taskName = task?.name || null
@@ -185,12 +175,8 @@ async function handleGET(
   let rasMarkers: ReturnType<typeof buildRasTraceMarkers> = []
   let rasSelection: Awaited<ReturnType<typeof readCoreRasEvents>> | null = null
   if (run.sessionTaskId) {
-    rasSelection = core ? await readCoreRasEvents(sourceRequest, [run.sessionTaskId], {limit: 200}) : null
-    const rasRows = core ? rasSelection!.events : await listRasEventsByTaskIds({
-      taskIds: [run.sessionTaskId],
-      user: run.user || undefined,
-      limit: 200,
-    })
+    rasSelection = (await readCoreRasEvents(sourceRequest, [run.sessionTaskId], {limit: 200}))
+    const rasRows = (rasSelection!.events)
     const eventRows: RasEventRow[] = rasRows.map((row) => ({
       id: row.id,
       deliveryId: row.deliveryId,
@@ -241,8 +227,7 @@ async function handleGET(
     reliabilityEvents: [],
   })
   } catch (error) {
-    if (isStorageCoreEnabled()) return analyticsFailure(error)
-    throw error
+    return analyticsFailure(error)
   }
 }
 

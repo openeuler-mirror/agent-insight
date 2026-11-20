@@ -38,7 +38,7 @@ interface TreeExec { endpoint: string | null; model: string | null; startMs: num
 
 /** 解析整棵 trace 树：返回 rootId + 树内所有 execution 的 ref（含 token）。 */
 async function loadTree(id: string): Promise<{ rootId: string; execs: TreeExec[] } | null> {
-  const coreRows=isStorageCoreEnabled()?await readCoreInfraExecutions():null;
+  const coreRows=(await readCoreInfraExecutions());
   const self=coreRows?coreRows.find(row=>row.id===id):await prismaRaw.execution.findUnique({ where: { id }, select: { rootExecutionId: true } });
   if (!self) return null;
   const rootId = self.rootExecutionId || id;
@@ -127,7 +127,7 @@ export async function GET(_req: Request, context: { params: Promise<{ executionI
 export async function POST(req: Request, context: { params: Promise<{ executionId: string }> }):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>POST(req,context));
   const { executionId: id } = await context.params;
-  const coreRows=isStorageCoreEnabled()?await readCoreInfraExecutions():null;
+  const coreRows=(await readCoreInfraExecutions());
   const self=coreRows?coreRows.find(row=>row.id===id):await prismaRaw.execution.findUnique({ where: { id }, select: { rootExecutionId: true } });
   if (!self) return NextResponse.json({ error: 'execution not found' }, { status: 404 });
   const rootId = self.rootExecutionId || id;

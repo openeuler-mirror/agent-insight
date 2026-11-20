@@ -75,7 +75,7 @@ export async function GET(
         const limitParam = searchParams.get('limit');
         const offsetParam = searchParams.get('offset');
 
-        const core = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+        const core = (await readCoreAnalytics(request));
         const { username } = core ?? await resolveUser(request);
         const { allowed, skill } = await canAccessSkill(id, username);
         if (!skill) {
@@ -138,9 +138,7 @@ export async function GET(
         if (core) await core.validate();
         return NextResponse.json({ total, items });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('Skill runs fetch error:', error);
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        return analyticsFailure(error);
     }
 
   },["read"]);

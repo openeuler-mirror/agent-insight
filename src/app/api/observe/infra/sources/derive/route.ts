@@ -27,13 +27,9 @@ import {readCoreInfraExecutions} from '@/lib/storage-core/infra';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req?:Request):Promise<Response> {
+export async function GET(req:Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>GET(req));
-  const rows = isStorageCoreEnabled()?(await readCoreInfraExecutions()).filter(row=>row.endpoint!==null).slice(0,5000):await prismaRaw.execution.findMany({
-    where: { endpoint: { not: null } },
-    select: { endpoint: true, model: true },
-    take: 5000,
-  });
+  const rows = ((await readCoreInfraExecutions()).filter(row=>row.endpoint!==null).slice(0,5000));
   const candidates = deriveCandidates(rows);
 
   const registered = new Set(

@@ -853,7 +853,7 @@ function pickExecutionTokenUsage(row: ExecutionMetricRow): number | null {
 async function loadTask(taskId: string, user: string) {
     const task = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({ where: { id: taskId, user } });
     if (!task) return null;
-    const configJson = withDefaultConfig(isStorageCoreEnabled()?await readCoreWorkbenchTaskConfiguration(user,task):safeParse<GrayscaleConfig>(task.configJson, {}));
+    const configJson = withDefaultConfig((await readCoreWorkbenchTaskConfiguration(user,task)));
     const normalizedConfig = hydrateGrayscaleTaskBinding(configJson, task);
     const parsed={
         ...task,
@@ -862,7 +862,7 @@ async function loadTask(taskId: string, user: string) {
         // 读到的原始 caseStatesJson 串, 用于整份回写时的乐观锁 compare-and-swap。
         rawCaseStatesJson: task.caseStatesJson,
     };
-    return isStorageCoreEnabled()?visibleExperimentTask(parsed):parsed;
+    return (visibleExperimentTask(parsed));
 }
 
 /**
@@ -1664,16 +1664,7 @@ async function executeSingleAgentRunImpl(args: {
         markRunCompleted(run);
         // runGeneralAgent 会尽量写入真实 opencode messages。这里再写一份 query/output
         // fallback，防止 ephemeral server 的 listMessages 返回空数组时 trace 详情页空白。
-        if(!isStorageCoreEnabled()) await persistGrayscaleFallbackTrace({
-            sessionId: result.sessionId,
-            user: args.user,
-            query: args.caseMap.get(target.caseId)!.input,
-            output: result.output || '',
-            agentName: grayAgentName,
-            // 同上: 按本侧实际使用绑定, 无 skill(baseline)不绑, 不回退到 B 侧 skill。
-            skill: args.version?.skillName ?? undefined,
-            skillVersion: args.version?.version,
-        });
+
     } catch (err) {
         if(isCoreDeliveryUncertain(err)){
             const completed=(err as {coreLocalExecutionResult?:{sessionId:string;output?:string}}).coreLocalExecutionResult;
@@ -1792,72 +1783,19 @@ async function reconcileFailedRunsFromExistingEval(user: string, config: Graysca
 }
 
 async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
-    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
-    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
-        where: {
-            user,
-            evaluatorRunId,
-            status: { in: ['pending', 'running'] },
-        },
-        data: {
-            status: 'failed',
-            errorMessage,
-        },
-    });
+    throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
 }
 
 async function markEvaluatorTasksFailed(user: string, evaluatorRunId: string, taskIds: string[], errorMessage: string) {
-    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
-    const scopedTaskIds = Array.from(new Set(taskIds.map(id => id.trim()).filter(Boolean)));
-    if (scopedTaskIds.length === 0) {
-        await markEvaluatorRunFailed(user, evaluatorRunId, errorMessage);
-        return;
-    }
-    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
-        where: {
-            user,
-            evaluatorRunId,
-            taskId: { in: scopedTaskIds },
-            status: { in: ['pending', 'running'] },
-        },
-        data: {
-            status: 'failed',
-            errorMessage,
-        },
-    });
+    throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
 }
 
 async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMessage: string) {
-    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
-    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
-    if (scopedRowIds.length === 0) return;
-    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
-        where: {
-            user,
-            id: { in: scopedRowIds },
-            status: { in: ['pending', 'running'] },
-        },
-        data: {
-            status: 'failed',
-            errorMessage,
-        },
-    });
+    throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
 }
 
 async function markEvaluatorRowsFailedForce(user: string, rowIds: string[], errorMessage: string) {
-    if(isStorageCoreEnabled())throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
-    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
-    if (scopedRowIds.length === 0) return;
-    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
-        where: {
-            user,
-            id: { in: scopedRowIds },
-        },
-        data: {
-            status: 'failed',
-            errorMessage,
-        },
-    });
+    throw Object.assign(new Error('机器结果必须由对应 Worker 的真实失败回执确认'),{status:503});
 }
 
 async function evaluateSingleRunTarget(args: {
@@ -1916,7 +1854,7 @@ async function evaluateSingleRunTarget(args: {
         let referenceOutput: string | null = null;
         let datasetInput: string | null = null;
         if (datasetId) {
-            const ds = isStorageCoreEnabled()?await readWorkbenchFrozenDataset(args.user,args.config.evalExperimentId,datasetId):await findAgentDataset(args.user,datasetId).catch(()=>null);
+            const ds = (await readWorkbenchFrozenDataset(args.user,args.config.evalExperimentId,datasetId));
             const datasetCase = ds?.cases.find(c => c.id === target.caseId);
             referenceOutput = datasetCase?.expectedOutput ?? null;
             datasetInput = datasetCase?.input ?? null;
@@ -2193,19 +2131,13 @@ async function evaluateRunsWithConcurrency(args: {
     }
     if (targets.length === 0) {
         if (args.config.evalExperimentId && !args.onlyMissingEvaluation) {
-            if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-                where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
-                data: { status: 'failed' },
-            });
+
         }
         return null;
     }
 
     if (args.config.evalExperimentId) {
-        if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-            where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
-            data: { status: 'running' },
-        });
+
     }
 
     if (!args.onlyMissingEvaluation && args.config.evalExperimentId) {
@@ -2373,10 +2305,7 @@ async function runWorkbenchTriggerTask(args: {
         };
     }
     if (!args.preparedStates) await persistTaskState(args.taskId, args.user, config, states);
-    if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-        where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
-        data: { status: 'running' },
-    });
+
 
     await mapConcurrent([...experimentCases], executionConcurrency, async ([caseId, experimentCaseId]) => {
         await withBackgroundOpencodeSlot(async () => {
@@ -2421,7 +2350,7 @@ async function runWorkbenchTriggerTask(args: {
                 }
                 const observation = generated.triggerDecisions?.[experimentCaseId];
                 if (!observation) throw new Error('客户端未返回有效 Skill 路由判定');
-                if(isStorageCoreEnabled()){
+                {
                     const current=await requireCoreExperimentContext().rpc('read',{experiment_id:config.evalExperimentId,case_ids:[experimentCaseId]}) as {experiment:{cases:Array<{id:string;results:EvalCaseResultRow[]}>}};
                     const rows=current.experiment.cases.find(row=>row.id===experimentCaseId)?.results;
                     if(!rows?.length||rows.some(row=>!['done','failed'].includes(row.status)))throw Object.assign(new Error('触发分析机器结果尚未完成'),{status:503});
@@ -2432,76 +2361,10 @@ async function runWorkbenchTriggerTask(args: {
                     await persistRunStatePatch({taskId:args.taskId,user:args.user,config,states,caseId,side:'b',nextRun:run,touchLatestResultAt:true});
                     return;
                 }
-                const exactEvaluation = evaluateSkillTriggerAnalysis({
-                    shouldTrigger,
-                    skillTriggered: observation.triggered,
-                    reason: typeof datasetCase.values?.trigger_rationale === 'string'
-                        ? datasetCase.values.trigger_rationale : datasetCase.evaluationFocus || undefined,
-                    facts: {
-                        runsTriggered: observation.triggered ? 1 : 0,
-                        runsTotal: 1,
-                        triggerRate: observation.triggered ? 1 : 0,
-                        competingSkill: observation.competingSkill,
-                    },
-                });
-                const exactData = {
-                    status: 'done',
-                    score: exactEvaluation.score!,
-                    verdict: exactEvaluation.verdict || null,
-                    summary: exactEvaluation.summary || null,
-                    pointsJson: JSON.stringify(exactEvaluation.points || []),
-                    evidenceJson: exactEvaluation.evidence ? JSON.stringify(exactEvaluation.evidence) : null,
-                    errorMessage: null,
-                    attempts: 1,
-                };
-                const applied = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-                    await tx.experimentCase.updateMany({ where: { id: experimentCaseId }, data: { id: experimentCaseId } });
-                    if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: caseId, side: 'b', runIndex: 1, executionClaimId: run.executionClaimId! })) return false;
-                    await tx.experimentCase.update({
-                        where: { id: experimentCaseId },
-                        data: {
-                            caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding({
-                                ...(datasetCase.values || {}),
-                                should_trigger: shouldTrigger,
-                                skill_triggered: observation.triggered,
-                                trigger_rate: observation.triggered ? 1 : 0,
-                                competing_skill: observation.competingSkill,
-                                routing_model: observation.actualModel,
-                            }, { datasetId: config.linkedDatasetIds![0], caseId })),
-                        },
-                    });
-                    await tx.experimentEvalResult.upsert({
-                        where: { caseId_evaluatorId: { caseId: experimentCaseId, evaluatorId: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } },
-                        create: { experimentId: config.evalExperimentId!, caseId: experimentCaseId, evaluatorId: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID, ...exactData },
-                        update: exactData,
-                    });
-                    return true;
-                });
-                if (!applied) return;
-                run.executionFinishedAt = new Date().toISOString();
-                run.status = 'executed';
-                run.sessionId = observation.sessionId;
-                run.skillTriggered = observation.triggered;
-                run.timeCost = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
-                run.output = observation.triggered ? 'Skill 已触发' : 'Skill 未触发';
-                applyExpRowsToRun(run, [{
-                    evaluatorId: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
-                    status: 'done', score: exactData.score,
-                    pointsJson: exactData.pointsJson,
-                    evidenceJson: exactData.evidenceJson,
-                    errorMessage: null,
-                }], config.evalExperimentId);
             } catch (error) {
                 if (signal.aborted) throw error;
                 const message = error instanceof Error ? error.message : String(error);
-                if(!isStorageCoreEnabled()) await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-                    await tx.experimentCase.updateMany({ where: { id: experimentCaseId }, data: { id: experimentCaseId } });
-                    if (run.executionClaimId && !await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: caseId, side: 'b', runIndex: 1, executionClaimId: run.executionClaimId })) return;
-                    await tx.experimentCase.update({
-                        where: { id: experimentCaseId },
-                        data: { actualOutput: `执行失败：${message}`, traceGenerationError: message },
-                    });
-                });
+
                 run.status = 'fail';
                 run.failureType = 'agent_error';
                 run.failureDetail = message;
@@ -2519,11 +2382,8 @@ async function runWorkbenchTriggerTask(args: {
         where: { experimentId: config.evalExperimentId, status: 'failed' },
     });
     const executionFailed = [...experimentCases.keys()].some((caseId) => states[caseId].b.runs?.[0]?.failureType);
-    if(isStorageCoreEnabled())await settleExperimentStatus(config.evalExperimentId!);
-    if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-        where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
-        data: { status: failed || executionFailed ? 'failed' : 'done' },
-    });
+    await settleExperimentStatus(config.evalExperimentId!);
+
 }
 
 async function runGrayscaleTask(args: {
@@ -2620,9 +2480,9 @@ async function runGrayscaleTask(args: {
             }
         }
     }
-    const persisted=await persistTaskState(taskId,user,config,states,isStorageCoreEnabled()?task.rawCaseStatesJson:undefined);
+    const persisted=await persistTaskState(taskId,user,config,states,(task.rawCaseStatesJson));
     if(!persisted)throw Object.assign(new Error('该执行已更新，请刷新后重试'),{code:'EXECUTION_SUPERSEDED',status:409});
-    if(isStorageCoreEnabled()){
+    {
         const context=requireCoreExperimentContext();const snapshot=await context.rpc('read',{experiment_id:config.evalExperimentId}) as {gold_redacted?:boolean;revision:string;experiment:Record<string,unknown>};
         if(snapshot.gold_redacted)throw Object.assign(new Error('Task-linked Experiment belongs to another actor'),{status:403});
         if(snapshot.experiment.scope==='grayscale-ab'){
@@ -2732,7 +2592,7 @@ async function prepareExperimentCasesForExecutionRetry(args: {
     datasetCase: DatasetCase;
     evaluatorIds: string[];
 }) {
-    if(isStorageCoreEnabled()){
+    {
         const context=requireCoreExperimentContext();if(context.actor.username!==args.user)throw Object.assign(new Error('Task actor differs'),{status:403});
         const task=await prisma.grayscaleTask.findFirst({where:{id:args.taskId,user:args.user},select:{caseStatesJson:true,configJson:true}});
         if(!task||task.caseStatesJson!==args.expectedCaseStatesJson)throw Object.assign(new Error('该执行已更新，请刷新后重试'),{code:'EXECUTION_SUPERSEDED',status:409});
@@ -2754,86 +2614,6 @@ async function prepareExperimentCasesForExecutionRetry(args: {
         if(!changed.count)throw Object.assign(new Error('该执行已更新，请刷新后重试'),{code:'EXECUTION_SUPERSEDED',status:409});
         return ids;
     }
-    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const claimed = await tx.grayscaleTask.updateMany({
-            where: { id: args.taskId, user: args.user, caseStatesJson: args.expectedCaseStatesJson },
-            data: { caseStatesJson: args.expectedCaseStatesJson },
-        });
-        if (!claimed.count) throw Object.assign(new Error('该执行已更新，请刷新后重试'), { code: 'EXECUTION_SUPERSEDED' });
-        const experimentCaseIds: string[] = [];
-        for (const run of args.runs) {
-            const oldSessionId = String(run.sessionId || '').trim();
-            const existing = await tx.experimentCase.findFirst({
-                where: {
-                    experimentId: args.experimentId,
-                    ...(run.experimentCaseId
-                        ? { id: run.experimentCaseId }
-                        : oldSessionId ? { taskId: oldSessionId } : { id: '__missing__' }),
-                    experiment: { user: args.user },
-                },
-                select: { id: true },
-            });
-            const caseData = {
-                executionId: null,
-                taskId: null,
-                input: args.datasetCase.input || '',
-                datasetInput: args.datasetCase.input || null,
-                actualOutput: '',
-                traceGenerationError: null,
-                traceGenerationCommandId: null,
-                referenceOutput: args.datasetCase.expectedOutput ?? null,
-                caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(args.datasetCase.values, { datasetId: args.datasetId, caseId: args.caseId })),
-            };
-            const experimentCase = existing
-                ? await tx.experimentCase.update({ where: { id: existing.id }, data: caseData, select: { id: true } })
-                : await tx.experimentCase.create({
-                    data: { experimentId: args.experimentId, ...caseData },
-                    select: { id: true },
-                });
-            await tx.experimentEvalResult.deleteMany({
-                where: { caseId: experimentCase.id, evaluatorId: { notIn: args.evaluatorIds } },
-            });
-            for (const evaluatorId of args.evaluatorIds) {
-                await tx.experimentEvalResult.upsert({
-                    where: { caseId_evaluatorId: { caseId: experimentCase.id, evaluatorId } },
-                    create: {
-                        experimentId: args.experimentId,
-                        caseId: experimentCase.id,
-                        evaluatorId,
-                        status: 'pending',
-                    },
-                    update: {
-                        status: 'pending',
-                        verdict: null,
-                        summary: null,
-                        score: null,
-                        pointsJson: null,
-                        evidenceJson: null,
-                        errorMessage: null,
-                        attempts: { increment: 1 },
-                        durationMs: null,
-                        humanScore: null,
-                        humanReason: null,
-                        humanBy: null,
-                        humanAt: null,
-                    },
-                });
-            }
-            experimentCaseIds.push(experimentCase.id);
-        }
-        await tx.experiment.updateMany({
-            where: { id: args.experimentId, user: args.user, deletedAt: null },
-            data: { status: 'running' },
-        });
-        args.sides.forEach((side, index) => {
-            const runIndex = args.runs[index].runIndex;
-            const run = args.states[args.caseId][side].runs!.find(item => item.runIndex === runIndex)!;
-            run.experimentCaseId = experimentCaseIds[index];
-            args.states[args.caseId][side] = rebuildSideAggregate(args.states[args.caseId][side], args.states[args.caseId][side].runCount || 1);
-        });
-        await tx.grayscaleTask.updateMany({ where: { id: args.taskId, user: args.user }, data: { caseStatesJson: JSON.stringify(args.states) } });
-        return experimentCaseIds;
-    });
 }
 
 function resetRunForExecutionRetry(run: RunResult, experimentCaseId: string) {
@@ -3006,16 +2786,10 @@ async function runGrayscaleExecutionRetry(args: {
         for (const item of retryItems) {
             if (item.run.status !== 'executed' || !item.run.sessionId) {
                 const message = item.run.failureDetail || item.run.output || 'Agent 执行失败';
-                if(isStorageCoreEnabled())continue;
-                await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-                    if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: args.caseId, side: item.side, runIndex: item.runIndex, executionClaimId: item.run.executionClaimId! })) return;
-                    await tx.experimentCase.update({ where: { id: item.experimentCaseId }, data: { actualOutput: message } });
-                    await tx.experimentEvalResult.updateMany({ where: { caseId: item.experimentCaseId }, data: { status: 'failed', errorMessage: message } });
-                });
                 continue;
             }
 
-            if(isStorageCoreEnabled()){
+            {
                 if(!await ownsSkillExecution(prisma,{taskId:args.taskId,user:args.user,datasetCaseId:args.caseId,side:item.side,runIndex:item.runIndex,executionClaimId:item.run.executionClaimId!}))continue;
                 const snapshot=await requireCoreExperimentContext().rpc('read',{experiment_id:experiment.id,case_ids:[item.experimentCaseId]}) as {experiment:{cases:Array<{id:string;taskId?:string;traceAttempts?:Array<{id:string;status:string}>}>}};
                 const row=snapshot.experiment.cases.find(value=>value.id===item.experimentCaseId);
@@ -3023,32 +2797,6 @@ async function runGrayscaleExecutionRetry(args: {
                 const currentRun=states[args.caseId]?.[item.side]?.runs?.find(value=>value.runIndex===item.runIndex)||item.run;
                 currentRun.experimentCaseId=item.experimentCaseId;evaluationTargets.push({caseId:args.caseId,side:item.side,run:currentRun});continue;
             }
-
-            const execution = await prisma.execution.findFirst({
-                where: { user: args.user, taskId: item.run.sessionId, isSubagent: false },
-                orderBy: { timestamp: 'desc' },
-                select: { id: true },
-            });
-            const owned = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-                if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: args.caseId, side: item.side, runIndex: item.runIndex, executionClaimId: item.run.executionClaimId! })) return false;
-                await tx.experimentCase.update({
-                    where: { id: item.experimentCaseId },
-                    data: {
-                        executionId: execution?.id || null,
-                        taskId: item.run.sessionId,
-                        input: datasetCase.input || '',
-                        datasetInput: datasetCase.input || null,
-                        actualOutput: item.run.output || '',
-                        referenceOutput: datasetCase.expectedOutput ?? null,
-                    },
-                });
-                return true;
-            });
-            if (!owned) continue;
-            const currentRun = states[args.caseId]?.[item.side]?.runs
-                ?.find(run => run.runIndex === item.runIndex) || item.run;
-            currentRun.experimentCaseId = item.experimentCaseId;
-            evaluationTargets.push({ caseId: args.caseId, side: item.side, run: currentRun });
         }
 
         if (evaluationTargets.length) {
@@ -3132,10 +2880,7 @@ async function runGrayscaleEvaluationRetry(args: {
         retryItems.push({ ...target, run, evaluatorIds, experimentCase });
     }
 
-    if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-        where: { id: experiment.id, user: args.user },
-        data: { status: 'running' },
-    });
+
     for (const item of retryItems) {
         item.run.evaluationAttempts = (item.run.evaluationAttempts || 0) + 1;
         item.run.evaluationClaimId = buildEvaluationClaimId();
@@ -3305,88 +3050,7 @@ export async function GET(
         }
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
-        if(isStorageCoreEnabled())return respondTask(task,activeRuns().get(`${user}:${taskId}`)||null);
-
-        const visible = await visibleExperimentTask(task);
-        if (!visible) return NextResponse.json({ error: 'Task deleted' }, { status: 404 });
-        task.caseStatesJson = visible.caseStatesJson;
-        const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
-        const executionsReconciled = await reconcileFinishedExecutions({
-            user,
-            config: task.configJson,
-            states: task.caseStatesJson,
-        });
-        const reconciled = await reconcileFinishedEvaluations(taskId, user, task.configJson, task.caseStatesJson);
-        // Q2: "评测失败但库里其实已有真实结果"的 run 用历史结果回填(no valid tasks 残留自愈, 不重新评测)。
-        const failedRehydrated = await reconcileFailedRunsFromExistingEval(user, task.configJson, task.caseStatesJson);
-
-        // === 孤儿 in-flight 清理 ===
-        // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
-        // 里还有 running/pending/evaluating 但 activeRuns 没有这个 task 的条目,
-        // 那一定是上次进程跑到一半被杀的孤儿——agent / evaluator 子进程都没了,
-        // 不会再有人推进它的状态。先走上面的 reconcileFinishedExecutions 反查
-        // Execution 表回填; 只有仍未被回填的 in-flight run 才能判作真正孤儿。
-        //
-        // 直接走跟 abort 同款的清理: pending/running/evaluating 全标 fail, 然后
-        // rebuildSideAggregate 让 top 跟 runs 一致。
-        const orphanStoreKey = `${user}:${taskId}`;
-        let orphanCleanup = false;
-        if (!activeRuns().get(orphanStoreKey) && hasAnyRunningCaseStates(task.caseStatesJson)) {
-            const states = task.caseStatesJson;
-            for (const cid of Object.keys(states)) {
-                for (const side of ['a', 'b'] as Side[]) {
-                    const sideState = states[cid][side];
-                    if (!sideState) continue;
-                    let patched = false;
-                    for (const run of sideState.runs || []) {
-                        // 同 startup 回收口径:评测被打断(执行已完成)的回到 executed 可重评,真没跑完的才执行失败。
-                        if (reconcileStaleGrayscaleRun(run, '服务重启中断, 请重新评测')) {
-                            patched = true;
-                            orphanCleanup = true;
-                        }
-                    }
-                    if (patched) {
-                        states[cid][side] = rebuildSideAggregate(
-                            sideState,
-                            sideState.runCount || sideState.runs?.length || 0,
-                        );
-                        const rebuilt = states[cid][side];
-                        if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
-                            rebuilt.status = 'fail';
-                            rebuilt.output = rebuilt.output || '服务重启中断';
-                        }
-                    }
-                }
-            }
-        }
-
-        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled || failedRehydrated) {
-            // 乐观锁回写: 这次 reconcile 是基于 task 刚 load 时的快照算的。若期间评测
-            // flow 已经写了更新的状态(CAS 落空), 不能用我们这份旧快照覆盖它 —— 否则
-            // 会把刚落库的 pass 又擦回 evaluating(就是"评完又退回评估中"那个抖动)。
-            // 冲突时直接返回最新已提交状态, 不再用本轮中间态响应, 下一拍 poll 会基于
-            // 最新状态重新 reconcile。
-            const written = await persistTaskState(
-                taskId,
-                user,
-                task.configJson,
-                task.caseStatesJson,
-                task.rawCaseStatesJson,
-            );
-            if (!written) {
-                const fresh = await loadTask(taskId, user);
-                if (fresh) return respondTask(fresh, activeRuns().get(`${user}:${taskId}`) || null);
-            }
-        }
-        const storeKey = `${user}:${taskId}`;
-        const active = activeRuns().get(storeKey);
-        if (active && !hasAnyRunningCaseStates(task.caseStatesJson)) {
-            activeRuns().delete(storeKey);
-        }
-        // 注意: 这里**不再自动补评**崩溃残留的"待评测/中断"积压(原 gray_recover_ 自动重评已移除)。
-        // 解卡(reconcileStaleGrayscaleRun)已把被打断的评测摆成"评测失败(中断) + 「重评」按钮",
-        // 由用户自行点击恢复 —— 避免"打开页面就自己重评起来、还把看着有分的又评一遍"。
-        return respondTask(task, activeRuns().get(`${user}:${taskId}`) || null);
+        return respondTask(task,activeRuns().get(`${user}:${taskId}`)||null);
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_GET_ONE] Failed:', err);
         return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
@@ -3496,10 +3160,7 @@ export async function POST(
                         await persistTaskState(taskId, user, taskRow.configJson, states);
                     }
                     if (taskRow.configJson.evalExperimentId) {
-                        if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-                            where: { id: taskRow.configJson.evalExperimentId, user },
-                            data: { status: 'cancelled' },
-                        });
+
                     }
                 }
             } catch (e) {
@@ -3643,10 +3304,7 @@ export async function POST(
             return NextResponse.json({ error: err instanceof Error ? err.message : 'invalid task skill binding' }, { status: 400 });
         }
         if (action === 'start' && task.configJson.evalExperimentId) {
-            if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-                where: { id: task.configJson.evalExperimentId, user, status: 'draft', deletedAt: null },
-                data: { status: 'running' },
-            });
+
         }
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const abortController = new AbortController();
@@ -3682,7 +3340,7 @@ export async function POST(
                     for (const caseId of caseIds.length > 0 ? caseIds : Object.keys(states)) {
                         ensureCaseState(states, caseId);
                         for (const side of ['a', 'b'] as Side[]) {
-                            if(isStorageCoreEnabled()){
+                            {
                                 for(const run of states[caseId][side].runs||[]){
                                     if(['pending','running','evaluating'].includes(run.status)&&!run.executionClaimId&&!run.traceAttemptId){run.status='fail';run.failureType='agent_error';run.failureCode='CORE_PREPARATION_FAILED';run.failureDetail=err instanceof Error?err.message:'实验准备失败';run.output=run.failureDetail;markRunCompleted(run);}
                                 }
@@ -3694,12 +3352,9 @@ export async function POST(
                             }
                         }
                     }
-                    await persistTaskState(taskId,user,task.configJson,states,isStorageCoreEnabled()?task.rawCaseStatesJson:undefined).catch(() => {});
+                    await persistTaskState(taskId,user,task.configJson,states,(task.rawCaseStatesJson)).catch(() => {});
                     if (task.configJson.evalExperimentId) {
-                        if(!isStorageCoreEnabled()) await prisma.experiment.updateMany({
-                            where: { id: task.configJson.evalExperimentId, user, deletedAt: null },
-                            data: { status: 'failed' },
-                        }).catch(() => undefined);
+
                     }
                 }
             })
@@ -3755,7 +3410,7 @@ export async function PATCH(
                 return NextResponse.json({ error: 'task skill version binding cannot be changed' }, { status: 400 });
             }
             const normalizedNextConfig = normalizeGrayscaleTaskBinding(nextConfig, existing);
-            if(isStorageCoreEnabled()){
+            {
                 const original=safeParse<Record<string,unknown>>(existing.configJson,{});
                 if(original.evalExperimentId&&normalizedNextConfig.evalExperimentId!==original.evalExperimentId)return NextResponse.json({error:'已绑定实验不能更换'}, {status:409});
                 if(original.__storageCoreHandoff)(normalizedNextConfig as unknown as Record<string,unknown>).__storageCoreHandoff=original.__storageCoreHandoff;

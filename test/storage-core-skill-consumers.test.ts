@@ -27,6 +27,7 @@ function setup(name:'skills'|'skills/[id]/versions',core:boolean,options:{count?
  source.validate=async()=>{validations++;if(options.validateError)throw Object.assign(Error('changed'),{status:options.validateError});};
  const deps:Record<string,unknown>={
   'next/server':{NextResponse:Response},
+  '@/lib/storage-core/control-route':{withCoreControlRoute:async(_request:Request,action:()=>Promise<Response>)=>action()},
   '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},
   '@/lib/storage-core/analytics':{readCoreAnalytics:async()=>{if(options.error)throw Object.assign(Error('unavailable'),{status:options.error});return source;},analyticsFailure:(e:{status?:number})=>Response.json({error:'storage'},{status:e.status||502})},
   '@/lib/auth/auth':{resolveUser:async()=>{oldAuth++;return{username:'alice'};},canAccessSkill:async(_id:unknown,user:unknown)=>{accessUsers.push(user);return{allowed:!options.forbidden&&user==='alice',skill};}},

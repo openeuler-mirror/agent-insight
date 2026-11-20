@@ -23,6 +23,14 @@ SCHEMA_PATH = Path(__file__).parent / 'schema' / 'sqlite' / '001_core.sql'
 
 
 class ControlOperations:
+    def require_ingest_capacity(self, con, workspace, additional=1):
+        limit = getattr(self, 'max_pending_ingest_batches', 256)
+        pending = con.execute("SELECT count(*) FROM ingest_batches WHERE workspace_id=? AND state IN ('accepted','prepared')", (workspace,)).fetchone()[0]
+        if pending + additional > limit:
+            error = Conflict('Analytical indexing queue is full; retry after indexing catches up')
+            error.code = 'QUEUE_LIMIT'
+            raise error
+
     def _manifest(self, value):
         self._assert_initialized()
         body = canonical_json(value).encode('utf-8')

@@ -6,7 +6,8 @@ import test from 'node:test';
 import {createIsolatedDatabase} from './helpers/isolated-database';
 const database=createIsolatedDatabase();
 process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=path.join(database.home,'controller');writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE,'a'.repeat(64),{mode:0o600});
-import {prismaRaw as prisma} from '@/lib/storage/prisma';
+import {prismaRaw as prisma} from './helpers/historical-prisma';
+import {controlRecordSnapshot} from './helpers/control-record-snapshot';
 import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import {GET as getPoints} from '@/app/api/skills/by-name/[name]/optimization-points/route';
 import {POST as createPlan} from '@/app/api/skill-opt/plan/route';
@@ -60,10 +61,11 @@ finally:x.doCleanups()
  for(const [id,skillId,user] of [['global-static','public-skill',null],['foreign-static','public-skill','bob'],['private-skill-static','private-skill',null]] as const)await prisma.evaluation.create({data:{id,skillId,user,type:'static',version:1,status:'ok'}});
  const session=await prisma.skillOptSession.create({data:{user:'alice',skillName:'checking',baseVersion:1}});const plan=await prisma.skillOptPlan.create({data:{sessionId:session.id,skillId:'skill',baseVersion:1,status:'draft'}});
  const previous=process.env.AGENT_INSIGHT_TRACE_STORAGE;process.env.AGENT_INSIGHT_TRACE_STORAGE='core';process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19000';
+ const control=controlRecordSnapshot('alice',{userSettings:[],skillOptPlanItem:[],skill:await prisma.skill.findMany(),skillVersion:await prisma.skillVersion.findMany(),evaluation:await prisma.evaluation.findMany(),skillIssue:await prisma.skillIssue.findMany(),skillOptSession:await prisma.skillOptSession.findMany(),skillOptPlan:await prisma.skillOptPlan.findMany()});
  const calls:string[]=[];const fetcher:typeof fetch=async(url,options)=>{
   const path=new URL(String(url)).pathname;
   if(path==='/v1/auth/me')return Response.json({principal_id:'alice',username:'alice',workspace_id:'w',workspaces:[{workspace_id:'w'}]});
-  const body=JSON.parse(String(options?.body));if(path==='/v1/compat/platform-control'&&body.action==='scope')return Response.json({value:{authorized:true}});assert.equal(path,'/v1/compat/experiments');calls.push(body.action);
+  const body=JSON.parse(String(options?.body));if(path==='/v1/compat/platform-control')return control(body);assert.equal(path,'/v1/compat/experiments');calls.push(body.action);
   if(body.action==='derived_list'){assert.equal(body.owned_only,true);return Response.json({value:actual.issues});}
   if(body.action==='derived_lookup')return Response.json({value:actual.evaluations.find((row:{id:string})=>row.id===body.id)});
   if(body.action==='derived_detail')return body.id===actual.evaluations[0].id?Response.json({value:actual.detail}):Response.json({error:'not found'},{status:404});
@@ -73,7 +75,7 @@ finally:x.doCleanups()
  try{
   const {withCoreControlRequest}=await import('@/lib/storage-core/control-context');
   const prepared=await withCoreControlRequest(new Request('http://localhost/prepare',{headers}),()=>prepareCoreExperimentStart({actor:{username:'alice'},operationKey:'public-scope',rpc:async()=>({revision:'1',experiment:{id:'public-exp',skillName:'public-checking',skillVersion:1,preset:'use-case',scope:'skill-workbench',configSnapshotJson:JSON.stringify({coreAssets:{evaluators:{judge:{card:{id:'judge'}}},releases:{}}})}})} as unknown as CoreExperimentContext,'public-exp'),{fetcher});
-  const publicScope=prepared.payload.config as Record<string,unknown>;assert.equal(publicScope.derived_public_business_skill_id,'public-skill');assert.deepEqual(publicScope.derived_skill_ids,['public-skill']);await validateControllerSkillScope('alice',publicScope);
+  const publicScope=prepared.payload.config as Record<string,unknown>;assert.equal(publicScope.derived_public_business_skill_id,'public-skill');assert.deepEqual(publicScope.derived_skill_ids,['public-skill']);await withCoreControlRequest(new Request('http://localhost/prepare',{headers}),()=>validateControllerSkillScope('alice',publicScope),{fetcher});
   const points=await withCoreWorkbenchRoute(new Request('http://localhost/api/skills/by-name/checking/optimization-points?version=1&user=forged',{headers}),input=>getPoints(input,{params:Promise.resolve({name:'checking'})}),{fetcher});
   assert.equal(points.status,200,await points.clone().text());const dto=await points.json();assert.equal(dto.issues.length,5);assert.equal(dto.issues.some((row:{id:string})=>row.id==='old-shadow'),false);assert.equal(dto.stats.bySource.dynamic,4);assert.equal(dto.stats.bySource.static,1);
   const planned=await withCoreWorkbenchRoute(new Request('http://localhost/api/skill-opt/plan',{method:'POST',headers,body:JSON.stringify({user:'forged',skillName:'checking',baseVersion:1,sessionId:session.id})}),createPlan,{fetcher});

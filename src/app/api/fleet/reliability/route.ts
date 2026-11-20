@@ -31,7 +31,7 @@ const TASK_ID_CHUNK = 400;
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const executionReader = analytics ?? prisma.execution;
         const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
@@ -79,8 +79,6 @@ export async function GET(req: Request) {
         if (analytics) await analytics.validate();
         return NextResponse.json({ window, granularity: plan.gran, ...data });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Fleet Reliability Error]', error);
-        return NextResponse.json({ error: 'Failed to load fleet reliability' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

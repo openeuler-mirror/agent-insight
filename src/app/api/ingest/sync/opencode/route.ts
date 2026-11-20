@@ -1,3 +1,5 @@
+import { withCoreControlRoute } from '@/lib/storage-core/control-route';
+import { requireCoreControlContext } from '@/lib/storage-core/control-context';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,7 +16,7 @@
  * limitations under the License.
  */
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canAccessSkill } from '@/lib/auth/auth';
 import { resolveRuntimeAssetPath } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
@@ -41,15 +43,15 @@ function copyRecursiveSync(src: string, dest: string) {
     }
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
     try {
-        const { skillId, version, user: explicitUser } = await request.json();
+        const { skillId, version } = await request.json();
 
         if (!skillId || !version) {
             return NextResponse.json({ error: 'Missing skillId or version' }, { status: 400 });
         }
 
-        const { username } = await resolveUser(request, explicitUser);
+        const { username } = requireCoreControlContext().actor;
 
         const { allowed, skill: skillCheck } = await canAccessSkill(skillId, username);
         if (!skillCheck) {
@@ -93,4 +95,8 @@ export async function POST(request: NextRequest) {
         console.error('Sync Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+}
+
+export async function POST(request: NextRequest) {
+    return withCoreControlRoute(request, () => handlePOST(request), ['read']);
 }

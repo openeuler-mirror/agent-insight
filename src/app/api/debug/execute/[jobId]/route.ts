@@ -44,7 +44,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ job
   const { jobId } = await params;
 
   // 1. Check in-memory store first (fast path)
-  const memJob = globalThis.__debugJobStore?.get(isStorageCoreEnabled()?coreControlCacheKey(jobId):jobId);
+  const memJob = globalThis.__debugJobStore?.get((coreControlCacheKey(jobId)));
   if (memJob) {
     if (memJob.status === 'running') return NextResponse.json({ status: 'running' });
     if (memJob.status === 'completed') {

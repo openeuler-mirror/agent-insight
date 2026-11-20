@@ -287,6 +287,35 @@ class LegacyTraceReads:
         self._postflight(token,workspace,route)
         return result
 
+    def session_page(self,token,workspace,trace,cursor=None,span_id=None,index=0):
+        from .control import Conflict
+        route=self.queries.route(token,workspace,trace)
+        summary=self.queries.summary(token,workspace,trace).get('trace')
+        if not summary:raise TraceNotFound('Trace has no indexed facts')
+        if not cursor and not span_id and int(summary.get('span_count') or 0)<=500 and route.get('source_namespace','').startswith(('trace.bundle.','agent.record.','collector.source.v1')):
+            return self.session(token,workspace,trace,view='structure')
+        scope=self.queries.iam.scope(token)
+        query=hashlib.sha256(json.dumps([workspace,trace,str(summary['revision']),'session-page-v1']).encode()).hexdigest()
+        after=self.queries._decode(cursor,scope.fingerprint,query) if cursor else (0,'')
+        if span_id:
+            row=self.authorized.read_span(token,workspace,route['trace_bucket'],trace,span_id)
+            if not row:raise TraceNotFound('Span unavailable')
+            result={'interaction':self._full(token,workspace,route,row,self._metadata(row,index,summary),{})}
+        else:
+            rows=self.authorized.read_spans(token,workspace,route['trace_bucket'],trace,limit=500,time_after=after)
+            interactions=[self._metadata(row,index+i,summary) for i,row in enumerate(rows)]
+            next_cursor=None
+            if len(rows)==500:
+                last=rows[-1]
+                next_cursor=self.queries._encode({'version':1,'scope':scope.fingerprint,'query':query,'created_at_ms':int(last.get('started_at_ms') or 0),'trace_id':last['span_id']})
+            result={'taskId':trace,'user':self._owner(summary),'startTime':summary.get('started_at_ms'),
+                    'interactions':interactions,'interactionCount':summary.get('span_count'),
+                    'nextCursor':next_cursor,'paged':True,'execution':{'status':summary.get('execution_status')}}
+        current=self.queries.summary(token,workspace,trace).get('trace')
+        if not current or str(current['revision'])!=str(summary['revision']):raise Conflict('Trace changed; refresh')
+        self._postflight(token,workspace,route)
+        return result
+
     def session(self,token,workspace_id,trace_id,view='structure',index=None):
         if view not in {'structure','interaction','interactions','full'}:raise ValueError('unknown legacy Trace view')
         if view=='interaction' and (type(index) is not int or not 0<=index<MAX_STRUCTURE_SPANS):raise InvalidInteractionIndex('Interaction index out of range')

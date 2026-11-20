@@ -78,7 +78,7 @@ export async function pollOnce(
 ): Promise<PollResult> {
   const { fetchImpl, tsMs = Date.now(), endpoints } = opts;
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return pollCoreInfraOwners(()=>pollOnce(opts));
-  if(isStorageCoreEnabled())await authorizeCoreInfra('write');
+  await authorizeCoreInfra('write');
   const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints,liveOnly:true});
 
   let polled = 0;
@@ -87,7 +87,7 @@ export async function pollOnce(
 
   for (const src of sources) {
     try {
-      if(isStorageCoreEnabled())await assertCoreInfraPollable(src.id);
+      await assertCoreInfraPollable(src.id);
       const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
         fetchImpl,
         tsMs,
@@ -116,9 +116,9 @@ async function runPollDue(
 ): Promise<PollResult> {
   const { nowMs = Date.now(), fetchImpl, endpoints } = opts;
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return pollCoreInfraOwners(()=>runPollDue(opts,failureLogs));
-  if(isStorageCoreEnabled())await authorizeCoreInfra('write');
+  await authorizeCoreInfra('write');
   const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints,liveOnly:true});
-  const ownerPrefix=isStorageCoreEnabled()?coreInfraOwnerKey():'';
+  const ownerPrefix=(coreInfraOwnerKey());
   if (failureLogs) {
     const activeIds = new Set(sources.map(source => ownerPrefix+source.id));
     for (const id of failureLogs.keys()) if (id.startsWith(ownerPrefix)&&!activeIds.has(id)) failureLogs.delete(id);
@@ -138,7 +138,7 @@ async function runPollDue(
     }
     lastPollAt.set(src.id, nowMs);
     try {
-      if(isStorageCoreEnabled())await assertCoreInfraPollable(src.id);
+      await assertCoreInfraPollable(src.id);
       const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
         fetchImpl,
         tsMs: nowMs,

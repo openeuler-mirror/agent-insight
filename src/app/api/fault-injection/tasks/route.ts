@@ -29,14 +29,7 @@ export const dynamic = 'force-dynamic'
 async function handleGET(req: Request) {
   const { username } = await resolveUser(req)
   const status = new URL(req.url).searchParams.get('status')
-  const tasks = isStorageCoreEnabled() ? await listCoreFiTasks({status}) : await prisma.faultInjectionTask.findMany({
-    where: {
-      ...(username ? { user: username } : {}),
-      ...(status ? { status } : {}),
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-  })
+  const tasks = (await listCoreFiTasks({status}))
   return NextResponse.json({
     tasks: tasks.map(serializeTask),
   })
@@ -111,9 +104,7 @@ async function handlePOST(req: Request) {
       needsWorker: true,
     })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

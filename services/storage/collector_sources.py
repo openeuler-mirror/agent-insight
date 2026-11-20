@@ -477,6 +477,7 @@ class CollectorSources:
             return dict(row)
 
     def _enqueue(self,con,workspace,trace,state,op,sources):
+        self.control.require_ingest_capacity(con,workspace,(len(sources)+MAX_PACKET_SPANS-1)//MAX_PACKET_SPANS)
         refs=[]
         for index,offset in enumerate(range(0,len(sources),MAX_PACKET_SPANS)):
             packet={'encoding':ENCODING,'trace_id':trace,'operation_slot':_hash(op['operation_key']),'input_hash':op['input_hash'],'packet_index':index,'sources':sources[offset:offset+MAX_PACKET_SPANS]};_bounded(packet,MAX_PLAN_BYTES)

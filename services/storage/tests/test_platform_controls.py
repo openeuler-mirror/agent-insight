@@ -23,6 +23,15 @@ class PlatformControlTests(unittest.TestCase):
         rows=self.read('registeredAgent',ids=['a'],body=True)['rows'];self.assertEqual(rows[0]['data']['user'],'alice')
         with self.assertRaises(ValueError):self.read('registeredAgent',where={'user':'alice'})
         with self.assertRaises(ValueError):self.read('not_a_model')
+    def test_authorized_id_with_unmatched_metadata_is_empty_not_denied(self):
+        self.write([{'kind':'skillTriggerEvalSet','method':'create','data':{'id':'draft','user':'alice','skillName':'checking','version':1,'status':'ready','itemsJson':'[]'}}])
+        self.assertEqual(self.read('skillTriggerEvalSet',ids=['draft'],metadata={'status':'drafting'})['rows'],[])
+        self.assertEqual(len(self.read('skillTriggerEvalSet',ids=['draft'],metadata={'status':'ready'})['rows']),1)
+        with self.assertRaises(Forbidden):
+            self.service().dispatch(self.bob,'w','records_read',{'kind':'skillTriggerEvalSet','ids':['draft'],'metadata':{'status':'drafting'}},trusted=True)
+        self.write([{'kind':'skillTriggerEvalSet','method':'delete','record_id':'draft'}],operation_key='remove')
+        self.assertEqual(self.read('skillTriggerEvalSet',ids=['draft'])['rows'],[])
+
     def test_capability_owner_and_private_settings_do_not_expand_via_controller(self):
         data={'id':'setting','user':'alice','settingsJson':'{"configs":[{"apiKey":"PRIVATE"}],"autoEvaluationEnabled":false}'}
         self.write([{'kind':'userSettings','method':'create','data':data}])

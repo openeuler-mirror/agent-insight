@@ -31,7 +31,7 @@ export async function GET(request: Request) {
     const limitStr = searchParams.get('limit');
     let limit = 10;
 
-    const core = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+    const core = (await readCoreAnalytics(request));
     const { username } = core ?? await resolveUser(request as any);
 
     // 如果提供了API key但找不到用户，返回空数组
@@ -123,9 +123,7 @@ export async function GET(request: Request) {
     return NextResponse.json(result);
 
   } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-    console.error('Skill logs fetch error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        return analyticsFailure(error);
   }
 
   },["read"]);

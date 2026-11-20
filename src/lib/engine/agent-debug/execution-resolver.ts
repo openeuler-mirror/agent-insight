@@ -39,7 +39,7 @@ interface SessionRecord {
 }
 
 export async function resolveAgentDebugExecution(inputId: string): Promise<{ execution: AgentDebugExecutionRecord; interactions: unknown[] } | null> {
-  if (isStorageCoreEnabled()) {
+  {
     let evidence;
     try { evidence = await resolveCoreReportEvidence(inputId); }
     catch (error) {
@@ -52,22 +52,6 @@ export async function resolveAgentDebugExecution(inputId: string): Promise<{ exe
     interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
     return { execution, interactions };
   }
-  const byId = await db.findExecutionById(inputId).catch(() => null) as AgentDebugExecutionRecord | null;
-  let execution = byId;
-  if (!execution) {
-    const rows = await db.findExecutions({ taskId: inputId }, { timestamp: 'desc' }).catch(() => []) as AgentDebugExecutionRecord[];
-    execution = rows[0] || null;
-  }
-  if (!execution?.id) return null;
-
-  const sessionKey = execution.taskId || inputId;
-  const session = await db.findSessionByTaskId(sessionKey).catch(() => null) as SessionRecord | null;
-  let interactions = parseInteractions(session?.interactions);
-  if (execution.framework === 'claudecode') {
-    interactions = normalizeClaudeCodeInteractionsForStorage(interactions as Parameters<typeof normalizeClaudeCodeInteractionsForStorage>[0]);
-  }
-  interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
-  return { execution, interactions };
 }
 
 function parseInteractions(value: SessionRecord['interactions']): unknown[] {

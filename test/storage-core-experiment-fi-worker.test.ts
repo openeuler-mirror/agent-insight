@@ -5,25 +5,26 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import * as delivery from '../src/lib/storage-core/execution-delivery';
 import * as crypto from 'node:crypto';
-import {createIsolatedDatabase} from './helpers/isolated-database';
-const database=createIsolatedDatabase();
-import {prisma} from '@/lib/storage/prisma';
-test.after(async()=>{await prisma.$disconnect();database.dispose();});
+import {startIsolatedControlCore} from './helpers/isolated-control-core';
+import * as fi from '@/lib/storage-core/fault-injection';
+let core: Awaited<ReturnType<typeof startIsolatedControlCore>>;
+test.before(async()=>{core=await startIsolatedControlCore(['core-owner']);});
+test.after(async()=>{await core?.dispose();});
 function loadStore(catalog:()=>Promise<unknown>){
- const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync('src/lib/fault-injection/store.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(id:string)=>({crypto,'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>false},'@/lib/storage/prisma':{prisma},'@/lib/fault-injection/engine':{listFaultsViaPython:catalog},'@/lib/fault-injection/compose-prompt':{composeFaultPrompt:({basePrompt}:{basePrompt:string})=>basePrompt,findSubmode:()=>null}}[id]??{}),console});return module.exports as {createTaskWithRuns:Function};
+ const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync('src/lib/fault-injection/store.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(id:string)=>({crypto,'@/lib/storage-core/mode':{isStorageCoreEnabled:()=>false},'@/lib/storage/prisma':{prisma:new Proxy({},{get(){throw Error('Retired FI storage accessed');}})},'@/lib/storage-core/fault-injection':fi,'@/lib/fault-injection/engine':{listFaultsViaPython:catalog},'@/lib/fault-injection/compose-prompt':{composeFaultPrompt:({basePrompt}:{basePrompt:string})=>basePrompt,findSubmode:()=>null}}[id]??{}),console});return module.exports as {createTaskWithRuns:Function};
 }
 const input={user:'core-owner',platform:'opencode',agent:'build',prompt:'public task',workspace:'sandbox',model:'model',items:[{fault:'network',submode:null}]};
 const stable={taskKey:'task-01234567',runIds:['ras-20261114T010101-01234567']};
-test('stable FI creation validates its catalog before atomically publishing runnable work',async()=>{
+test('stable FI creation validates its catalog before atomically publishing runnable work',async()=>core.run('core-owner',async()=>{
  const api=loadStore(async()=>{throw Error('catalog unavailable');});
- const before=await prisma.faultInjectionTask.count();await assert.rejects(api.createTaskWithRuns(input,stable),/catalog unavailable/);assert.equal(await prisma.faultInjectionTask.count(),before);
-});
-test('stable FI retry reuses original actor and immutable execution input',async()=>{
+ const before=(await fi.listCoreFiTasks()).length;await assert.rejects(api.createTaskWithRuns(input,stable),/catalog unavailable/);assert.equal((await fi.listCoreFiTasks()).length,before);
+}));
+test('stable FI retry reuses original actor and immutable execution input',async()=>core.run('core-owner',async()=>{
  const api=loadStore(async()=>[]);const first=await api.createTaskWithRuns(input,stable);const second=await api.createTaskWithRuns(input,stable);
- assert.equal(first.task.id,second.task.id);assert.equal(first.runs[0].runId,stable.runIds[0]);assert.equal(await prisma.faultInjectionRun.count(),1);
- await assert.rejects(api.createTaskWithRuns({...input,user:'other'},stable),/identity|身份|冲突/);
- await assert.rejects(api.createTaskWithRuns({...input,prompt:'different input'},stable),/identity|身份|冲突/);
-});
+ assert.equal(first.task.id,second.task.id);assert.equal(first.runs[0].runId,stable.runIds[0]);assert.equal((await fi.listCoreFiTasks({includeRuns:true})).flatMap(task=>task.runs).length,1);
+ await assert.rejects(api.createTaskWithRuns({...input,user:'other'},stable),(error:unknown)=>(error as {status:number}).status===403);
+ await assert.rejects(api.createTaskWithRuns({...input,prompt:'different input'},stable),(error:unknown)=>(error as {status:number}).status===409);
+}));
 
 test('core FI execution binds a fenced identity before publishing its physical fault task',async()=>{
  const calls:Array<{action:string;payload:Record<string,unknown>}>=[];
@@ -57,11 +58,11 @@ for(const committed of [true,false])test(`FI completion transport loss ${committ
  assert.equal(created,1);assert.equal(stopped,0);assert.equal(failed,0);
 });
 
-test('a conflicting FI Run rolls back the entire newly queued group',async()=>{
- const api=loadStore(async()=>[]);const tasks=await prisma.faultInjectionTask.count();const runs=await prisma.faultInjectionRun.count();
+test('a conflicting FI Run rolls back the entire newly queued group',async()=>core.run('core-owner',async()=>{
+ const api=loadStore(async()=>[]);const tasks=(await fi.listCoreFiTasks()).length;const runs=(await fi.listCoreFiTasks({includeRuns:true})).flatMap(task=>task.runs).length;
  await assert.rejects(api.createTaskWithRuns({...input,items:[{fault:'network'},{fault:'network'}]},{taskKey:'task-89abcdef',runIds:['ras-20261114T010101-89abcdef',stable.runIds[0]]}));
- assert.equal(await prisma.faultInjectionTask.count(),tasks);assert.equal(await prisma.faultInjectionRun.count(),runs);
-});
+ assert.equal((await fi.listCoreFiTasks()).length,tasks);assert.equal((await fi.listCoreFiTasks({includeRuns:true})).flatMap(task=>task.runs).length,runs);
+}));
 
 test('FI dispatch reserves real task identities before returning and resumes the same work in the background',async()=>{
  const calls:string[]=[];let physicalWaits=0;const handle={experiment_id:'exp',run_id:'frozen-run',work_item_id:'work',attempt_id:'attempt',case_id:'case',fence:'2',checkpoint_revision:'1',lease_owner:'worker'};

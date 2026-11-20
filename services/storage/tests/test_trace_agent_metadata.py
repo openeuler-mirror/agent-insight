@@ -65,6 +65,19 @@ class TraceAgentMetadataTests(unittest.TestCase):
         row=self.read(trace)['items'][0]
         self.assertIsNone(row['agentId']);self.assertEqual(row['agentName'],'test-agent')
 
+    def test_native_registration_scan_does_not_accumulate_the_span_vector(self):
+        import copy
+        from services.storage.tests.test_observations import packet
+        body=packet();spans=body['resourceSpans'][0]['scopeSpans'][0]['spans'];root=spans[0]
+        for index in range(2,302):
+            child=copy.deepcopy(root);child['spanId']=f'{index:016x}';child['parentSpanId']=root['spanId'];spans.append(child)
+        self.ingest.accept(self.token,'w',body);self.drain()
+        trace=self.service().read(self.token,'w')['pending'][0]['trace_id']
+        with patch('services.storage.dataset_generation_sources.MAX_EVENT_BYTES',8192):
+            row=self.read(trace)['items'][0]
+        self.assertLessEqual(len(row['interactions']),2)
+        self.assertEqual(row['agentName'],'test-agent')
+
     def test_native_registration_fields_match_original_full_session_resource_precedence(self):
         from services.storage.tests.test_observations import packet
         body=packet();attrs=body['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']

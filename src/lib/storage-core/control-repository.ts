@@ -15,7 +15,7 @@ const heavy=(field:string)=>bodyFields.has(field)||field.endsWith('Json');
 const fail=(status:number,message:string,code?:string)=>Object.assign(new Error(message),{status,code});
 const plain=(value:any):value is Row=>!!value&&typeof value==='object'&&!Array.isArray(value)&&!(value instanceof Date);
 interface Saved {record_id:string;revision:string;owner_principal_id:string;data:Row;file_bundle?:import('./control-files').ControlFile[]}
-interface Transaction {actor:string;write:boolean;scopes:Map<string,string>;rows:Map<string,Saved>;operations:Row[]}
+interface Transaction {actor:string;write:boolean;scopes:Map<string,string>;rows:Map<string,Saved>;operations:Row[];projections:Array<{kind:string;id:string;value:Row}>}
 const transactions=new AsyncLocalStorage<Transaction>();
 export const isCoreControlKind=(kind:string)=>Object.hasOwn(models,kind);
 function actorKey(){const {actor,origin}=requireCoreControlContext();return [origin,actor.principal,actor.workspace,actor.token].join('\0');}
@@ -131,13 +131,32 @@ class Operation<T> implements PromiseLike<T>{constructor(readonly run:()=>Promis
 async function transaction<T>(action:((client:any)=>Promise<T>)|Operation<any>[],forceWrite?:boolean):Promise<T>{
  if(transactions.getStore())return Array.isArray(action)?await Promise.all(action.map(item=>item.run())) as T:action(controlClient);
  const write=forceWrite??(Array.isArray(action)?action.some(item=>item.mutation):requireCoreControlContext().capabilities?.includes('write')??true);
- const tx:Transaction={actor:actorKey(),write,scopes:new Map(),rows:new Map(),operations:[]};
+ const tx:Transaction={actor:actorKey(),write,scopes:new Map(),rows:new Map(),operations:[],projections:[]};
  return transactions.run(tx,async()=>{const result=Array.isArray(action)?await action.reduce(async(previous,item)=>[...await previous,await item.run()],Promise.resolve([] as any[])):await action(controlClient);
-  if(tx.operations.length)await rpc('records_batch',{legacy_username:requireCoreControlContext().actor.username,operation_key:randomUUID(),operations:tx.operations,expected_kind_revisions:Object.fromEntries(tx.scopes)});return result as T;});
+  if(tx.operations.length){
+   const committed=await rpc('records_batch',{legacy_username:requireCoreControlContext().actor.username,operation_key:randomUUID(),operations:tx.operations,expected_kind_revisions:Object.fromEntries(tx.scopes)});
+   if(!Array.isArray(committed.results)||committed.results.length!==tx.operations.length)throw fail(502,'Invalid control commit receipt');
+   for(const [index,operation] of tx.operations.entries()){
+    if(operation.method==='delete')continue;
+    const saved=committed.results[index];if(!plain(saved)||saved.id!==operation.record_id)throw fail(502,'Invalid control commit identity');
+    const data=hydrate(operation.kind,saved);
+    for(const projection of tx.projections)if(projection.kind===operation.kind&&projection.id===operation.record_id){
+     for(const field of Object.keys(projection.value))if(field in data)projection.value[field]=data[field];
+    }
+   }
+  }
+  return result as T;
+ });
+}
+function committedProjection(kind:string,row:Row,query:Row):Row {
+ const value=controlProject(row,query);
+ transactions.getStore()?.projections.push({kind,id:row.id,value});
+ return value;
 }
 const delegates=new Map<string,any>();
 function delegate(kind:string):any{
- if(delegates.has(kind))return delegates.get(kind);const value=new Proxy({},{get:(_target,method)=>{
+ if(delegates.has(kind))return delegates.get(kind);const value=new Proxy({},{get:(target,method)=>{
+  if(Object.hasOwn(target,method))return Reflect.get(target,method);
   if(method==='then')return undefined;const name=String(method);
   if(!['findMany','findFirst','findUnique','findFirstOrThrow','findUniqueOrThrow','count','aggregate','groupBy','create','createMany','update','updateMany','upsert','delete','deleteMany'].includes(name))throw fail(501,'Unsupported fixed control operation: '+name);
   return (args:Row={})=>new Operation(async()=>{
@@ -146,7 +165,7 @@ function delegate(kind:string):any{
     if(name==='create'||name==='createMany'){
      const entries=name==='create'?[args.data]:args.data;const results=[];for(const input of entries){const data=defaults(kind,input);for(const [field,relation] of Object.entries(models[kind].relations))if(relation.fields&&input[field]?.connect)for(let i=0;i<relation.fields.length;i++)data[relation.fields[i]]=input[field].connect[relation.references![i]];
       await requireVersionOwner(kind,data);const created=enqueue(kind,'create',data);await nestedWrites(kind,Object.fromEntries(Object.entries(input).filter(([field])=>!models[kind].relations[field]?.fields)),data);results.push(created);}
-     return name==='createMany'?{count:results.length}:controlProject(results[0],args);
+     return name==='createMany'?{count:results.length}:committedProjection(kind,results[0],args);
     }
     const rows=await read(kind,{...args,...(name==='count'?{select:{id:true}}:{}),...(['findFirst','findUnique','findFirstOrThrow','findUniqueOrThrow','update','upsert','delete'].includes(name)?{take:1}:{})},mutation);
     if(!mutation){const values=rows.map(row=>row.data);if(name==='count')return values.length;
@@ -161,19 +180,29 @@ function delegate(kind:string):any{
     if(name==='upsert'&&!rows.length)return await delegate(kind).create({data:args.create,select:args.select,include:args.include});
     if(!rows.length&&!name.endsWith('Many'))throw fail(404,'Control record not found','P2025');const results=[];
     for(const row of rows){if(name==='delete'||name==='deleteMany'){enqueue(kind,'delete',row.data,row);results.push(row.data);}else {const input=name==='upsert'?args.update:args.data;const data=defaults(kind,input,row.data);await requireVersionOwner(kind,data);const updated=enqueue(kind,'update',data,row);await nestedWrites(kind,input,data);results.push(updated);}}
-    return name.endsWith('Many')?{count:results.length}:controlProject(results[0],args);
+    return name.endsWith('Many')?{count:results.length}:committedProjection(kind,results[0],args);
    };
    return mutation&&!transactions.getStore()?transaction(run,true):run();
   },['create','createMany','update','updateMany','upsert','delete','deleteMany'].includes(name));
  }});delegates.set(kind,value);return value;
 }
-export const controlClient:any=new Proxy({},{get:(_target,kind)=>{
- if(kind==='$transaction')return (action:any)=>transaction(action);if(kind==='then')return undefined;
- if(typeof kind!=='string'||!isCoreControlKind(kind))throw fail(501,'Unsupported fixed control domain: '+String(kind));return delegate(kind);
+const unavailableDelegates=new Map<string,object>();
+export const controlClient:any=new Proxy({},{get:(target,kind)=>{
+ if(Object.hasOwn(target,kind))return Reflect.get(target,kind);
+ if(kind==='$disconnect')return async()=>{};if(typeof kind==='symbol'||kind==='then')return undefined;
+ if(kind==='$transaction')return (action:any)=>transaction(action);
+ if(typeof kind==='string'&&isCoreControlKind(kind))return delegate(kind);
+ if(typeof kind!=='string'||kind.startsWith('$'))throw fail(501,'Unsupported Core operation: '+String(kind));
+ if(!unavailableDelegates.has(kind))unavailableDelegates.set(kind,new Proxy({}, {get:(operations,method)=>{
+  if(Object.hasOwn(operations,method))return Reflect.get(operations,method);
+  if(method==='then'||typeof method==='symbol')return undefined;
+  return ()=>{throw fail(501,'Use the typed Storage Core API for domain: '+kind);};
+ }}));
+ return unavailableDelegates.get(kind);
 }});
-export function withControlDelegates<T extends object>(legacy:T):T{return new Proxy(legacy,{get:(target,key,receiver)=>{
- if(typeof key==='string'&&isCoreControlKind(key))return controlClient[key];if(key==='$transaction')return (action:any,options?:any)=>{if(Array.isArray(action)&&action.some(item=>!(item instanceof Operation)))throw fail(501,'Mixed core/legacy transaction is unsupported');return transaction(action);};const value=Reflect.get(target,key,receiver);return typeof value==='function'?value.bind(target):value;
-}});}
+export function withControlDelegates<T extends object>(_legacy: T): T {
+ return controlClient as T;
+}
 
 export const controlRepositoryRequest=rpc;
 

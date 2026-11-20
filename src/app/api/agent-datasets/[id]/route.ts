@@ -38,7 +38,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, normalized => datasetGET(normalized, context)) : datasetGET(request, context);
+  return (withCoreDatasetRoute(request, normalized => datasetGET(normalized, context)));
 }
 async function datasetGET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -80,7 +80,7 @@ async function datasetGET(request: Request, { params }: { params: Promise<{ id: 
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
-  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, normalized => datasetDELETE(normalized, context)) : datasetDELETE(request, context);
+  return (withCoreDatasetRoute(request, normalized => datasetDELETE(normalized, context)));
 }
 async function datasetDELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -104,46 +104,7 @@ async function datasetDELETE(request: Request, { params }: { params: Promise<{ i
       recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.delete' });
       return NextResponse.json({success:true});
     }
-    const owner = await traceIdentity(request, false);
-    if (owner === user) {
-      const manager = await getTraceDatasetManager().catch(() => null);
-      const job = manager && await manager.client.traceDatasetGenerationJob.findFirst({ where: { owner, datasetId: idTrim }, select: { id: true } });
-      const receipt = manager && await manager.client.traceDatasetOperationReceipt.findFirst({ where: { ownerKey: hash(owner), datasetId: idTrim, kind: 'delete' }, select: { id: true } });
-      if (manager && (job || receipt)) {
-        const result = await manager.remove(owner, idTrim);
-        return result ? NextResponse.json(result, { status: 202 }) : new Response(null, { status: 204 });
-      }
-    }
-    if (await guardTraceDataset(request, idTrim, user)) {
-      const manager = await getTraceDatasetManager();
-      const result = await manager.remove(user, idTrim);
-      return result ? NextResponse.json(result, { status: 202 }) : new Response(null, { status: 204 });
-    }
-    const existing = await findAgentDataset(user, idTrim);
-    if (!existing) {
-      return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
-    }
-    if (isBuiltinReliabilityDataset(existing)) {
-      return NextResponse.json(
-        { error: '内置可靠性评测集不可删除' },
-        { status: 403 },
-      );
-    }
-    if (existing.datasetKind === 'benchmark' || await isReadOnlyBenchmarkDataset(user, idTrim)) {
-      return NextResponse.json(
-        { error: 'Benchmark 数据集由系统导入并维护，不可删除' },
-        { status: 403 },
-      );
-    }
-
-    const removed = await deleteAgentDataset(user, idTrim);
-    if (!removed) {
-      return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
-    }
-
-    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.delete' });
-
-    return NextResponse.json({ success: true });
+    throw new Error('Storage Core dataset context required');
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
     if (getCoreDatasetContext()) return coreDatasetFailure(error);

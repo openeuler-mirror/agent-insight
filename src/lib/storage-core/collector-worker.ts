@@ -96,7 +96,7 @@ async function runHooks(identity:CoreCollectorIdentity,hooks:Row[]){
  }
 }
 export function kickCoreCollectorWorker(identity?:CoreCollectorIdentity){
- if(!isStorageCoreEnabled())return;
+
  const current=state();if(identity)current.identities.set(identity.workspace+'\0'+identity.principal,identity);
  if(!current.timer){current.timer=setInterval(()=>{void drainCoreCollectorWork().catch(()=>{});},1000);current.timer.unref();}
  void drainCoreCollectorWork().catch(()=>{});

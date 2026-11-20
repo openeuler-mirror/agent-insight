@@ -44,6 +44,7 @@ module.exports = {
   getDataRoot: () => process.cwd(),
 }
 `)
+  write('scripts/storage-core-preflight.cjs', `exports.preflight = async () => { require('node:fs').writeFileSync('core-ready', '1') }`)
   write('scripts/sync_admin_api_key.js', 'exports.syncAdminApiKey = async () => ({})')
   write('scripts/sync-prisma-client.js', 'exports.syncGeneratedPrismaClient = () => {}')
   write('scripts/lib/fi-python-runtime.js', 'exports.readCurrentRuntime = exports.resolveBootstrapPython = () => null')
@@ -60,6 +61,16 @@ module.exports = {
 }
 
 for (const mode of ['dev', 'start'] as const) {
+  test(`CLI refuses Next ${mode} startup when Core readiness fails`, t => {
+    const {root, write, run} = createCliFixture(t, mode)
+    write('scripts/storage-core-preflight.cjs', `exports.preflight = async () => { throw Error('ClickHouse unavailable') }`)
+    write('node_modules/next/dist/bin/next', `require('node:fs').writeFileSync('started', '1')`)
+    const result = run()
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /ClickHouse unavailable/)
+    assert.equal(fs.existsSync(path.join(root, 'started')), false)
+    assert.equal(fs.existsSync(path.join(root, 'commands')), false)
+  })
   test(`CLI fallback launches Next ${mode} on the requested port`, t => {
     const { root, write, run } = createCliFixture(t, mode)
     write('node_modules/next/dist/bin/next', `
@@ -70,9 +81,8 @@ require('node:fs').writeFileSync('ready', '')
     assert.equal(result.status, 0, result.error?.message || result.stderr)
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'args'), 'utf8')), [mode, '--port', '34817'])
     assert.equal(result.stdout.includes('[benchmark catalog] generated: fixture'), mode === 'dev')
-    assert.deepEqual(fs.readFileSync(path.join(root, 'commands'), 'utf8').trim().split('\n'), [
-      'npx prisma generate', 'node scripts/prepare-ras-sqlite-schema.js', 'npx prisma db push --skip-generate',
-    ])
+    assert.equal(fs.readFileSync(path.join(root, 'core-ready'), 'utf8'), '1')
+    assert.equal(fs.existsSync(path.join(root, 'commands')), false, 'Web startup must not initialize a legacy database')
   })
 
   test(`CLI fallback reports ${mode} preparation failures`, t => {

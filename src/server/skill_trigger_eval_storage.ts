@@ -17,15 +17,14 @@
 /**
  * Skill 触发评价集（TriggerTestSet）存储层。
  *
- * 模型：SkillTriggerEvalSet + SkillTriggerEvalRun（见 prisma/schema.prisma）。
+ * 静态触发集通过 Core 控制仓库保存；评测运行使用 typed Core API。
  * 设计：design/skill-eval-datasets/design.md。
  *
  * 为什么不复用 AgentEvalDataset：触发集 case 形态是 {query, shouldTrigger}，
  * 跟 ideal_output 的 {input, expectedOutput} 完全不是一码事——强塞会让
  * datasetKind 变杂物间。
  *
- * 与 agent_datasets_storage.ts 的区别：触发集没有 JSON 文件兜底（项目早已切到
- * Prisma 路径），所以本模块**只走 Prisma**，没 client 时直接抛错。
+ * 控制写入要求已认证的用户作用域，不提供旧数据库或 JSON 文件兜底。
  */
 
 import { randomUUID } from 'crypto';
@@ -139,14 +138,7 @@ export interface SkillTriggerEvalRunRecord {
 // =========================================================================
 
 function requirePrisma(): PrismaClient {
-  const client = db.getClient();
-  if (!(client instanceof PrismaClient)) {
-    throw new Error(
-      'SkillTriggerEval storage requires the Prisma client. ' +
-        '(项目应已切到 Prisma；如果在用 JSON 文件兜底，需要 lift 一下基础设施。)',
-    );
-  }
-  return client;
+  return db.getClient() as unknown as PrismaClient;
 }
 
 function normalizeSource(value: unknown): TriggerItemSource {

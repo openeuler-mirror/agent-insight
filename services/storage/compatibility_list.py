@@ -195,7 +195,41 @@ class LegacyTraceList:
         if operator=='<=':return value<=expected
         raise ValueError('unsupported Trace filter operator')
 
+    def _native_record_page(self,token,workspace,params):
+        if not callable(getattr(self.queries.facts,'read_trace_page',None)):return None
+        if params.get('listPart')!='records' or not _flag(params.get('paginated')):return None
+        allowed={'user','workspace_id','paginated','databasePagination','page','pageSize','sort','dir','time','status','anomaly','includeEvaluations','fields','includeTags','skipAutoEvalReady','collapseGoalPlusWorkers','ownership','listPart'}
+        if set(params)-allowed:return None
+        if any(params.get(key,default)!=default for key,default in [('sort','timestamp'),('time','all'),('status','all'),('anomaly','all')]):return None
+        if params.get('ownership','all') not in ('all','user'):return None
+        direction=params.get('dir','desc')
+        if direction not in ('asc','desc'):raise ValueError('invalid sort direction')
+        page=int(params.get('page',1));size=int(params.get('pageSize',20))
+        if not 1<=page<=1000000 or not 1<=size<=100:raise ValueError('invalid existing pagination')
+        scope=self.iam.scope(token)
+        with self.control.read_transaction() as con:
+            access,values=self.queries._selection(con,scope,workspace)
+            routes=con.execute("SELECT t.trace_id,t.source_namespace FROM trace_locators t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_kind='trace' AND a.resource_id=t.trace_id WHERE t.workspace_id=? AND t.state='active'"+access,tuple(values)).fetchall()
+        ids=[row['trace_id'] for row in routes]
+        if len(ids)>100000 or sum(len(value.encode('utf-8'))*2+3 for value in ids)>3*1024*1024:return None
+        grant=self.iam._workspace(scope,workspace,'read')
+        if not ids:return {'records':[],'page':page,'pageSize':size,'hasMore':False,'canViewAllTraces':grant.role in ('owner','admin')}
+        selected=self.queries.facts.read_trace_page(workspace,ids,size+1,(page-1)*size,direction,params.get('ownership'))
+        records,_=self._records(token,workspace,selected[:size])
+        by_id={row['_trace_id']:row for row in records}
+        output=[]
+        for trace in selected[:size]:
+            row=by_id[trace]
+            for key in list(row):
+                if key.startswith('_'):row.pop(key)
+            output.append(row)
+        current=self.iam.scope(token)
+        if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed during pagination')
+        return {'records':output,'page':page,'pageSize':size,'hasMore':len(selected)>size,'canViewAllTraces':grant.role in ('owner','admin')}
+
     def read(self,token,workspace,params):
+        paged=self._native_record_page(token,workspace,params)
+        if paged is not None:return paged
         facet=params.get('facet');task_selection=execution_selection=tasks_selection=None
         def resolve_refs(refs,kind):
             found=set()

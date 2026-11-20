@@ -207,28 +207,7 @@ export async function loadActualExtractedTraceSteps(
     const steps = await extractFrozenTraceSteps(interactions, user);
     return steps.length ? { status: 'ok', steps, text: formatActualExtractedSteps(steps) } : { status: 'no-extracted-steps' };
   }
-  if (isStorageCoreEnabled()) throw new Error('Trusted frozen Trace context required');
-  if (!resolvedTaskId) return { status: 'no-extracted-steps' };
-  const executionMatch = await db.findExecutionMatch(resolvedTaskId);
-  const extractedSteps = executionMatch?.extractedSteps
-    ? JSON.parse(executionMatch.extractedSteps)
-    : [];
-  let normalizedSteps = Array.isArray(extractedSteps) ? extractedSteps as ExtractedTraceStep[] : [];
-  if (normalizedSteps.length === 0) {
-    const dynamicResult = await analyzeDynamicOnly(resolvedTaskId, user);
-    if (!dynamicResult.success) return { status: 'dynamic-analysis-failed' };
-    const refreshedExecutionMatch = await db.findExecutionMatch(resolvedTaskId);
-    const refreshedExtractedSteps = refreshedExecutionMatch?.extractedSteps
-      ? JSON.parse(refreshedExecutionMatch.extractedSteps)
-      : [];
-    normalizedSteps = Array.isArray(refreshedExtractedSteps) ? refreshedExtractedSteps as ExtractedTraceStep[] : [];
-  }
-  if (normalizedSteps.length === 0) return { status: 'no-extracted-steps' };
-  return {
-    status: 'ok',
-    steps: normalizedSteps,
-    text: formatActualExtractedSteps(normalizedSteps),
-  };
+  throw new Error('Trusted frozen Trace context required');
 }
 
 export async function buildSkillKeyActionComparison(

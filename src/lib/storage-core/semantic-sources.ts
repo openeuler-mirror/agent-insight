@@ -35,12 +35,12 @@ export async function semanticRpc<T>(action:string,payload:Row={},context=semant
  if(!Object.hasOwn(response.data,'value'))throw failure('Semantic storage response unavailable');return response.data.value as T;
 }
 export async function resolveSemanticUser(request:Request,explicitUser?:string|null){
- if(!isStorageCoreEnabled())return legacyResolveUser(request,explicitUser);
+
  const {actor}=semanticContext();if(explicitUser&&explicitUser!==actor.username){const scope=await semanticRpc<{admin:boolean}>('scope');if(!scope.admin)throw failure('Semantic owner filter differs',403);readOwners.set(contextKey(),explicitUser);}
  return {username:explicitUser||actor.username,apiKey:actor.token};
 }
 export async function withSemanticRequest<T>(request:Request,action:()=>Promise<T>):Promise<T>{
- if(!isStorageCoreEnabled())return action();
+
  if(getCoreControlContext())return getCoreSessionScope()?action():withCoreSessionRead(request,action);
  return withCoreControlRequest(request,()=>withCoreSessionRead(request,action));
 }
@@ -126,4 +126,4 @@ async function transaction(work:(tx:any)=>Promise<any>,attempt=0):Promise<any>{
  try{const result=await transactions.run(active,()=>work(core));for(const [domain,value] of active)await flush(domain,value);states.delete(contextKey());return result;}catch(error){states.delete(contextKey());if((error as any)?.status===409&&attempt<3)return transaction(work,attempt+1);throw error;}
 }
 const core={...delegates,$transaction:transaction};
-export const semanticProjection=new Proxy({} as PrismaClient,{get:(_,key)=>{if(isStorageCoreEnabled())return (core as Row)[key as string];const value=(legacy as unknown as Row)[key as string];return typeof value==='function'?value.bind(legacy):value;}});
+export const semanticProjection=new Proxy({} as PrismaClient,{get:(_,key)=>{return (core as Row)[key as string];}});

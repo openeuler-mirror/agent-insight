@@ -5,9 +5,61 @@ description: "Explicit initialization, private identity mappings, original scree
 
 # Enable an isolated Storage Core Trace workflow
 
+## Single storage runtime
+
+The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 020 (77 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
+
+Web startup checks the Core origin, private controller file and readiness of both stores. Core startup and /v1/health verify transaction migrations and required ClickHouse tables, columns and SELECT access. This does not replace ingestion and business acceptance tests. Outbox work survives ClickHouse outages without falling back to a relational analytical store. The private Core configuration accepts max_pending_ingest_batches (per workspace, default 256, range 1–10000). New ingestion receives 429/QUEUE_LIMIT when full; retries of accepted receipts remain idempotent.
+
+Control state, authorization, routing, revisions and publication receipts stay transactional. Trace/Span/payloads and analytical facts stay in ClickHouse. Contract-defined artifacts and durable delivery files remain supported. Legacy databases are explicit offline migration inputs only. Startup neither runs legacy Prisma db push nor migrates/deletes existing data. Generating historical Prisma DTO types at build time does not open a database.
+
+Control mutations return committed values, including `updatedAt`, so conditional updates and receipt retries share the persisted version. An authorized record that does not match a filter produces an empty result; unauthorized reads remain denied. Static Skill evaluations and feedback read control records, while dynamic evaluations, Traces and derived issues use their typed Core interfaces. Device authentication uses the request-bound Core transport and rejects an origin change during authentication.
+
+Dashboard and quality-analysis registration reads share the verified Core control scope. Report Traces, trajectory scores and diagnoses come exclusively from Core analytics snapshots; a missing snapshot fails explicitly. Request callbacks retain their identity scope until returned lazy queries finish. Successful Agent deletion retains the existing usage event; rejected or failed deletion is not counted.
+
+This implementation run validates SQLite + ClickHouse only. PostgreSQL/openGauss remain supported but are not exercised against real servers in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 500 remain unchanged.
+
+
+The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 020 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
+
+## Isolated Docker validation
+
+`docker-compose.storage-core.yml` runs the existing Next.js UI, the Python Storage Core, and ClickHouse in a dedicated Compose project. Separate volumes hold Web artifacts, transactional data and ClickHouse facts. Web is published on `127.0.0.1:3000` by default (AGENT_INSIGHT_PORT may override it); Core listens on loopback in the shared network namespace. This setup does not import the default database or switch production traffic.
+
+With a running Docker daemon, run from the repository root:
+
+```bash
+export CLICKHOUSE_PASSWORD='a strong password for this isolated deployment'
+docker compose -f docker-compose.storage-core.yml up -d --build
+docker compose -f docker-compose.storage-core.yml ps
+docker compose -f docker-compose.storage-core.yml logs --tail=100 storage-core
+```
+
+The first start explicitly initializes SQLite migrations 001–020 and ClickHouse migrations 001–004 in new volumes, then creates a private controller key and service configuration. Subsequent starts verify the existing schema and configuration without replacing data. Keep the same password for restarts; back up and use the explicit migration workflow for an upgrade or credential change. Create an isolated account through the existing `/login`, submit a test Trace through `/api/ingest/otel/v1/traces`, then check `/trace` or `/api/observe/data` and the corresponding ClickHouse facts. The legacy collector compatibility endpoint returns an acceptance result; batch receipts apply when calling Storage Core `/v1/ingest/otlp` directly. `docker compose -f docker-compose.storage-core.yml down` stops the deployment while retaining volumes; do not add `-v` when keeping acceptance data.
+
+This Compose setup uses SQLite as its transactional backend. PostgreSQL/openGauss, full legacy migration, production capacity, and high availability need separate validation. The manual setup procedure follows.
+
 **Product compatibility status (2026-11-14):** Login, navigation and visible markup retain the pre-refactor layout. Server compatibility now adapts existing Trace contracts to core storage. Diagnosis chat/self-Traces and Trace reports use the protocol below; Dataset versions/Trace backflow/generation use the steps below; experiment/evaluation results and DiagnosisRun consumers are integrated incrementally, with remaining Workbench/Benchmark branches documented in implementation status; this is isolated validation, not a production cutover.
 
-The mode flag is server-only. Existing credentials must be verified and explicitly mapped to current IAM principals/workspaces. Missing mappings, revoked access and core failures fail closed without legacy Trace fallback. Other domains still have legacy paths. See the [reference](../../reference/platform/storage-core.md) and implementation status for coverage.
+The mode flag is server-only. Existing credentials must be verified and explicitly mapped to current IAM principals/workspaces. Missing mappings, revoked access and core failures fail closed without legacy Trace fallback. The runtime has no legacy single-database fallback; full business regression is still required. See the [reference](../../reference/platform/storage-core.md) and implementation status for coverage.
+
+## Generate a large synthetic Trace
+
+With the local standalone-login deployment running, execute:
+
+```bash
+python3 scripts/simulate-large-trace.py \
+  --username 'your-test-user@example.com' \
+  --web-url http://127.0.0.1:3000 \
+  --core-url http://127.0.0.1:4319 \
+  --state-file /absolute/path/to/private/large-trace.json
+```
+
+The script authenticates through Web and writes OTLP directly to Storage Core, waiting for each ClickHouse batch to become `indexed`. Defaults are 21,001 spans (one root and 21,000 LLM children), 500 spans per batch, and 1,024 ASCII output characters per LLM span. Outputs and token counts are synthetic; no model is called. Adjust `--spans`, `--batch-size`, and `--output-chars` within the existing 4 MiB / 4096 span request limits. Repeated outputs compress well and do not represent real model compression ratios.
+
+Background error clustering skips repeated full LLM input history, avoiding quadratic copying for large traces. Outputs and error classification are retained; detail callers keep the default history behavior.
+
+Reuse the same arguments and state file to resume; a new state file creates a new Trace. The state contains IDs, timestamps and progress, never credentials. Completion verifies span count and ownership and prints the original Trace page URL. Batch timing includes HTTP, transactions, indexing and polling, not just ClickHouse query latency. This prepares database test data and does not measure the Web collector compatibility layer. Test data remains available for inspection. The local 21,001-Span fixture has been verified across 43 pages of at most 500 Spans with no duplicate IDs; original-layout scrolling was also checked. Endpoint success alone does not establish full product acceptance.
 
 ## Initialize and provision explicit targets
 
@@ -19,7 +71,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–019, currently schema_version19. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–020, currently schema_version20. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -29,7 +81,7 @@ python3 -m services.storage migrate-sqlite \
 
 The backup must be a new sibling file. Relational initialization/migration requires private DSN files and external backup evidence; see the reference. Startup does not create schemas or ClickHouse databases.
 
-Provision a new ClickHouse database with `ClickHouseStore.initialize_new_database()`. In the trusted setup process, use `IAMStore.create_principal`, `set_password` and `bind_workspace` after creating the workspace. Passwords require15..1024 characters; prompt interactively rather than placing secrets in command arguments. Issue a workspace-bound write-only API credential through a temporary login session, save it in a private collector file, and revoke that setup session. The Chinese procedure includes the complete Python sequence, including creation of a separate random0600 controller-key file without printing it.
+Provision a new ClickHouse database with `ClickHouseStore.initialize_new_database()`, then apply `initialize_analytics_schema()`, `initialize_infra_schema()` and `initialize_semantic_usage_schema()`. In the trusted setup process, use `IAMStore.create_principal`, `set_password` and `bind_workspace` after creating the workspace. Passwords require15..1024 characters; prompt interactively rather than placing secrets in command arguments. Issue a workspace-bound write-only API credential through a temporary login session, save it in a private collector file, and revoke that setup session. The Chinese procedure includes the complete Python sequence, including creation of a separate random0600 controller-key file without printing it.
 
 Create a private regular `trace-service.json` file, mode0600 and not a symlink. Its exact SQLite configuration is:
 
@@ -55,20 +107,19 @@ python3 -m services.storage.trace_service --config /absolute/path/to/isolated-co
 
 The service binds127.0.0.1 only. `/v1/health` reports the control schema and worker state; it does not prove an actual CH ingestion succeeded. `worker_enabled=false` can pause materialization for isolated recovery tests while durable acceptance continues.
 
-Next needs its own isolated runtime home and Prisma shell database. **Do not point DATABASE_URL at core.db**: startup and other application areas may still initialize the legacy shell database.
+Next needs its own isolated runtime home and Prisma shell database. **Do not point DATABASE_URL at core.db**: startup and other application areas may still initialize the legacy shell database. `develop_start.sh` clears only `.next/dev` in the current checkout and preserves the production build in the same directory.
 
 ```bash
 AGENT_INSIGHT_HOME=/absolute/path/to/isolated-web \
-DATABASE_URL=file:/absolute/path/to/isolated-web/data/legacy-shell.db \
 AGENT_INSIGHT_PORT=4320 \
-AGENT_INSIGHT_TRACE_STORAGE=core \
+AGENT_INSIGHT_BIND_HOST=127.0.0.1 \
 AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319 \
 AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=/absolute/path/to/isolated-core/identity-mapping.json \
 AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=/absolute/path/to/isolated-core/controller-key \
 bash scripts/develop_start.sh
 ```
 
-Check port availability and checkout ownership first. Restart Next after server configuration changes. The old public flag remains a deprecated server-side alias; frontend code does not branch on storage mode. The bridge accepts an explicit loopback origin only. Next and the storage process must share a reachable network namespace.
+Check port availability and checkout ownership first. `AGENT_INSIGHT_BIND_HOST=127.0.0.1` limits the development server to local connections; without it the script retains its existing all-interface binding. Restart Next after server configuration changes. The old public flag remains a deprecated server-side alias; frontend code does not branch on storage mode. The bridge accepts an explicit loopback origin only. Next and the storage process must share a reachable network namespace.
 
 Keep the original `/login` and existing keys. Set `AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE` to an absolute private regular0600 JSON file containing `version:1`, the exact `core_origin`, and `bindings`. Each binding has `legacy_api_key_sha256`, `legacy_username`, `principal_id`, `workspace_id` and a private delegated `credential`. Verify the legacy account/key before provisioning; do not infer membership from matching names or payload.user. Issue the delegated API credential with read/write/execute/delete capabilities through the trusted setup session. The write-only collector key cannot serve UI reads. The Chinese guide contains a placeholder mapping example. Never commit this credential file.
 
@@ -80,7 +131,7 @@ The Web entry accepts OTLP JSON/protobuf and gzip; decoded JSON is limited to4Mi
 
 Successful OTLP responses remain an empty JSON object or protobuf body. `X-Storage-Batch-Id` and `X-Storage-State` identify the durable receipt. Accepted means the private packet was fsynced and the control transaction committed. Poll `/v1/batches/<id>?workspace_id=default`; write-only collectors can inspect their own receipts. Only indexed means all sinks completed.
 
-The original `/trace` retains existing DTOs, filters, tags and detail controls. The compatibility layer reads all lightweight structure in pages of200, capped at100000 Spans/16MiB. It does not read ordinary OTLP payloads during structure loading. Selecting a Span loads its fixed interaction index and exact payload revision, using at most4 chunks per section page. Do not describe this as clicking before reading any structure.
+The original `/trace` retains existing DTOs, filters, tags and detail controls. Trace records are requested by page. Opening a detail requests at most 500 lightweight Spans; scrolling near the end appends the next batch. The loading indicator shows only “Loading…”. It does not read ordinary OTLP payloads during structure loading. Selecting a Span loads its fixed interaction index and exact payload revision, using at most4 chunks per section page.
 
 Trace bundles retain v1 format and execution trees. Imports accept at most50MiB/500 executions, validate the entire tree first, remap colliding IDs and nested references, and return success only after all batches are indexed. Reuse an Idempotency-Key only to resume the same import. Export/full-session responses are capped at128MiB. Existing Langfuse views consume full nodes directly, so that compatibility path restores full bodies and is excluded from ordinary OTLP lazy-loading claims.
 
@@ -133,10 +184,10 @@ Pricing GET obtains observed models from the caller's IAM-authorized Trace scope
 
 For analytics consumers, explicitly migrate the isolated control store to 015 and initialize CH002. Existing pages and success payloads remain unchanged. Verify real IAM isolation, native Agent platform filtering, selected zero scores, current unresolved issues/reports and genuine RAS events. Write-only API keys may submit RAS events; reading statistics requires read permission. Initial indexing has a dedicated retry marker. Never treat503 as an empty dataset or claim 1000-collector capacity from endpoint tests.
 
-Version one is limited to preserving existing features, UI, workflows, statistics and data. Large-Trace capacity work and watermarked snapshots are deferred to version two.
+Version one is limited to preserving existing features, UI, workflows, statistics and data. Large Traces now load in batches of at most 500 Spans; watermarked snapshots and thousand-collector capacity remain unverified.
 
 
-Validate Skill and Agent dynamic reads through the original `/skills` and `/agents` pages: list statistics, version trends and full execution output, including empty results, zero values and historical executions without Sessions. Keep existing static configuration and registrations; dynamic statistics use authorized core storage. A legacy login mapped to a different canonical IAM username must still discover only its own Agents. Skill runs/logs, Agent deletion and asset/configuration writes are outside this slice, so the legacy control database remains required.
+Validate Skill and Agent dynamic reads through the original `/skills` and `/agents` pages: list statistics, version trends and full execution output, including empty results, zero values and historical executions without Sessions. Keep existing static configuration and registrations; dynamic statistics use authorized core storage. A legacy login mapped to a different canonical IAM username must still discover only its own Agents. Skill runs/logs, Agent deletion and asset/configuration writes are outside this slice, these historical slice results do not constitute full acceptance; the current runtime refuses legacy control database access.
 
 
 ## Acceptance after019 control integration
@@ -162,3 +213,11 @@ The current isolated target uses transactional schema020 and CH004. Keep new-dat
 Export a consistent legacy SQLite copy with export-legacy, then use the separate plan-legacy-import, apply-legacy-import and verify-legacy-import commands. Specify the private export directory, stable source ID, owner bindings and isolated target config explicitly; apply/verify also require current actor credentials and a migration ID. The original plan-legacy remains strict read-only inventory and has no apply operation.
 
 Resolve owner, file and source/target conflicts first. Retry apply using the same receipt to recover pending work, then wait for actual CH indexing before verify. Durable acceptance with pending facts is not completed migration. A subsequent apply should replay without new imports. Check unchanged source bytes/content, readable original history states and zero execution commands. The47-row rehearsal covers those fixtures only and does not replace customer-wide preflight. No production cutover is performed.
+
+### On-demand Trace loading
+
+`/trace` retains its original table, statistics, filters and pagination controls. The default timestamp-sorted list uses ClickHouse LIMIT/OFFSET and enriches only the selected page; complex filters still use the existing compatibility query. Statistics load separately.
+
+Core detail loads 500 Span structures initially and appends another 500 when scrolling to the loaded end. The original tree and detail panel remain. While a request is pending, only “Loading…” is shown; the indicator disappears afterwards, without loaded/total counts. Node metrics describe loaded spans. Signed cursors bind permissions, Trace and revision. A changed revision requires refresh (409). Payload reads select Span ID directly. Small legacy-format Traces retain their original conversion.
+
+Validation covered 21,001 spans in 43 pages without duplicates or omissions, plus Chrome scrolling to 1,500 spans in the original tree. Global search, full analysis and very large complex legacy sources still require further validation.

@@ -89,7 +89,7 @@ export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
         // 作用域与大盘一致：按当前用户过滤（客户端可传 ?user=）；解析不出用户则回退全量。
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const executionReader = analytics ?? prisma.execution;
         const { username } = analytics ?? await resolveUser(req, url.searchParams.get('user'));
         const userFilter = analytics ? {} : username ? { user: username } : {};
@@ -141,8 +141,6 @@ export async function GET(req: Request) {
         if (analytics) await analytics.validate();
         return NextResponse.json(summary);
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Task Insight] Failed to aggregate task insight:', error);
-        return NextResponse.json({ error: 'Failed to aggregate task insight' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

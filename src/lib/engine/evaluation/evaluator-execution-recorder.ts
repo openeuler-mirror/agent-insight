@@ -328,9 +328,7 @@ async function persistExecution(record:ExecutionRecord,input:{recordCoreTrace?:C
     catch(error){if(isCoreTraceRecordingError(error))throw error;throw new CoreTraceRecordingError(error);}
     return true;
   }
-  if(isStorageCoreEnabled())throw new CoreTraceRecordingError(new Error('Trusted core Trace recorder is required'));
-  const {saveExecutionRecord}=await import('@/lib/storage/data-service');
-  return (await saveExecutionRecord(record)).success;
+  throw new CoreTraceRecordingError(new Error('Trusted core Trace recorder is required'));
 }
 
 export async function recordEvaluatorExecution(

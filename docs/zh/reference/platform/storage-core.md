@@ -5,16 +5,33 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 # 新存储核心、IAM 与安全迁移
 
+## 唯一存储运行方式
+
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 020（77 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+
+Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
+
+事务库保存权限、路由、控制状态、版本、回执与发布水位；Trace/Span/正文及各类分析事实由 ClickHouse 保存。字典规定的资产制品与可靠投递文件继续保留。旧数据库只作为显式离线迁移输入；正常启动不执行旧 Prisma db push，也不自动迁移或删除旧数据。构建期间生成 Prisma 历史 DTO 类型不连接业务数据库。
+
+控制记录的创建和更新返回事务库提交后的值（包括 `updatedAt`），条件更新与重复回执使用同一版本。已授权记录不满足筛选条件时返回空结果；越权读取仍拒绝。静态 Skill 评估和反馈只读取控制记录，动态评估、Trace 与派生问题通过对应 Core 分析接口读取，禁止跨回旧 Execution 表。设备认证沿用请求绑定的 Core 连接，并在响应后校验连接目标未改变。
+
+仪表盘和质量分析读取注册信息时使用同一已验证的 Core 事务上下文，报告的 Trace、轨迹评分和诊断数据只来自 Core 分析快照；缺少快照明确失败，不读取旧表。请求回调直接返回延迟查询时，身份范围持续到查询完成。Agent 删除成功后沿用原用量事件，拒绝或失败不计数。
+
+本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 500 条滚动追加及“加载中…”提示保持。
+
+
+下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
+
 **产品兼容状态（2026-11-14）**：原前端已恢复为重构前版本，Trace旧接口由服务端兼容。完整功能数据接管与回归仍未完成，不能作为生产切库结果；本页配置只用于隔离验证。
 
-`services/storage/` 是 Python 3.11+ 独立存储基础库。SQLite/IAM/ClickHouse 使用标准库；PG 与 openGauss 通过显式 DB-API 连接工厂接入。Next在显式core模式接管Trace采集、列表、Span和正文，保持原登录与界面；其他领域尚未整体接管。未设置开关保留旧路径，离线命令不会切换运行库。启用和启动步骤见[隔离运行指南](../../how-to/platform/storage-core.md)。
+`services/storage/` 是 Python 3.11+ 独立存储基础库。SQLite/IAM/ClickHouse 使用标准库；PG 与 openGauss 通过显式 DB-API 连接工厂接入。Next 通过 Core 接管数据访问，保留原登录与界面；全领域业务回归尚未全部通过。未设置开关也使用 Core，离线命令不会切换运行库。启用和启动步骤见[隔离运行指南](../../how-to/platform/storage-core.md)。
 
 表的职责、主键/索引速查与总览/关联图见[核心表关系导读](../../../../design/platform/analytical-transactional-storage/core-table-dictionary.md#表关系总览与阅读顺序)，包括IAM、版本资产、任务结果、Trace正文及数据集/评测。
 
 ## 已实现范围
 
 - `001_core.sql`：21 张事务表、13 张 ClickHouse 表；原始字节与 checksum 保持不变。
-- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，015新增3张统计控制索引，016新增1张首次采集准备封存表，017新增3张Thread控制关系表，CH002新增2张统计事实表，合计 **69 张事务表 + 15 张 CH 表 = 84 张**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
+- `002_iam.sql`：10 张 IAM 表，003另增2张项目目录/归属表，004再增2张采集/实体版本表，005新增4张旧ID/标注/标签表，006增加2张诊断会话/消息表，007增加2张报告运行/当前指针表，008新增2张数据集兼容head/操作回执表，009新增1张Trace生成任务表，010新增8张实验索引、011新增2张诊断来源绑定、012新增5张Benchmark表、013兼容空证据且不新增表、014新增1张Issue解决注解表，015新增3张统计控制索引，016新增1张首次采集准备封存表，017新增3张Thread控制关系表，CH002新增2张统计事实表，截至 017 合计 **69 张事务表 + 15 张 CH 表 = 84 张**；当前 020/CH004 已扩展为 **77 张事务表 + 19 张 CH 表**。完整字段、类型、约束和索引见仓库 `design/platform/analytical-transactional-storage/core-table-dictionary.md`。
 - 三种事务后端共享资产 release/依赖封存、别名/草稿 CAS、冻结 RunPlan、任务领取/续租/fence/取消、制品校验，以及结果回执和 Outbox 同事务提交。
 - ClickHouse 支持可信 canonical Span 批量写、最新态筛选、单 Span/分页结构读取、精确 bundle revision 的多 section 正文、正文块与清单 hash 校验，以及受限范围的最新态聚合。请求上限 4MiB，正文 bundle 上限 64MiB。
 - `observations.py`可靠接收完成OTLP Span、冻结准备计划、全局强序Outbox worker及幂等CH物化；`trace_service.py`提供loopback HTTP查询/接收，Next服务端原接口兼容及旧身份显式映射。
@@ -26,7 +43,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–017。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前017（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015、私有采集准备最低016、采集图和Thread最低017），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–020。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前020（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015、私有采集准备最低016、采集图和Thread最低017），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -49,7 +66,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 SQLite 写事务使用 `BEGIN IMMEDIATE`；PG/openGauss 写事务暂通过 `schema_meta` 基础行锁串行协调，保证跨进程领取、回执和 fence 正确。只读事务分别使用 WAL 读取快照和 `REPEATABLE READ READ ONLY`，不占控制写锁。密码派生与 CH HTTP 在写事务外执行。此粒度是正确性基线，尚不证明 1000 采集端混合读写吞吐；细粒度 CAS/队列分片和容量验证仍需后续批次完成。
 
-PG 可安装 `services/storage/requirements-relational.txt` 固定测试驱动。openGauss 必须按部署版本使用兼容驱动/libpq，不把 PG 协议兼容当作认证兼容。此次真实验证涵盖 PG 15.19 与 openGauss 7.0.0（PG 兼容模式）：后者使用官方 Linux ARM64 Python 包与原生 SHA256 认证；macOS 的普通 psycopg2-binary 在原生认证上不兼容。兼容 MD5 的隔离测试只用作补充，不作为生产配置建议。通过 `OpenGaussControlStore(connection_factory, schema=..., artifact_directory=...)` 注入认证过的驱动；`from_dsn` 使用当前环境导入的 psycopg2。
+PG 可安装 `services/storage/requirements-relational.txt` 固定测试驱动。openGauss 必须按部署版本使用兼容驱动/libpq，不把 PG 协议兼容当作认证兼容。此前迁移阶段的验证记录涵盖 PG 15.19 与 openGauss 7.0.0（PG 兼容模式）：后者使用官方 Linux ARM64 Python 包与原生 SHA256 认证；macOS 的普通 psycopg2-binary 在原生认证上不兼容。兼容 MD5 的隔离测试只用作补充，不作为生产配置建议。通过 `OpenGaussControlStore(connection_factory, schema=..., artifact_directory=...)` 注入认证过的驱动；`from_dsn` 使用当前环境导入的 psycopg2。
 
 ## 显式初始化与版本迁移
 
@@ -65,7 +82,7 @@ python3 -m services.storage migration-plan --backend sqlite --database /absolute
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` 只输出 SQL。新目标初始化应用001–007；已有已知001/002/003只校验，不隐式升级。IAM/项目上下文要求003；Trace HTTP服务启动要求已应用当前007，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
+`schema` 只输出 SQL。新目标初始化应用001–020；已有已知001/002/003只校验，不隐式升级。IAM/项目上下文要求003；Trace HTTP服务启动要求已应用当前020，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
 
 SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，再持写锁重核源与备份内容，防止备份后的并发写入被遗漏；变化时拒绝并保留备份。待执行迁移及版本登记同事务成功或回滚，不覆盖旧备份、不删除原数据。新目标启用 WAL/FULL，不能将 SQLite 文件放在 NFS 跨主机共享写入。
 
@@ -91,13 +108,13 @@ SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，�
 
 `trace_service.py`只监听127.0.0.1，32个并行请求槽，过载503。`--config`指定0600普通JSON文件；control选择sqlite(database)或postgresql/opengauss(dsn/schema/artifacts)，clickhouse指定endpoint/database/user/password，另含cursor_secret_hex、controller_key_file、default_workspace、port、worker_enabled。先显式初始化/迁移全部控制schema与CH，启动不会建表升级。配置示例和可信账号/Key配置见[操作指南](../../how-to/platform/storage-core.md)。
 
-Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE_CORE_URL`及`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`，配置变更后重启。旧public flag只保留服务端兼容别名。`DATABASE_URL`仍为隔离旧业务库，不能指向core.db；原前端Key保存/登录行为不改。映射文件0600且绑定验证过的旧Key摘要、旧用户名、IAM主体、workspace及read/write/execute/delete代理凭据。错误不回落旧Trace库，未迁移领域仍有既有路径。
+Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE_CORE_URL`及`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`，配置变更后重启。旧public flag只保留服务端兼容别名。`DATABASE_URL` 不用于 Web 运行时访问，事务连接由 Core 私有配置指定；原前端Key保存/登录行为不改。映射文件0600且绑定验证过的旧Key摘要、旧用户名、IAM主体、workspace及read/write/execute/delete代理凭据。错误不回落旧Trace库，不保留旧单库运行路径。
 
 ### 原接口兼容与005
 
 `trace_legacy_ids`保存不可变task/execution别名；`trace_annotations`保存版本化标注和显式空值覆盖；`trace_tags`和`trace_tag_links`保存用户标签及多对多关联。均在控制库，受当前IAM与删除屏障约束。001–004不变。新OTLP路由同接收事务登记native ID别名；旧路由需明确回填，不按同名猜测。
 
-兼容入口为旧`/api/observe/data`、`/api/observe/session`、`/api/tags`、execution tags及Trace bundle import/export。列表支持旧记录/统计/筛选合同；含 taskId、executionId 或非空 taskIds 的准确定位先按当前 IAM 解析旧别名/内部 ID 并取交集，只物化所选 Trace，保留来源、当前 Outcome、权限及删除屏障的前后复核。缺失或无权的选择返回空集，仍校验空结果请求的筛选参数；skills/values/tags 全局 facet 保持原范围。普通列表仍枚举授权范围，超过100000条明确拒绝；尚未完成通用索引下推和千级并发容量验证。普通结构读取所有轻量Span、最多100000条/16MiB；后端按200条读取，不在结构请求中加载正文。点击单Span按固定索引和精确payload revision装载。完整会话/导出128MiB上限；原Langfuse节点协议需完整正文，单独作为兼容例外。
+兼容入口为旧`/api/observe/data`、`/api/observe/session`、`/api/tags`、execution tags及Trace bundle import/export。列表支持旧记录/统计/筛选合同；含 taskId、executionId 或非空 taskIds 的准确定位先按当前 IAM 解析旧别名/内部 ID 并取交集，只物化所选 Trace，保留来源、当前 Outcome、权限及删除屏障的前后复核。缺失或无权的选择返回空集，仍校验空结果请求的筛选参数；skills/values/tags 全局 facet 保持原范围。普通列表仍枚举授权范围，超过100000条明确拒绝；尚未完成通用索引下推和千级并发容量验证。原详情通过 span-page 每批最多读取 500 条轻量 Span，滚动追加；结构请求不读取正文。完整会话兼容接口仍有独立预算，不用于分页详情的首次装载。点击单Span按固定索引和精确payload revision装载。完整会话/导出128MiB上限；原Langfuse节点协议需完整正文，单独作为兼容例外。
 
 Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。Trace回流、普通实验/评测结果/RunPlan及DiagnosisRun消费者已使用下述新存储协议；infra和非OTLP既有写入口仍有未接入范围，不能把页面恢复视为全部功能迁移完成。
 

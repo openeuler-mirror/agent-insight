@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from services.storage.control import SQLiteControlStore, Conflict
 from services.storage.iam import IAMStore
@@ -246,12 +247,31 @@ class LegacyImportTests(unittest.TestCase):
         from contextlib import redirect_stdout
         import io
         output = io.StringIO()
-        with redirect_stdout(output):
+        with redirect_stdout(output), patch('services.storage.clickhouse.ClickHouseStore.check_schema',return_value={'schema_version':4,'tables':19}) as readiness, patch('services.storage.trace_service.TraceRuntime.start_worker',side_effect=AssertionError('import must not start service')):
             code = main(['apply-legacy-import', '--directory', str(export), '--source-id', 'deployment-1',
                 '--bindings-file', str(binding), '--actors-file', str(actors), '--config', str(config), '--migration-id', 'cli'])
         self.assertEqual(code, 0)
+        readiness.assert_called_once()
         self.assertEqual(json.loads(output.getvalue())['imported'], 1)
         self.assertNotIn(self.token, output.getvalue())
+
+    def test_cli_import_requires_clickhouse_before_writing_control_records(self):
+        from services.storage.__main__ import main
+        from services.storage.clickhouse import ClickHouseError
+        from contextlib import redirect_stderr
+        import io
+        export=self.snapshot();config=self.root/'runtime.json'
+        config.write_text(json.dumps({'control':{'backend':'sqlite','database':str(self.root/'target.db')},
+            'clickhouse':{'endpoint':'http://127.0.0.1:1','database':'unused_isolated'},'cursor_secret_hex':'00'*32}));config.chmod(0o600)
+        bindings=self.root/'bindings.json';bindings.write_text(json.dumps(self.bindings));bindings.chmod(0o600)
+        actors=self.root/'actors.json';actors.write_text(json.dumps({'old-alice':self.token}));actors.chmod(0o600)
+        error=io.StringIO()
+        with patch('services.storage.clickhouse.ClickHouseStore.check_schema',side_effect=ClickHouseError('ClickHouse unavailable')),redirect_stderr(error):
+            code=main(['apply-legacy-import','--directory',str(export),'--source-id','deployment-1','--config',str(config),'--migration-id','unavailable','--bindings-file',str(bindings),'--actors-file',str(actors)])
+        self.assertEqual(code,1)
+        self.assertEqual(json.loads(error.getvalue())['error'],'ClickHouseError')
+        with self.control.read_transaction() as con:
+            self.assertEqual(con.execute('SELECT COUNT(*) FROM platform_control_records').fetchone()[0],0)
 
     def test_diagnosis_conversation_keeps_message_order_and_external_session_without_lease(self):
         self.legacy_rows('Execution', [{'id': 'execution', 'taskId': 'task', 'user': 'old-alice', 'timestamp': 1700000000000, 'isSubagent': 0}])

@@ -120,7 +120,7 @@ async function backfillObservedAgentsFromSessions(user?: string, metadata?: Core
 export async function GET(request: Request) {
   return withCoreControlRoute(request,async()=>{
   try {
-    const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+    const analytics = (await readCoreAnalytics(request));
     const metadata = analytics ? await readCoreAgentMetadata(analytics) : undefined;
     // 每次列表请求都确保系统 Agent 已注册/更新（已发现的同名 Agent 会被 promote 成 system），
     // 同时把历史遗留的 'unregistered' 记录一次性迁移成 'user'。
@@ -202,10 +202,7 @@ export async function GET(request: Request) {
     if (analytics) await analytics.validate();
     return NextResponse.json({ agents });
   } catch (error) {
-    if (isStorageCoreEnabled()) return analyticsFailure(error);
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error('[agents] GET error:', msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return analyticsFailure(error);
   }
 
   },["read"]);

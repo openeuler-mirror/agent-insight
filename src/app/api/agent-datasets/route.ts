@@ -50,7 +50,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
-  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, datasetGET) : datasetGET(request);
+  return (withCoreDatasetRoute(request, datasetGET));
 }
 async function datasetGET(request: Request) {
   try {
@@ -93,7 +93,7 @@ async function datasetGET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, datasetPOST) : datasetPOST(request);
+  return (withCoreDatasetRoute(request, datasetPOST));
 }
 async function datasetPOST(request: Request) {
   try {
@@ -179,7 +179,7 @@ async function datasetPOST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  return isStorageCoreEnabled() ? withCoreDatasetRoute(request, datasetPATCH) : datasetPATCH(request);
+  return (withCoreDatasetRoute(request, datasetPATCH));
 }
 async function datasetPATCH(request: Request) {
   try {

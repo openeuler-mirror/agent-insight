@@ -20,10 +20,12 @@ function fixture() {
 }
 function route(name:string,core:boolean,source=fixture(), registrations?:{name:string;user:string|null;platform:string;agentOwnership:string;createdAt:Date}[]) {
   let oldReads=0;let oldAuth=0;
+  let controlScope=false;
   const registered=registrations||[{name:'A',user:'alice',platform:'opencode',agentOwnership:'user',createdAt:new Date(now)}];
   const dynamic=()=>{oldReads++;if(core)throw Error('Legacy dynamic tables poisoned');return source;};
   const deps:Record<string,unknown>={
     'next/server':{NextResponse:Response},
+    '@/lib/storage-core/control-route':{withCoreControlRoute:async(_request:Request,action:()=>Promise<Response>,capabilities:string[])=>{assert.deepEqual(Array.from(capabilities),['read']);controlScope=true;try{return await action();}finally{controlScope=false;}}},
     '@/lib/storage-core/mode':{isStorageCoreEnabled:()=>core},
     '@/lib/storage-core/analytics':{readCoreAnalytics:async()=>source,analyticsFailure:(error:{status?:number})=>Response.json({error:'storage'},{status:error.status||502})},
     '@/lib/storage-core/compat':{compatibilityFailure:(error:{status?:number})=>Response.json({error:'storage'},{status:error.status||502})},
@@ -35,6 +37,7 @@ function route(name:string,core:boolean,source=fixture(), registrations?:{name:s
       readRecords:async(_user:unknown,filters:Parameters<typeof analyticsRecords>[1])=>{dynamic();return analyticsRecords(source,filters);},
     },
     '@/lib/storage/prisma':{prisma:{execution:{findMany:(query:unknown)=>dynamic().findMany(query as never),count:(query:unknown)=>dynamic().count(query as never)},executionSkill:{findMany:()=>{dynamic();return source.skillRows(source.rows.map(row=>row.id));}},session:{findMany:()=>{dynamic();return[];}},rasAnomalyEvent:{findMany:()=>{dynamic();return[];}},registeredAgent:{findMany:async(query:{where?:{user?:unknown;OR?:unknown;platform?:string}})=>{
+        assert.ok(controlScope,'Agent registration reads require a verified Core control scope');
         if(core&&name==='quality/agents')assert.deepEqual(JSON.parse(JSON.stringify(query.where?.OR)),[{user:'alice'},{user:null}]);
         else if(core)assert.deepEqual(JSON.parse(JSON.stringify(query.where?.user)),{in:['alice']});
         return registered.filter(row=>(row.user==='alice'||name==='quality/agents'&&row.user===null)&&(!query.where?.platform||row.platform===query.where.platform));

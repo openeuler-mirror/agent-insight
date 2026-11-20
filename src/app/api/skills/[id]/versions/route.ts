@@ -106,7 +106,7 @@ export async function GET(
   return withCoreControlRoute(request,async()=>{
     try {
         const { id } = await params;
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+        const analytics = (await readCoreAnalytics(request));
         const access = analytics ? await canAccessSkill(id, analytics.username) : null;
         const skill = access ? access.skill : await db.findSkillById(id);
         if (!skill) {
@@ -221,8 +221,7 @@ export async function GET(
         }
         return NextResponse.json(versionsList);
     } catch (e: any) {
-        if (isStorageCoreEnabled()) return analyticsFailure(e);
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return analyticsFailure(e);
     }
 
   },["read"]);

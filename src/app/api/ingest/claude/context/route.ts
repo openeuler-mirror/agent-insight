@@ -36,43 +36,7 @@ import { NextResponse } from 'next/server';
  * 不新增 spool 源、不改消费者。
  */
 export async function POST(req: Request) {
-  if(isStorageCoreEnabled())return handleCoreCollectorContext(req);
-  try {
-    // 补传等于往别人的 trace 里塞内容,比 logs 端点更值得收紧:必须是有效 API key。
-    const apiKey = req.headers.get('x-witty-api-key');
-    if (!apiKey || !(await db.findUserByApiKey(apiKey))) {
-      return NextResponse.json({ status: 'error', message: 'invalid or missing x-witty-api-key' }, { status: 401 });
-    }
-
-    const contentType = req.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      return NextResponse.json({ status: 'error', message: 'expected application/json' }, { status: 415 });
-    }
-
-    const body = await req.json();
-    const sessionId = typeof body?.sessionId === 'string' ? body.sessionId.trim() : '';
-    if (!sessionId) {
-      return NextResponse.json({ status: 'error', message: 'sessionId is required' }, { status: 400 });
-    }
-
-    const { events, truncated } = buildContextSupplementEvents(sessionId, body?.items, {
-      receivedAt: new Date().toISOString(),
-      maxTextChars: maxTextChars(),
-    });
-
-    if (events.length > 0) appendClaudeOtelEvents(events);
-
-    return NextResponse.json({
-      status: 'accepted',
-      received: Array.isArray(body?.items) ? body.items.length : 0,
-      stored: events.length,
-      truncated,
-      sessionId,
-    });
-  } catch (err: any) {
-    console.error('[Claude Context] Handler Error:', err);
-    return NextResponse.json({ status: 'error', message: err?.message || 'unknown error' }, { status: 500 });
-  }
+  return handleCoreCollectorContext(req);
 }
 
 export async function OPTIONS() {

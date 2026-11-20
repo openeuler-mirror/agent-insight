@@ -16,6 +16,7 @@
 
 'use client';
 
+
 import Link from 'next/link';
 import { traceRelationsPending } from '@/lib/trace/parent-agent';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -1007,7 +1008,9 @@ function TracePageContent() {
         };
         void refresh();
         const timer = window.setInterval(refresh, TRACE_STATS_REFRESH_MS);
+        document.addEventListener('visibilitychange', refresh);
         return () => {
+            document.removeEventListener('visibilitychange', refresh);
             active = false;
             controller.abort();
             window.clearInterval(timer);
@@ -1656,7 +1659,7 @@ function TraceDetailView({
             .then(response => response.ok ? response.json() : null)
             .then(records => { if (requestId === sessionRequestRef.current && Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
             .catch(() => {});
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}&view=structure&paged=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => {
                 if (requestId !== sessionRequestRef.current) return;
@@ -1693,12 +1696,40 @@ function TraceDetailView({
         return () => clearInterval(id);
     }, []);
 
+    const [loadingMoreSpans, setLoadingMoreSpans] = useState(false);
+    const [moreSpansError, setMoreSpansError] = useState('');
+    const spanPageRequest = useRef<AbortController | null>(null);
+    useEffect(() => () => { spanPageRequest.current?.abort(); spanPageRequest.current = null; }, [taskId]);
+    const loadMoreSpans = useCallback(async () => {
+        const current = sessionRef.current;
+        if (!current?.nextCursor || spanPageRequest.current) return;
+        const controller = new AbortController();
+        spanPageRequest.current = controller;
+        setLoadingMoreSpans(true); setMoreSpansError('');
+        try {
+            const query = new URLSearchParams({ taskId, view: 'structure', paged: '1', cursor: current.nextCursor, index: String(current.interactions.length) });
+            const response = await apiFetch('/api/observe/session?' + query, { signal: controller.signal });
+            if (!response.ok) throw new Error(await readApiError(response));
+            const next = await response.json();
+            if (controller.signal.aborted || sessionRef.current !== current) return;
+            const ids = new Set(current.interactions.map((item: any) => item.spanId));
+            const merged = { ...current, nextCursor: next.nextCursor, interactions: [...current.interactions, ...next.interactions.filter((item: any) => !ids.has(item.spanId))] };
+            sessionRef.current = merged; setSession(merged);
+        } catch (error) {
+            if (!controller.signal.aborted) setMoreSpansError(error instanceof Error ? error.message : '加载失败');
+        } finally {
+            if (spanPageRequest.current === controller) { spanPageRequest.current = null; setLoadingMoreSpans(false); }
+        }
+    }, [taskId]);
+
     const loadInteraction = useCallback(async (index: number) => {
-        const source = sessionRef.current?.interactions?.[index]?._collaboration;
+        const selectedSpan = sessionRef.current?.interactions?.[index];
+        const paging = sessionRef.current?.paged ? `&paged=1&spanId=${encodeURIComponent(selectedSpan.spanId)}` : '';
+        const source = selectedSpan?._collaboration;
         const sourceTaskId = source?.taskId ?? taskId;
         const sourceIndex = source?.index ?? index;
         const response = await apiFetch(
-            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&user=${encodeURIComponent(user || '')}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
+            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&user=${encodeURIComponent(user || '')}&view=interaction&index=${sourceIndex}${paging}${source ? "&source=raw" : ""}`,
             { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
         );
         if (!response.ok) throw new Error(await readApiError(response));
@@ -1932,7 +1963,7 @@ function TraceDetailView({
                 onNavigate={navigateToTaskId}
             />
 
-            <h2 className="text-sm font-semibold text-foreground mb-2">{t('tracePage.executionTrace')}</h2>
+            <h2 className="text-sm font-semibold text-foreground mb-2">{t('tracePage.executionTrace')}{(loading || loadingMoreSpans) && <span role="status" className="ml-2 text-xs font-normal text-foreground-muted">{locale === 'zh' ? '加载中…' : 'Loading…'}</span>}</h2>
             <div className="min-h-[200px] flex-1 min-h-0">
                 {loading ? (
                     <div className="rounded-md border border-card-border bg-card p-4 space-y-2">
@@ -1955,6 +1986,9 @@ function TraceDetailView({
                         framework={execution.framework}
                         langfuseTraceNodes={session.langfuseTraceNodes}
                         executionDurationMs={latency}
+                        loadMoreSpans={session?.nextCursor ? loadMoreSpans : undefined}
+                        loadingMoreSpans={loadingMoreSpans}
+                        moreSpansError={moreSpansError}
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}

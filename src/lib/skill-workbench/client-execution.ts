@@ -44,8 +44,7 @@ interface ClientCaseInput {
 }
 
 export async function executeSkillCaseOnClient(input: ClientCaseInput) {
-  if(isStorageCoreEnabled())return executeCoreClientCase(input,requireCoreExperimentContext());
-  return executeClientCase(input);
+  return executeCoreClientCase(input,requireCoreExperimentContext());
 }
 
 async function executeClientCase(input: ClientCaseInput) {

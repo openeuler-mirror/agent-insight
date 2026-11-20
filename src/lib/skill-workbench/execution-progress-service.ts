@@ -33,7 +33,7 @@ export async function loadSkillExecutionProgress(experimentId: string, user: str
     const config = parse(experiment.configSnapshotJson)
     const task = config.grayscaleTaskId ? await tx.grayscaleTask.findFirst({ where: { id: String(config.grayscaleTaskId), user }, select: { id: true, caseStatesJson: true } }) : null
     let states: AbCaseStates = parse(task?.caseStatesJson)
-    if(isStorageCoreEnabled()){
+    {
       const current=await requireCoreExperimentContext().rpc('read',{experiment_id:experimentId}) as {experiment:WorkbenchCoreSnapshot};
       states=projectCoreWorkbenchTaskStates(current.experiment,states);
     }
@@ -103,5 +103,5 @@ export async function loadSkillExecutionProgress(experimentId: string, user: str
     }
     return result
   }
-  return isStorageCoreEnabled()?read(await workbenchControlReadSource(user,experimentId) as unknown as Prisma.TransactionClient):readExecutionProgressSnapshot(read)
+  return (read(await workbenchControlReadSource(user,experimentId) as unknown as Prisma.TransactionClient))
 }

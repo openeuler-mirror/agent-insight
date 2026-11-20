@@ -75,7 +75,7 @@ export async function POST(request: Request) {
 
   const jobId = makeJobId();
   const store = getJobStore();
-  const cacheKey=isStorageCoreEnabled()?coreControlCacheKey(jobId):jobId;
+  const cacheKey=(coreControlCacheKey(jobId));
   const startedAt = Date.now();
 
   store.set(cacheKey, { status: 'running', startedAt });

@@ -56,8 +56,8 @@ test('failed Agent run is recorded through the same callback with its actual fai
  assert.ok(captured);assert.equal(h.legacy(),0);assert.equal(captured.record.failures[0].context,'MODEL_ERROR');assert.equal(captured.record.interactions.at(-1)?.error?.message,'actual failure');assert.equal(captured.record.final_result,undefined);
 });
 
-test('legacy recorder retains saveExecutionRecord behavior when core mode is off',async()=>{
- const h=recorder(false);await h.module.recordEvaluatorExecution({listMessages:async()=>raw},{taskId:'provider-session',agentName:'fault-diagnosis-agent'});assert.equal(h.legacy(),1);
+test('retired mode cannot restore a legacy recorder without a trusted Core callback',async()=>{
+ const h=recorder(false);await assert.rejects(h.module.recordEvaluatorExecution({listMessages:async()=>raw},{taskId:'provider-session',agentName:'fault-diagnosis-agent'}),error=>h.module.isCoreTraceRecordingError(error));assert.equal(h.legacy(),0);
 });
 
 function runner(){

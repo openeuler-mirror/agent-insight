@@ -49,8 +49,8 @@ test('trusted core command callback preserves Trace facts without touching legac
  await (module.exports as {applyCommandStatus:Function}).applyCommandStatus({commandId:'cmd_core',clientId:'client',status:'SUCCEEDED',result:{traceId:'core-trace'}});
  assert.equal(shadow,0);assert.equal(writes?.resultJson,'{"traceId":"core-trace"}');
  row.payloadJson='{}';
- await assert.rejects((module.exports as {applyCommandStatus:Function}).applyCommandStatus({commandId:'cmd_core',clientId:'client',status:'SUCCEEDED',result:{traceId:'trace',correlation:{storageCore:true}}}),/legacy forbidden/);
- assert.equal(shadow,1);
+ await (module.exports as {applyCommandStatus:Function}).applyCommandStatus({commandId:'cmd_core',clientId:'client',status:'SUCCEEDED',result:{traceId:'trace',correlation:{storageCore:true}}});
+ assert.equal(shadow,0);assert.equal(JSON.parse(String(writes?.resultJson)).traceId,'trace');
 });
 
  test('lease loss requests real cancellation and unconfirmed cleanup forbids retry or score',async()=>{

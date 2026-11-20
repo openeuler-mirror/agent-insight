@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get('category');
     const userParam = searchParams.get('user');
 
-    const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+    const analytics = (await readCoreAnalytics(request));
     const { username: user } = analytics ?? await resolveUser(request, userParam);
 
     const where: any = {};
@@ -191,9 +191,7 @@ export async function GET(request: NextRequest) {
     if (analytics) await analytics.validate();
     return NextResponse.json(response);
   } catch (error) {
-    if (isStorageCoreEnabled()) return analyticsFailure(error);
-    console.error('Fetch Skills Error:', error);
-    return NextResponse.json({ error: 'Failed to fetch skills' }, { status: 500 });
+    return analyticsFailure(error);
   }
 
   },["read"]);

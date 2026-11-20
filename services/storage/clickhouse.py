@@ -64,6 +64,22 @@ class ClickHouseStore:
         except (urllib.error.URLError, OSError) as exc:
             raise ClickHouseError('ClickHouse request failed; inspect server logs without exposing credentials') from exc
 
+    def check_schema(self):
+        expected = {}
+        for path in sorted((Path(__file__).parent / 'schema' / 'clickhouse').glob('*.sql')):
+            for name, body in re.findall(r'CREATE TABLE (\w+)\s*\((.*?)\)\s*ENGINE', path.read_text(), re.S):
+                expected[name] = {column for column, _ in re.findall(r'(?:^|,)\s*(\w+)\s+(\w+)', body) if column != 'CONSTRAINT'}
+        rows = self._request('SELECT table, name FROM system.columns WHERE database = {db:String} FORMAT JSONEachRow', parameters={'db': self.database})
+        actual = {}
+        for line in rows.splitlines():
+            row = json.loads(line)
+            actual.setdefault(row['table'], set()).add(row['name'])
+        if not expected or any(not columns <= actual.get(name, set()) for name, columns in expected.items()):
+            raise ClickHouseError('ClickHouse schema is incomplete; explicitly initialize or upgrade the analytical database')
+        # Query the actual tables as well: visibility in system.columns does not grant SELECT.
+        self._request(' UNION ALL '.join(f'SELECT 1 FROM {name} LIMIT 0' for name in expected))
+        return {'schema_version': 4, 'tables': len(expected)}
+
     def initialize_new_database(self):
         self._request(f'CREATE DATABASE {self.database}', database='default')
         sql = (Path(__file__).parent / 'schema' / 'clickhouse' / '001_core.sql').read_text()
@@ -228,7 +244,19 @@ class ClickHouseStore:
             revision(row['revision'])
         self._insert('obs_span_current',rows)
 
-    def read_spans(self, workspace_id, bucket, trace_id, *, status=None, parent_span_id=None, after_span_id='', limit=200, search=None):
+    def read_trace_page(self,workspace,ids,count,offset,direction,ownership):
+        if direction not in ('asc','desc') or not 1<=count<=101 or offset<0:raise ValueError('invalid Trace page')
+        query="""SELECT trace_id FROM obs_trace_current FINAL WHERE workspace_id={workspace:String} AND is_deleted=0
+            AND has({ids:Array(String)},trace_id) AND NOT JSONExtractBool(attributes_json,'is_subagent')"""
+        escaped=["'"+identifier(value).replace('\\','\\\\').replace("'","\\'")+"'" for value in ids]
+        query=query.replace('has({ids:Array(String)},trace_id)', 'trace_id IN ('+','.join(escaped)+')')
+        if ownership=='user':query+=" AND JSONExtractString(attributes_json,'ownership') IN ('','user')"
+        order=direction.upper()
+        query+=' ORDER BY started_at_ms '+order+',trace_id '+order+' LIMIT {count:UInt32} OFFSET {offset:UInt64} FORMAT JSONEachRow'
+        raw=self._request(query,parameters={'workspace':workspace,'count':count,'offset':offset})
+        return [json.loads(line)['trace_id'] for line in raw.splitlines() if line]
+
+    def read_spans(self, workspace_id, bucket, trace_id, *, status=None, parent_span_id=None, after_span_id='', limit=200, search=None, time_after=None):
         if type(limit) is not int or not 1<=limit<=1000: raise ValueError('page size must be 1..1000')
         parameters=self._scope(workspace_id,bucket,trace_id)
         parameters.update({'limit':limit,'after_span_id':after_span_id})
@@ -240,7 +268,13 @@ class ClickHouseStore:
         if search is not None:
             if not isinstance(search,str) or len(search)>256:raise ValueError('invalid bounded Span search')
             predicates.append("positionCaseInsensitiveUTF8(concat(span_id,' ',name,' ',model),{search:String})>0");parameters['search']=search
-        sql='SELECT * FROM obs_span_current FINAL WHERE '+' AND '.join(predicates)+' ORDER BY span_id LIMIT {limit:UInt32} FORMAT JSONEachRow'
+        order='span_id'
+        if time_after is not None:
+            predicates.remove('span_id > {after_span_id:String}')
+            parameters.update(after_time=time_after[0],after_id=time_after[1])
+            predicates.append('(ifNull(started_at_ms,0),span_id) > ({after_time:UInt64},{after_id:String})')
+            order='ifNull(started_at_ms,0),span_id'
+        sql='SELECT * FROM obs_span_current FINAL WHERE '+' AND '.join(predicates)+' ORDER BY '+order+' LIMIT {limit:UInt32} FORMAT JSONEachRow'
         return [json.loads(line) for line in self._request(sql,parameters=parameters).splitlines() if line]
 
     def read_span(self, workspace_id, bucket, trace_id, span_id):

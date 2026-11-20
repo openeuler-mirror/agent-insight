@@ -68,3 +68,29 @@ test('virtual child executions and Session collaboration summaries retain direct
   const bc=[...projection.collaboration.edges,...projection.collaboration.children!.flatMap(row=>row.edges)].filter(edge=>edge[0]==='B'&&edge[1]==='C');
   assert.equal(bc.length,2);
 });
+
+test('analytics skips repeated LLM history while preserving error classification and detail defaults', () => {
+  const turns = [
+    {role: 'user', content: 'initial request'},
+    {role: 'assistant', model: 'm', content: 'first response'},
+    ...interactions,
+  ];
+  const full = buildFaultPathSteps(turns, 'zh');
+  const compact = buildFaultPathSteps(turns, 'zh', {includeLlmHistory: false});
+  assert.ok(full.some(step => step.kind === 'llm' && step.rawInput?.includes('first response')));
+  assert.ok(compact.filter(step => step.kind === 'llm').every(step => step.rawInput === undefined));
+  assert.deepEqual(compact.map(({rawInput, ...step}) => step), full.map(({rawInput, ...step}) => step));
+  assert.deepEqual(clusterErrorSteps([{executionId: 'exec', steps: compact}]), clusterErrorSteps([{executionId: 'exec', steps: full}]));
+});
+
+test('analytics processes 21000 LLM outputs without retaining quadratic conversation history', () => {
+  const raw = evidence();
+  raw.session.interactions = Array.from({length: 21000}, (_, index) => ({
+    role: 'assistant', model: 'm', content: `output ${index} ` + 'x'.repeat(1024),
+    timeInfo: {created: 1000 + index, completed: 1001 + index},
+  })) as unknown as typeof interactions;
+  const result = buildAnalyticsProjection({evidence: raw});
+  assert.equal(result.executions.length, 1);
+  assert.deepEqual(result.errors[0].clusters, []);
+  assert.ok(JSON.stringify(result).length < 10000);
+});

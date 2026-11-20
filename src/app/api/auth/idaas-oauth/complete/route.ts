@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const user = isStorageCoreEnabled()?await bootstrapCoreControlUser(payload.username):await db.findUserByUsername(payload.username);
+  const user = (await bootstrapCoreControlUser(payload.username));
   if (!user) {
     const response = NextResponse.json({ error: 'User not found' }, { status: 401 });
     clearLoginCookie(response, path, secure);

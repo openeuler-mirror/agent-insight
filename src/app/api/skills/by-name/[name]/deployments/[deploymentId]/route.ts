@@ -17,17 +17,16 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest, context: { params: Promise<{ name: string; deploymentId: string }> }) {
   return withCoreControlRoute(request,async()=>{
-  if(isStorageCoreEnabled()){
+  {
     try{return await withCoreExperiments(request,()=>statusRequest(request,context))}
     catch(error){const status=Number((error as {status?:number})?.status);return reliabilityErrorResponse(error instanceof ReliabilityError?error:new ReliabilityError('SOURCE_UNAVAILABLE','身份或存储来源不可用',[400,401,403,404,409,413,422,503].includes(status)?status:503),'skill-deployment/status')}
   }
-  return statusRequest(request,context)
 
   },["read"]);
 }
 async function statusRequest(request: NextRequest, context: { params: Promise<{ name: string; deploymentId: string }> }) {
   try {
-    const { username } = isStorageCoreEnabled()?{username:requireCoreExperimentContext().actor.username}:await resolveUser(request, request.nextUrl.searchParams.get('user'))
+    const { username } = ({username:requireCoreExperimentContext().actor.username})
     if (!username) throw new ReliabilityError('USER_REQUIRED', 'user is required', 400)
     const { name, deploymentId } = await context.params
     const deployment = await getSkillDeployment(username, decodeURIComponent(name), deploymentId)

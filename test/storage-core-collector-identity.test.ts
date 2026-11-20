@@ -16,9 +16,15 @@ const binding=(username='legacy-owner',credential=token,principal='principal-a',
 const mapping=(bindings= [binding()])=>writeFileSync(process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE!,JSON.stringify({version:1,core_origin:'http://127.0.0.1:19000',bindings}),{mode:0o600});
 const request=(headers:HeadersInit={},query='')=>new Request('http://localhost/api/ingest/upload'+query,{method:'POST',headers,body:JSON.stringify({user:'forged',authenticatedUser:true})});
 const status=(expected:number)=>(error:unknown)=>(error as {status?:number}).status===expected;
+const devices=new Map<string,{clientId:string;user:string;revoked:boolean}>();
 let enabled=true,canWrite=true;const requests:string[]=[];
 const fetcher:typeof fetch=async(url,options)=>{
  const parsed=new URL(String(url)),credential=new Headers(options?.headers).get('authorization');requests.push(parsed.pathname);
+ if(parsed.pathname==='/v1/compat/platform-control-capability'){
+  assert.ok(new Headers(options?.headers).has('x-storage-controller-proof'));const payload=JSON.parse(String(options?.body));assert.equal(payload.action,'identity');
+  const device=devices.get(payload.capability.credential_hash);if(!device||device.revoked)return Response.json({error:'invalid device'},{status:401});
+  return Response.json({value:{principal:'principal-a',workspace:'w',username:device.user,client_id:device.clientId}});
+ }
  if(parsed.pathname==='/v1/compat/platform-control-bootstrap'){assert.ok(new Headers(options?.headers).has('x-storage-controller-proof'));return Response.json({value:{actors:[],failures:[]}});}
  if(!enabled)return Response.json({error:'revoked'},{status:401});
  if(parsed.pathname==='/v1/auth/me')return Response.json({principal_id:credential==='Bearer '+otherToken?'principal-b':'principal-a',username:'core-owner',workspace_id:'w',workspaces:[{workspace_id:'w',role:'member'},{workspace_id:'other',role:'member'}]});
@@ -33,8 +39,7 @@ async function api(){
  return import('@/lib/storage-core/collector-identity');
 }
 async function device(user='legacy-owner'){
- const {createInstallToken,registerClient}=await import('@/lib/reliability/client-registry');const {installToken}=await createInstallToken({user,expiresInSeconds:600});
- return registerClient({installToken,hostname:'isolated-fixture',machineId:null});
+ const clientId='fixture-client-'+devices.size,deviceCredential='dc_fixture_'+devices.size;devices.set(hash(deviceCredential),{clientId,user,revoked:false});return {clientId,deviceCredential};
 }
 test.beforeEach(()=>{mapping();enabled=true;canWrite=true;requests.length=0;});
 test.after(async()=>{const {prismaRaw}=await import('@/lib/storage/prisma');await prismaRaw.$disconnect();if(previous.origin===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=previous.origin;if(previous.mapping===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=previous.mapping;if(previous.controller===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE;else process.env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=previous.controller;database.dispose();});
@@ -54,9 +59,9 @@ test('direct API bearer and x-witty credentials require live write capability ra
 test('revalidation refuses credential revocation and lost capability before yielding the private actor',async()=>{
  const a=await api();const identity=await a.resolveCoreCollectorIdentity(request({'x-witty-api-key':token}),{operation:'snapshot'},options);enabled=false;await assert.rejects(identity.revalidate(),status(401));enabled=true;canWrite=false;await assert.rejects(a.withCoreCollectorIdentity(identity,async()=>assert.fail('unauthorized actor yielded')),status(403));
 });
-test('actual registered device credential maps its verified owner and binds only its actual client',async()=>{
+test('Core-verified device credential maps its owner and binds only its verified client',async()=>{
  const a=await api(),d=await device();const identity=await a.resolveCoreCollectorIdentity(request({authorization:'Bearer '+d.deviceCredential,'x-agent-insight-client-id':d.clientId}),{framework:'opencode',clientId:d.clientId,operation:'snapshot'},options);assert.equal(identity.username,'legacy-owner');assert.equal(identity.principal,'principal-a');assert.equal(identity.clientId,d.clientId);
- const {prismaRaw}=await import('@/lib/storage/prisma');await prismaRaw.reliabilityClientCredential.updateMany({where:{clientId:d.clientId},data:{revokedAt:new Date()}});await assert.rejects(identity.revalidate(),status(401));
+ devices.get(hash(d.deviceCredential))!.revoked=true;await assert.rejects(identity.revalidate(),status(401));
 });
 test('both valid credentials must identify the same principal and workspace',async()=>{
  const a=await api(),d=await device();const same=await a.resolveCoreCollectorIdentity(request({'x-witty-api-key':token,authorization:'Bearer '+d.deviceCredential}),{framework:'opencode',operation:'snapshot'},options);assert.equal(same.clientId,d.clientId);assert.equal(same.username,'legacy-owner');assert.equal(same.principalUsername,'core-owner');
@@ -108,4 +113,17 @@ test('origin drift during an awaited profile response cannot transmit the creden
 test('the private callback receives a pinned transport that rejects origin changes before credential transmission',async()=>{
  const a=await api();const identity=await a.resolveCoreCollectorIdentity(request({'x-witty-api-key':token}),{operation:'snapshot'},options);
  await a.withCoreCollectorIdentity(identity,async(actor,pinned)=>{assert.ok(pinned?.fetcher,'private collector callback requires its pinned transport');const before=requests.length;process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19001';try{const {requestCore}=await import('@/lib/storage-core/server');await assert.rejects(requestCore('/v1/compat/collector-source?workspace_id=w',{token:actor.token,method:'POST',body:JSON.stringify({action:'scope',operation:'snapshot'})},pinned.fetcher),status(503));assert.equal(requests.length,before);}finally{process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19000';}});
+});
+
+test('device authentication uses the pinned transport and rejects origin drift before binding an owner',async()=>{
+ const a=await api(),d=await device();
+ const drifting={...options,fetcher:async(url:RequestInfo|URL,init?:RequestInit)=>{
+  const response=await fetcher(url,init);
+  if(new URL(String(url)).pathname==='/v1/compat/platform-control-capability')process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19001';
+  return response;
+ }};
+ try{
+  await assert.rejects(a.resolveCoreCollectorIdentity(request({authorization:'Bearer '+d.deviceCredential}),{framework:'opencode',operation:'snapshot'},drifting),status(503));
+  assert.deepEqual(requests,['/v1/compat/platform-control-capability']);
+ }finally{process.env.AGENT_INSIGHT_STORAGE_CORE_URL='http://127.0.0.1:19000';}
 });

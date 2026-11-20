@@ -10,6 +10,7 @@ from services.storage.authorized import AuthorizedStorage
 
 
 class QueryFacts:
+    def check_schema(self):return {'schema_version':4,'tables':19}
     def __init__(self):self.rows=[];self.calls=[];self.before_return=None
     def _request(self,sql,*,parameters):
         self.calls.append((sql,parameters))
@@ -535,3 +536,33 @@ class BenchmarkCompatibilityHTTPTests(unittest.TestCase):
             status,data,_=self.request(path,body=value,headers=headers);self.assertEqual(status,200);self.assertEqual(data['value'],{'client':'device','verified':True})
             self.assertEqual(self.request(path,body={**value,'verified_device_client_id':'forged'},headers=headers)[0],403)
             self.assertEqual(self.request(path,body=value,headers={**headers,'x-benchmark-device-client':'forged'})[0],403)
+
+
+class ReadinessTests(unittest.TestCase):
+    def test_dependency_failure_is_unavailable_and_recovers_without_legacy_fallback(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from services.storage.trace_service import TraceRuntime
+        runtime = object.__new__(TraceRuntime)
+        runtime.control = SimpleNamespace(migration_plan=Mock(return_value={'current_version':20,'pending':[]}))
+        runtime.facts = SimpleNamespace(check_schema=Mock(return_value={'schema_version':4,'tables':19}))
+        runtime.worker = None
+        runtime.last_worker_error = None
+        self.assertEqual(runtime.readiness()[0],200)
+        runtime.facts.check_schema.side_effect = RuntimeError('private database password')
+        status, body = runtime.readiness()
+        self.assertEqual(status,503)
+        self.assertEqual(body['status'],'unavailable')
+        self.assertNotIn('password',json.dumps(body))
+        runtime.facts.check_schema.side_effect = None
+        self.assertEqual(runtime.readiness()[0],200)
+        runtime.control.migration_plan.side_effect = RuntimeError('private database path')
+        status, body = runtime.readiness()
+        self.assertEqual(status,503)
+        self.assertIsNone(body['schema_version'])
+        self.assertNotIn('private',json.dumps(body))
+        runtime.control.migration_plan.side_effect = None
+        runtime.control.migration_plan.return_value = {'current_version':19,'pending':[20]}
+        runtime.facts.check_schema.reset_mock()
+        self.assertEqual(runtime.readiness()[0],503)
+        runtime.facts.check_schema.assert_not_called()

@@ -139,7 +139,7 @@ class GenerationSources(TraceEvidence):
             return value
         except (OSError,KeyError,ValueError,TypeError,UnicodeError):raise EvidenceUnavailable('Generation source unavailable') from None
 
-    def _boundary(self,token,ws,trace):
+    def _boundary(self,token,ws,trace,consume=None):
         self.deadline=__import__('time').monotonic()+60
         begin=self._capture(token,ws,None,None,trace)
         from .collector_sources import active_heads, order_rows
@@ -152,7 +152,7 @@ class GenerationSources(TraceEvidence):
             if not _same(summary.get(key),state.get(key)):raise EvidenceUnavailable('Generation source summary differs')
         expected_status=summary_status(state)
         if summary.get('execution_status')!=expected_status:raise EvidenceUnavailable('Generation source lifecycle differs')
-        rows=[];after='';size=0
+        rows=[];after='';size=0;count=0
         while True:
             page=self.authorized.read_spans(token,ws,begin['route']['trace_bucket'],trace,after_span_id=after,limit=200)
             if not isinstance(page,list) or len(page)>200:raise EvidenceUnavailable('Invalid generation Span page')
@@ -160,11 +160,13 @@ class GenerationSources(TraceEvidence):
                 sid=row.get('span_id');head=heads.get(sid)
                 if not isinstance(sid,str) or sid<=after or not head or not _same(row.get('revision'),head['revision']):raise EvidenceUnavailable('Generation Span vector is not indexed')
                 if row.get('workspace_id')!=ws or row.get('trace_id')!=trace or row.get('trace_bucket')!=begin['route']['trace_bucket'] or row.get('is_deleted') not in (0,'0'):raise EvidenceUnavailable('Generation Span escaped scope')
-                size+=_size(row,MAX_EVENT_BYTES)
+                size=(_size(row,MAX_EVENT_BYTES) if consume else size+_size(row,MAX_EVENT_BYTES))
                 if size>MAX_EVENT_BYTES:raise EvidenceTooLarge('Generation Span vector exceeds budget')
-                after=sid;rows.append(row)
+                after=sid;count+=1
+                if consume:consume(row,heads,summary)
+                else:rows.append(row)
             if len(page)<200:break
-        if len(rows)!=len(heads):raise EvidenceUnavailable('Generation Span set incomplete')
+        if count!=len(heads):raise EvidenceUnavailable('Generation Span set incomplete')
         return begin,summary,order_rows(begin,rows),heads,state
 
     def _source(self,row,head):

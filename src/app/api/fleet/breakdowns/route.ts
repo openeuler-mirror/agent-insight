@@ -63,7 +63,7 @@ function topN<T>(arr: T[], key: (t: T) => number, n: number): T[] {
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(req) : null;
+        const analytics = (await readCoreAnalytics(req));
         const executionReader = analytics ?? prisma.execution;
         const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
@@ -418,8 +418,6 @@ export async function GET(req: Request) {
             },
         });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('[Fleet Breakdowns Error]', error);
-        return NextResponse.json({ error: 'Failed to load fleet breakdowns' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

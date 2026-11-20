@@ -39,112 +39,31 @@ export const dynamic = "force-dynamic"
 
 export async function POST(req: Request) {
   try {
-    if (isStorageCoreEnabled()) {
+    {
       const normalized = normalizeRasIngestBody(await req.json());
       if (!normalized.ok) return NextResponse.json({error: normalized.error}, {status: 400});
       const events = (normalized.records || [normalized.record]).map(record => ({...record, ts: record.ts.toISOString(), platform: record.framework, id: 'ras_' + createHash('sha256').update(JSON.stringify([record.taskId,record.deliveryId])).digest('hex')}));
       const result = await ingestCoreRas(req, events);
       return NextResponse.json({status: 'ok', written: result.accepted, ids: result.ids});
     }
-    const { username, apiKey } = await resolveUser(req)
-    if (apiKey && !username) {
-      return NextResponse.json({ error: "unauthorized", detail: "invalid API key" }, { status: 401 })
-    }
-    if (!username && !process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER) {
-      return NextResponse.json(
-        {
-          error: "unauthorized",
-          detail: "x-witty-api-key required (or set AGENT_INSIGHT_DEFAULT_INGEST_USER for local demo)",
-        },
-        { status: 401 },
-      )
-    }
-    const effectiveUser = username || process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER || null
-
-    const body = await req.json()
-    const normalized = normalizeRasIngestBody(body)
-    if (!normalized.ok) {
-      return NextResponse.json({ error: normalized.error }, { status: 400 })
-    }
-    const records = normalized.records || [normalized.record]
-    const result = await upsertRasIngestRecords(records, effectiveUser)
-    return NextResponse.json({
-      status: "ok",
-      written: result.written,
-      ids: result.ids,
-    })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) return compatibilityFailure(err);
-    const message = err instanceof Error ? err.message : String(err)
-    console.error("[RAS ingest] POST error:", message)
-    return NextResponse.json({ status: "error", message }, { status: 500 })
+    return compatibilityFailure(err);
   }
 }
 
 export async function GET(req: Request) {
   try {
-    if (isStorageCoreEnabled()) return await handleCoreRasGet(req);
-    const { username: user } = await resolveUser(req)
-    const url = new URL(req.url)
-    const taskId = url.searchParams.get("taskId")
-    const taskIdsParam = url.searchParams.get("taskIds")
-    const summary = url.searchParams.get("summary") === "1"
-    const taskIds = taskIdsParam
-      ? taskIdsParam.split(",").map((s) => s.trim()).filter(Boolean)
-      : taskId
-        ? [taskId]
-        : []
-
-    if (!user) {
-      return NextResponse.json(
-        { error: "unauthorized", detail: "valid x-witty-api-key required" },
-        { status: 401 },
-      )
-    }
-
-    if (!taskIds.length) {
-      if (summary) {
-        const traces = await listReliabilityTraces({
-          user,
-          limit: Math.min(Number(url.searchParams.get("limit") || "200"), 500),
-        })
-        return NextResponse.json({ status: "ok", traces })
-      }
-      const recentTaskIds = await listAllTasksWithRasEvents({
-        user,
-        limit: Number(url.searchParams.get("limit") || "200"),
-      })
-      if (!recentTaskIds.length) {
-        return NextResponse.json({ status: "ok", traces: [] })
-      }
-      const events = await listRasEventsByTaskIds({ taskIds: recentTaskIds, user, limit: Number(url.searchParams.get("limit") || "200") })
-      return NextResponse.json({ status: "ok", events })
-    }
-
-    if (summary) {
-      const byTask = await summarizeRasByTaskIds({ taskIds, user })
-      return NextResponse.json({ status: "ok", byTask })
-    }
-
-    const events = await listRasEventsByTaskIds({
-      taskIds,
-      user,
-      limit: Number(url.searchParams.get("limit") || 200),
-    })
-    const executionId = taskIds.length === 1 ? await findRootExecutionId(taskIds[0]) : null
-    return NextResponse.json({ status: "ok", events, executionId })
+    return await handleCoreRasGet(req);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
-    if (isStorageCoreEnabled()) return analyticsFailure(err);
-    console.error("[RAS ingest] GET error:", message)
-    return NextResponse.json({ status: "error", message }, { status: 500 })
+    return analyticsFailure(err);
   }
 }
 
 export async function DELETE(req: Request) {
   try {
     const core=isStorageCoreEnabled()
-    const user=core ? true : (await resolveUser(req)).username
+    const user=(true)
     if (!user) {
       return NextResponse.json(
         { error: "unauthorized", detail: "valid x-witty-api-key required" },
@@ -170,13 +89,10 @@ export async function DELETE(req: Request) {
       )
     }
 
-    const result = core ? await deleteCoreRas(req,taskIds) : await deleteReliabilityTraces({ taskIds, user: user as string })
+    const result = (await deleteCoreRas(req,taskIds))
     return NextResponse.json({ status: "ok", ...result })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) return analyticsFailure(err)
-    const message = err instanceof Error ? err.message : String(err)
-    console.error("[RAS ingest] DELETE error:", message)
-    return NextResponse.json({ status: "error", message }, { status: 500 })
+    return analyticsFailure(err)
   }
 }
 

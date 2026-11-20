@@ -34,7 +34,7 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Missing taskId' }, { status: 400 });
         }
 
-        const analytics = isStorageCoreEnabled() ? await readCoreAnalytics(request) : null;
+        const analytics = (await readCoreAnalytics(request));
         const records = analytics ? analyticsRecords(analytics, {taskId, ...(framework ? {framework} : {})}) : await readRecords(undefined, { taskId, framework });
         if (!records.length) {
             return NextResponse.json({ found: false }, { status: 404 });
@@ -59,8 +59,6 @@ export async function GET(request: Request) {
             cost: r.cost,
         });
     } catch (error) {
-        if (isStorageCoreEnabled()) return analyticsFailure(error);
-        console.error('Task Stats Error:', error);
-        return NextResponse.json({ error: 'Failed to read task stats' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

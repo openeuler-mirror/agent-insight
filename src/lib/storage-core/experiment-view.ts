@@ -14,12 +14,13 @@ function array(value:unknown):Row[]{if(!Array.isArray(value))return [];if(value.
 function atom(value:unknown):unknown{return value instanceof Date?value.valueOf():value;}
 function matchValue(value:unknown,condition:unknown):boolean{
  if(!record(condition))return atom(value)===atom(condition);
+ const compare=(wanted:unknown)=>condition.mode==='insensitive'&&typeof value==='string'&&typeof wanted==='string'?value.toLowerCase()===wanted.toLowerCase():matchValue(value,wanted);
  for(const [operator,wanted] of Object.entries(condition)){
   const actual=atom(value);const expected=atom(wanted);
   switch(operator){
-   case 'equals':if(!matchValue(value,wanted))return false;break;
-   case 'in':case 'notIn':{if(!Array.isArray(wanted))unavailable('Invalid Experiment view filter');const included=wanted.some(item=>matchValue(value,item));if(included===(operator==='notIn'))return false;break;}
-   case 'not':if(matchValue(value,wanted))return false;break;
+   case 'equals':if(!compare(wanted))return false;break;
+   case 'in':case 'notIn':{if(!Array.isArray(wanted))unavailable('Invalid Experiment view filter');const included=wanted.some(compare);if(included===(operator==='notIn'))return false;break;}
+   case 'not':if(compare(wanted))return false;break;
    case 'gt':case 'gte':case 'lt':case 'lte':{if(actual===null||actual===undefined||expected===null||expected===undefined)return false;const a=actual as number|string;const b=expected as number|string;if(operator==='gt'&&!(a>b)||operator==='gte'&&!(a>=b)||operator==='lt'&&!(a<b)||operator==='lte'&&!(a<=b))return false;break;}
    case 'contains':case 'startsWith':case 'endsWith':{if(typeof value!=='string'||typeof wanted!=='string')return false;const text=condition.mode==='insensitive'?value.toLowerCase():value;const part=condition.mode==='insensitive'?wanted.toLowerCase():wanted;if(!(operator==='contains'?text.includes(part):operator==='startsWith'?text.startsWith(part):text.endsWith(part)))return false;break;}
    case 'mode':if(wanted!=='insensitive'&&wanted!=='default')unavailable('Unsupported Experiment view text mode');break;

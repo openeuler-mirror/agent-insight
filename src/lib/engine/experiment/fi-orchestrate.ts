@@ -79,37 +79,10 @@ export class FiOrchestrateError extends Error {
 
 /** 从实验 case 中提取需要 FI 的条目（只有已绑定有效 Execution 的才跳过）。 */
 export async function collectFiCasesFromExperiment(experimentId: string): Promise<FiOrchestrateCaseSpec[]> {
-  if (isStorageCoreEnabled()) {
+  {
     const snapshot = await requireCoreExperimentContext().rpc('read',{experiment_id: experimentId}) as {experiment: {cases: Array<{id: string; input: string; executionId?: string; faultInjectionType?: string; faultInjectionSubmode?: string}>}}
     return snapshot.experiment.cases.filter(row => !row.executionId && Boolean(resolveCaseFaultInjectionType(row))).map(row => ({caseId: row.id, input: row.input, fault: resolveCaseFaultInjectionType(row)!, submode: row.faultInjectionSubmode}))
   }
-  const cases = await prisma.experimentCase.findMany({
-    where: { experimentId },
-    orderBy: { createdAt: 'asc' },
-  })
-  const out: FiOrchestrateCaseSpec[] = []
-  for (const item of cases) {
-    if (item.executionId) continue
-    const fault = resolveCaseFaultInjectionType(item)
-    if (!fault) continue
-    let submode: string | null = null
-    if (item.caseValuesJson) {
-      try {
-        const values = JSON.parse(item.caseValuesJson) as Record<string, unknown>
-        const raw = values.submode
-        if (raw != null && String(raw).trim()) submode = String(raw).trim()
-      } catch {
-        submode = null
-      }
-    }
-    out.push({
-      caseId: item.id,
-      input: item.input || '',
-      fault,
-      submode,
-    })
-  }
-  return out
 }
 
 async function patchCaseFiMeta(caseId: string, meta: {
@@ -130,45 +103,7 @@ async function patchCaseFiMeta(caseId: string, meta: {
 export async function orchestrateFaultInjection(
   req: FiOrchestrateRequest,
 ): Promise<FiOrchestrateResult> {
-  if (isStorageCoreEnabled()) return (await import('@/lib/storage-core/experiment-fi-worker')).orchestrateCoreFi(requireCoreExperimentContext(), req)
-  if (!req.cases.length) {
-    return { skipped: true, reason: 'no_fi_cases', taskIds: [], runIds: [], caseFaults: [] }
-  }
-
-  await assertFiExecutionTarget(req)
-
-  const workspace = normalizeFiWorkspaceInput(req.workspace)
-  const taskIds: string[] = []
-  const runIds: string[] = []
-  const caseFaults: FiOrchestrateResult['caseFaults'] = []
-
-  for (const item of req.cases) {
-    const { task, runs } = await createFiCaseTask(req, item)
-    // 必须用业务 runId（ras-…），禁止 Prisma cuid：Worker/collect/API 一律按 runId 关联。
-    const runId = runs[0]?.runId
-    taskIds.push(task.id)
-    if (runId) runIds.push(runId)
-    caseFaults.push({
-      caseId: item.caseId,
-      fault: item.fault,
-      taskId: task.id,
-      runId,
-    })
-    if (runId) {
-      await patchCaseFiMeta(item.caseId, {
-        fault: item.fault,
-        taskId: task.id,
-        runId,
-      })
-    }
-  }
-
-  return {
-    skipped: false,
-    taskIds,
-    runIds,
-    caseFaults,
-  }
+  return (await import('@/lib/storage-core/experiment-fi-worker')).orchestrateCoreFi(requireCoreExperimentContext(), req)
 }
 
 export function hasUsableTraceInteractions(value: string | null | undefined): boolean {
@@ -187,21 +122,7 @@ function sleep(ms: number): Promise<void> {
 
 /** 按业务 runId 或历史误写入的 Prisma id 查找 FI Run。 */
 export async function findFiRunByKey(runKey: string) {
-  if (isStorageCoreEnabled()) return findCoreFiRun(runKey)
-  return prisma.faultInjectionRun.findFirst({
-    where: { OR: [{ runId: runKey }, { id: runKey }] },
-    select: {
-      id: true,
-      runId: true,
-      status: true,
-      sessionTaskId: true,
-      error: true,
-      user: true,
-      agent: true,
-      platform: true,
-      updatedAt: true,
-    },
-  })
+  return findCoreFiRun(runKey)
 }
 
 /**
@@ -212,50 +133,13 @@ export async function bindExperimentCaseToFiSession(input: {
   fiRunKey: string
   sessionTaskId: string
 }): Promise<number> {
-  if (isStorageCoreEnabled()) {
+  {
     const context = requireCoreExperimentContext()
     const identity = await context.rpc('case_lookup',{fi_run_id: input.fiRunKey}) as {experiment_id: string; case_id: string}
     const snapshot = await context.rpc('read',{experiment_id: identity.experiment_id, case_ids: [identity.case_id]}) as {experiment: {cases: Array<{taskId?: string; executionId?: string}>}}
     const row = snapshot.experiment.cases[0]
     return row?.taskId === input.sessionTaskId && row.executionId ? 1 : 0
   }
-  const sessionTaskId = input.sessionTaskId.trim()
-  if (!sessionTaskId) return 0
-
-  const run = await findFiRunByKey(input.fiRunKey)
-  if (!run) return 0
-  const keys = Array.from(
-    new Set([input.fiRunKey, run?.runId, run?.id].filter((v): v is string => Boolean(v))),
-  )
-  if (!keys.length) return 0
-
-  const [execution, session] = await Promise.all([
-    prisma.execution.findFirst({
-      where: { taskId: sessionTaskId, isSubagent: false, ...(run?.user ? { user: run.user } : {}) },
-      orderBy: { timestamp: 'desc' },
-      select: { id: true, agentName: true },
-    }),
-    prisma.session.findFirst({
-      where: { taskId: sessionTaskId, ...(run.user ? { user: run.user } : {}) },
-      select: { interactions: true, endTime: true },
-    }),
-  ])
-  if (!execution || !isFiBusinessTraceUsable({
-    platform: run.platform, agent: run.agent, executionAgent: execution.agentName,
-    interactions: session?.interactions, endTime: session?.endTime,
-  })) return 0
-
-  const result = await prisma.experimentCase.updateMany({
-    where: {
-      fiRunId: { in: keys },
-    },
-    data: {
-      taskId: sessionTaskId,
-      executionId: execution.id,
-      traceGenerationError: null,
-    },
-  })
-  return result.count
 }
 
 /**
@@ -278,7 +162,7 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
   pendingRunIds: string[]
   failedRunIds: string[]
 }> {
-  if (isStorageCoreEnabled()) {
+  {
     const readyRunIds: string[] = [], pendingRunIds: string[] = [], failedRunIds: string[] = []
     for (const id of input.runIds) {
       const run = await findFiRunByKey(id)
@@ -288,73 +172,6 @@ export async function awaitFiSessionsAndBindExperimentCases(input: {
       else pendingRunIds.push(id)
     }
     return {bound: readyRunIds.length, readyRunIds, pendingRunIds, failedRunIds}
-  }
-  const runIds = Array.from(new Set(input.runIds.filter(Boolean)))
-  if (!runIds.length) {
-    return { bound: 0, readyRunIds: [], pendingRunIds: [], failedRunIds: [] }
-  }
-
-  const timeoutMs = Math.max(5_000, input.timeoutMs ?? 240_000)
-  const pollMs = Math.max(50, input.pollMs ?? 2_000)
-  const traceWaitMs = Math.max(0, input.traceWaitMs ?? FI_TRACE_ARRIVAL_GRACE_MS)
-  const started = Date.now()
-  const ready = new Set<string>()
-  const failed = new Set<string>()
-  let bound = 0
-
-  while (true) {
-    const expired = Date.now() - started >= timeoutMs
-    if (expired && !input.waitForActiveRuns) break
-    if (input.shouldContinue && !(await input.shouldContinue())) break
-    let waitingForWork = false
-    for (const runKey of runIds) {
-      if (ready.has(runKey) || failed.has(runKey)) continue
-      const run = await findFiRunByKey(runKey)
-      if (!run) {
-        failed.add(runKey)
-        continue
-      }
-      if (run.sessionTaskId) {
-        const count = await bindExperimentCaseToFiSession({
-          fiRunKey: runKey,
-          sessionTaskId: run.sessionTaskId,
-        })
-        if (count > 0) {
-          bound += count
-          ready.add(runKey)
-          continue
-        }
-      }
-      const terminal = ['completed', 'judge_skipped', 'failed', 'stopped'].includes(run.status)
-      if (terminal && !run.sessionTaskId) {
-        failed.add(runKey)
-      } else if (isFiTraceWaitExpired(run.status, run.updatedAt, traceWaitMs)) {
-        failed.add(runKey)
-      } else {
-        waitingForWork = true
-      }
-    }
-    if (ready.size + failed.size >= runIds.length) break
-    if (expired && !waitingForWork) break
-    await sleep(pollMs)
-  }
-
-  // Preserve a reason on the Case so terminal empty runs do not remain generating forever.
-  for (const runKey of failed) {
-    const run = await findFiRunByKey(runKey)
-    if (!run) continue
-    await prisma.experimentCase.updateMany({
-      where: { fiRunId: { in: [run.runId, run.id] }, executionId: null },
-      data: { traceGenerationError: run.error || 'FI 执行已结束，但未产生可用的业务 Trace（无实际回复、未上报或回传等待超时）' },
-    })
-  }
-
-  const pendingRunIds = runIds.filter((id) => !ready.has(id) && !failed.has(id))
-  return {
-    bound,
-    readyRunIds: Array.from(ready),
-    pendingRunIds,
-    failedRunIds: Array.from(failed),
   }
 }
 
@@ -395,23 +212,12 @@ export async function createFiCaseTask(req: FiOrchestrateRequest, item: FiOrches
 }
 
 export async function cancelFiExecution(user: string, runId: string): Promise<void> {
-  if (isStorageCoreEnabled()) {
+  {
     coreFiOwner(user);await coreFiRpc('cancel',{runId})
     const deadline=Date.now()+30000
     do {const current=await findCoreFiRun(runId);if(!current||['completed','judge_skipped','failed','stopped'].includes(current.status))return;await sleep(250)} while(Date.now()<deadline)
     throw Object.assign(new Error('FI进程停止尚未确认，已禁止重试'),{code:'EVALUATION_CLEANUP_UNCONFIRMED',status:409})
   }
-  const run = await prisma.faultInjectionRun.findFirst({where: {runId, user}})
-  if (!run) return
-  await prisma.faultInjectionRun.updateMany({where: {id: run.id, user, status: 'queued'}, data: {status: 'stopped', stopRequested: true, error: 'stopped by user'}})
-  await prisma.faultInjectionRun.updateMany({where: {id: run.id, user, status: {in: ['collecting','judging']}}, data: {stopRequested: true}})
-  const deadline = Date.now() + 30_000
-  do {
-    const current = await prisma.faultInjectionRun.findFirst({where: {id: run.id, user}})
-    if (current && ['completed','judge_skipped','failed','stopped'].includes(current.status)) {await refreshTaskProgress(run.fiTaskId);return}
-    await sleep(250)
-  } while (Date.now() < deadline)
-  throw Object.assign(new Error('FI进程停止尚未确认，已禁止重试'), {code: 'EVALUATION_CLEANUP_UNCONFIRMED', status: 409})
 }
 
 export async function isCoreFiBusinessTraceReady(input: {sessionTaskId: string; platform: string; agent: string}): Promise<boolean> {

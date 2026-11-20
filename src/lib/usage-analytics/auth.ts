@@ -53,6 +53,6 @@ export async function gateUsageAdmin(request: Request): Promise<UsageAdminGate> 
 
     const { username } = await resolveUser(request);
     if (!username) return { ok: false, username: null, reason: 'unauthenticated' };
-    if (!(isStorageCoreEnabled()?await coreUsageAdmin():isUsageAdmin(username))) return { ok: false, username, reason: 'forbidden' };
+    if (!((await coreUsageAdmin()))) return { ok: false, username, reason: 'forbidden' };
     return { ok: true, username };
 }

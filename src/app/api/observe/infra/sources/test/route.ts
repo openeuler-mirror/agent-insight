@@ -54,7 +54,7 @@ function pullResult(probe: { reachable: boolean; metricCount: number; model: str
 export async function POST(req: Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>POST(req));
   try {
-    if(isStorageCoreEnabled())await authorizeCoreInfra();
+    await authorizeCoreInfra();
     const body = await req.json().catch(() => ({}));
     let endpoint: string | null = body?.endpoint ? String(body.endpoint) : null;
     let authJson = toAuthHeadersJson(body?.authHeaders);
@@ -78,7 +78,7 @@ export async function POST(req: Request):Promise<Response> {
 
 export async function GET(req: Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>GET(req));
-  if(isStorageCoreEnabled())await authorizeCoreInfra();
+  await authorizeCoreInfra();
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get('mode') === 'push' ? 'push' : 'pull';
 

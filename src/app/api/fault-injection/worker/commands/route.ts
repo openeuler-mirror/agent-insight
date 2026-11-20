@@ -43,9 +43,7 @@ async function handleGET(req: Request) {
     const commands = await listStopCommandsForWorker(username, workerId)
     return NextResponse.json({ commands })
   } catch (err: unknown) {
-    if (isStorageCoreEnabled()) throw err
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 

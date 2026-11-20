@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request):Promise<Response> {
   if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(request,()=>GET(request));
-  if(isStorageCoreEnabled())await authorizeCoreInfra();
+  await authorizeCoreInfra();
   try {
     const { searchParams } = new URL(request.url);
     const target = searchParams.get('target');

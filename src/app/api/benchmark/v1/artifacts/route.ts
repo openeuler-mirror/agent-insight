@@ -36,32 +36,7 @@ export async function POST(req: Request) {
       }
       throw error
     }
-    if(isStorageCoreEnabled())return NextResponse.json(await coreBenchmarkCallbackArtifact(req,coreBenchmarkCallbackContext(req,identity.clientId)),{status:201})
-    let form: FormData
-    try {
-      form = await req.formData()
-    } catch {
-      throw new BenchmarkProtocolError('ARTIFACT_MULTIPART_INVALID', 'Artifact 请求不是合法 multipart', 400)
-    }
-    let metadata: Record<string, unknown>
-    try {
-      metadata = JSON.parse(String(form.get('metadata') || '{}')) as Record<string, unknown>
-    } catch {
-      throw new BenchmarkProtocolError('ARTIFACT_METADATA_INVALID', 'Artifact metadata 不是合法 JSON', 400)
-    }
-    const file = form.get('file')
-    if (!(file instanceof File)) {
-      throw new BenchmarkProtocolError('ARTIFACT_FILE_MISSING', 'Artifact 缺少 file 字段', 400)
-    }
-    const result = await storeBenchmarkArtifact({
-      runId: String(metadata.runId || ''),
-      clientId: identity.clientId,
-      name: String(metadata.name || file.name || ''),
-      mediaType: String(metadata.mediaType || file.type || ''),
-      expectedSha256: String(metadata.sha256 || ''),
-      bytes: new Uint8Array(await file.arrayBuffer()),
-    })
-    return NextResponse.json(result, { status: 201 })
+    return NextResponse.json(await coreBenchmarkCallbackArtifact(req,coreBenchmarkCallbackContext(req,identity.clientId)),{status:201})
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/artifacts')
   }

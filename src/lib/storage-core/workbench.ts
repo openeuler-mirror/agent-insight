@@ -7,12 +7,12 @@ import {coreDatasetRequest,type CoreDatasetSnapshot} from './datasets';
 import {findAgentDataset} from '@/server/agent_datasets_storage';
 export function requireWorkbenchActor(user:string){const context=requireCoreExperimentContext();if(context.actor.username!==user)throw Object.assign(new Error('Workbench actor differs'),{status:403});return context;}
 export async function workbenchReadSource<T>(legacy:T,user?:string,experimentId?:string):Promise<T>{
- if(!isStorageCoreEnabled())return legacy;
+
  const context=user?requireWorkbenchActor(user):requireCoreExperimentContext();await ensureCoreExperimentReadView(context,experimentId);if(!context.readView)throw Object.assign(new Error('Complete Workbench Experiment view required'),{status:503});return context.readView as T;
 }
 export function withCoreWorkbenchRoute(request:Request,next:(request:NextRequest)=>Promise<Response>,options:CompatibilityOptions={}):Promise<Response>{return withCoreExperimentMutationRoute(request,normalized=>next(new NextRequest(normalized)),options);}
 export async function readWorkbenchFrozenDataset(user:string,experimentId:string,datasetId:string,options:{freshGrayscaleStart?:boolean}={}){
- if(!isStorageCoreEnabled())return findAgentDataset(user,datasetId);
+
  const context=requireWorkbenchActor(user);const result=await context.rpc('read',{experiment_id:experimentId,include_cases:false}) as {gold_redacted?:boolean;experiment:{scope:string;configSnapshotJson?:string}};
  if(result.gold_redacted)throw Object.assign(new Error('Frozen Dataset Experiment belongs to another actor'),{status:403});
  if(options.freshGrayscaleStart&&result.experiment.scope==='grayscale-ab')return findAgentDataset(user,datasetId);
@@ -24,7 +24,7 @@ export async function readWorkbenchFrozenDataset(user:string,experimentId:string
  return {...frozen.dataset,user};
 }
 export async function workbenchControlReadSource(user:string,experimentId?:string){
- const view=await workbenchReadSource(prismaRaw,user,experimentId);if(!isStorageCoreEnabled())return view;
+ const view=await workbenchReadSource(prismaRaw,user,experimentId);
  const reads=new Set(['findUnique','findUniqueOrThrow','findFirst','findFirstOrThrow','findMany','count','aggregate','groupBy']);
  const control=new Set(['grayscaleTask','reliabilityCommand']);
  return new Proxy(view,{get(target,key){
