@@ -83,9 +83,11 @@ test('debug job token usage is non-zero after a real run (regression for tokenUs
   assert.ok(usage > 50_000, `expected a realistic token magnitude, got ${usage}`);
 });
 
-test('an empty run (no completion messages) derives 0 tokens and parses to 0 without throwing', () => {
+test('an empty run (no completion messages) leaves token usage undefined and parses to 0 without throwing', () => {
   const derived = deriveOpencodeExecutionFields([]);
-  assert.equal(derived.tokens, 0);
+  // 没有 completion 消息就没有 usage：undefined 表示「未提供」，不能写成 0。
+  assert.equal(derived.tokens, undefined);
+  assert.equal(derived.usageReported, false);
   const stats = {
     eventCount: 0,
     textDeltaCount: 0,

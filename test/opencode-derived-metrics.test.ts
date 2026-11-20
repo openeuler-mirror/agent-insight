@@ -56,3 +56,28 @@ test("opencode: deriveOpencodeExecutionFields is deterministic and prefers top-l
   assert.deepEqual(fields2, fields)
 })
 
+
+test("opencode: leaves token fields undefined when the upstream provided no usage", () => {
+  const interactions = [
+    { role: "user", content: "Q1" },
+    {
+      role: "assistant",
+      content: "Answer without usage",
+      // Legacy uploads observed the message but never received tokens.
+      usage: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }, total: 0 },
+      timeInfo: { created: "2026-01-01T00:00:00.000Z", completed: "2026-01-01T00:00:01.000Z" },
+    },
+  ]
+
+  const fields = deriveOpencodeExecutionFields(interactions as any[])
+
+  assert.equal(fields.final_result, "Answer without usage")
+  assert.equal(fields.usageReported, false)
+  assert.equal(fields.tokens, undefined)
+  assert.equal(fields.input_tokens, undefined)
+  assert.equal(fields.output_tokens, undefined)
+  assert.equal(fields.reasoning_tokens, undefined)
+  assert.equal(fields.cache_read_input_tokens, undefined)
+  assert.equal(fields.cache_creation_input_tokens, undefined)
+  assert.equal(fields.llm_call_count, 1)
+})

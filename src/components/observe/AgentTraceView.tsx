@@ -420,6 +420,8 @@ type SubtreeStats = {
     cacheWriteTokens: number;
     reasoningTokens: number;
     totalTokens: number;
+    /** 至少一次 LLM 调用带回了非零 usage；全 0 且未上报时界面显示「未提供」。 */
+    usageReported: boolean;
 };
 
 const subtreeStatsCache = new WeakMap<AgentNode, SubtreeStats>();
@@ -438,6 +440,7 @@ function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
         cacheWriteTokens: node.stats.cacheWriteTokens,
         reasoningTokens: node.stats.reasoningTokens,
         totalTokens: node.stats.totalTokens,
+        usageReported: node.stats.usageReported === true,
     };
     for (const child of node.children) {
         const c = aggregateSubtreeStats(child);
@@ -452,6 +455,7 @@ function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
         stats.cacheWriteTokens += c.cacheWriteTokens;
         stats.reasoningTokens += c.reasoningTokens;
         stats.totalTokens += c.totalTokens;
+        stats.usageReported = stats.usageReported || c.usageReported;
     }
     subtreeStatsCache.set(node, stats);
     return stats;
@@ -849,7 +853,7 @@ export default function AgentTraceView({
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
-        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0;
+        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0, usageReported = false;
         walkTree(tree, n => {
             agents++;
             tasks += n.stats.taskCalls;
@@ -858,13 +862,17 @@ export default function AgentTraceView({
             skills += n.stats.skillCalls;
             llm += n.stats.llmCalls;
             tokens += n.stats.totalTokens;
+            usageReported = usageReported || n.stats.usageReported === true;
         });
-        return { agents, tasks, chains, tools, skills, llm, tokens };
+        return { agents, tasks, chains, tools, skills, llm, tokens, usageReported };
     }, [tree]);
     const tokenUsageEstimated = useMemo(
         () => interactions.some(interaction => interaction.usage?.estimated === true),
         [interactions],
     );
+    // 汇总为 0 且没有任何一次调用上报 usage 时，说明上游没提供用量；此时不能把
+    // 0 当成有效值展示（CLI 模式丢失 message.updated 的典型表现）。
+    const tokensNotProvided = Boolean(totalStats && totalStats.tokens === 0 && !totalStats.usageReported);
 
     const traceTimeline = useMemo(
         () => resolveTraceTimelineBounds(tree, executionDurationMs),
@@ -1183,8 +1191,12 @@ export default function AgentTraceView({
                     <Sep />
                     <StatChip
                         label="TOKENS"
-                        value={`${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
-                        hint={tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                        value={tokensNotProvided
+                            ? tt('traceTree.tokensNotProvided')
+                            : `${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
+                        hint={tokensNotProvided
+                            ? tt('traceTree.tokensNotProvidedHint')
+                            : tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
                     />
                     {eventTypeFilter !== 'all' && (
                         <Button variant="ghost" size="sm" onClick={() => setEventTypeFilter('all')} className="ml-auto h-6 text-xs">
@@ -1334,7 +1346,7 @@ export default function AgentTraceView({
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
                         <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
                         <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
-                        <span className="w-11 text-right">{tt('traceTree.spanTokens')}</span>
+                        <span className="w-16 text-right">{tt('traceTree.spanTokens')}</span>
                         <span className="w-2" />
                     </div>
 
@@ -1559,12 +1571,13 @@ function UnifiedSpanTree({
     isLast: boolean;
     prefixBits: boolean[];
 }) {
-    const { locale } = useLocale();
+    const { locale, t: tt } = useLocale();
     const aKey = agentKey(node.id);
     const isExpanded = expandedKeys.has(aKey);
     const isSelected = selectedKey === aKey;
     const status = getStatus(node);
     const displayStats = aggregateSubtreeStats(node);
+    const displayTokensNotProvided = displayStats.totalTokens === 0 && !displayStats.usageReported;
 
     // Gantt bar for this agent
     const barLeft = (totalStart != null && totalDuration && node.startedAt != null)
@@ -1797,8 +1810,8 @@ function UnifiedSpanTree({
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
                 </span>
-                <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                    {formatTokens(displayStats.totalTokens)}
+                <span className="w-16 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0" title={displayTokensNotProvided ? tt('traceTree.tokensNotProvidedHint') : undefined}>
+                    {displayTokensNotProvided ? tt('traceTree.tokensNotProvided') : formatTokens(displayStats.totalTokens)}
                 </span>
                 <span className="w-2 ml-1 flex items-center justify-center">
                     {status !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[status])} />}
@@ -3067,7 +3080,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
                     </span>
                 )}
                 <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(getAgentActiveDurationMs(child))}</b></span>
-                <span>Token <b className="font-semibold text-foreground tabular-nums">{exactTokens(s.totalTokens)}</b></span>
+                <span>Token <b className="font-semibold text-foreground tabular-nums">{s.totalTokens === 0 && !s.usageReported ? (locale === 'zh' ? '未提供' : 'N/A') : exactTokens(s.totalTokens)}</b></span>
                 <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
                 <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>
                 {s.skillCalls > 0 && <span>Skill <b className="font-semibold text-foreground tabular-nums">{s.skillCalls}</b></span>}

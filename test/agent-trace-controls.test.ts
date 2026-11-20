@@ -779,3 +779,17 @@ test('clearing a deep search keeps its reading anchor beyond the initial batch',
     assert.equal(captured, 'e:root:150');
     assert.equal(count, 300);
 });
+
+test('agent trace marks usage as not provided when every call reports zeros', () => {
+    const missing = buildAgentCallTree([
+        { role: 'assistant', content: 'answer', usage: { input: 0, output: 0, total: 0 } },
+    ])!;
+    assert.equal(missing.stats.totalTokens, 0);
+    assert.equal(missing.stats.usageReported, false);
+
+    const reported = buildAgentCallTree([
+        { role: 'assistant', content: 'answer', usage: { input: 10, output: 5, total: 15 } },
+    ])!;
+    assert.equal(reported.stats.totalTokens, 15);
+    assert.equal(reported.stats.usageReported, true);
+});

@@ -117,6 +117,7 @@
     "test/opencode-deleted-sessions.test.ts",
     "test/opencode-derived-metrics.test.ts",
     "test/opencode-env-shadow.test.ts",
+    "test/opencode-final-usage.test.ts",
     "test/opencode-inprogress-snapshot.test.ts",
     "test/opencode-plugin-completion.test.ts",
     "test/opencode-plugin-distribution.test.ts",

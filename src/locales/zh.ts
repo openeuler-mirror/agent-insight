@@ -318,6 +318,8 @@ export const zh = {
     spanShare: '时间轴',
     spanDuration: '耗时',
     spanTokens: 'Tokens',
+    tokensNotProvided: '未提供',
+    tokensNotProvidedHint: '上游没有为本轮会话提供 Token 用量（例如 OpenCode CLI 退出时未回传 usage），这里不显示为 0。',
     clearFilter: '清除过滤',
     resetFilter: '重置',
     viewAll: '查看全部',

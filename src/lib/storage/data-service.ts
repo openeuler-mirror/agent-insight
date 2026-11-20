@@ -2901,17 +2901,19 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             if (derived.model) targetRecord.model = derived.model;
             if (derived.final_result) targetRecord.final_result = derived.final_result;
             if (derived.agentName && !targetRecord.agentName) targetRecord.agentName = derived.agentName;
-            targetRecord.tokens = derived.tokens;
+            // Token 字段只在 derived 明确算出有效用量时才覆盖：undefined 表示上游没提供
+            // usage，不能写成 0，否则界面会把「未提供」误报成有效用量。
+            if (derived.tokens !== undefined) targetRecord.tokens = derived.tokens;
             targetRecord.latency = derived.latency;
-            targetRecord.input_tokens = derived.input_tokens;
-            targetRecord.output_tokens = derived.output_tokens;
+            if (derived.input_tokens !== undefined) targetRecord.input_tokens = derived.input_tokens;
+            if (derived.output_tokens !== undefined) targetRecord.output_tokens = derived.output_tokens;
             targetRecord.tool_call_count = derived.tool_call_count;
             targetRecord.tool_call_error_count = derived.tool_call_error_count;
             targetRecord.llm_call_count = derived.llm_call_count;
-            targetRecord.cache_read_input_tokens = derived.cache_read_input_tokens;
-            targetRecord.cache_creation_input_tokens = derived.cache_creation_input_tokens;
-            targetRecord.max_single_call_tokens = derived.max_single_call_tokens;
-            targetRecord.reasoning_tokens = derived.reasoning_tokens;
+            if (derived.cache_read_input_tokens !== undefined) targetRecord.cache_read_input_tokens = derived.cache_read_input_tokens;
+            if (derived.cache_creation_input_tokens !== undefined) targetRecord.cache_creation_input_tokens = derived.cache_creation_input_tokens;
+            if (derived.max_single_call_tokens !== undefined) targetRecord.max_single_call_tokens = derived.max_single_call_tokens;
+            if (derived.reasoning_tokens !== undefined) targetRecord.reasoning_tokens = derived.reasoning_tokens;
         }
     }
     let isSkillCorrect = false; // Reset to false and recalculate based on current config
