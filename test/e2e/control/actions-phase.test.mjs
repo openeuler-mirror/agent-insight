@@ -47,6 +47,21 @@ function installInputs(options, results) {
   }
 }
 function passUt() { return { status: 'PASS', exitCode: 0, runnerCompleted: true, fullSuiteComplete: true, interrupted: false, observedSummary: { tests: 3, pass: 2, fail: 0, cancelled: 0, skipped: 1, todo: 0 }, failures: [], skippedTests: [{ title: 'SQLite fixture', reason: 'deferred' }] }; }
+
+test('missing build context preserves a matching preparation failure instead of replacing it with ENOENT', async t => {
+  const options=fixture(t),directory=path.join(options.root,'inputs/build');fs.mkdirSync(directory,{recursive:true});
+  const failure={version:1,phase:'build',runId:options.runId,testedSha:options.testedSha,status:'BLOCKED',payload:{status:'BLOCKED',reason:'Locked dependency installation failed'}};
+  fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify(failure));
+  const result=await phase.runActionsPhase({...options,phase:'collect'});
+  assert.equal(result.status,'BLOCKED');assert.match(result.payload.error,/Locked dependency installation failed/);assert.doesNotMatch(result.payload.error,/ENOENT/);
+  assert.equal(result.payload.npmTest.status,'NOT_RUN');assert.ok(result.payload.scenarios.every(row=>row.status==='NOT_RUN'));
+  failure.testedSha='f'.repeat(40);failure.payload.reason='unrelated-run-error';fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify(failure));
+  const unrelated=await phase.runActionsPhase({...options,phase:'collect'});
+  assert.doesNotMatch(unrelated.payload.error,/unrelated-run-error/);assert.match(unrelated.payload.error,/upload\/download/);
+  fs.unlinkSync(path.join(directory,'result.json'));
+  const missing=await phase.runActionsPhase({...options,phase:'collect'});assert.match(missing.payload.error,/Build context artifact is missing/);
+  assert.equal(fs.existsSync(path.join(options.root,'public/context.json')),false);
+});
 const childRunId = (runId, caseId) => `ag-${createHash('sha256').update(runId).digest('hex').slice(0, 16)}-${caseId}`;
 function writeCaseReport(options, args, env, overrides = {}) {
   const caseId = args[args.indexOf('--case') + 1], runId = args[args.indexOf('--run-id') + 1], configuration = JSON.parse(env.E2E_CONFIG_PROVENANCE);

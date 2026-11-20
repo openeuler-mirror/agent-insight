@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { command } from '../shared/runtime.mjs';
+import { recordPreparationFailure } from './actions-phase.mjs';
 
 export function assertJobContainer(cgroup = fs.readFileSync('/proc/self/cgroup','utf8')) {
   assert.match(cgroup,/kubepods/,'Actions execution requires a Kubernetes Job container');
@@ -16,22 +17,35 @@ function git(cwd,args) {
   assert.equal(result.status,0,result.stderr||'Git source preparation failed');return result.stdout.trim();
 }
 
-export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt',envFile=process.env.ATOMGIT_ENV,phase,runId,expectedSha,run=command}) {
+export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt',envFile=process.env.ATOMGIT_ENV,phase,runId,expectedSha,dependencyMode=process.env.E2E_DEPENDENCY_MODE||'image',jobRoot,run=command}) {
   assert.ok(['build','ut','case','collect'].includes(phase),'Unknown Actions job phase');
   assert.match(runId||'',/^[a-z0-9-]{1,80}$/,'Invalid Actions run ID');
   assert.ok(path.isAbsolute(envFile||''),'Actions environment file is required');
+  assert.ok(['image','lockfile'].includes(dependencyMode),'Unknown Actions dependency mode');
   const testedSha=git(checkout,['rev-parse','HEAD']);
   if(expectedSha)assert.equal(testedSha,expectedSha,'Job checked out a different source commit');
-  const root=fs.mkdtempSync(path.join(checkout,'.atomgit-e2e.')),project=path.join(root,'source');
+  const root=jobRoot||fs.mkdtempSync(path.join(checkout,'.atomgit-e2e.')),project=path.join(root,'source');
   fs.mkdirSync(project);git(project,['init','-q']);git(project,['fetch','--no-tags','--depth=1',checkout,testedSha]);git(project,['checkout','--detach',testedSha]);
   const env={E2E_CI_ROOT:root,E2E_CI_SOURCE:project,E2E_CI_TESTED_SHA:testedSha,E2E_CI_RUN_ID:runId,E2E_ISOLATED_CONTAINER:'1',E2E_ATOMGIT_JOB:'1'};
   if(phase!=='collect') {
     const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    for(const [source,image] of [['package-lock.json','dependencies/package-lock.json'],['test/e2e/package-lock.json','e2e/package-lock.json']]) {
-      assert.equal(hash(path.join(project,source)),hash(path.join(imageRoot,image)),`${source} differs from the fixed image; rebuild the image`);
+    const locks=[['package-lock.json','dependencies',''],['test/e2e/package-lock.json','e2e','test/e2e']].map(([source,image,prefix])=>({source,image,prefix,digest:hash(path.join(project,source)),matches:hash(path.join(project,source))===hash(path.join(imageRoot,image,'package-lock.json'))}));
+    if(dependencyMode==='image')for(const lock of locks)assert.ok(lock.matches,`${lock.source} differs from the fixed image; rebuild the image`);
+    for(const lock of locks) {
+      const directory=path.join(project,lock.prefix);
+      if(lock.matches)fs.cpSync(path.join(imageRoot,lock.image,'node_modules'),path.join(directory,'node_modules'),{recursive:true,verbatimSymlinks:true});
+      else {
+        const home=path.join(root,'dependency-home');fs.mkdirSync(home,{mode:0o700,recursive:true});
+        const install=()=>run('npm',['ci','--legacy-peer-deps','--ignore-scripts','--no-audit','--no-fund','--prefer-offline','--maxsockets=8','--fetch-retries=1','--fetch-timeout=120000'],{cwd:directory,env:{PATH:process.env.PATH,HOME:home,npm_config_cache:path.join(root,'dependency-cache'),npm_config_registry:'https://registry.npmjs.org',npm_config_offline:'false',npm_config_userconfig:path.join(home,'empty.npmrc')},log:path.join(root,'dependency-install.log'),maxLogBytes:2*1024*1024,timeout:600000});
+        let installed=await install();
+        if(installed.code!==0&&/\b(EIDLETIMEOUT|ETIMEDOUT|ECONNRESET|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)\b/.test(installed.output||'')) {
+          console.log('Retrying locked dependency installation after a network failure:',lock.source);installed=await install();
+        }
+        assert.equal(installed.code,0,`Locked dependency installation failed for ${lock.source}; see dependency-install.log`);
+      }
+      assert.equal(hash(path.join(project,lock.source)),lock.digest,'Dependency preparation changed the lockfile');
+      console.log('Actions dependencies:',JSON.stringify({lockfile:lock.source,sha256:lock.digest,source:lock.matches?'image':'npm-ci'}));
     }
-    fs.cpSync(path.join(imageRoot,'dependencies/node_modules'),path.join(project,'node_modules'),{recursive:true,verbatimSymlinks:true});
-    fs.cpSync(path.join(imageRoot,'e2e/node_modules'),path.join(project,'test/e2e/node_modules'),{recursive:true,verbatimSymlinks:true});
     fs.mkdirSync(path.join(project,'exclude/core-e2e/runtime/v2'),{recursive:true});
     fs.symlinkSync(path.join(imageRoot,'opencode-v2/node_modules'),path.join(project,'exclude/core-e2e/runtime/v2/node_modules'));
     const cache=path.join(project,'exclude/core-e2e/cache/npm');
@@ -47,6 +61,21 @@ export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt'
   }
   fs.appendFileSync(envFile,Object.entries(env).map(([key,value])=>`${key}=${value}\n`).join(''));
   return {root,project,testedSha,env};
+}
+
+export async function prepareActionsJobWithReport(options) {
+  assert.ok(['build','ut','case','collect'].includes(options.phase),'Unknown Actions job phase');
+  assert.match(options.runId||'',/^[a-z0-9-]{1,80}$/,'Invalid Actions run ID');
+  const envFile=options.envFile||process.env.ATOMGIT_ENV;
+  assert.ok(path.isAbsolute(envFile||''),'Actions environment file is required');
+  const checkout=options.checkout||process.cwd(),root=fs.mkdtempSync(path.join(checkout,'.atomgit-e2e.'));
+  try { return await prepareActionsJob({...options,jobRoot:root}); }
+  catch(error) {
+    const testedSha=git(checkout,['rev-parse','HEAD']);
+    fs.appendFileSync(envFile,`E2E_CI_ROOT=${root}\nE2E_CI_SOURCE=${checkout}\nE2E_CI_TESTED_SHA=${testedSha}\nE2E_CI_RUN_ID=${options.runId}\n`);
+    recordPreparationFailure({root,project:checkout,phase:options.phase,runId:options.runId,testedSha,env:process.env},error);
+    throw error;
+  }
 }
 
 export async function verifyActionsRuntime({project,imageRoot='/opt',run=command,env=process.env}) {
@@ -68,7 +97,7 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
     assertJobContainer();
     if(values['verify-runtime'])await verifyActionsRuntime({project:process.env.E2E_CI_SOURCE});
     else {
-      const prepared=await prepareActionsJob({phase:values.phase,runId:values['run-id'],expectedSha:process.env.E2E_EXPECTED_SHA});
+      const prepared=await prepareActionsJobWithReport({phase:values.phase,runId:values['run-id'],expectedSha:process.env.E2E_EXPECTED_SHA});
       console.log('Actions job prepared:',JSON.stringify({phase:values.phase,testedSha:prepared.testedSha,runId:values['run-id']}));
     }
   } catch(error) {console.error('Actions job preparation failed:',error.message);process.exitCode=1;}

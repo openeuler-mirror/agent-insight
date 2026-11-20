@@ -236,6 +236,20 @@ function matchingResult(options, context, id, cleanups) {
   return result;
 }
 function collectPhase(options) {
+  if(!fs.existsSync(path.join(options.root,'inputs/build/context.json'))) {
+    let reason='Build context artifact is missing; inspect build preparation and e2e-result-build upload/download logs';
+    try {
+      const failed=read(path.join(options.root,'inputs/build/result.json'));
+      assert.equal(failed.version,1);assert.equal(failed.phase,'build');assert.equal(failed.runId,options.runId);assert.equal(failed.testedSha,options.testedSha);
+      assert.ok(['FAIL','BLOCKED'].includes(failed.status));assert.equal(failed.payload.status,failed.status);
+      assert.equal(typeof failed.payload.reason,'string');reason+='; build: '+failed.payload.reason;
+    } catch {}
+    const report=emptyReport(options);
+    report.status='BLOCKED';report.error=reason;report.productionBuild={status:'BLOCKED',reason};
+    report.npmTest={status:'NOT_RUN',fullSuiteComplete:false,reason};
+    for(const row of report.scenarios)row.reason=reason;
+    return {result:envelope(options,undefined,report,'BLOCKED'),report};
+  }
   const context = validateContext(read(path.join(options.root, 'inputs/build/context.json')), options);
   const report = emptyReport(options, context), problems = [];report.processCleanups = {};
   let outcomes;
@@ -271,6 +285,23 @@ function collectPhase(options) {
     catch (error) { report.status = 'FAIL';report.aggregationErrors = [message(error)]; }
   }
   return { context, result: envelope(options, context, report, report.status), report };
+}
+export function recordPreparationFailure(options,error) {
+  const reason='Isolated job preparation failed: '+message(error),report=emptyReport(options);
+  report.status='BLOCKED';report.error=reason;
+  if(options.phase==='build')report.productionBuild={status:'BLOCKED',reason};
+  const log=path.join(options.root,'dependency-install.log');
+  let logTail;
+  if(fs.existsSync(log)) {
+    const fd=fs.openSync(log,'r');
+    try { const size=fs.fstatSync(fd).size,buffer=Buffer.alloc(Math.min(size,65536));fs.readSync(fd,buffer,0,buffer.length,size-buffer.length);logTail=buffer.toString('utf8'); }
+    finally { fs.closeSync(fd); }
+    const secrets=Object.entries(options.env||{}).filter(([key])=>/KEY|TOKEN|PASSWORD|SECRET/.test(key)).map(([,value])=>value);
+    logTail=redact(logTail,secrets).replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi,'$1[REDACTED]@');report.preparationLog='preparation.log';
+  }
+  const result=persist(options,undefined,envelope(options,undefined,{status:'BLOCKED',reason},'BLOCKED'),report);
+  if(logTail!==undefined)write(path.join(options.root,'public/preparation.log'),logTail);
+  return result;
 }
 export async function runActionsPhase(input, overrides = {}) {
   const options = { ...input, project: path.resolve(input.project), root: path.resolve(input.root), env: input.env || process.env };
