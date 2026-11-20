@@ -417,7 +417,9 @@ test('SWR runtime prefix is shared by publishing and evaluation; prebuilt remote
   }
 })
 
-test('ZSoft fixed registry image uses the shared pool for cold pull, cache reuse and repull after eviction', async (t) => {
+test('ZSoft fixed registry image uses the shared pool for cold pull, cache reuse and repull after eviction', { timeout: 15000 }, async (t) => {
+  // This verifies cache ownership, not filesystem latency against the admission deadline.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const directory = await temporary(t)
   const ref = `swr.example.test/team/zsoft@sha256:${'c'.repeat(64)}`
   const image = { id: `sha256:${'b'.repeat(64)}`, size: 100, arch: 'amd64', references: [], digests: [ref] }

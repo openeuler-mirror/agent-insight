@@ -275,6 +275,28 @@ test('no deletion candidate produces bounded capacity error without starting a p
   assert.deepEqual(pool.state.operations, {})
 })
 
+test('an admission deadline rejects its waiter while retaining the unfinished pull budget', { timeout: 5000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+  const { pool, store } = await fixture(t)
+  let finish!: () => void
+  let started!: () => void
+  const pulling = new Promise<void>((resolve) => { started = resolve })
+  store.beforePull = () => { started(); return new Promise<void>((resolve) => { finish = resolve }) }
+  const requested = pool.acquire(owner('deadline'), [spec('deadline')])
+  const rejected = assert.rejects(requested, { code: 'IMAGE_POOL_WAIT_TIMEOUT' })
+  await pulling
+  try {
+    t.mock.timers.tick(config.waitMs)
+    await rejected
+    assert.equal(Object.keys(pool.state.operations).length, 1)
+    assert.equal(pool.activePulls, 1)
+  } finally { finish() }
+  await Promise.all([...pool.inflight.values()])
+  assert.equal(Object.keys(pool.state.operations).length, 0)
+  assert.equal(pool.activePulls, 0)
+  assert.deepEqual((Object.values(pool.state.images)[0] as any).users, {})
+})
+
 test('cancelling a waiter does not pretend that an in-flight Docker pull stopped', async (t) => {
   const { pool, store } = await fixture(t)
   let finish!: () => void
