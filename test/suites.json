@@ -492,7 +492,8 @@
     "test/skill-workbench-upload.test.ts",
     "test/skill-workbench-view-race.test.ts",
     "test/skills-versions-p95.test.ts",
-    "test/trigger-eval-retry.test.ts"
+    "test/trigger-eval-retry.test.ts",
+    "test/trigger-eval-save-target-version.test.ts"
   ],
   "reliability": [
     "test/builtin-reliability-dataset-readonly.test.ts",
