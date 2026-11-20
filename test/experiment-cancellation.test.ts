@@ -31,6 +31,22 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   const { assertExperimentActive, withExperimentCancellation, markExperimentCleanupUnconfirmed } = await import('../src/lib/engine/experiment/cancellation-context');
   t.after(async () => { await prisma.$disconnect(); await fs.rm(directory, { recursive: true, force: true }); });
   const experiment = await prisma.experiment.create({ data: { user: 'owner', name: 'cancel test', status: 'running', cases: { create: [{ id: 'case-a' }, { id: 'case-b' }] } } });
+  let captured!: () => void;
+  let resume!: () => void;
+  let held = false;
+  const snapshotCaptured = new Promise<void>((resolve) => { captured = resolve; });
+  const snapshotGate = new Promise<void>((resolve) => { resume = resolve; });
+  const originalCount = prisma.experimentLocalExecution.count;
+  prisma.experimentLocalExecution.count = (async (args: any) => {
+    const count = await originalCount.call(prisma.experimentLocalExecution, args);
+    if (!held && args.where.experimentId === experiment.id && count > 0) {
+      held = true;
+      captured();
+      await snapshotGate;
+    }
+    return count;
+  }) as typeof originalCount;
+  t.after(() => { resume(); prisma.experimentLocalExecution.count = originalCount; });
   await assert.rejects(() => deleteExperimentExecution('other', experiment.id), /不存在/);
   await assert.rejects(() => deleteExperimentExecution('owner', experiment.id, 'foreign'), /不属于/);
   let enter!: () => void;
@@ -42,7 +58,7 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
     timeout = setTimeout(() => reject(new Error('Experiment cancellation did not complete within 30000ms')), 30000);
   });
   const running = withExperimentCancellation(experiment.id, 'case-a', (signal) => new Promise((resolve) => {
-    signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+    signal.addEventListener('abort', () => { void snapshotCaptured.then(() => resolve('aborted')); }, { once: true });
     enter();
   }));
   let cancelled: Awaited<ReturnType<typeof deleteExperimentExecution>>;
@@ -50,14 +66,26 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
     await Promise.race([entered, running, deadline]);
     cancelled = await Promise.race([deleteExperimentExecution('owner', experiment.id, 'case-a'), deadline]);
     await assert.rejects(Promise.race([running, deadline]), /已取消/);
+    // Reconciliation can still be sharing a pass that observed the worker before it exited.
+    await Promise.race([(async () => {
+      const pendingPass = reconcileCancellation(cancelled.id);
+      resume();
+      let reconciled = await pendingPass;
+      assert.equal(reconciled.status, 'pending');
+      while (reconciled.status === 'pending') {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        reconciled = await reconcileCancellation(cancelled.id);
+      }
+      assert.equal(reconciled.status, 'completed');
+    })(), deadline]);
   } finally {
+    resume();
     clearTimeout(timeout);
   }
   await assert.rejects(() => assertExperimentActive(experiment.id, 'case-a'), /已取消/);
   await assertExperimentActive(experiment.id, 'case-b');
   assert.equal((await prisma.experiment.findUniqueOrThrow({ where: { id: experiment.id } })).deletedAt, null);
   assert.ok((await prisma.experimentCase.findUniqueOrThrow({ where: { id: 'case-a' } })).deletedAt);
-  assert.equal((await reconcileCancellation(cancelled.id)).status, 'completed');
   assert.equal((await deleteExperimentExecution('owner', experiment.id, 'case-a')).id, cancelled.id);
   await deleteExperimentExecution('owner', experiment.id);
   await assert.rejects(() => assertExperimentActive(experiment.id), /已取消/);

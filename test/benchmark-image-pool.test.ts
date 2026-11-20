@@ -194,7 +194,9 @@ test('online image management lists ownership and purges only idle pool-owned im
   assert.ok(await store.inspect(reused.imageId))
 })
 
-test('online purge does not delete while a Docker pull operation is recorded', async (t) => {
+test('online purge does not delete while a Docker pull operation is recorded', { timeout: 15000 }, async (t) => {
+  // Exercise purge ownership independently of filesystem latency; admission deadlines have a separate test.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const { pool, store } = await fixture(t)
   await cache(pool, 'idle-during-pull')
   pool.state.operations.pull = { bytes: 100, startedAt: Date.now(), uncertain: false }
