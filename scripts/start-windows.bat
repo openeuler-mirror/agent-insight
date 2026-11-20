@@ -18,7 +18,8 @@ REM  What it does:
 REM    1. checks Node.js 20+ and that the platform port is free
 REM    2. runs "npm install" only when node_modules is missing
 REM    3. creates %USERPROFILE%\.agent-insight (config + data dirs)
-REM    4. syncs the SQLite schema (prisma db push, never --accept-data-loss)
+REM    4. syncs the SQLite schema via scripts\db-push.cjs, the same no-loss
+REM       whitelist every other start entry uses (destructive changes stop startup)
 REM    5. starts the platform from this source checkout
 REM
 REM  Data root : %USERPROFILE%\.agent-insight
@@ -115,15 +116,21 @@ if not exist "%APP_HOME%\.env" (
 )
 
 REM The prisma CLI does not read %APP_HOME%\.env, so pin DATABASE_URL here.
-REM Empty / missing value means the default SQLite file under the data root.
+REM Same rule as the other start entries: strip surrounding quotes, and treat an
+REM empty value or the template default file:../data/witty_insight.db as "not
+REM set", so the database stays under the data root declared above.
 set "ENV_DATABASE_URL="
 for /f "usebackq tokens=1,* delims==" %%a in (`findstr /R /C:"^DATABASE_URL=" "%APP_HOME%\.env" 2^>nul`) do set "ENV_DATABASE_URL=%%b"
-if defined ENV_DATABASE_URL goto :db_from_env
+if not defined ENV_DATABASE_URL goto :db_default
+set "ENV_DATABASE_URL=%ENV_DATABASE_URL:"=%"
+set "ENV_DATABASE_URL=%ENV_DATABASE_URL:'=%"
+if not defined ENV_DATABASE_URL goto :db_default
+if /I "%ENV_DATABASE_URL%"=="file:../data/witty_insight.db" goto :db_default
+set "DATABASE_URL=%ENV_DATABASE_URL%"
+goto :db_ready
+:db_default
 set "APP_HOME_FWD=%APP_HOME:\=/%"
 set "DATABASE_URL=file:%APP_HOME_FWD%/data/witty_insight.db"
-goto :db_ready
-:db_from_env
-set "DATABASE_URL=%ENV_DATABASE_URL%"
 :db_ready
 set "AGENT_INSIGHT_HOME=%APP_HOME%"
 
@@ -132,11 +139,17 @@ if not exist "node_modules\next\package.json" (
   call npm install
   if errorlevel 1 goto :install_failed
 )
-if not exist "node_modules\.prisma\client\index.js" (
-  echo       Generating Prisma client...
-  call npx prisma generate
-  if errorlevel 1 goto :generate_failed
-)
+REM Regenerate the Prisma client when the schema or generator changed. A stale
+REM client queries columns the database no longer has and fails at runtime with
+REM P2022 (e.g. after switching branches). Same fingerprint check as start.sh.
+node scripts\start-build-state.cjs prisma-check
+if not errorlevel 1 goto :prisma_ready
+echo       Generating Prisma client...
+call npx prisma generate
+if errorlevel 1 goto :generate_failed
+node scripts\start-build-state.cjs prisma-record
+if errorlevel 1 goto :generate_failed
+:prisma_ready
 echo       Config and dependencies are ready.
 
 REM ---------- [3/4] Database schema ----------
@@ -144,8 +157,7 @@ echo.
 echo [3/4] Syncing SQLite schema (%DATABASE_URL%)...
 node scripts\prepare-ras-sqlite-schema.js
 if errorlevel 1 goto :schema_failed
-REM "< nul" keeps prisma from prompting "reset database?" on destructive diffs.
-call npx prisma db push --skip-generate < nul
+node scripts\db-push.cjs --skip-generate
 if errorlevel 1 goto :schema_failed
 
 REM ---------- [4/4] Start ----------

@@ -225,6 +225,7 @@ test('start documents force rebuild; db push wrapper rejects arbitrary destructi
 test('db push forwards skip-generate on normal and allowed retry paths, preserving the default', t => {
   const f = fixture(t)
   f.write('scripts/db_push.sh', fs.readFileSync('scripts/db_push.sh', 'utf8'))
+  f.write('scripts/db-push.cjs', fs.readFileSync('scripts/db-push.cjs', 'utf8'))
   f.write('scripts/trace-datasets/remove-legacy-summary.cjs', '')
   const bin = path.join(f.root, 'bin')
   f.write('bin/npx', `#!/bin/sh
@@ -258,7 +259,7 @@ test('start.sh integration: first worker generation, reuse, source change, force
   await new Promise<void>(resolve => probe.close(() => resolve()))
   const pids = new Set<number>()
   t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch {} } })
-  for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh', 'build-trace-dataset-worker.cjs']) {
+  for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh', 'db-push.cjs', 'build-trace-dataset-worker.cjs']) {
     f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
   }
   for (const file of ['prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')

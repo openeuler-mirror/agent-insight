@@ -31,6 +31,7 @@ test('startup db_push upgrades an existing SQLite database additively and is rep
     await mkdir(path.join(root, 'scripts'));
     await symlink(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
     await writeFile(path.join(root, 'scripts/db_push.sh'), await readFile('scripts/db_push.sh'));
+    await writeFile(path.join(root, 'scripts/db-push.cjs'), await readFile('scripts/db-push.cjs'));
     await mkdir(path.join(root, 'scripts/trace-datasets'));
     await writeFile(path.join(root, 'scripts/trace-datasets/remove-legacy-summary.cjs'), await readFile('scripts/trace-datasets/remove-legacy-summary.cjs'));
     const schema = (await readFile('prisma/schema.prisma', 'utf8')).replace(/generator client\s*\{[^}]*\}/, '');
