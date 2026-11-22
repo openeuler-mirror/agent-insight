@@ -123,6 +123,25 @@ test("syncAdminApiKey initializes the client key only when none exists", async (
   )
 })
 
+test("syncAdminApiKey reuses the persisted admin key when refreshing startup metadata", async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-sync-"))
+  fs.writeFileSync(path.join(dataRoot, ".admin_api_key"), "wi_existing_admin\n")
+  let presentedKey = ""
+
+  await syncAdminApiKey({
+    dataRoot,
+    port: 3250,
+    host: "http://localhost:3250",
+    requestLoginMode: async () => "standalone",
+    requestApiKey: async (_port: number, _host: string, _timeout: number, apiKey: string) => {
+      presentedKey = apiKey
+      return { username: "admin", apiKey }
+    },
+  })
+
+  assert.equal(presentedKey, "wi_existing_admin")
+})
+
 test("syncAdminApiKey skips admin provisioning in IDaaS mode and preserves the client key", async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-sync-"))
   const envPath = path.join(dataRoot, ".env")

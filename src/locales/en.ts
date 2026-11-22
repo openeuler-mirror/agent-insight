@@ -679,6 +679,8 @@ export const en = {
   login: {
     subtitle: 'Agent Skill Evaluation, Analysis & Optimization',
     emailLabel: 'Email Address',
+    apiKeyLabel: 'API Key (required for an existing account)',
+    apiKeyPlaceholder: 'Leave empty for first registration, or enter the existing API key',
     signIn: 'Sign In',
     redirecting: 'Redirecting to organization login...',
     checkingLogin: 'Checking login status...',

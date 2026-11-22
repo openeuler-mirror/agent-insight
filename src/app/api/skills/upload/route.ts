@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from '@/lib/auth/auth';
+import { canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
@@ -88,6 +88,9 @@ export async function POST(request: NextRequest) {
         // Resolve user: API Key header > explicit user field
         const authResult = await resolveUser(request, explicitUser || undefined);
         const user = authResult.username;
+        if (!user) {
+            return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+        }
 
         if (targetSkillId) {
             skill = await db.findSkillById(targetSkillId);
@@ -95,7 +98,8 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ error: 'Target skill not found' }, { status: 404 });
             }
             
-            if (user && skill.user && skill.user !== user) {
+            const { allowed } = await canManageSkill(targetSkillId, user);
+            if (!allowed) {
                 return NextResponse.json({ error: 'Unauthorized to update this skill' }, { status: 403 });
             }
 

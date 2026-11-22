@@ -26,6 +26,11 @@ import {
   parseBackflowFields,
 } from '@/lib/agent-dataset-backflow';
 import { POST } from '@/app/api/agent-datasets/backflow/route';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
+
+test.before(async () => {
+  await ensureTestApiUsers('test-user');
+});
 
 function backflowCase(id: string, taskId?: string) {
   return {
@@ -166,7 +171,7 @@ test('rejects duplicate field names even when internal keys differ', () => {
 });
 
 test('rejects an invalid new dataset schema before writing cases', async () => {
-  const response = await POST(new Request('http://localhost/api/agent-datasets/backflow', {
+  const response = await POST(testRequest('http://localhost/api/agent-datasets/backflow', 'test-user', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -186,7 +191,7 @@ test('rejects an invalid new dataset schema before writing cases', async () => {
 });
 
 test('requires users to choose a target mode', async () => {
-  const response = await POST(new Request('http://localhost/api/agent-datasets/backflow', {
+  const response = await POST(testRequest('http://localhost/api/agent-datasets/backflow', 'test-user', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

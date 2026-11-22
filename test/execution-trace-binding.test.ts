@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { createIsolatedDatabase } from './helpers/isolated-database'
 import { acceptCaseProgress } from '@/lib/engine/experiment/execution-progress'
 import { benchmarkExecutionProgress } from '@/lib/benchmark/execution-progress'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 const database = createIsolatedDatabase()
 const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/storage/prisma')
@@ -31,7 +32,10 @@ const { GET } = require('@/app/api/experiments/[id]/route') as typeof import('@/
 test.after(async () => { await prisma.$disconnect(); database.dispose() })
 const user = 'trace-binding-fixture'
 const clientId = 'trace-binding-client'
-test.before(async () => { await prisma.reliabilityClient.create({ data: { clientId, user, name: 'fixture', lastSeenAt: new Date() } }) })
+test.before(async () => {
+  await ensureTestApiUsers(user)
+  await prisma.reliabilityClient.create({ data: { clientId, user, name: 'fixture', lastSeenAt: new Date() } })
+})
 
 async function fixture(scope = '') {
   const experiment = await prisma.experiment.create({ data: { user, name: 'fixture', scope, status: 'running', evaluatorIdsJson: '[]', cases: { create: { input: 'run' } } }, include: { cases: true } })
@@ -208,7 +212,7 @@ test('Benchmark 重试隐藏历史链接，旧回调和迟到失败不能覆盖�
   await progress(old.id, 'agent_running', 'benchmark-old')
   const { failBenchmarkCaseResults } = require('@/lib/benchmark/experiment-lifecycle') as typeof import('@/lib/benchmark/experiment-lifecycle')
   await failBenchmarkCaseResults(old.id, 'late failure')
-  let response = await GET(new Request(`http://localhost/api/experiments/${f.experimentId}?user=${user}`), { params: Promise.resolve({ id: f.experimentId }) })
+  let response = await GET(testRequest(`http://localhost/api/experiments/${f.experimentId}?user=${user}`, user), { params: Promise.resolve({ id: f.experimentId }) })
   assert.equal(response.status, 200)
   let current = (await response.json()).cases[0]
   assert.equal(current.benchmark.runId, next.id)
@@ -218,7 +222,7 @@ test('Benchmark 重试隐藏历史链接，旧回调和迟到失败不能覆盖�
   await assert.rejects(progress(next.id, 'agent_running', 'benchmark-old'), code('TRACE_ID_REUSED'))
   await progress(next.id, 'agent_running', 'benchmark-new')
   const newRoot = await root('benchmark-new')
-  response = await GET(new Request(`http://localhost/api/experiments/${f.experimentId}?user=${user}`), { params: Promise.resolve({ id: f.experimentId }) })
+  response = await GET(testRequest(`http://localhost/api/experiments/${f.experimentId}?user=${user}`, user), { params: Promise.resolve({ id: f.experimentId }) })
   current = (await response.json()).cases[0]
   assert.equal(current.benchmark.executionId, newRoot.id)
   assert.equal(current.taskId, 'benchmark-new')

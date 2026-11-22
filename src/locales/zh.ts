@@ -679,6 +679,8 @@ export const zh = {
   login: {
     subtitle: '智能体技能评估、分析与优化',
     emailLabel: '邮箱地址',
+    apiKeyLabel: 'API Key（已有账号必填）',
+    apiKeyPlaceholder: '首次注册可留空；已有账号请输入现有 API Key',
     signIn: 'Sign In',
     redirecting: '正在跳转到组织登录页...',
     checkingLogin: '正在检查登录状态...',

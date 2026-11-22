@@ -81,7 +81,7 @@ function readEnvValue(envPath, targetKey) {
   return ''
 }
 
-function requestAdminApiKey(port, host = 'localhost', timeoutMs = 5000) {
+function requestAdminApiKey(port, host = 'localhost', timeoutMs = 5000, apiKey = '') {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({ username: 'admin' })
     const req = http.request(
@@ -93,6 +93,7 @@ function requestAdminApiKey(port, host = 'localhost', timeoutMs = 5000) {
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(postData),
+          ...(apiKey ? { 'x-witty-api-key': apiKey } : {}),
         },
       },
       (res) => {
@@ -209,7 +210,10 @@ async function syncAdminApiKey(options = {}) {
     }
   }
   const requestApiKey = options.requestApiKey || requestAdminApiKey
-  const result = await requestApiKey(port, 'localhost', requestTimeoutMs)
+  const existingAdminApiKey = fs.existsSync(keyFilePath)
+    ? fs.readFileSync(keyFilePath, 'utf8').trim()
+    : ''
+  const result = await requestApiKey(port, 'localhost', requestTimeoutMs, existingAdminApiKey)
   fs.mkdirSync(dataRoot, { recursive: true })
   fs.writeFileSync(keyFilePath, result.apiKey, 'utf8')
   const envUpdates = {

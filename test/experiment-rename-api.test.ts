@@ -20,10 +20,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const databaseDir = mkdtempSync(join(tmpdir(), 'experiment-rename-'));
 const databasePath = join(databaseDir, 'test.db');
-execFileSync('python3', ['-c', 'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute("CREATE TABLE Experiment (id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, scope TEXT, deletedAt DATETIME, updatedAt DATETIME NOT NULL)"); db.commit(); db.close()', databasePath]);
+execFileSync('python3', ['-c', 'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute("CREATE TABLE Experiment (id TEXT PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, scope TEXT, deletedAt DATETIME, updatedAt DATETIME NOT NULL)"); db.execute("CREATE TABLE User (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, externalAccount TEXT UNIQUE, apiKey TEXT UNIQUE NOT NULL, createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"); db.commit(); db.close()', databasePath]);
 
 let PATCH: typeof import('@/app/api/experiments/[id]/route').PATCH;
 let prisma: typeof import('@/lib/storage/prisma').prisma;
@@ -32,6 +33,7 @@ test.before(async () => {
   process.env.DATABASE_URL = `file:${databasePath}`;
   ({ PATCH } = await import('@/app/api/experiments/[id]/route'));
   ({ prisma } = await import('@/lib/storage/prisma'));
+  await ensureTestApiUsers('rename-owner', 'other-user');
 });
 
 test.after(async () => {
@@ -40,7 +42,7 @@ test.after(async () => {
 });
 
 function patchRequest(id: string, user: string, body: Record<string, unknown>): Request {
-  return new Request(`http://localhost/api/experiments/${id}`, {
+  return testRequest(`http://localhost/api/experiments/${id}`, user, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user, ...body }),

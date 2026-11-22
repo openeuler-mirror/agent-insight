@@ -203,9 +203,7 @@ test('administrator Trace reads and dashboard aggregates share the global scope'
 
     await context.test('query usernames and invalid credentials do not grant global admin access', async () => {
         const response = await data.GET(request(listUrl));
-        const page = await response.json();
-        assert.equal(page.canViewAllTraces, false);
-        assert.deepEqual(page.records.map((row: { user: string }) => row.user), ['admin']);
+        assert.equal(response.status, 401);
         assert.equal((await data.GET(request(listUrl, 'invalid'))).status, 401);
         assert.equal((await data.GET(request('/api/observe/data'))).status, 401);
     });

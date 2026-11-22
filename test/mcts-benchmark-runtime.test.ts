@@ -30,11 +30,13 @@ import { GET as listExperimentAgents } from '../src/app/api/experiments/agents/r
 import { prisma, prismaRaw } from '../src/lib/storage/prisma'
 import { writeSyntheticZsoftPlugin } from './fixtures/mcts-zsoft-fixture'
 import { zsoftL1Adapter } from '../benchmarks/zsoft-l1/adapter'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 const require = createRequire(import.meta.url)
 const runtime = require('../services/executor/src/mcts-runtime.cjs')
 const { runProcess } = require('../services/executor/src/index.cjs')
 const client = require('../scripts/reliability-client.cjs')
+test.before(async () => { await ensureTestApiUsers('fixture-user') })
 
 function git(cwd: string, ...args: string[]) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -447,7 +449,7 @@ for (const scenario of [
       methods[key] = implementation
       t.after(() => { methods[key] = original })
     }
-    const response = await listExperimentAgents(new Request('http://localhost/api/experiments/agents?user=fixture-user'))
+    const response = await listExperimentAgents(testRequest('http://localhost/api/experiments/agents?user=fixture-user', 'fixture-user'))
     assert.equal(response.status, 200)
     const body = await response.json()
     if (!scenario.ready) {

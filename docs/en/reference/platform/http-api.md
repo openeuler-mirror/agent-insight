@@ -26,14 +26,14 @@ Prefix URLs with the deployment address, including any configured subpath. The p
 
 Routes using `resolveUser(request, explicitUser)` resolve identity in this order:
 
-1. A nonempty `explicitUser` supplied by the route is used directly. Some routes obtain it from a `user` body field or query parameter.
-2. Otherwise, `x-witty-api-key` is looked up against platform users.
-3. Only when that header has no nonempty value, the `apiKey` query parameter is considered.
-4. An unresolved user produces an empty identity, which each route handles separately. An invalid header Key does not fall through to the query Key.
+1. Look up `x-witty-api-key` against platform users.
+2. Only when that header has no nonempty value, consider the `apiKey` query parameter.
+3. If the route supplies an explicit `user` from its body or query, it is only an assertion and must exactly match the Key's user.
+4. An invalid Key, a Key/user mismatch, or an explicit `user` without a Key produces an empty identity. An invalid header Key does not fall through to the query Key.
 
-An explicit `user` is a compatibility selector, not a verified credential or proof of access isolation. Integrations should send the target account's `x-witty-api-key` and avoid simultaneously supplying an overriding `user`. Obtain the Key from that account's client installation instructions. Browser login, IDaaS, and individual collectors have their own flows; this function does not describe every route.
+The browser `apiFetch` helper adds the local API Key to business `/api/*` requests but explicitly skips `/api/auth/*`, so login and account switching do not carry a stale Key into authentication endpoints. Integrations must likewise send the account's `x-witty-api-key`; a query `user` alone is never an identity or a data-isolation credential. Browser login, IDaaS, and individual collectors have their own flows.
 
-A read-only experiment list may omit its user filter when identity is empty, while other routes can return `400`, `401`, or `404`. A successful list response does not prove that a Key was validated. Detail and write operations apply their branch-specific ownership checks. Configure external access boundaries for the actual deployment.
+Private-resource endpoints fail closed when identity is empty; resources explicitly defined as public, such as public Skills, may still return limited anonymous data. Anonymous public Skill version lists omit execution content belonging to other users. A few read-only status endpoints, such as enterprise synchronization process state, may remain unauthenticated, so one successful response does not prove the whole page or service is isolated. Detail and write operations also check ownership.
 
 ```bash
 # Read-only example. Supply the address and Key through your environment.

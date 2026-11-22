@@ -23,6 +23,7 @@ import test from 'node:test';
 import { PrismaClient } from '@prisma/client';
 import { repairTraceLatency } from '../src/lib/storage/repair-trace-latency';
 import { executionBigIntToNumber } from '../src/lib/storage/prisma-client';
+import { testApiKey, testRequest } from './helpers/api-auth';
 
 test('Effective latency survives ingestion, list statistics, detail reads and safe history repair', async context => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-active-storage-'));
@@ -53,6 +54,7 @@ test('Effective latency survives ingestion, list statistics, detail reads and sa
         { role: 'user', content: 'second', timeInfo: { created: base + 3620000 } },
         { role: 'assistant', content: 'done', timeInfo: { created: base + 3620000, completed: base + 3650000 } },
     ];
+    await client.user.create({ data: { username: 'timing-test', apiKey: testApiKey('timing-test') } });
     await saveExecutionRecord({ task_id: 'active-test', upload_id: 'active-test', framework: 'opencode', user: 'timing-test',
         query: 'active duration test', agentName: 'build', timestamp: new Date(base), interactions: rows, skip_evaluation: true,
         trace_started_at: new Date(base).toISOString(), trace_completed_at: new Date(base + 3650000).toISOString() });
@@ -60,7 +62,7 @@ test('Effective latency survives ingestion, list statistics, detail reads and sa
     const page = await readRecordPage('timing-test', undefined, { databasePagination: true, page: 1, pageSize: 10, lightweight: true, attachEvaluations: false });
     assert.equal(page.records[0].latency, 50000);
     assert.equal(page.stats.avgLatencyMs, 50000);
-    const detail = await (await GET(new Request('http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=structure&source=raw'))).json();
+    const detail = await (await GET(testRequest('http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=structure&source=raw', 'timing-test'))).json();
     assert.equal(detail.execution.latency, 50000);
     const before = await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } });
     const sessionBefore = await client.session.findUniqueOrThrow({ where: { taskId: 'active-test' } });
@@ -68,7 +70,7 @@ test('Effective latency survives ingestion, list statistics, detail reads and sa
     assert.equal((await repairTraceLatency(client)).changed, 1);
     assert.equal((await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } })).latency, 3650000);
     for (const view of ['structure', 'full', 'interactions', 'interaction&index=0']) {
-        const oldDetail = await (await GET(new Request(`http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=${view}&source=raw`))).json();
+        const oldDetail = await (await GET(testRequest(`http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=${view}&source=raw`, 'timing-test'))).json();
         assert.equal(oldDetail.execution.latency, 50000, 'historical detail uses recalculated metrics in every view');
     }
     assert.equal((await repairTraceLatency(client, { apply: true })).updated, 1);

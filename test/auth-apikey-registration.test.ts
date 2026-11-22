@@ -43,10 +43,13 @@ const usernames = {
 };
 const idaasUsername = `Employee-UUID-${suffix}-ABCDEF`;
 
-function register(username: string): Promise<Response> {
+function register(username: string, apiKey?: string): Promise<Response> {
   return POST(new Request('http://localhost/api/auth/apikey', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { 'x-witty-api-key': apiKey } : {}),
+    },
     body: JSON.stringify({ username }),
   }));
 }
@@ -99,26 +102,38 @@ test('首次注册只创建账号，不注入内置示例数据', async () => {
   );
 });
 
-test('用户名大小写归一到同一用户和同一 API key', async () => {
+test('用户名大小写归一；已有账号必须用原 API key 恢复', async () => {
   const first = await register(usernames.casing.toUpperCase());
-  const second = await register(usernames.casing);
   assert.equal(first.status, 200);
-  assert.equal(second.status, 200);
-
   const firstBody = await first.json();
-  const secondBody = await second.json();
   assert.equal(firstBody.username, usernames.casing);
-  assert.equal(secondBody.username, usernames.casing);
-  assert.equal(firstBody.apiKey, secondBody.apiKey);
+
+  const unauthenticated = await register(usernames.casing);
+  assert.equal(unauthenticated.status, 401);
+  assert.equal((await unauthenticated.json()).code, 'credential_required');
+
+  const restored = await register(usernames.casing.toUpperCase(), firstBody.apiKey);
+  assert.equal(restored.status, 200);
+  assert.deepEqual(await restored.json(), {
+    username: usernames.casing,
+    apiKey: firstBody.apiKey,
+  });
   assert.equal(await prisma.user.count({ where: { username: usernames.casing } }), 1);
 });
 
-test('10 路并发首次注册全部成功并返回同一 API key', async () => {
+test('10 路并发注册同一新用户名时只有首个请求获得 API key', async () => {
   const responses = await Promise.all(Array.from({ length: 10 }, () => register(usernames.race)));
-  assert.deepEqual(responses.map((response) => response.status), Array(10).fill(200));
+  assert.equal(responses.filter(response => response.status === 200).length, 1);
+  assert.equal(responses.filter(response => response.status === 401).length, 9);
 
-  const bodies = await Promise.all(responses.map((response) => response.json()));
-  assert.equal(new Set(bodies.map((body) => body.apiKey)).size, 1);
+  const winner = responses.find(response => response.status === 200);
+  assert.ok(winner);
+  const body = await winner.json();
+  assert.equal(body.username, usernames.race);
+
+  const restored = await register(usernames.race, body.apiKey);
+  assert.equal(restored.status, 200);
+  assert.equal((await restored.json()).apiKey, body.apiKey);
   assert.equal(await prisma.user.count({ where: { username: usernames.race } }), 1);
 });
 

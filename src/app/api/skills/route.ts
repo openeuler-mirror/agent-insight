@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from '@/lib/auth/auth';
+import { canManageSkill, resolveUser, skillVisibilityWhere } from '@/lib/auth/auth';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { getSkillStorageRoot } from '@/lib/env';
 import fs from 'fs';
@@ -34,15 +34,7 @@ export async function GET(request: NextRequest) {
 
     const { username: user } = await resolveUser(request, userParam);
 
-    const where: any = {};
-
-    if (user) {
-        where.OR = [
-            { user: user },
-            { user: null },
-            { visibility: 'public' }
-        ];
-    }
+    const where: any = skillVisibilityWhere(user);
 
     if (query) {
       const queryFilter = {
@@ -51,15 +43,11 @@ export async function GET(request: NextRequest) {
           { description: { contains: query } }
         ]
       };
-      if (where.OR) {
-          where.AND = [
-              { OR: where.OR },
-              queryFilter
-          ];
-          delete where.OR;
-      } else {
-          where.OR = queryFilter.OR;
-      }
+      where.AND = [
+          { OR: where.OR },
+          queryFilter
+      ];
+      delete where.OR;
     }
 
     if (category && category !== '全部') {
@@ -197,11 +185,14 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const { username: user } = await resolveUser(request, userParam);
+    if (!user) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
 
-    const skill = await db.findSkillById(id);
+    const { allowed, skill } = await canManageSkill(id, user);
     if (!skill) return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
 
-    if (user && skill.user && skill.user !== user) {
+    if (!allowed) {
         return NextResponse.json({ error: 'Unauthorized delete' }, { status: 403 });
     }
 

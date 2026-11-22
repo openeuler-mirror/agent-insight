@@ -492,6 +492,7 @@
     "test/skill-workbench-upload.test.ts",
     "test/skill-workbench-view-race.test.ts",
     "test/skills-versions-p95.test.ts",
+    "test/trigger-eval-save-target-version.test.ts",
     "test/trigger-eval-retry.test.ts"
   ],
   "reliability": [
@@ -561,6 +562,7 @@
     "test/agent-runtime-preference.test.ts",
     "test/auth-apikey-registration.test.ts",
     "test/auth-restore.test.ts",
+    "test/auth-security.test.ts",
     "test/builtin-demo-cleanup.test.ts",
     "test/call-stats.test.ts",
     "test/container-runtime.test.ts",
