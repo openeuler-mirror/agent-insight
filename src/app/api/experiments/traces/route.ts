@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreExperiments,requireCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {readCoreExperimentTraces} from '@/lib/storage-core/experiment-traces';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -56,64 +59,15 @@ function isOk(row: { toolCallErrorCount: number | null; failures: string | null 
   }
 }
 
-export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const { username } = await resolveUser(req, url.searchParams.get('user'));
-    const agent = (url.searchParams.get('agent') || '').trim();
-    const model = (url.searchParams.get('model') || '').trim();
-    const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '20', 10) || 20));
-    const filters = parseExperimentTraceFilters(url.searchParams);
-    if (filters.tagIds.length > 0) await ensureTraceTagTables();
-    const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
-    const where = {
-      AND: [
-        buildExperimentTraceWhere(username, agent, filters),
-        userOwnershipWhere,
-      ],
-    };
-    // 对比向导：加 model 过滤（LLM 维度按模型查候选 trace）
-    const finalWhere = model ? { ...where, model } : where;
-
-    const [total, rows] = await Promise.all([
-      prisma.execution.count({ where: finalWhere }),
-      prisma.execution.findMany({
-        where: finalWhere,
-        orderBy: { timestamp: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        select: {
-          id: true, taskId: true, query: true, finalResult: true,
-          latency: true, tokens: true, timestamp: true,
-          toolCallErrorCount: true, failures: true,
-          model: true, skill: true, skillVersion: true,
-        },
-      }),
-    ]);
-
-    return NextResponse.json({
-      total,
-      page,
-      pageSize,
-      items: rows.map((r: ExperimentTraceRow) => ({
-        id: r.id,
-        taskId: r.taskId,
-        query: r.query,
-        // ③ 步"实际输出"预填来源，勾选时随行带走，免二次请求。
-        finalResult: r.finalResult,
-        latency: r.latency,
-        tokens: r.tokens,
-        timestamp: r.timestamp,
-        ok: isOk(r),
-        // 对比向导：返回 model/skillName/skillVersion 供矩阵分组
-        model: r.model,
-        skillName: r.skill,
-        skillVersion: r.skillVersion,
-      })),
-    });
-  } catch (error) {
-    console.error('[Experiment Traces Error]', error);
-    return NextResponse.json({ error: 'Failed to load traces' }, { status: 500 });
+export async function GET(req: Request):Promise<Response> {
+  {
+    try{return await withCoreExperiments(req,async()=>{
+      const url=new URL(req.url);const filters=parseExperimentTraceFilters(url.searchParams);const query=new URLSearchParams({ownership:'user'});
+      const agent=url.searchParams.get('agent');if(agent)query.set('agentName',agent);
+      if(filters.search)query.set('query',filters.search);if(filters.from)query.set('timeFrom',filters.from.toISOString());if(filters.to)query.set('timeTo',filters.to.toISOString());if(filters.tagIds.length)query.set('tagIds',filters.tagIds.join(','));
+      const model=url.searchParams.get('model');if(model)query.set('filters',JSON.stringify([{column:'model',operator:'=',value:model}]));
+      const rows=await readCoreExperimentTraces(requireCoreExperimentContext(),query);const page=Math.max(1,parseInt(url.searchParams.get('page')||'1',10)||1);const pageSize=Math.min(100,Math.max(1,parseInt(url.searchParams.get('pageSize')||'20',10)||20));
+      return NextResponse.json({total:rows.length,page,pageSize,items:rows.slice((page-1)*pageSize,page*pageSize).map(row=>({id:row.upload_id,taskId:row.task_id,query:row.query??null,finalResult:row.final_result??null,latency:row.latency??null,tokens:row.tokens??null,timestamp:row.timestamp,ok:Number(row.tool_call_error_count||0)===0&&row.has_failures!==true&&row.trace_status!=='failed',model:row.model??null,skillName:Array.isArray(row.skills)?row.skills[0]??null:null,skillVersion:Array.isArray(row.invoked_skills)?row.invoked_skills[0]?.version??null:null}))});
+    });}catch(error){return coreExperimentFailure(error);}
   }
 }

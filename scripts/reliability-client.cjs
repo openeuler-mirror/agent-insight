@@ -2990,7 +2990,7 @@ async function executeClaimedFiRun(cfg, run, options = {}) {
   const postResult = options.postResult || ((payload) => api(
     cfg, 'POST',
     '/api/fault-injection/runs/' + encodeURIComponent(run.runId) + '/collect-result',
-    payload,
+    { ...payload, workerId: cfg.clientId, ...(run.claimToken ? { claimToken: run.claimToken } : {}) },
   ))
   try {
     const payload = await collect(cfg, run)

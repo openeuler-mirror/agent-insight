@@ -1,0 +1,1642 @@
+{
+  "goalPlusSource": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "user": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "workspaceFingerprint": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "label": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "collectorVersion": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceSchemaVersion": {
+        "type": "Int",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "firstSeenAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$now",
+        "updated": false
+      },
+      "lastSeenAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$now",
+        "updated": false
+      },
+      "lastScanCompletedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "semanticCheckpointJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "user",
+        "sourceId"
+      ]
+    ],
+    "relations": {
+      "goals": {
+        "model": "goalPlusGoal",
+        "many": true,
+        "foreign": "sourceDbId"
+      },
+      "runs": {
+        "model": "goalPlusRun",
+        "many": true,
+        "foreign": "sourceDbId"
+      },
+      "links": {
+        "model": "goalPlusExecutionLink",
+        "many": true,
+        "foreign": "sourceDbId"
+      },
+      "snapshots": {
+        "model": "goalPlusSemanticSnapshot",
+        "many": true,
+        "foreign": "sourceDbId"
+      }
+    },
+    "parents": {},
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusGoal": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "sourceDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "goalPlusId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "currentRevision": {
+        "type": "Int",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "status": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "phase": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "goalDigest": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "boundedGoal": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "policyJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "triageJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "revisionsJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "workItemsJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "searchTasksJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "finalChecksJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "activeSessionJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "nextActionJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceCreatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceUpdatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "sourceDbId",
+        "goalPlusId"
+      ]
+    ],
+    "relations": {
+      "source": {
+        "model": "goalPlusSource",
+        "many": false,
+        "field": "sourceDbId"
+      },
+      "runs": {
+        "model": "goalPlusRun",
+        "many": true,
+        "foreign": "goalDbId"
+      },
+      "links": {
+        "model": "goalPlusExecutionLink",
+        "many": true,
+        "foreign": "goalDbId"
+      }
+    },
+    "parents": {
+      "sourceDbId": "goalPlusSource"
+    },
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusRun": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "sourceDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "goalDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "runId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "frozenSpecId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceRunId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "replacementRunId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "state": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "strategy": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "metricName": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "metricDirection": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "bestCandidateId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "bestScore": {
+        "type": "Float",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedCandidateId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedIteration": {
+        "type": "Int",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedScore": {
+        "type": "Float",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedGitHead": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedArtifactHash": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "invalidationReason": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "invalidationSummary": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "budgetUsedJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "selectedModelsJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "bestJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "reportJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceCreatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "invalidatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "sourceDbId",
+        "runId"
+      ]
+    ],
+    "relations": {
+      "source": {
+        "model": "goalPlusSource",
+        "many": false,
+        "field": "sourceDbId"
+      },
+      "goal": {
+        "model": "goalPlusGoal",
+        "many": false,
+        "field": "goalDbId"
+      },
+      "candidates": {
+        "model": "goalPlusCandidate",
+        "many": true,
+        "foreign": "runDbId"
+      },
+      "agentSessions": {
+        "model": "goalPlusAgentSession",
+        "many": true,
+        "foreign": "runDbId"
+      },
+      "links": {
+        "model": "goalPlusExecutionLink",
+        "many": true,
+        "foreign": "runDbId"
+      }
+    },
+    "parents": {
+      "sourceDbId": "goalPlusSource",
+      "goalDbId": "goalPlusGoal"
+    },
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusCandidate": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "runDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "candidateId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "status": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedModel": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "baseGitHead": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "bestIteration": {
+        "type": "Int",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "bestScore": {
+        "type": "Float",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "bestArtifactHash": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "taskJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "scoreReportJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "promotionJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "runDbId",
+        "candidateId"
+      ]
+    ],
+    "relations": {
+      "run": {
+        "model": "goalPlusRun",
+        "many": false,
+        "field": "runDbId"
+      },
+      "iterations": {
+        "model": "goalPlusIteration",
+        "many": true,
+        "foreign": "candidateDbId"
+      },
+      "agentSessions": {
+        "model": "goalPlusAgentSession",
+        "many": true,
+        "foreign": "candidateDbId"
+      },
+      "links": {
+        "model": "goalPlusExecutionLink",
+        "many": true,
+        "foreign": "candidateDbId"
+      }
+    },
+    "parents": {
+      "runDbId": "goalPlusRun"
+    },
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusIteration": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "candidateDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "iteration": {
+        "type": "Int",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "agentSessionId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedModel": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "score": {
+        "type": "Float",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "processPassed": {
+        "type": "Boolean",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "disposition": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "failureClass": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "gitHead": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "ledgerGitHead": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "artifactHash": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "changedFilesJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "metricsJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "summary": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "hypothesis": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceCreatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "candidateDbId",
+        "iteration"
+      ]
+    ],
+    "relations": {
+      "candidate": {
+        "model": "goalPlusCandidate",
+        "many": false,
+        "field": "candidateDbId"
+      }
+    },
+    "parents": {
+      "candidateDbId": "goalPlusCandidate"
+    },
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusAgentSession": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "runDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "candidateDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "agentSessionId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "host": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "role": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "nativeSessionId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "taskName": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "transcriptFingerprint": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "selectedModel": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "usageJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "hostMetadataJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "countersJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "sourceCreatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceUpdatedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "runDbId",
+        "agentSessionId"
+      ]
+    ],
+    "relations": {
+      "run": {
+        "model": "goalPlusRun",
+        "many": false,
+        "field": "runDbId"
+      },
+      "candidate": {
+        "model": "goalPlusCandidate",
+        "many": false,
+        "field": "candidateDbId"
+      },
+      "links": {
+        "model": "goalPlusExecutionLink",
+        "many": true,
+        "foreign": "agentSessionDbId"
+      }
+    },
+    "parents": {
+      "runDbId": "goalPlusRun",
+      "candidateDbId": "goalPlusCandidate"
+    },
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusExecutionLink": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "sourceDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "goalDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "runDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "candidateDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "agentSessionDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "executionId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "role": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "linkMethod": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "linkState": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "priority": {
+        "type": "Int",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "evidenceJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "linkedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "createdAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$now",
+        "updated": false
+      },
+      "updatedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": true
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "sourceDbId",
+        "executionId",
+        "role"
+      ]
+    ],
+    "relations": {
+      "source": {
+        "model": "goalPlusSource",
+        "many": false,
+        "field": "sourceDbId"
+      },
+      "goal": {
+        "model": "goalPlusGoal",
+        "many": false,
+        "field": "goalDbId"
+      },
+      "run": {
+        "model": "goalPlusRun",
+        "many": false,
+        "field": "runDbId"
+      },
+      "candidate": {
+        "model": "goalPlusCandidate",
+        "many": false,
+        "field": "candidateDbId"
+      },
+      "agentSession": {
+        "model": "goalPlusAgentSession",
+        "many": false,
+        "field": "agentSessionDbId"
+      },
+      "execution": {
+        "model": "execution",
+        "many": false,
+        "field": "executionId"
+      }
+    },
+    "parents": {
+      "sourceDbId": "goalPlusSource",
+      "goalDbId": "goalPlusGoal",
+      "runDbId": "goalPlusRun",
+      "candidateDbId": "goalPlusCandidate",
+      "agentSessionDbId": "goalPlusAgentSession",
+      "executionId": "execution"
+    },
+    "domain": "goal",
+    "immutable": false
+  },
+  "goalPlusSemanticSnapshot": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "sourceDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "snapshotId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "kind": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "objectKey": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "parentKeysJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "contentHash": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceSchemaVersion": {
+        "type": "Int",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sanitizedPayloadJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "redactionJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "ingestedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$now",
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "sourceDbId",
+        "snapshotId"
+      ]
+    ],
+    "relations": {
+      "source": {
+        "model": "goalPlusSource",
+        "many": false,
+        "field": "sourceDbId"
+      }
+    },
+    "parents": {
+      "sourceDbId": "goalPlusSource"
+    },
+    "domain": "goal",
+    "immutable": true
+  },
+  "collaboration": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "user": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "collaborationId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceType": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "reported",
+        "updated": false
+      },
+      "sourceRef": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "diagnosticsJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "[]",
+        "updated": false
+      },
+      "createdAt": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "updatedAt": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$now",
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "user",
+        "collaborationId"
+      ],
+      [
+        "user",
+        "sourceType",
+        "sourceRef"
+      ]
+    ],
+    "relations": {
+      "events": {
+        "model": "collaborationEvent",
+        "many": true,
+        "foreign": "collaborationDbId"
+      }
+    },
+    "parents": {},
+    "domain": "collaboration",
+    "immutable": false
+  },
+  "collaborationEvent": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "collaborationDbId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "user": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "collaborationId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "eventId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "fromSessionId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "toSessionId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "description": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "observedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "content": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "fromLocatorJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sourceType": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "reported",
+        "updated": false
+      },
+      "sourceRef": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "relationKind": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "role": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "eventBodyJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false,
+        "column": "bodyJson"
+      },
+      "contentHash": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false,
+        "column": "bodyHash"
+      },
+      "receivedAt": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "collaborationDbId",
+        "eventId"
+      ],
+      [
+        "user",
+        "collaborationId",
+        "eventId"
+      ]
+    ],
+    "relations": {
+      "collaboration": {
+        "model": "collaboration",
+        "many": false,
+        "field": "collaborationDbId"
+      },
+      "endpointResolutions": {
+        "model": "collaborationEndpointResolution",
+        "many": true,
+        "foreign": "eventDbId"
+      }
+    },
+    "parents": {
+      "collaborationDbId": "collaboration"
+    },
+    "domain": "collaboration",
+    "immutable": true
+  },
+  "collaborationEndpointResolution": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "eventDbId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "side": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "executionId": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "linkState": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "pending",
+        "updated": false
+      },
+      "linkMethod": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "evidenceJson": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "{}",
+        "updated": false
+      },
+      "anchorState": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "anchorJson": {
+        "type": "String",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "resolvedAt": {
+        "type": "DateTime",
+        "nullable": true,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "updatedAt": {
+        "type": "DateTime",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$now",
+        "updated": true
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "eventDbId",
+        "side"
+      ]
+    ],
+    "relations": {
+      "event": {
+        "model": "collaborationEvent",
+        "many": false,
+        "field": "eventDbId"
+      },
+      "execution": {
+        "model": "execution",
+        "many": false,
+        "field": "executionId"
+      }
+    },
+    "parents": {
+      "eventDbId": "collaborationEvent",
+      "executionId": "execution"
+    },
+    "domain": "collaboration",
+    "immutable": false
+  },
+  "collaborationSessionBinding": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": true,
+        "default": "$id",
+        "updated": false
+      },
+      "user": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "collaborationId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "sessionId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "traceSessionId": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "eventClock": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      },
+      "createdAt": {
+        "type": "String",
+        "nullable": false,
+        "hasDefault": false,
+        "default": null,
+        "updated": false
+      }
+    },
+    "unique": [
+      [
+        "id"
+      ],
+      [
+        "user",
+        "collaborationId",
+        "sessionId"
+      ]
+    ],
+    "relations": {},
+    "parents": {},
+    "domain": "collaboration",
+    "immutable": false
+  }
+}

@@ -17,19 +17,22 @@
 // 某个 infra 源在指定时间窗内「有哪些 session 在干活」。
 // 解析 source.endpoint 后查命中该 endpoint 的 execution，与详情页的 infra 曲线共用同一时间轴。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { countSessionsForEndpoint, listSessionsForEndpoint } from '@/lib/infra/sessions';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {findInfraSource} from '@/lib/infra/store';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>GET(req));
   const { searchParams } = new URL(req.url);
   const sourceId = searchParams.get('sourceId');
   if (!sourceId) return NextResponse.json({ error: 'Missing sourceId' }, { status: 400 });
 
-  const src = await prismaRaw.infraSource.findUnique({ where: { id: sourceId }, select: { endpoint: true } });
+  const src = await findInfraSource({id:sourceId});
   if (!src) return NextResponse.json({ error: 'source not found' }, { status: 404 });
 
   const toRaw = searchParams.get('to');

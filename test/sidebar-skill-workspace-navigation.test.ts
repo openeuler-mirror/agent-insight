@@ -65,7 +65,9 @@ test('左侧导航遵循新的一级模块与现有页面映射', async () => {
     assert.ok(traceItem);
     assert.equal(isSidebarItemActive(traceItem, '/details'), true);
 
-    const taskInsightItem = navigation.find(item => item.key === 'observe')?.children?.find(item => item.key === 'task-insight');
+    const taskInsightItem = navigation
+        .find(item => item.key === 'observe')
+        ?.children?.find(item => item.key === 'task-insight');
     assert.ok(taskInsightItem);
     assert.equal(taskInsightItem.href, '/task-insight');
     assert.equal(isSidebarItemActive(taskInsightItem, '/task-insight'), true);

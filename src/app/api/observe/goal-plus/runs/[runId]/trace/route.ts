@@ -1,3 +1,4 @@
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,12 +16,12 @@
  */
 
 import { NextResponse } from 'next/server';
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import { getGoalPlusRunTrace } from '@/lib/ingest/goal-plus/query';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request, context: { params: Promise<{ runId: string }> }) {
+async function handleGET(request: Request, context: { params: Promise<{ runId: string }> }) {
   const url = new URL(request.url);
   const { username } = await resolveUser(request, url.searchParams.get('user'));
   if (!username) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -31,3 +32,5 @@ export async function GET(request: Request, context: { params: Promise<{ runId: 
   if (!trace) return NextResponse.json({ error: 'Goal Plus run not found' }, { status: 404 });
   return NextResponse.json({ trace });
 }
+
+export async function GET(request: Request, context: { params: Promise<{ runId: string }> }) {return semanticRoute(request,()=>handleGET(request,context));}

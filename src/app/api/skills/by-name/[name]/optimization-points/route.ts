@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,6 +16,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { resolveUser, canAccessSkill } from '@/lib/auth/auth';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { aggregateSkillIssues, type IssueWithPrevalence } from '@/lib/engine/skill-issues';
@@ -38,7 +42,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(
   request: NextRequest,
   props: { params: Promise<{ name: string }> },
-) {
+):Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext())return withCoreWorkbenchRoute(request,input=>GET(input,props));
   try {
     const { name: rawName } = await props.params;
     const name = decodeURIComponent(rawName);
@@ -96,12 +102,10 @@ export async function GET(
       stats: result.stats,
     });
   } catch (err) {
-    console.error('[optimization-points] Error:', err);
-    return NextResponse.json(
-      { error: 'Failed to load optimization points', detail: (err as Error)?.message },
-      { status: 500 },
-    );
+    return coreExperimentFailure(err);
   }
+
+  },["read"]);
 }
 
 interface OptIssue {

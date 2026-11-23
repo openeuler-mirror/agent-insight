@@ -16,6 +16,9 @@
 
 'use client';
 
+import { apiFetch as fetch } from '@/lib/client/api';
+import { downloadApiFile } from '@/lib/client/download';
+
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Editor } from '@monaco-editor/react';
@@ -2210,15 +2213,7 @@ function getToolLabel(name: string, args: any, locale: string): string {
  * so the page doesn't appear to navigate away during the download dialog.
  */
 function triggerSkillDownload(sessionId: string, skillName: string) {
-    const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
-    const a = document.createElement('a');
-    a.href = `${basePath}/api/skill-generator/download/${encodeURIComponent(sessionId)}`;
-    // The server's Content-Disposition is authoritative for the filename;
-    // this hint is just a fallback for browsers that ignore it.
-    a.download = `${skillName || 'skill'}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    void downloadApiFile(`/api/skill-generator/download/${encodeURIComponent(sessionId)}`, `${skillName || 'skill'}.zip`).catch(console.error);
 }
 
 function ChatMessage({ msg, user, onOpenFile, onDebug, onDownload, onPreview, locale }: { msg: Message, user: string, onOpenFile: (p: string) => void, onDebug: () => void, onDownload: (skillName: string) => void, onPreview: () => void, locale: string }) {

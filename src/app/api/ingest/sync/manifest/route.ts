@@ -1,3 +1,5 @@
+import { withCoreControlRoute } from '@/lib/storage-core/control-route';
+import { requireCoreControlContext } from '@/lib/storage-core/control-context';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,16 +17,14 @@
  */
 
 
-import { resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: NextRequest) {
+async function handleGET(request: NextRequest) {
     try {
-        const userParam = request.nextUrl.searchParams.get('user');
-        const { username } = await resolveUser(request, userParam);
+        const { username } = requireCoreControlContext().actor;
         const urlPrefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
         const where: any = { isUploaded: true };
@@ -62,4 +62,8 @@ export async function GET(request: NextRequest) {
         console.error('[Manifest] Error:', error);
         return NextResponse.json({ error: 'Failed to generate manifest' }, { status: 500 });
     }
+}
+
+export async function GET(request: NextRequest) {
+    return withCoreControlRoute(request, () => handleGET(request), ['read']);
 }

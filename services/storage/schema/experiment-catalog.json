@@ -1,0 +1,1378 @@
+{
+  "version": 10,
+  "name": "experiments",
+  "tables": [
+    {
+      "name": "experiment_heads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "scope",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "skill_name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "agent_name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "watch_mode",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "watch_enabled_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "metadata_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "metadata_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "current_run_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "deleted_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "experiment_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        [
+          "workspace_id",
+          "workspaces",
+          [
+            "workspace_id"
+          ]
+        ],
+        [
+          "created_by",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "current_run_id"
+          ],
+          "experiment_runs",
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "state",
+          "scope",
+          "updated_at_ms",
+          "experiment_id"
+        ],
+        [
+          "workspace_id",
+          "watch_mode",
+          "agent_name"
+        ]
+      ],
+      "checks": [
+        "state IN ('active','deleted')",
+        "status IN ('draft','queued','running','done','partial','failed','cancelled')",
+        "type IN ('single','llm','framework','skill')",
+        "watch_mode IN (0,1)",
+        "(state='active' AND deleted_at_ms IS NULL) OR (state='deleted' AND deleted_at_ms IS NOT NULL)",
+        "length(name)>0",
+        "length(experiment_id)>0",
+        "watch_mode >= 0 AND watch_mode <= 9223372036854775807",
+        "watch_enabled_at_ms >= 0 AND watch_enabled_at_ms <= 9223372036854775807",
+        "length(metadata_hash)=64",
+        "length(metadata_ref)>0",
+        "revision >= 1 AND revision <= 9223372036854775807",
+        "lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807",
+        "deleted_at_ms >= 0 AND deleted_at_ms <= 9223372036854775807",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807",
+        "updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807"
+      ],
+      "immutable": false,
+      "identity": [
+        "workspace_id",
+        "experiment_id",
+        "created_by",
+        "created_at_ms"
+      ],
+      "revision_guard": true
+    },
+    {
+      "name": "experiment_runs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "generation",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "run_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "run_id"
+        ],
+        [
+          "workspace_id",
+          "experiment_id",
+          "generation"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "experiment_heads",
+          [
+            "workspace_id",
+            "experiment_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "run_id"
+          ],
+          "runs",
+          [
+            "workspace_id",
+            "run_id"
+          ]
+        ],
+        [
+          "created_by",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "created_at_ms"
+        ]
+      ],
+      "checks": [
+        "length(experiment_id)>0",
+        "generation >= 1 AND generation <= 9223372036854775807",
+        "lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807"
+      ],
+      "immutable": true,
+      "identity": [],
+      "revision_guard": false
+    },
+    {
+      "name": "experiment_cases",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "payload_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "deleted_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "binding_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "case_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "case_id"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "experiment_heads",
+          [
+            "workspace_id",
+            "experiment_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "trace_id"
+          ],
+          "trace_locators",
+          [
+            "workspace_id",
+            "trace_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "state",
+          "ordinal"
+        ]
+      ],
+      "checks": [
+        "state IN ('active','deleted')",
+        "(state='active' AND deleted_at_ms IS NULL) OR (state='deleted' AND deleted_at_ms IS NOT NULL)",
+        "binding_hash IS NULL OR length(binding_hash)=64",
+        "length(experiment_id)>0",
+        "length(case_id)>0",
+        "ordinal >= 0 AND ordinal <= 9223372036854775807",
+        "revision >= 1 AND revision <= 9223372036854775807",
+        "lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807",
+        "length(payload_hash)=64",
+        "length(payload_ref)>0",
+        "deleted_at_ms >= 0 AND deleted_at_ms <= 9223372036854775807",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807",
+        "updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807",
+        "length(binding_hash)=64"
+      ],
+      "immutable": false,
+      "identity": [
+        "workspace_id",
+        "experiment_id",
+        "case_id",
+        "created_at_ms"
+      ],
+      "revision_guard": true,
+      "partial_indexes": [
+        {
+          "name": "idx_experiment_case_active_binding",
+          "columns": [
+            "workspace_id",
+            "experiment_id",
+            "binding_hash"
+          ],
+          "unique": true,
+          "where": "state='active'"
+        }
+      ]
+    },
+    {
+      "name": "experiment_result_slots",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evaluator_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "selected_result_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "review_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "evaluation_version",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "result_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "case_id",
+          "evaluator_id"
+        ],
+        [
+          "workspace_id",
+          "experiment_id",
+          "result_id"
+        ],
+        [
+          "workspace_id",
+          "experiment_id",
+          "case_id",
+          "result_id"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ],
+          "experiment_cases",
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ],
+          "experiment_runs",
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_id",
+            "evaluator_id"
+          ],
+          "work_items",
+          [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_key",
+            "evaluator_slot"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "run_id",
+            "case_id",
+            "evaluator_id",
+            "selected_result_id"
+          ],
+          "result_receipts",
+          [
+            "workspace_id",
+            "run_id",
+            "case_key",
+            "evaluator_slot",
+            "result_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "result_id",
+            "review_id"
+          ],
+          "experiment_annotations",
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "result_id",
+            "annotation_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "status"
+        ]
+      ],
+      "checks": [
+        "status IN ('pending','running','done','failed','cancelled','skipped')",
+        "(run_id IS NULL AND work_item_id IS NULL AND selected_result_id IS NULL) OR (run_id IS NOT NULL AND work_item_id IS NOT NULL)",
+        "length(experiment_id)>0",
+        "length(case_id)>0",
+        "length(result_id)>0",
+        "length(evaluator_id)>0",
+        "revision >= 1 AND revision <= 9223372036854775807",
+        "evaluation_version >= 0 AND evaluation_version <= 9223372036854775807",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807",
+        "updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807"
+      ],
+      "immutable": false,
+      "identity": [
+        "workspace_id",
+        "experiment_id",
+        "case_id",
+        "result_id",
+        "evaluator_id",
+        "created_at_ms"
+      ],
+      "revision_guard": true
+    },
+    {
+      "name": "experiment_attempt_checkpoints",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "fence",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lease_owner",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "payload_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "stage",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "command_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "attempt_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "run_id",
+          "attempt_id",
+          "actor_principal_id"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ],
+          "experiment_cases",
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ],
+          "experiment_runs",
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "work_item_id",
+            "attempt_id"
+          ],
+          "work_attempts",
+          [
+            "workspace_id",
+            "work_item_id",
+            "attempt_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_id"
+          ],
+          "work_items",
+          [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_key"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "trace_id"
+          ],
+          "trace_locators",
+          [
+            "workspace_id",
+            "trace_id"
+          ]
+        ],
+        [
+          "actor_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "case_id",
+          "created_at_ms"
+        ],
+        [
+          "workspace_id",
+          "command_id"
+        ]
+      ],
+      "checks": [
+        "length(experiment_id)>0",
+        "length(case_id)>0",
+        "fence >= 1 AND fence <= 9223372036854775807",
+        "length(lease_owner)>0",
+        "lifecycle_revision >= 1 AND lifecycle_revision <= 9223372036854775807",
+        "case_lifecycle_revision >= 1 AND case_lifecycle_revision <= 9223372036854775807",
+        "revision >= 1 AND revision <= 9223372036854775807",
+        "length(payload_hash)=64",
+        "length(payload_ref)>0",
+        "length(stage)>0",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807",
+        "updated_at_ms >= 0 AND updated_at_ms <= 9223372036854775807"
+      ],
+      "immutable": false,
+      "identity": [
+        "workspace_id",
+        "experiment_id",
+        "case_id",
+        "run_id",
+        "work_item_id",
+        "attempt_id",
+        "fence",
+        "lease_owner",
+        "actor_principal_id",
+        "lifecycle_revision",
+        "case_lifecycle_revision",
+        "created_at_ms"
+      ],
+      "revision_guard": true
+    },
+    {
+      "name": "experiment_annotations",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "annotation_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "machine_result_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "subject_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lookup_key",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "annotation_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "annotation_id"
+        ],
+        [
+          "workspace_id",
+          "experiment_id",
+          "case_id",
+          "result_id",
+          "annotation_id"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "experiment_heads",
+          [
+            "workspace_id",
+            "experiment_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ],
+          "experiment_cases",
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "result_id"
+          ],
+          "experiment_result_slots",
+          [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "result_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "machine_result_id"
+          ],
+          "result_receipts",
+          [
+            "workspace_id",
+            "result_id"
+          ]
+        ],
+        [
+          "actor_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "created_at_ms",
+          "annotation_id"
+        ],
+        [
+          "workspace_id",
+          "result_id",
+          "created_at_ms"
+        ],
+        [
+          "workspace_id",
+          "kind",
+          "lookup_key",
+          "created_at_ms",
+          "annotation_id"
+        ]
+      ],
+      "checks": [
+        "kind IN ('review','comment','comment_remove','cancellation','cancellation_update','derived-evaluation','derived-issue')",
+        "result_id IS NULL OR case_id IS NOT NULL",
+        "kind<>'review' OR (result_id IS NOT NULL AND machine_result_id IS NOT NULL)",
+        "kind<>'comment_remove' OR subject_id IS NOT NULL",
+        "length(experiment_id)>0",
+        "length(case_id)>0",
+        "length(result_id)>0",
+        "length(payload_hash)=64",
+        "length(payload_ref)>0",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807"
+      ],
+      "immutable": true,
+      "identity": [],
+      "revision_guard": false
+    },
+    {
+      "name": "experiment_operation_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "response_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "response_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "actor_principal_id",
+        "operation_kind",
+        "operation_key"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        [
+          "actor_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "experiment_heads",
+          [
+            "workspace_id",
+            "experiment_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "created_at_ms"
+        ]
+      ],
+      "checks": [
+        "length(operation_kind)>0",
+        "length(operation_key)>0",
+        "length(request_hash)=64",
+        "length(experiment_id)>0",
+        "length(response_hash)=64",
+        "length(response_ref)>0",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807"
+      ],
+      "immutable": true,
+      "identity": [],
+      "revision_guard": false
+    },
+    {
+      "name": "experiment_judge_traces",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "trace_id"
+          ],
+          "trace_locators",
+          [
+            "workspace_id",
+            "trace_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ],
+          "experiment_runs",
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id",
+            "attempt_id",
+            "owner_principal_id"
+          ],
+          "experiment_attempt_checkpoints",
+          [
+            "workspace_id",
+            "experiment_id",
+            "run_id",
+            "attempt_id",
+            "actor_principal_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "attempt_id"
+          ],
+          "work_attempts",
+          [
+            "workspace_id",
+            "attempt_id"
+          ]
+        ],
+        [
+          "owner_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "run_id",
+          "attempt_id"
+        ]
+      ],
+      "checks": [
+        "length(experiment_id)>0",
+        "created_at_ms >= 0 AND created_at_ms <= 9223372036854775807"
+      ],
+      "immutable": true,
+      "identity": [],
+      "revision_guard": false
+    }
+  ]
+}

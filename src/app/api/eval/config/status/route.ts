@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,17 +23,19 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+
+    if (searchParams.get('check_login') === 'true' || searchParams.get('check_org') === 'true') {
+        const loginMode = resolveLoginMode();
+        return NextResponse.json({
+            login_mode: loginMode,
+            org_mode: loginMode === 'organization',
+            org_login_redirect_url: process.env.ORG_LOGIN_REDIRECT_URL || ''
+        });
+    }
+
+  return withCoreControlRoute(request,async()=>{
     try {
-        const { searchParams } = new URL(request.url);
-        
-        if (searchParams.get('check_login') === 'true' || searchParams.get('check_org') === 'true') {
-            const loginMode = resolveLoginMode();
-            return NextResponse.json({
-                login_mode: loginMode,
-                org_mode: loginMode === 'organization',
-                org_login_redirect_url: process.env.ORG_LOGIN_REDIRECT_URL || ''
-            });
-        }
 
         const id = searchParams.get('id');
         if (!id) {
@@ -74,4 +77,6 @@ export async function GET(request: Request) {
         console.error('Config Status Error:', error);
         return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
     }
+
+  },["read"]);
 }

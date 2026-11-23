@@ -28,6 +28,9 @@
  *
  * 输出固定 5 字段，直接对接 derive-skill-opt-points → SkillIssue 表。
  */
+import { getTrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { setTimeout as delay } from 'node:timers/promises';
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { jsonrepair } from 'jsonrepair';
 import {
@@ -42,7 +45,7 @@ import { loadServerModelForUser } from '@/lib/engine/general-agent/server-model-
 import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
-import { recordEvaluatorExecution } from './evaluator-execution-recorder';
+import { isCoreTraceRecordingError, recordEvaluatorExecution } from './evaluator-execution-recorder';
 import type { KeyActionTraceAnalysisResult, TrajectoryDimensionScores } from './trajectory-evaluator';
 
 /** 改进建议分类——映射到 SkillIssue.category（前端按它分组展示）。 */
@@ -300,19 +303,22 @@ async function runSuggestionViaOpencode(args: {
   executionId: string;
   attemptTimeoutMs: number;
 }): Promise<string> {
-  const model = await loadServerModelForUser(args.user);
+  const trusted = getTrustedCoreAgentContext();
+  trusted?.cancelSignal?.throwIfAborted();
+  const model = trusted?.trustedModel || await loadServerModelForUser(args.user);
   if (!model) {
     throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
   }
 
   return runWithEphemeralOpencodeServer(
-    { user: args.user || undefined, verbose: false, isolateHome: true, telemetryEnabled: false },
+    { user: args.user || undefined, verbose: false, isolateHome: true, telemetryEnabled: false, signal: trusted?.cancelSignal, ...(trusted ? {captureMode:'core-recorded' as const, frozenModel:trusted.trustedModel} : {}) },
     async (serverUrl) => {
       const insight = new AgentInsight({
         baseURL: serverUrl,
         timeout: 180_000,
         maxRetries: 2,
         logLevel: 'warn',
+        ...(trusted ? { directory: args.workspaceDir } : {}),
       });
       const permissions = buildPermissionsForWorkspace(args.workspaceDir);
       const sessionResp = await insight.createSession({
@@ -365,6 +371,7 @@ async function runSuggestionViaOpencode(args: {
 
       let agentText = '';
       let attemptTimedOut = false;
+      let failure: { code: string; message: string } | undefined;
       const attemptAbort = new AbortController();
       const attemptTimer = setTimeout(() => {
         attemptTimedOut = true;
@@ -374,14 +381,18 @@ async function runSuggestionViaOpencode(args: {
         const result = await insight.chat(sessionId, payload, handlers, {
           streamTimeoutMs: args.attemptTimeoutMs,
           idleTimeoutMs: 60_000,
-          signal: attemptAbort.signal,
+          signal: trusted?.cancelSignal ? AbortSignal.any([trusted.cancelSignal, attemptAbort.signal]) : attemptAbort.signal,
         });
         agentText = result.transcriptText || result.text || fullText;
         if (attemptTimedOut) {
           throw new Error(`Skill suggestion attempt timeout（${args.attemptTimeoutMs}ms）`);
         }
+        trusted?.cancelSignal?.throwIfAborted();
         if (runtimeError) throw runtimeError;
         return agentText;
+      } catch (cause) {
+        failure = { code: 'MODEL_ERROR', message: cause instanceof Error ? cause.message : String(cause) };
+        throw cause;
       } finally {
         clearTimeout(attemptTimer);
         try {
@@ -391,8 +402,10 @@ async function runSuggestionViaOpencode(args: {
             user: args.user,
             query: args.query,
             fallbackOutput: agentText || fullText,
+            ...(trusted ? { failure } : {}),
           });
         } catch (persistError) {
+          if (trusted || isCoreTraceRecordingError(persistError)) throw persistError;
           console.warn(
             '[skill-suggestion-agent] failed to persist suggestion execution:',
             (persistError as Error)?.message || persistError,
@@ -409,6 +422,9 @@ async function runSuggestionViaOpencode(args: {
  * 注意：skill 内容不旁路注入，agent 从 trace 的 load_skill 节点读取实际执行的那版 skill。
  */
 export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs): Promise<SkillSuggestion[]> {
+  const trusted = getTrustedCoreAgentContext();
+  if (isStorageCoreEnabled() && !trusted) throw new Error('Trusted core suggestion context required');
+  trusted?.cancelSignal?.throwIfAborted();
   const user = String(args.user || '').trim();
   const skillName = String(args.skillName || '').trim();
   const executionId = String(args.executionId || '').trim();
@@ -417,7 +433,7 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
   if (interactions.length === 0) return [];
 
   const workspaceTag = `skill-suggestion-${executionId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
-  const workspaceDir = ensureSessionWorkspace(user, workspaceTag);
+  const workspaceDir = trusted?.trustedWorkspaceDir || ensureSessionWorkspace(user, workspaceTag);
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
 
   const skillLabel = `${skillName}${args.skillVersion != null ? `@v${args.skillVersion}` : ''}`;
@@ -450,6 +466,7 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
     ? Number(args.maxAttempts)
     : 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    trusted?.cancelSignal?.throwIfAborted();
     try {
       const agentText = await withBackgroundOpencodeSlot(
         () => runSuggestionViaOpencode({
@@ -465,6 +482,7 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
           skill: skillName,
           skillVersion: args.skillVersion ?? undefined,
           label: `skill-suggestion · ${executionId}`,
+          signal: trusted?.cancelSignal,
         },
       );
       const suggestions = parseSkillSuggestions(agentText);
@@ -474,11 +492,14 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
       // 成功跑完（无论是否空）不再重试——重试只针对错误。
       return suggestions;
     } catch (e) {
+      if (isCoreTraceRecordingError(e)) throw e;
+      trusted?.cancelSignal?.throwIfAborted();
       const msg = (e as Error).message || String(e);
       const transient = /fetch failed|ECONN|ETIMEDOUT|EAI_AGAIN|network|timeout|socket hang|aborted/i.test(msg);
       console.warn(`[skill-suggestion-agent] attempt ${attempt}/${maxAttempts} failed for ${executionId}: ${msg}`);
-      if (!transient || attempt === maxAttempts) break;
-      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      if (!transient || attempt === maxAttempts) { if (trusted) throw e; break; }
+      if (trusted) await delay(1500 * attempt, undefined, { signal: trusted.cancelSignal });
+      else await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
     }
   }
   return [];

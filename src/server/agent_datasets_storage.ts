@@ -15,11 +15,8 @@
  */
 
 import { normalizeTraceCases } from '@/lib/trace-datasets/contracts';
-import fs from 'fs';
-import path from 'path';
+import {listCoreDatasets,findCoreDataset,saveCoreDataset,deleteCoreDataset,cacheCoreDatasetRootCauses} from '@/lib/storage-core/datasets';
 import { randomUUID } from 'crypto';
-import { PrismaClient } from '@prisma/client';
-import { db } from '@/lib/storage/prisma';
 import {
   canReuseRootCauseCache,
   hashExpectedOutput,
@@ -28,24 +25,9 @@ import {
   type DatasetCaseRootCauseMeta,
   type RootCauseItem,
 } from '@/lib/dataset-case-root-causes';
-import { resolveAgentInsightDataPath } from '@/lib/env';
 import { SYSTEM_BENCHMARK_DATASET_OWNER } from '@/lib/benchmark/dataset-ownership';
 
-const DATA_DIR = resolveAgentInsightDataPath();
-const LEGACY_FILE = path.join(DATA_DIR, 'agent_datasets.json');
 
-let fileBackendWarned = false;
-
-function warnFileBackendOnce() {
-  if (fileBackendWarned) return;
-  fileBackendWarned = true;
-  const client = db.getClient();
-  if (!(client instanceof PrismaClient)) {
-    console.warn(
-      '[agent-datasets] 使用 JSON 文件存储（非 Prisma 数据库客户端）。评测集数据在 data/agent_datasets.json。',
-    );
-  }
-}
 
 export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
 
@@ -93,6 +75,7 @@ export interface DatasetCase {
 }
 
 export interface AgentDatasetRecord {
+  _storageEtag?: string;
   generationSource?: string | null;
   generationStatus?: string | null;
   id: string;
@@ -179,16 +162,6 @@ export function buildAgentDatasetProjection(cases: DatasetCase[], trace = false)
       tags: item.tags,
     }))),
   };
-}
-
-function tryGetPrisma(): PrismaClient | null {
-  const client = db.getClient();
-  return client instanceof PrismaClient ? client : null;
-}
-
-function ensureLegacyDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(LEGACY_FILE)) fs.writeFileSync(LEGACY_FILE, JSON.stringify([], null, 2));
 }
 
 export function normalizeDatasetKind(value: unknown): DatasetKind {
@@ -572,105 +545,9 @@ function summaryFromDbRow(row: {
   };
 }
 
-function readLegacyFileSync(): AgentDatasetRecord[] {
-  ensureLegacyDir();
-  try {
-    const raw = fs.readFileSync(LEGACY_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item: unknown) =>
-        item && typeof item === 'object' ? normalizeStoredDataset(item as Record<string, unknown>) : null,
-      )
-      .filter((d): d is AgentDatasetRecord => d !== null && Boolean(d.id) && Boolean(d.user));
-  } catch {
-    return [];
-  }
-}
 
-function writeLegacyFileSync(datasets: AgentDatasetRecord[]) {
-  ensureLegacyDir();
-  fs.writeFileSync(LEGACY_FILE, JSON.stringify(datasets, null, 2));
-}
-
-let legacyMigration: Promise<void> | null = null;
-
-async function migrateLegacyJsonIfNeeded(prisma: PrismaClient): Promise<void> {
-  if (legacyMigration) return legacyMigration;
-
-  legacyMigration = (async () => {
-    const count = await prisma.agentEvalDataset.count();
-    if (count > 0) {
-      if (fs.existsSync(LEGACY_FILE)) {
-        try {
-          fs.renameSync(LEGACY_FILE, `${LEGACY_FILE}.bak.${Date.now()}`);
-        } catch {
-          /* ignore */
-        }
-      }
-      return;
-    }
-
-    if (!fs.existsSync(LEGACY_FILE)) return;
-
-    let list: AgentDatasetRecord[];
-    try {
-      const raw = fs.readFileSync(LEGACY_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return;
-      list = parsed
-        .map((item: unknown) =>
-          item && typeof item === 'object' ? normalizeStoredDataset(item as Record<string, unknown>) : null,
-        )
-        .filter((d): d is AgentDatasetRecord => d !== null && Boolean(d.id) && Boolean(d.user));
-    } catch {
-      return;
-    }
-
-    if (list.length === 0) return;
-
-    for (const r of list) {
-      const projection = buildAgentDatasetProjection(r.cases);
-      await prisma.agentEvalDataset.create({
-        data: {
-          id: r.id,
-          user: r.user,
-          name: r.name,
-          description: r.description,
-          targetAgent: r.targetAgent,
-          targetSkill: r.targetSkill ?? '',
-          tagsJson: JSON.stringify(r.tags),
-          fieldsJson: JSON.stringify(r.fields),
-          casesJson: JSON.stringify(r.cases),
-          ...projection,
-          projectionReady: true,
-          datasetKind: r.datasetKind,
-          createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
-          updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
-        },
-      });
-    }
-
-    try {
-      fs.renameSync(LEGACY_FILE, `${LEGACY_FILE}.migrated.${Date.now()}`);
-    } catch {
-      /* ignore */
-    }
-  })();
-
-  return legacyMigration;
-}
-
-/** 全部评测集（仅 Prisma 路径会做 JSON 文件一次性迁移） */
 export async function readAllAgentDatasets(): Promise<AgentDatasetRecord[]> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const rows = await prisma.agentEvalDataset.findMany({ orderBy: { updatedAt: 'desc' } });
-    return rows.map(recordFromDbRow);
-  }
-  warnFileBackendOnce();
-  return readLegacyFileSync();
+  return listCoreDatasets();
 }
 
 function agentDatasetVisibilityWhere(user: string) {
@@ -692,33 +569,7 @@ function canReadAgentDataset(user: string, item: Pick<AgentDatasetRecord, 'user'
 }
 
 export async function readUserAgentDatasets(user: string, includeTrace = true): Promise<AgentDatasetRecord[]> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}) },
-      orderBy: { updatedAt: 'desc' },
-    });
-    return rows.map(recordFromDbRow);
-  }
-  warnFileBackendOnce();
-  return readLegacyFileSync().filter(item => canReadAgentDataset(user, item));
-}
-
-async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: string): Promise<void> {
-  const pending = await prisma.agentEvalDataset.findMany({
-    where: { ...agentDatasetVisibilityWhere(user), projectionReady: false, generationSource: null },
-    select: { id: true, casesJson: true, updatedAt: true },
-  });
-  for (const row of pending) {
-    let rawCases: unknown = [];
-    try { rawCases = JSON.parse(row.casesJson || '[]'); } catch { rawCases = []; }
-    const projection = buildAgentDatasetProjection(normalizeCases(rawCases));
-    await prisma.agentEvalDataset.update({
-      where: { id: row.id },
-      data: { ...projection, projectionReady: true, updatedAt: row.updatedAt },
-    });
-  }
+  return listCoreDatasets('full', undefined, includeTrace);
 }
 
 export async function readAgentDatasetSummaries(
@@ -726,25 +577,7 @@ export async function readAgentDatasetSummaries(
   targetSkill?: string,
   includeTrace = true,
 ): Promise<AgentDatasetSummary[]> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    await ensureAgentDatasetProjectionsForUser(prisma, user);
-    const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}), ...(targetSkill !== undefined ? { targetSkill } : {}) },
-      select: {
-        id: true, user: true, name: true, description: true, targetAgent: true,
-        targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
-        generationSource: true, generationStatus: true, caseCount: true, createdAt: true, updatedAt: true,
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
-    return rows.map(summaryFromDbRow);
-  }
-  warnFileBackendOnce();
-  return readLegacyFileSync()
-    .filter(item => canReadAgentDataset(user, item) && (targetSkill === undefined || item.targetSkill === targetSkill))
-    .map(({ cases, ...item }) => ({ ...item, caseCount: cases.length }));
+  return listCoreDatasets('summary', targetSkill, includeTrace);
 }
 
 export async function readAgentDatasetReferences(
@@ -752,120 +585,19 @@ export async function readAgentDatasetReferences(
   targetSkill?: string,
   includeTrace = true,
 ): Promise<AgentDatasetReference[]> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    await ensureAgentDatasetProjectionsForUser(prisma, user);
-    const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), ...(!includeTrace ? { generationSource: null } : {}), ...(targetSkill !== undefined ? { targetSkill } : {}) },
-      select: {
-        id: true, user: true, name: true, description: true, targetAgent: true,
-        targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
-        generationSource: true, generationStatus: true, caseCount: true, referenceCasesJson: true, createdAt: true, updatedAt: true,
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
-    return rows.map(row => {
-      let cases: AgentDatasetReferenceCase[] = [];
-      try {
-        const parsed = JSON.parse(row.referenceCasesJson || '[]');
-        if (Array.isArray(parsed)) cases = parsed.map(item => ({
-          id: String(item?.id || ''),
-          input: String(item?.input || ''),
-          expectedOutput: String(item?.expectedOutput || ''),
-          evaluationFocus: String(item?.evaluationFocus || ''),
-          tags: normalizeTags(item?.tags),
-        }));
-      } catch { cases = []; }
-      return { ...summaryFromDbRow(row), cases };
-    });
-  }
-  warnFileBackendOnce();
-  return readLegacyFileSync()
-    .filter(item => canReadAgentDataset(user, item) && (targetSkill === undefined || item.targetSkill === targetSkill))
-    .map(item => ({
-      ...item,
-      caseCount: item.cases.length,
-      cases: item.cases.map(({ id, input, expectedOutput, evaluationFocus, tags }) => ({
-        id, input, expectedOutput, evaluationFocus, tags,
-      })),
-    }));
+  return listCoreDatasets('reference', targetSkill, includeTrace);
 }
 
 export async function findAgentDataset(user: string, id: string): Promise<AgentDatasetRecord | null> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const row = await prisma.agentEvalDataset.findFirst({
-      where: { id, ...agentDatasetVisibilityWhere(user) },
-    });
-    return row ? recordFromDbRow(row) : null;
-  }
-  warnFileBackendOnce();
-  return readLegacyFileSync().find(d => d.id === id && canReadAgentDataset(user, d)) ?? null;
+  return findCoreDataset(id);
 }
 
 export async function createAgentDatasetRecord(record: AgentDatasetRecord): Promise<void> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const projection = buildAgentDatasetProjection(record.cases);
-    await prisma.agentEvalDataset.create({
-      data: {
-        id: record.id,
-        user: record.user,
-        name: record.name,
-        description: record.description,
-        targetAgent: record.targetAgent,
-        targetSkill: record.targetSkill ?? '',
-        tagsJson: JSON.stringify(record.tags),
-        fieldsJson: JSON.stringify(record.fields),
-        casesJson: JSON.stringify(record.cases),
-        ...projection,
-        projectionReady: true,
-        datasetKind: record.datasetKind,
-        createdAt: new Date(record.createdAt),
-        updatedAt: new Date(record.updatedAt),
-      },
-    });
-    return;
-  }
-  warnFileBackendOnce();
-  const datasets = readLegacyFileSync();
-  datasets.push(record);
-  writeLegacyFileSync(datasets);
+  { await saveCoreDataset(record, {create:true}); return; }
 }
 
 export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Promise<boolean> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const projection = buildAgentDatasetProjection(updated.cases, updated.generationSource === 'trace');
-    const res = await prisma.agentEvalDataset.updateMany({
-      where: { id: updated.id, user: updated.user, ...(updated.generationSource === 'trace' ? { generationStatus: 'published', OR: [{ generationJob: { is: null } }, { generationJob: { is: { status: 'succeeded' } } }] } : {}) },
-      data: {
-        name: updated.name,
-        description: updated.description,
-        targetAgent: updated.targetAgent,
-        targetSkill: updated.targetSkill ?? '',
-        tagsJson: JSON.stringify(updated.tags),
-        fieldsJson: JSON.stringify(updated.fields),
-        casesJson: JSON.stringify(updated.cases),
-        ...projection,
-        projectionReady: true,
-        datasetKind: updated.datasetKind,
-        updatedAt: new Date(updated.updatedAt),
-      },
-    });
-    return res.count > 0;
-  }
-  warnFileBackendOnce();
-  const datasets = readLegacyFileSync();
-  const index = datasets.findIndex(item => item.id === updated.id && item.user === updated.user);
-  if (index === -1) return false;
-  datasets[index] = updated;
-  writeLegacyFileSync(datasets);
-  return true;
+  { await saveCoreDataset(updated); return true; }
 }
 
 export interface DatasetRootCauseWarning {
@@ -938,49 +670,14 @@ export async function cacheLiveRootCausesForDatasetCase(options: {
   now?: Date;
 }): Promise<DatasetCaseRootCauseCacheWriteStatus> {
   const { user, datasetId, caseId, expectedOutput, rootCauses, now = new Date() } = options;
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const row = await prisma.agentEvalDataset.findFirst({ where: { id: datasetId, user } });
-    if (!row) return 'not-found';
-
-    const prepared = prepareLiveRootCauseCacheWrite(
-      recordFromDbRow(row),
-      caseId,
-      expectedOutput,
-      rootCauses,
-      now,
-    );
+  {
+    const record = await findCoreDataset(datasetId);
+    if (!record) return 'not-found';
+    const prepared = prepareLiveRootCauseCacheWrite(record, caseId, expectedOutput, rootCauses, now);
     if (!prepared.cases) return prepared.status;
-
-    const projection = buildAgentDatasetProjection(prepared.cases);
-    const result = await prisma.agentEvalDataset.updateMany({
-      where: { id: datasetId, user, updatedAt: row.updatedAt },
-      data: {
-        casesJson: JSON.stringify(prepared.cases),
-        ...projection,
-        projectionReady: true,
-        updatedAt: row.updatedAt,
-      },
-    });
-    return result.count > 0 ? 'updated' : 'conflict';
+    const value = prepared.cases.find(item => item.id === caseId);
+    return await cacheCoreDatasetRootCauses(datasetId, caseId, expectedOutput, value?.rootCauses || [], value?.rootCauseMeta) ? 'updated' : 'conflict';
   }
-
-  warnFileBackendOnce();
-  const datasets = readLegacyFileSync();
-  const datasetIndex = datasets.findIndex(item => item.id === datasetId && item.user === user);
-  if (datasetIndex < 0) return 'not-found';
-  const prepared = prepareLiveRootCauseCacheWrite(
-    datasets[datasetIndex],
-    caseId,
-    expectedOutput,
-    rootCauses,
-    now,
-  );
-  if (!prepared.cases) return prepared.status;
-  datasets[datasetIndex] = { ...datasets[datasetIndex], cases: prepared.cases };
-  writeLegacyFileSync(datasets);
-  return 'updated';
 }
 
 export interface PrepareDatasetCasesOptions {
@@ -1090,30 +787,9 @@ export async function findAgentDatasetsByTargetSkill(
   user: string,
   targetSkill: string,
 ): Promise<AgentDatasetRecord[]> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const rows = await prisma.agentEvalDataset.findMany({
-      where: { ...agentDatasetVisibilityWhere(user), targetSkill },
-      orderBy: { updatedAt: 'desc' },
-    });
-    return rows.map(recordFromDbRow);
-  }
-  warnFileBackendOnce();
-  return readLegacyFileSync().filter(d => canReadAgentDataset(user, d) && (d.targetSkill ?? '') === targetSkill);
+  return listCoreDatasets('full', targetSkill);
 }
 
 export async function deleteAgentDataset(user: string, id: string): Promise<boolean> {
-  const prisma = tryGetPrisma();
-  if (prisma) {
-    await migrateLegacyJsonIfNeeded(prisma);
-    const res = await prisma.agentEvalDataset.deleteMany({ where: { id, user } });
-    return res.count > 0;
-  }
-  warnFileBackendOnce();
-  const datasets = readLegacyFileSync();
-  const next = datasets.filter(d => !(d.id === id && d.user === user));
-  if (next.length === datasets.length) return false;
-  writeLegacyFileSync(next);
-  return true;
+  return deleteCoreDataset(id);
 }

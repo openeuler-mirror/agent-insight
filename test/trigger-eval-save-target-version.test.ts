@@ -17,17 +17,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
-import { createIsolatedDatabase } from './helpers/isolated-database';
+import { startIsolatedControlCore } from './helpers/isolated-control-core';
 
 const require = createRequire(import.meta.url);
-const database = createIsolatedDatabase();
+const user = 'trigger-save-target-test';
+let core: Awaited<ReturnType<typeof startIsolatedControlCore>>;
+test.before(async () => { core = await startIsolatedControlCore([user, 'trigger-save-empty-skill-user']); });
 const { prismaRaw: store } = require('../src/lib/storage/prisma') as typeof import('@/lib/storage/prisma');
-const storage = require('../src/server/skill_trigger_eval_storage') as typeof import('@/server/skill_trigger_eval_storage');
+const unscopedStorage = require('../src/server/skill_trigger_eval_storage') as typeof import('@/server/skill_trigger_eval_storage');
 const { POST } = require('../src/app/api/skill-eval/trigger/[skillName]/route') as typeof import('@/app/api/skill-eval/trigger/[skillName]/route');
 
-test.after(async () => { await store.$disconnect(); database.dispose(); });
+test.after(async () => { await core?.dispose(); });
+const storage = new Proxy(unscopedStorage, { get(target, key) { const fn = target[key as keyof typeof target]; return typeof fn === 'function' ? (...args: any[]) => core.run(typeof args[0] === 'object' ? args[0].user : user, () => (fn as Function)(...args)) : fn; } });
 
-const user = 'trigger-save-target-test';
 const skillName = 'save-target-skill';
 
 const items = (query: string) => [{ id: query, query, shouldTrigger: true, source: 'user-added' as const }];
@@ -35,7 +37,7 @@ const items = (query: string) => [{ id: query, query, shouldTrigger: true, sourc
 async function save(payload: Record<string, unknown>) {
   return POST(
     new Request(`http://localhost/api/skill-eval/trigger/${encodeURIComponent(skillName)}`, {
-      method: 'POST',
+      method: 'POST', headers: { authorization: 'Bearer ' + core.tokens[typeof payload !== 'undefined' && payload.user ? String(payload.user) : user] },
       body: JSON.stringify({ user, ...payload }),
     }),
     { params: Promise.resolve({ skillName }) },
@@ -78,7 +80,7 @@ test('只有占位行、没有任何 ready 版本时，保存新建 manual 版�
   });
   const response = await POST(
     new Request(`http://localhost/api/skill-eval/trigger/${encodeURIComponent(skillName)}`, {
-      method: 'POST',
+      method: 'POST', headers: { authorization: 'Bearer ' + core.tokens[orphanUser] },
       body: JSON.stringify({ user: orphanUser, versionId: orphan.id, items: items('manual') }),
     }),
     { params: Promise.resolve({ skillName }) },
@@ -88,5 +90,5 @@ test('只有占位行、没有任何 ready 版本时，保存新建 manual 版�
   assert.notEqual(created.id, orphan.id);
   assert.equal(created.versionSource, 'manual');
   assert.deepEqual(created.items.map(i => i.query), ['manual']);
-  assert.deepEqual((await storage.findTriggerEvalSetById(orphan.id))?.items, []);
+  assert.deepEqual((await core.run(orphanUser, () => unscopedStorage.findTriggerEvalSetById(orphan.id)))?.items, []);
 });

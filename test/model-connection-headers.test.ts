@@ -1,3 +1,13 @@
+import { startIsolatedControlCore } from './helpers/isolated-control-core';
+let core: Awaited<ReturnType<typeof startIsolatedControlCore>>;
+test.before(async () => { core = await startIsolatedControlCore(['test-only']); });
+test.after(async () => { await core?.dispose(); });
+function authenticatedRequest(url: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('authorization', 'Bearer ' + core.tokens['test-only']);
+  return new Request(url, { ...init, headers });
+}
+
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -146,6 +156,7 @@ test('连接测试会把 Authorization 等自定义 Header 发送给模型端点
   const oldProxyEnv = Object.fromEntries(proxyEnvNames.map(name => [name, process.env[name]]));
   for (const name of proxyEnvNames) delete process.env[name];
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(_input instanceof Request ? _input.url : String(_input)).origin === core.origin) return originalFetch(_input, init);
     receivedAuthorization = new Headers(init?.headers).get('authorization') ?? '';
     return new Response(JSON.stringify({
       id: 'chatcmpl-test',
@@ -165,7 +176,7 @@ test('连接测试会把 Authorization 等自定义 Header 发送给模型端点
   resetProxyConfigCache();
 
   try {
-    const response = await testModelConnection(new Request('http://localhost/api/eval/settings/test', {
+    const response = await testModelConnection(authenticatedRequest('http://localhost/api/eval/settings/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -139,12 +139,20 @@ function toggleFilter<T extends string>(values: T[], value: T) {
   return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
+interface EvaluatorListSnapshot { user: string | null; cards: EvaluatorCard[]; etag?: string }
+
 export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
   benchmarkEvaluatorCards: EvaluatorCard[];
 }) {
   const { user } = useAuth();
   const router = useRouter();
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
+  const [evaluatorSnapshot, setEvaluatorSnapshot] = useState<EvaluatorListSnapshot>({ user: null, cards: [] });
+  const evaluatorDraftSnapshot = useRef<EvaluatorListSnapshot | null>(null);
+  const evaluatorWriteHeaders = (snapshot: EvaluatorListSnapshot) => {
+    if (snapshot.user !== user) throw new Error('评估器数据加载失败');
+    return { 'Content-Type': 'application/json', ...(snapshot.etag ? { 'If-Match': snapshot.etag } : {}) };
+  };
   const [activeTab, setActiveTab] = useState<TabKey>('custom');
   const [filters, setFilters] = useState<FilterState>(emptyFilters);
   const [customToolbar, setCustomToolbar] = useState<CustomToolbarState>(emptyCustomToolbar);
@@ -177,6 +185,8 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
 
   useEffect(() => {
     if (!user) {
+      setEvaluatorSnapshot({ user: null, cards: [] });
+      evaluatorDraftSnapshot.current = null;
       setCustomEvaluators([]);
     }
   }, [user]);
@@ -195,14 +205,12 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
           apiFetch(`/api/eval/settings?user=${encodeURIComponent(user)}`),
         ]);
 
-        if (evalResMaybe.status === 'fulfilled' && evalResMaybe.value.ok) {
-          try {
-            const j = await evalResMaybe.value.json();
-            if (Array.isArray(j)) list = j as EvaluatorCard[];
-          } catch {
-            /* 自建评估器解析失败 → 用空列表 */
-          }
-        }
+        if (evalResMaybe.status !== 'fulfilled') throw evalResMaybe.reason;
+        const evaluatorResponse = evalResMaybe.value;
+        const evaluatorData = await evaluatorResponse.json();
+        if (!evaluatorResponse.ok || !Array.isArray(evaluatorData)) throw new Error(evaluatorData?.error || '评估器数据加载失败');
+        list = evaluatorData as EvaluatorCard[];
+        let etag = evaluatorResponse.headers.get('etag') || undefined;
 
         if (settingsResMaybe.status === 'fulfilled' && settingsResMaybe.value.ok) {
           try {
@@ -223,24 +231,29 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
         }
 
         if (!cancelled && list.length === 0 && typeof window !== 'undefined') {
+          let parsed: unknown = [];
           try {
             const raw = window.localStorage.getItem('agent-insight-custom-evaluators');
-            const parsed = raw ? JSON.parse(raw) : [];
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              list = parsed as EvaluatorCard[];
-              await apiFetch('/api/user-evaluators', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user, evaluators: list }),
-              });
-              window.localStorage.removeItem('agent-insight-custom-evaluators');
-            }
+            parsed = raw ? JSON.parse(raw) : [];
           } catch {
-            /* ignore corrupt localStorage */
+            parsed = [];
+          }
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const response = await apiFetch('/api/user-evaluators', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', ...(etag ? { 'If-Match': etag } : {}) },
+              body: JSON.stringify({ user, evaluators: parsed }),
+            });
+            const result = await response.json();
+            if (!response.ok || !Array.isArray(result.evaluators)) throw new Error(result.error || '评估器数据加载失败');
+            list = result.evaluators;
+            etag = response.headers.get('etag') || undefined;
+            window.localStorage.removeItem('agent-insight-custom-evaluators');
           }
         }
 
         if (!cancelled) {
+          setEvaluatorSnapshot({ user, cards: list, etag });
           setCustomEvaluators(list);
         }
       } catch (e) {
@@ -276,6 +289,7 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
   };
 
   const openLlmCreateFlow = () => {
+    evaluatorDraftSnapshot.current = evaluatorSnapshot;
     setLlmDraft(blankLlmDraft());
     setCustomCreate('llm');
     setError('');
@@ -339,11 +353,12 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     setCreating(true);
     try {
       const res = await apiFetch('/api/user-evaluators', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, evaluators: [item, ...customEvaluators] }),
+        method: 'PUT', headers: evaluatorWriteHeaders(evaluatorDraftSnapshot.current || evaluatorSnapshot),
+        body: JSON.stringify({ user, evaluators: [item, ...(evaluatorDraftSnapshot.current?.cards || customEvaluators)] }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '创建失败');
+      setEvaluatorSnapshot({ user, cards: data.evaluators, etag: res.headers.get('etag') || undefined });
       setCustomEvaluators(data.evaluators);
       setCustomPage(1);
       setCustomCreate(null);
@@ -371,12 +386,15 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
     try {
       const res = await apiFetch('/api/user-evaluators', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: evaluatorWriteHeaders(evaluatorSnapshot),
         body: JSON.stringify({ user, evaluators: next }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.success === false) throw new Error('删除失败');
+      setEvaluatorSnapshot({ user, cards: data.evaluators || next, etag: res.headers.get('etag') || undefined });
+      setCustomEvaluators(data.evaluators || next);
     } catch (e) {
+      setEvaluatorSnapshot({ ...evaluatorSnapshot, cards: prev });
       setCustomEvaluators(prev);
       setError(e instanceof Error ? e.message : '删除失败');
     }

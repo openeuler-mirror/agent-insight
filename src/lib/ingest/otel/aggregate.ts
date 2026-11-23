@@ -146,6 +146,7 @@ export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEve
 export function aggregateOtelTraceSession(
   sessionId: string,
   spoolDir = getOtelTraceSpoolDir(),
+  suppliedEvents?:OtelTraceEvent[],
 ): OtelTraceAggregationResult {
   const enforceGoalPlusLimits = sessionId.startsWith('goal-plus:');
   const selected = new Map<string, OtelTraceEvent>();
@@ -166,7 +167,8 @@ export function aggregateOtelTraceSession(
   let eventCount = 0;
 
   try {
-    const visitResult = visitEventsForSession<OtelTraceEvent>(
+    const visit:typeof visitEventsForSession<OtelTraceEvent>=suppliedEvents?(_dir,_file,_session,visitor,options)=>{let eventCount=0;for(const event of suppliedEvents){if(event.sessionId!==sessionId)continue;const bytes=Buffer.byteLength(JSON.stringify(event));if(options?.maxLineBytes&&bytes>options.maxLineBytes){options.onOversizedLine?.(bytes,'authenticated-core-journal');continue;}visitor(event,bytes);eventCount++;}return {eventCount,lineCount:eventCount,parseErrors:0} as ReturnType<typeof visitEventsForSession<OtelTraceEvent>>;}:visitEventsForSession<OtelTraceEvent>;
+    const visitResult = visit(
       spoolDir,
       'traces.jsonl',
       sessionId,

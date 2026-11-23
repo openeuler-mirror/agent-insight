@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+import { analyticsRecords } from '@/lib/storage-core/analytics-records';
+
+
 import { readRecords } from '@/lib/storage/data-service';
 import { NextResponse } from 'next/server';
 
@@ -29,12 +34,14 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Missing taskId' }, { status: 400 });
         }
 
-        const records = await readRecords(undefined, { taskId, framework });
+        const analytics = (await readCoreAnalytics(request));
+        const records = analytics ? analyticsRecords(analytics, {taskId, ...(framework ? {framework} : {})}) : await readRecords(undefined, { taskId, framework });
         if (!records.length) {
             return NextResponse.json({ found: false }, { status: 404 });
         }
 
         const r: any = records[0];
+        if (analytics) await analytics.validate();
         return NextResponse.json({
             found: true,
             task_id: r.task_id,
@@ -52,7 +59,6 @@ export async function GET(request: Request) {
             cost: r.cost,
         });
     } catch (error) {
-        console.error('Task Stats Error:', error);
-        return NextResponse.json({ error: 'Failed to read task stats' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

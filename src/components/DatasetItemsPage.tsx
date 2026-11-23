@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
+import { captureDatasetSnapshot, datasetWriteHeaders, type DatasetSnapshotVersion } from '@/lib/agent-dataset-concurrency';
 import {
   type AgentDataset,
   type DatasetCase,
@@ -251,14 +252,20 @@ export default function DatasetItemsPage() {
   const highlightCaseId = searchParams?.get('case') || '';
   const [highlightActive, setHighlightActive] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [rowEditor, setRowEditor] = useState<{ mode: 'add' | 'edit'; row: DatasetCase } | null>(null);
+  const [rowEditor, setRowEditor] = useState<{ mode: 'add' | 'edit'; row: DatasetCase; snapshot: AgentDataset; _storageEtag?: string } | null>(null);
   const [fieldEditorOpen, setFieldEditorOpen] = useState(false);
+  const fieldEditorSnapshot = useRef<AgentDataset | null>(null);
   const [fieldDraft, setFieldDraft] = useState<{ label: string; type: DatasetFieldType }>({
     label: '',
     type: 'text',
   });
   const [fieldError, setFieldError] = useState('');
-  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchModalOpen, updateBatchModalOpen] = useState(false);
+  const batchSnapshot = useRef<AgentDataset | null>(null);
+  const setBatchModalOpen = (open: boolean) => {
+    if (open) batchSnapshot.current = dataset;
+    updateBatchModalOpen(open);
+  };
   const [batchImportMethod, setBatchImportMethod] = useState<'paste' | 'file'>('paste');
   const [batchPasteText, setBatchPasteText] = useState('');
   const [batchFile, setBatchFile] = useState<File | null>(null);
@@ -308,9 +315,10 @@ export default function DatasetItemsPage() {
       if (!res.ok) {
         throw new Error(data?.error || '加载失败');
       }
-      const d = data as AgentDataset & { user?: string };
+      const d = captureDatasetSnapshot(data as AgentDataset & { user?: string }, res.headers);
       setDataset({
         id: d.id,
+        _storageEtag: d._storageEtag,
         generationSource: d.generationSource,
         generationStatus: d.generationStatus,
         name: d.name,
@@ -403,19 +411,19 @@ export default function DatasetItemsPage() {
     const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || '完整数据加载失败');
-    const full = data as AgentDataset;
+    const full = captureDatasetSnapshot(data as AgentDataset, res.headers);
     fullDatasetRef.current = full;
     return full;
   };
 
-  const loadFullCase = async (caseId: string): Promise<DatasetCase> => {
+  const loadFullCase = async (caseId: string): Promise<DatasetCase & DatasetSnapshotVersion> => {
     if (!user || !id) throw new Error('缺少数据集信息');
     const res = await apiFetch(
       `/api/agent-datasets/${id}?user=${encodeURIComponent(user)}&view=case&caseId=${encodeURIComponent(caseId)}`,
     );
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || '完整数据项加载失败');
-    return data as DatasetCase;
+    return captureDatasetSnapshot(data as DatasetCase, res.headers);
   };
 
   useEffect(() => {
@@ -439,7 +447,7 @@ export default function DatasetItemsPage() {
     return () => clearTimeout(tid);
   }, [highlightCaseId, dataset]);
 
-  const persistCases = async (cases: DatasetCase[]): Promise<boolean> => {
+  const persistCases = async (cases: DatasetCase[], snapshot: AgentDataset, ...sources: DatasetSnapshotVersion[]): Promise<boolean> => {
     if (!user || !dataset) return false;
     if (isReadOnly) {
       setError('内置可靠性评测集由系统维护，不可编辑');
@@ -450,21 +458,21 @@ export default function DatasetItemsPage() {
     try {
       const payload = {
         user,
-        id: dataset.id,
-        fields: dataset.generationSource === 'trace' ? dataset.fields : withEvaluatorCatalogFields(dataset.fields, cases),
+        id: snapshot.id,
+        fields: snapshot.generationSource === 'trace' ? snapshot.fields : withEvaluatorCatalogFields(snapshot.fields, cases),
         cases: cases.map(item => ({
           id: item.id,
           input: fieldText(item, 'input').trim(),
           expectedOutput: fieldText(item, 'reference_output').trim(),
           evaluationFocus: item.evaluationFocus?.trim() || '',
           tags: item.tags || [],
-          trajectory: dataset.datasetKind === 'trajectory'
-            ? (dataset.fields.some(field => field.key === 'trace') ? fieldText(item, 'trace') : fieldText(item, 'trajectory')).trim()
+          trajectory: snapshot.datasetKind === 'trajectory'
+            ? (snapshot.fields.some(field => field.key === 'trace') ? fieldText(item, 'trace') : fieldText(item, 'trajectory')).trim()
             : '',
           values: Object.fromEntries(
             Object.entries(item.values || {}).map(([key, value]) => [
               key,
-              typeof value === 'string' && dataset.generationSource !== 'trace' ? value.trim() : value,
+              typeof value === 'string' && snapshot.generationSource !== 'trace' ? value.trim() : value,
             ]),
           ),
           source: item.source,
@@ -473,7 +481,7 @@ export default function DatasetItemsPage() {
       };
       const res = await apiFetch('/api/agent-datasets', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...datasetWriteHeaders(snapshot, ...sources) },
         body: JSON.stringify(payload),
       });
       const result = await res.json();
@@ -492,11 +500,12 @@ export default function DatasetItemsPage() {
   };
 
   const openAdd = () => {
-    if (isReadOnly) return;
-    setRowEditor({ mode: 'add', row: createEmptyCase() });
+    if (isReadOnly || !dataset) return;
+    setRowEditor({ mode: 'add', row: createEmptyCase(), snapshot: dataset, _storageEtag: dataset._storageEtag });
   };
 
   const openFieldEditor = () => {
+    fieldEditorSnapshot.current = dataset;
     setFieldDraft({ label: '', type: 'text' });
     setFieldError('');
     setFieldEditorOpen(true);
@@ -509,12 +518,12 @@ export default function DatasetItemsPage() {
   };
 
   const openEdit = async (row: DatasetCase) => {
-    if (isReadOnly) return;
+    if (isReadOnly || !dataset) return;
     setSaving(true);
     setError('');
     try {
       const fullRow = await loadFullCase(row.id);
-      setRowEditor({ mode: 'edit', row: { ...fullRow, values: { ...(fullRow.values || {}) } } });
+      setRowEditor({ mode: 'edit', row: { ...fullRow, values: { ...(fullRow.values || {}) } }, snapshot: dataset, _storageEtag: fullRow._storageEtag });
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
     } finally {
@@ -522,7 +531,7 @@ export default function DatasetItemsPage() {
     }
   };
 
-  const persistFields = async (fields: DatasetField[]) => {
+  const persistFields = async (fields: DatasetField[], snapshot: AgentDataset) => {
     if (!user || !dataset) return false;
     if (isReadOnly) {
       setError('内置可靠性评测集由系统维护，不可编辑');
@@ -533,8 +542,8 @@ export default function DatasetItemsPage() {
     try {
       const res = await apiFetch('/api/agent-datasets', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, id: dataset.id, fields }),
+        headers: { 'Content-Type': 'application/json', ...datasetWriteHeaders(snapshot) },
+        body: JSON.stringify({ user, id: snapshot.id, fields }),
       });
       const result = await res.json();
       if (!res.ok || !result?.success) throw new Error(result?.error || '字段保存失败');
@@ -552,28 +561,29 @@ export default function DatasetItemsPage() {
 
   const addField = async () => {
     if (dataset?.generationSource === 'trace') return;
-    if (!dataset) return;
+    const snapshot = fieldEditorSnapshot.current;
+    if (!dataset || !snapshot) return;
     const label = fieldDraft.label.trim();
     if (!label) {
       setFieldError('请输入字段名称');
       return;
     }
-    if (dataset.fields.some(field => field.label.trim().toLocaleLowerCase() === label.toLocaleLowerCase())) {
+    if (snapshot.fields.some(field => field.label.trim().toLocaleLowerCase() === label.toLocaleLowerCase())) {
       setFieldError('字段名称已存在');
       return;
     }
     const catalogKey = evaluatorCatalogFieldKeyFromLabel(label);
-    if (catalogKey && dataset.fields.some(field => field.key === catalogKey)) {
+    if (catalogKey && snapshot.fields.some(field => field.key === catalogKey)) {
       setFieldError(`${catalogKey} 已存在`);
       return;
     }
-    const key = catalogKey ?? nextDatasetFieldKey(dataset.fields.map(field => field.key));
+    const key = catalogKey ?? nextDatasetFieldKey(snapshot.fields.map(field => field.key));
     const ok = await persistFields([
-      ...dataset.fields,
+      ...snapshot.fields,
       catalogKey
         ? createEvaluatorCatalogField(catalogKey, label)
         : { id: safeUUID(), key, label, type: fieldDraft.type },
-    ]);
+    ], snapshot);
     if (ok) {
       closeFieldEditor();
     }
@@ -590,7 +600,7 @@ export default function DatasetItemsPage() {
     if (isReadOnly) return;
     try {
       const full = await loadFullDataset();
-      await persistCases(full.cases.filter(c => c.id !== rowId));
+      await persistCases(full.cases.filter(c => c.id !== rowId), dataset, full);
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
     }
@@ -632,7 +642,7 @@ export default function DatasetItemsPage() {
         mode === 'add'
           ? [...full.cases, row]
           : full.cases.map(c => (c.id === row.id ? row : c));
-      await persistCases(next);
+      await persistCases(next, rowEditor.snapshot, full, rowEditor);
     } catch (e) {
       setError(e instanceof Error ? e.message : '完整数据加载失败');
     } finally {
@@ -651,7 +661,8 @@ export default function DatasetItemsPage() {
   };
 
   const runBatchImport = async () => {
-    if (!dataset || !user || saving) return;
+    const snapshot = batchSnapshot.current;
+    if (!dataset || !snapshot || !user || saving) return;
     if (isReadOnly) {
       setBatchModalError('内置可靠性评测集由系统维护，不可导入数据');
       return;
@@ -666,14 +677,14 @@ export default function DatasetItemsPage() {
           setBatchModalError('请先粘贴 JSON 或 CSV 内容');
           return;
         }
-        const result = dataset.generationSource === 'trace' ? parseTraceBatch(text) : parseBatchAuto(text, dataset.datasetKind);
+        const result = snapshot.generationSource === 'trace' ? parseTraceBatch(text) : parseBatchAuto(text, snapshot.datasetKind);
         if (result.cases.length === 0) {
           setBatchModalError(result.message || '未能解析出有效数据');
           return;
         }
         const full = await loadFullDataset();
         const merged = [...full.cases, ...result.cases];
-        const ok = await persistCases(merged);
+        const ok = await persistCases(merged, snapshot, full);
         if (!ok) {
           setBatchModalError('保存失败，请查看上方错误提示');
           return;
@@ -687,14 +698,14 @@ export default function DatasetItemsPage() {
         return;
       }
       text = await readFileAsText(batchFile);
-      const result = dataset.generationSource === 'trace' ? parseTraceBatch(text) : parseBatchFromFileContent(text, batchFile.name, dataset.datasetKind);
+      const result = snapshot.generationSource === 'trace' ? parseTraceBatch(text) : parseBatchFromFileContent(text, batchFile.name, snapshot.datasetKind);
       if (result.cases.length === 0) {
         setBatchModalError(result.message || '未能解析出有效数据');
         return;
       }
       const full = await loadFullDataset();
       const merged = [...full.cases, ...result.cases];
-      const ok = await persistCases(merged);
+      const ok = await persistCases(merged, snapshot, full);
       if (!ok) {
         setBatchModalError('保存失败，请查看上方错误提示');
         return;

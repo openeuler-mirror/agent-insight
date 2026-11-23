@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {createHash} from 'node:crypto'
+import {benchmarkCoreContext,benchmarkCoreRpc,usesCoreBenchmark} from './core-store'
 import { randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 
@@ -124,6 +126,12 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
     throw new BenchmarkProtocolError('DATASET_EMPTY', 'Benchmark 数据集至少包含一个 Case', 400)
   }
 
+  const original={user,name,description:input.description||'',adapterKey:input.adapterKey,source:input.source||{},cases:input.cases}
+  if(usesCoreBenchmark()){
+    const context=benchmarkCoreContext();if(user!==context.actor.username)throw new BenchmarkProtocolError('DATASET_ACTOR_MISMATCH','数据集用户与当前身份不一致',403)
+    const prior=await benchmarkCoreRpc<{id:string;contentHash:string;caseCount:number}|null>('lookup_operation',{kind:'dataset_import',operation_key:context.operationKey,operation_request:original})
+    if(prior)return {id:prior.id,contentHash:prior.contentHash,caseCount:prior.caseCount,reused:true}
+  }
   const adapter = getBenchmarkAdapter(input.adapterKey)
   const seenCaseIds = new Set<string>()
   const rows = input.cases.map((rawCase, ordinal) => {
@@ -193,6 +201,19 @@ export async function importBenchmarkDataset(input: ImportBenchmarkDatasetInput)
   }))
   const sourceProfile = typeof input.source?.profileKey === 'string' ? input.source.profileKey : ''
   const datasetTags = [adapter.manifest.displayName, sourceProfile].filter(Boolean)
+
+  if(usesCoreBenchmark()){
+    const context=benchmarkCoreContext();if(user!==context.actor.username)throw new BenchmarkProtocolError('DATASET_ACTOR_MISMATCH','数据集用户与当前身份不一致',403)
+    const id='bd_'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey,input.adapterKey,contentHash])).digest('hex').slice(0,32)
+    const caseId=(ordinal:number)=>'bdc_'+createHash('sha256').update(id+':'+ordinal).digest('hex').slice(0,32)
+    const result=await benchmarkCoreRpc<{id:string;contentHash:string;caseCount:number}>('dataset_import',{
+      dataset_id:id,adapter_key:input.adapterKey,content_hash:contentHash,source:input.source||{},
+      public_dataset:{id:'public_'+id,name,description:input.description||'',datasetKind:'benchmark',tags:datasetTags,fields:JSON.parse(fieldsJson),cases:publicCases.map((row,index)=>({...row,id:caseId(index)}))},
+      cases:rows.map((row,index)=>({id:caseId(index),externalCaseId:row.externalCaseId,ordinal:index,rawCase:JSON.parse(row.rawCaseJson),publicPayload:JSON.parse(row.publicPayloadJson),privatePayload:JSON.parse(row.privatePayloadJson)})),
+      operation_request:original,
+    })
+    return {id:result.id,contentHash:result.contentHash,caseCount:result.caseCount,reused:result.id!==id}
+  }
 
   const sameContent = await prisma.benchmarkDataset.findFirst({
     where: { user, adapterKey: input.adapterKey, contentHash },

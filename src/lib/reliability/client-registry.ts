@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {getCoreControlContext} from '@/lib/storage-core/control-context'
+import {withCoreControlInstall,authenticateCoreControlDevice} from '@/lib/storage-core/control-auth'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -168,6 +171,7 @@ export async function registerClient(input: {
    * 旧凭证立即撤销，否则原账号仍能向这台机器下发配置。
    */
   previousClientId?: string | null
+  previousDeviceCredential?: string
 }): Promise<{
   clientId: string
   user: string
@@ -175,6 +179,7 @@ export async function registerClient(input: {
   unboundPrevious: { clientId: string; user: string } | null
   reused: boolean
 }> {
+  if(isStorageCoreEnabled()&&!getCoreControlContext()?.install)return withCoreControlInstall(input.installToken,input.previousDeviceCredential,()=>registerClient(input))
   const tokenHash = sha256(String(input.installToken || ''))
   const record = await prisma.reliabilityInstallToken.findUnique({ where: { tokenHash } })
   if (!record) {
@@ -210,7 +215,7 @@ export async function registerClient(input: {
   // 解绑旧绑定必须和新注册在同一个事务里：否则中途失败会留下
   //「旧凭证已撤销、新客户端没建成」的半态，本机彻底失联且无法自愈。
   const previous = input.previousClientId
-    ? await prisma.reliabilityClient.findUnique({ where: { clientId: input.previousClientId } })
+    ? await prisma.reliabilityClient.findFirst({ where: { clientId: input.previousClientId } })
     : null
   const shouldUnbind = Boolean(previous && !previous.unboundAt && previous.clientId !== clientId)
 
@@ -287,33 +292,7 @@ export async function authenticateDevice(req: Request): Promise<{
   clientId: string
   user: string
 }> {
-  const auth = req.headers.get('authorization') || ''
-  const match = /^Bearer\s+(.+)$/i.exec(auth.trim())
-  if (!match) {
-    throw new ReliabilityError('DEVICE_UNAUTHORIZED', '缺少设备凭证', 401)
-  }
-  const credentialHash = sha256(match[1].trim())
-  const cred = await prisma.reliabilityClientCredential.findUnique({
-    where: { credentialHash },
-  })
-  if (!cred || cred.revokedAt) {
-    throw new ReliabilityError('DEVICE_UNAUTHORIZED', '设备凭证无效或已撤销', 401)
-  }
-  const headerClientId = req.headers.get('x-agent-insight-client-id')
-  if (headerClientId && !hashEquals(headerClientId, cred.clientId)) {
-    throw new ReliabilityError('DEVICE_CLIENT_MISMATCH', '设备凭证与 clientId 不匹配', 403)
-  }
-  const client = await prisma.reliabilityClient.findUnique({
-    where: { clientId: cred.clientId },
-  })
-  if (!client) {
-    throw new ReliabilityError('CLIENT_NOT_FOUND', '客户端不存在', 404)
-  }
-  await prisma.reliabilityClientCredential.update({
-    where: { credentialHash },
-    data: { lastUsedAt: new Date() },
-  })
-  return { clientId: client.clientId, user: client.user }
+  return authenticateCoreControlDevice(req)
 }
 
 export function normalizeCapabilities(raw: unknown): ClientCapabilities {

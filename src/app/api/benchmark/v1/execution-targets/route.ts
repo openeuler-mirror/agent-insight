@@ -1,3 +1,7 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
+import {benchmarkCoreRpc,usesCoreBenchmark} from '@/lib/benchmark/core-store';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,7 +32,7 @@ export const dynamic = 'force-dynamic'
 
 async function findDataset(username: string, datasetId: string) {
   if (!datasetId) throw new BenchmarkProtocolError('BENCHMARK_DATASET_REQUIRED', '缺少 Benchmark 数据集', 400)
-  const dataset = await prisma.benchmarkDataset.findFirst({
+  const dataset = usesCoreBenchmark()?(await benchmarkCoreRpc<Array<{id:string;agentEvalDatasetId:string;adapterKey:string;status:string}>>('dataset_list')).find(row=>(row.id===datasetId||row.agentEvalDatasetId===datasetId)&&row.status==='ready'):await prisma.benchmarkDataset.findFirst({
     where: {
       OR: [{ id: datasetId }, { agentEvalDatasetId: datasetId }],
       user: { in: benchmarkDatasetOwners(username) }, status: 'ready',
@@ -39,7 +43,8 @@ async function findDataset(username: string, datasetId: string) {
   return dataset
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,GET);
   const url = new URL(req.url)
   const { username } = await resolveUser(req, url.searchParams.get('user'))
   if (!username) {

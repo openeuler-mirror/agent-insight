@@ -1,3 +1,5 @@
+import {getCoreExperimentContext,experimentReadSource} from '@/lib/storage-core/experiments'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +29,7 @@ export type CaseExecutionSnapshot = {
 }
 
 export async function readExecutionProgressSnapshot<T>(read: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+  if(getCoreExperimentContext()||isStorageCoreEnabled())return read(experimentReadSource(prisma) as unknown as Prisma.TransactionClient)
   const deadline = Date.now() + 35000
   let lastError: unknown
   for (let attempt = 0; ; attempt++) {

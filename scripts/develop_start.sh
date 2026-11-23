@@ -44,7 +44,6 @@ case "$AGENT_INSIGHT_HOME" in /*) ;; *) AGENT_INSIGHT_HOME="$PWD/$AGENT_INSIGHT_
 RESOLVED_AGENT_INSIGHT_HOME="$AGENT_INSIGHT_HOME"
 AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
 AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
-DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
 
 load_agent_insight_env() {
   if [ -f "$AGENT_INSIGHT_ENV_FILE" ]; then
@@ -63,11 +62,7 @@ if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
 fi
   [ "$PROCESS_DATABASE_URL_IS_SET" != x ] || export DATABASE_URL="$PROCESS_DATABASE_URL"
 
-  if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
-    export DATABASE_URL="file:$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
-  elif [[ "$DATABASE_URL" == file:\~* ]]; then
-    export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
-  fi
+
 }
 
 ensure_goal_plus_watcher() {
@@ -140,35 +135,11 @@ find_pid_on_port() {
 
 echo "Checking port $PORT..."
 
-# Check for OpenGauss configuration in ~/.agent-insight/.env
+# Load the Web configuration before checking both storage dependencies.
 load_agent_insight_env
+node scripts/storage-core-preflight.cjs || exit 1
 
-if [[ "${DATABASE_URL:-}" == file:* ]]; then
-  echo "SQLite database target: ${DATABASE_URL#file:}"
-else
-  echo "Using custom database configuration."
-fi
-
-if [ -n "$DB_HOST" ]; then
-  echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
-  echo "Initializing OpenGauss database with project schema..."
-  
-  # Ensure psycopg2 is installed
-  if ! python3 -c "import psycopg2" >/dev/null 2>&1; then
-    echo "psycopg2 not found. Installing psycopg2-binary..."
-    pip3 install psycopg2-binary
-  fi
-  
-  # Run the initialization script
-  python3 scripts/init_opengauss.py
-  if [ $? -ne 0 ]; then
-    echo "OpenGauss initialization failed! Aborting."
-    exit 1
-  fi
-  echo "OpenGauss initialized successfully."
-else
-  echo "No OpenGauss configuration (DB_HOST) found. Skipping OpenGauss init."
-fi
+echo "Storage: Core transactional backend + ClickHouse"
 
 # 1. Try finding PID specifically
 PIDS=$(find_pid_on_port $PORT)
@@ -217,106 +188,13 @@ echo "Port $PORT is confirmed free."
 
 # 4. Start in DEV mode
 echo "-----------------------------------"
-echo "Clearing Next.js dev cache (.next)..."
-rm -rf .next
-
-echo "Running ad-hoc SQLite column migrations..."
-# 一次性、幂等的 SQLite 列改名步骤。集中放在 prisma db push 之前，
-# 因为 db push 对 SQLite 的"重命名列"识别不可靠——不加 --accept-data-loss 会报错，
-# 加了则把旧列里的数据直接丢掉。这里用 PRAGMA + ALTER TABLE RENAME COLUMN
-# (SQLite 3.25+ 原生支持) 显式迁移，老数据原地保留。
-# 仅在使用 SQLite（无 DB_HOST，即没配 OpenGauss）时跑。
-if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
-  # 默认 DATABASE_URL 写在 ~/.agent-insight/.env；默认相对值会在加载时解析到用户数据目录。
-  DB_PATH=$(printf '%s' "${DATABASE_URL:-}" | sed -E 's/^"//; s/"$//; s|^file:||')
-  if [ -z "$DB_PATH" ]; then
-    DB_PATH="$AGENT_INSIGHT_STORAGE_DIR/witty_insight.db"
-  fi
-  if [ -f "$DB_PATH" ]; then
-    # 召回 → 触发：把历史 Execution.skillRecallRate 改名成 skillTriggerRate。
-    # 幂等：先 PRAGMA 检查旧列还在不在；不在就直接跳过。新数据库（prisma db push
-    # 已造出 skillTriggerRate）也无副作用。
-    if sqlite3 "$DB_PATH" "PRAGMA table_info(Execution);" | grep -q "|skillRecallRate|"; then
-      echo "  [migrate] Renaming Execution.skillRecallRate → skillTriggerRate ($DB_PATH)..."
-      sqlite3 "$DB_PATH" "ALTER TABLE Execution RENAME COLUMN skillRecallRate TO skillTriggerRate;"
-    fi
-
-    # A/B 测试：GrayscaleTask 增加 skill 绑定四列（schema 是 NOT NULL）。
-    # 直接让 prisma db push 加 NOT NULL 列会弹 "reset database?" 提示——回车默认 Yes
-    # 会整库清空（不只是 GrayscaleTask）。
-    # 复用团队已有的 scripts/cleanup_grayscale_skill_binding.ts：它会
-    #   1) ADD COLUMN（SQLite 只支持加 nullable 列）
-    #   2) 从 configJson 反推 skillId/versionBId，JOIN Skill/SkillVersion 拿 name/version
-    #   3) 删除 configJson 没有有效 skill 引用的「孤儿行」（A/B 上线前的脏数据）
-    #   4) 按 (user, skillName, skillVersion) 去重，保留每组 createdAt 最新一条
-    #   5) 重建相关索引
-    # 之后 prisma db push 看到列已存在 + 无 NULL，会静默把列升级到 NOT NULL。
-    if [ -f scripts/cleanup_grayscale_skill_binding.ts ]; then
-      # 仅当 GrayscaleTask 还有 NULL 绑定列（或四列尚未加）时才跑，避免每次重启都做无谓 IO。
-      NEEDS_CLEANUP=0
-      if ! sqlite3 "$DB_PATH" "PRAGMA table_info(GrayscaleTask);" | grep -q "|skillId|"; then
-        NEEDS_CLEANUP=1
-      elif [ "$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM GrayscaleTask WHERE skillId IS NULL OR skillName IS NULL OR skillVersion IS NULL OR skillVersionId IS NULL;")" != "0" ]; then
-        NEEDS_CLEANUP=1
-      fi
-      if [ "$NEEDS_CLEANUP" = "1" ]; then
-        echo "  [migrate] Running cleanup_grayscale_skill_binding.ts (backfill + 删孤儿 + 去重)..."
-        if ! npx tsx scripts/cleanup_grayscale_skill_binding.ts; then
-          echo ""
-          echo "  ⛔ cleanup_grayscale_skill_binding.ts 失败。"
-          echo "     直接放行会让 prisma db push 弹出 reset 提示并清掉整个数据库。"
-          echo "     请检查上方报错（常见原因：prisma client 没 generate → 跑 'npx prisma generate'）。"
-          exit 1
-        fi
-        REMAINING=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM GrayscaleTask WHERE skillId IS NULL OR skillName IS NULL OR skillVersion IS NULL OR skillVersionId IS NULL;")
-        if [ "$REMAINING" != "0" ]; then
-          echo ""
-          echo "  ⛔ Backfill 后仍有 $REMAINING 行 GrayscaleTask 字段为 NULL（脚本未能清理干净）。"
-          echo "     直接放行 prisma db push 会弹出 reset 提示——回车默认 Yes 会清整库数据。"
-          echo "     问题行 (id | user | taskName | configJson 前 200 字):"
-          sqlite3 "$DB_PATH" "SELECT '    ' || id || ' | ' || user || ' | ' || taskName || ' | ' || substr(configJson, 1, 200) FROM GrayscaleTask WHERE skillId IS NULL OR skillName IS NULL OR skillVersion IS NULL OR skillVersionId IS NULL;"
-          echo ""
-          echo "     处理后再跑 bash scripts/develop_start.sh。"
-          exit 1
-        fi
-      fi
-    fi
-  fi
-fi
-
-echo "Syncing database schema..."
-if [[ "${DATABASE_URL:-}" == file:* ]]; then
-  if ! node scripts/prepare-ras-sqlite-schema.js; then
-    echo "  ⛔ Agent RAS SQLite schema 预检失败，已停止启动以避免重复事件被错误合并。"
-    exit 1
-  fi
-fi
-# 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
-# 其余潜在破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
-if ! sh scripts/db_push.sh; then
-  echo ""
-  echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
-  echo "     直接启动 server 会让运行时撞到 schema/code 不一致（旧 client 查不到的列等）。"
-  echo "     退出脚本。修好后重新跑 bash scripts/develop_start.sh。"
-  exit 1
-fi
-
-if [ -z "${DB_HOST:-}" ] && [[ "${DATABASE_URL:-}" == file:* ]] && command -v sqlite3 >/dev/null 2>&1; then
-  DB_PATH="${DATABASE_URL#file:}"
-  TRACE_EVALUATION_TABLE=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'TraceEvaluation';")
-  if [ "$TRACE_EVALUATION_TABLE" != "1" ]; then
-    echo ""
-    echo "  ⛔ TraceEvaluation 表未在 $DB_PATH 中创建。"
-    echo "     为避免服务连接到未同步的数据库，退出启动。"
-    exit 1
-  fi
-fi
+echo "Reusing Next.js development cache..."
 
 echo "Generating Prisma client..."
 if ! npx prisma generate; then
   echo ""
-  echo "  ⛔ prisma generate 失败 —— Prisma Client 没更新，但 schema 已同步。"
-  echo "     启动 server 会用旧 client 查新表，所有数据 API 都会挂。"
+  echo "  ⛔ prisma generate 失败 —— 兼容类型生成失败。"
+  echo "     请修复生成步骤后重试；此步骤不连接业务数据库。"
   echo "     常见原因：node_modules 里有 root 拥有的文件（之前用 sudo npm install 过）。"
   echo "     修法："
   echo "       sudo chown -R \"\$(whoami)\":staff node_modules/.prisma node_modules/@prisma"
@@ -331,7 +209,7 @@ set -a
 load_agent_insight_env
 set +a
 
-NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev -- --port "$PORT" > server.log 2>&1 &
+NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev -- --port "$PORT" --hostname "${AGENT_INSIGHT_BIND_HOST:-0.0.0.0}" > server.log 2>&1 &
 NEW_PID=$!
 
 echo "Server process started."

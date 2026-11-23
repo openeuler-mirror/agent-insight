@@ -175,6 +175,8 @@ test('OTel consumer parked failures leave capacity for healthy sessions and repl
 
 test('OTel consumer defers mixed files only after healthy members have saved and keeps their evaluation due', async t => {
   const { root, add, source } = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   const file = add('a-pending');
   fs.appendFileSync(file, `${JSON.stringify({ sessionId: 'b-ready' })}\n`);
   const aggregate = source.aggregate;
@@ -196,6 +198,14 @@ test('OTel consumer defers mixed files only after healthy members have saved and
       return { success: true, record: data };
     },
   });
+  const state = getOtelSpoolConsumerForTest()!;
+  now += state.shortMs;
+  await runOtelSpoolConsumerTick(state);
+  assert.ok(await waitUntil(() => fastSaved && !state.dispatching));
+  assert.equal(evaluated, false);
+  assert.equal(getFileCursor(root, toCheckpointRelPath(root, file)).bytes, 0);
+  now += state.longMs - state.shortMs;
+  await runOtelSpoolConsumerTick(state);
   assert.ok(await waitUntil(() => fastSaved && evaluated),
     'deferring a mixed file must neither starve another member nor drop its pending evaluation');
   assert.equal(getFileCursor(root, toCheckpointRelPath(root, file)).bytes, 0);
@@ -203,6 +213,8 @@ test('OTel consumer defers mixed files only after healthy members have saved and
 
 test('OTel consumer retries failed evaluated writes in evaluated mode', async t => {
   const { add, source } = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
   add('evaluated-retry');
   let fastCalls = 0;
   let evaluatedCalls = 0;
@@ -219,8 +231,40 @@ test('OTel consumer retries failed evaluated writes in evaluated mode', async t 
       return { success: true, record: data };
     },
   });
+  const state = getOtelSpoolConsumerForTest()!;
+  now += state.shortMs;
+  await runOtelSpoolConsumerTick(state);
+  assert.ok(await waitUntil(() => fastCalls === 1 && !state.dispatching));
+  assert.equal(evaluatedCalls, 0);
+  now += state.longMs - state.shortMs;
+  await runOtelSpoolConsumerTick(state);
+  assert.ok(await waitUntil(() => evaluatedCalls === 1 && !state.dispatching));
+  now += state.shortMs;
+  await runOtelSpoolConsumerTick(state);
   assert.ok(await waitUntil(() => evaluatedCalls >= 2));
   assert.equal(fastCalls, 1);
+});
+
+test('OTel consumer saves directly in evaluated mode when both deadlines have elapsed', async t => {
+  const { root, add, source } = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const file = add('both-deadlines-elapsed');
+  const calls: Array<{ skipEvaluation: unknown; forceJudgment: unknown }> = [];
+  startOtelSpoolConsumer({
+    ...options,
+    sources: [source],
+    saveExecution: async data => {
+      calls.push({ skipEvaluation: data.skip_evaluation, forceJudgment: data.force_judgment });
+      return { success: true, record: data };
+    },
+  });
+  const state = getOtelSpoolConsumerForTest()!;
+  now += state.maxWaitMs;
+  await runOtelSpoolConsumerTick(state);
+  assert.ok(await waitUntil(() => state.pendingFiles.size === 0 && !state.dispatching));
+  assert.deepEqual(calls, [{ skipEvaluation: false, forceJudgment: true }]);
+  assert.equal(getFileCursor(root, toCheckpointRelPath(root, file)).bytes, fs.statSync(file).size);
 });
 
 test('OTel consumer summarizes saturated files once per minute instead of once per file and tick', async t => {

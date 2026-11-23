@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -29,6 +30,7 @@ export const dynamic = 'force-dynamic';
  * 这种暂不做的功能预留参数；本期前端永远会带上）。
  */
 export async function GET(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { searchParams } = new URL(req.url);
     const user = searchParams.get('user');
@@ -57,6 +59,8 @@ export async function GET(req: NextRequest) {
     console.error('[skill-opt sessions GET] failed:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 /**
@@ -66,6 +70,7 @@ export async function GET(req: NextRequest) {
  * 可选 initial messages（前端"新对话"时不传，让 chat 路由跑首条 message 时再插入）。
  */
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const body = await req.json();
     const { user, skillName, baseVersion, title, files, messages } = body;
@@ -102,4 +107,6 @@ export async function POST(req: NextRequest) {
     console.error('[skill-opt sessions POST] failed:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["write"]);
 }

@@ -72,8 +72,8 @@ test('renaming official files, missing declarations and escaping symlinks are re
   assert.deepEqual(collected.files.map((file: any) => file.name), ['原名.json'])
 })
 
-async function evaluatorRun(t: TestContext, code: string, signal = new AbortController().signal) {
-  const root = await directory(t)
+async function evaluatorRun(t: TestContext, code: string, signal = new AbortController().signal, existingRoot?: string) {
+  const root = existingRoot || await directory(t)
   const entrypoint = path.join(root, 'fixture.cjs')
   await fs.writeFile(entrypoint, `const fs=require('node:fs'),path=require('node:path'); const output=process.argv[process.argv.indexOf('--output')+1]; ${code}`)
   const evaluator = new FileEvaluatorEntrypoint({ key: 'fixture', runtime: 'script-package', command: 'node', entrypoint, rawResultSchema: { type: 'object', required: ['passed'] } })
@@ -104,19 +104,43 @@ test('nonzero process exit retains partial official output and complete stderr b
 })
 
 test('timeout retains files and logs written before termination', async t => {
+  const root = await directory(t)
   const controller = new AbortController()
-  const readyRoot = await directory(t)
-  const ready = path.join(readyRoot, 'ready')
-  const watcher = watch(readyRoot, (_event, filename) => { if (String(filename) === 'ready') controller.abort() })
-  const timeout = setTimeout(() => controller.abort(), 10000)
-  try {
-    const error = await evaluatorRun(t, `fs.writeFileSync(path.join(path.dirname(output),'before-timeout.log'),'progress'); fs.writeSync(2,'timeout diagnostic'); fs.writeFileSync(${JSON.stringify(ready)},'ready'); setInterval(()=>{},1000);`, controller.signal).then(() => assert.fail('expected timeout'), (failure: any) => failure)
-    {
-      assert.equal(error.code, 'EVALUATION_TIMEOUT')
-      assert.ok(error.evidenceFiles.some((file: any) => file.name === 'before-timeout.log'))
-      assert.equal(await fs.readFile(error.evidenceFiles.find((file: any) => file.name === 'controller/stderr.log').path, 'utf8'), 'timeout diagnostic')
+  const readiness = new AbortController()
+  const events = fs.watch(root, { recursive: true, signal: readiness.signal })
+  const startup = setTimeout(() => readiness.abort(), 10_000)
+  const ready = (async () => {
+    for await (const _event of events) {
+      try {
+        const output = await fs.readFile(path.join(root, 'job/entrypoint/output/before-timeout.log'), 'utf8')
+        const stderr = await fs.readFile(path.join(root, 'job/entrypoint/controller-logs/stderr.log'), 'utf8')
+        if (output === 'progress' && stderr === 'timeout diagnostic') return
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
     }
-  } finally { watcher.close(); clearTimeout(timeout) }
+    assert.fail('evaluator did not write its pre-timeout evidence and logs')
+  })()
+  const result = evaluatorRun(t, `fs.writeFileSync(path.join(path.dirname(output),'before-timeout.log'),'progress'); process.stderr.write('timeout diagnostic'); setInterval(()=>{},1000);`, controller.signal, root).then(() => assert.fail('expected timeout'), (failure: any) => failure)
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([ready, result.then(error => { throw error })])
+    clearTimeout(startup)
+    readiness.abort()
+    timeout = setTimeout(() => controller.abort(), 500)
+    const error = await result
+    assert.equal(error.code, 'EVALUATION_TIMEOUT')
+    const evidence = error.evidenceFiles.find((file: any) => file.name === 'before-timeout.log')
+    assert.ok(evidence)
+    assert.equal(await fs.readFile(evidence.path, 'utf8'), 'progress')
+    assert.equal(await fs.readFile(error.evidenceFiles.find((file: any) => file.name === 'controller/stderr.log').path, 'utf8'), 'timeout diagnostic')
+  } finally {
+    clearTimeout(startup)
+    clearTimeout(timeout)
+    readiness.abort()
+    controller.abort()
+    await result
+  }
 })
 
 test('malformed JSON diagnostics remain readable while structured scoring data and byte integrity stay strict', async t => {

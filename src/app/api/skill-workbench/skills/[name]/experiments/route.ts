@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,6 +16,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -31,7 +35,9 @@ import {
   type WorkbenchExperimentPreset,
 } from '@/lib/skill-workbench/experiment-service';
 
-export async function GET(request: NextRequest, context: { params: Promise<{ name: string }> }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ name: string }> }):Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,next=>GET(next,context));
   try {
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
@@ -45,12 +51,15 @@ export async function GET(request: NextRequest, context: { params: Promise<{ nam
     if (!result) return NextResponse.json({ error: 'Skill、版本不存在或无访问权限' }, { status: 404 });
     return NextResponse.json(result);
   } catch (error) {
-    console.error('[skill-workbench experiments GET] failed:', error);
-    return NextResponse.json({ error: '加载 Skill 实验失败' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
+
+  },["read"]);
 }
 
-export async function POST(request: NextRequest, context: { params: Promise<{ name: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ name: string }> }):Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,next=>POST(next,context));
   try {
     const body = await request.json();
     const { username } = await resolveUser(request, body.user);
@@ -123,6 +132,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     console.error('[skill-workbench experiments POST] failed:', error);
     if (error instanceof EvaluatorRunConfigValidationError) return NextResponse.json({ error: error.message }, { status: 400 });
     if (error instanceof TraceGenerationError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.httpStatus });
-    return NextResponse.json({ error: '创建 Skill 实验失败' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
+
+  },["write"]);
 }

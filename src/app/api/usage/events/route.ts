@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {bindCoreUsageEvent} from '@/lib/storage-core/usage';
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -16,7 +19,7 @@
 
 import { NextResponse } from 'next/server';
 
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import { isClientSubmittable } from '@/lib/usage-analytics/catalog';
 import { MAX_CLIENT_BATCH, MAX_EVENT_ID_LENGTH, MAX_KEY_LENGTH, isUsageEnabled } from '@/lib/usage-analytics/config';
 import { normalizeRoute } from '@/lib/usage-analytics/collector';
@@ -26,7 +29,7 @@ import type { UsageEvent, UsageEventInput } from '@/lib/usage-analytics/types';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
     if (!isUsageEnabled()) {
         return NextResponse.json({ accepted: 0, dropped: 0 }, { status: 202 });
     }
@@ -62,6 +65,7 @@ export async function POST(request: Request) {
             dropped++;
             continue;
         }
+        if (isStorageCoreEnabled()&&!bindCoreUsageEvent(parsed)){dropped++;continue;}
         if (queue?.enqueue(parsed)) accepted++;
         else dropped++;
     }
@@ -95,3 +99,5 @@ function parseClientEvent(raw: UsageEventInput, user: string): UsageEvent | null
         route: normalizeRoute(route),
     };
 }
+
+export async function POST(request:Request){return !isUsageEnabled()?handlePOST(request):semanticRoute(request,()=>handlePOST(request));}

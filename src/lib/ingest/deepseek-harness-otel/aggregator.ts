@@ -443,8 +443,8 @@ export function aggregateDeepSeekHarnessOtelEvents(
   };
 }
 
-export function aggregateDeepSeekHarnessOtelSession(sessionId: string): DeepSeekHarnessOtelAggregationResult {
-  const events = readDeepSeekHarnessOtelEventsForSession(sessionId);
+export function aggregateDeepSeekHarnessOtelSession(sessionId: string, suppliedEvents?: Parameters<typeof aggregateDeepSeekHarnessOtelEvents>[1]): DeepSeekHarnessOtelAggregationResult {
+  const events = suppliedEvents??readDeepSeekHarnessOtelEventsForSession(sessionId);
   const record = aggregateDeepSeekHarnessOtelEvents(sessionId, events);
   if (record) return { sessionId, record, eventCount: events.length, disposition: 'persisted' };
   return {

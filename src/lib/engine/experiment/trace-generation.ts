@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { requireCoreExperimentContext } from '@/lib/storage-core/experiments';
+import { readTraceEvidence } from '@/lib/storage-core/evidence';
 import { ownsSkillExecution } from '@/lib/grayscale/execution-fence';
 import type { SkillExecutionFence } from '@/lib/grayscale/run-progress';
 import { normalizeAgentOptions, resolveAgentOptions, type AgentOptions } from '../../../../packages/agent-runtime/index.cjs';
@@ -90,7 +93,7 @@ export class TraceGenerationError extends Error {
 }
 
 const TERMINAL_COMMAND_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'EXPIRED', 'DELIVERY_FAILED']);
-const AUTO_RETRY_DELAYS_MS = [5_000, 20_000];
+export const AUTO_RETRY_DELAYS_MS = [5_000, 20_000];
 const TRACE_INGEST_TIMEOUT_MS = 60_000;
 
 type CommandRow = NonNullable<Awaited<ReturnType<typeof getCommand>>> & { status: string };
@@ -144,7 +147,7 @@ export function parseTraceIdFromCommandResult(resultJson: string | null | undefi
   return typeof traceId === 'string' && traceId.trim() ? traceId.trim() : null;
 }
 
-async function traceIdFromCompletedCommand(resultJson: string | null | undefined, timeoutMs: number): Promise<string | null> {
+export async function traceIdFromCompletedCommand(resultJson: string | null | undefined, timeoutMs: number): Promise<string | null> {
   const direct = parseTraceIdFromCommandResult(resultJson);
   if (direct) return direct;
   const facts = parseObject(resultJson);
@@ -205,14 +208,10 @@ function commandFailure(command: CommandRow | null): AttemptFailure {
 export async function collectTraceGenerationCases(
   experimentId: string,
 ): Promise<TraceGenerationCaseSpec[]> {
-  const rows = await prisma.experimentCase.findMany({
-    where: { experimentId, executionId: null },
-    orderBy: { createdAt: 'asc' },
-    select: { id: true, input: true },
-  });
-  return rows
-    .map((row: { id: string; input: string }) => ({ caseId: row.id, input: row.input.trim() }))
-    .filter((row: TraceGenerationCaseSpec) => Boolean(row.input));
+  {
+    const snapshot = await requireCoreExperimentContext().rpc('read', {experiment_id: experimentId}) as {experiment: {cases: Array<{id: string; input: string; executionId?: string}>}};
+    return snapshot.experiment.cases.filter(row => !row.executionId && row.input.trim()).map(row => ({caseId: row.id, input: row.input.trim()}));
+  }
 }
 
 export async function assertTraceGenerationTarget(input: {
@@ -237,7 +236,7 @@ export async function assertTraceGenerationTarget(input: {
   return resolveAgentOptions(target.parameterDefinitions || [], input.platform, input.agent, input.agentOptions);
 }
 
-async function waitForCommand(commandId: string, timeoutMs: number, signal?: AbortSignal): Promise<CommandRow | null> {
+export async function waitForCommand(commandId: string, timeoutMs: number, signal?: AbortSignal): Promise<CommandRow | null> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     signal?.throwIfAborted();
@@ -258,28 +257,16 @@ export async function findExecutionByTraceId(input: {
   traceId: string;
   completedTriggerCommand?: { status: string; resultJson: string | null };
 }) {
-  const session = await prisma.session.findFirst({
-    where: { user: input.user, taskId: input.traceId },
-    select: { interactions: true, endTime: true },
-  });
-  if (!session || !hasUsableTraceInteractions(session.interactions)) return null;
-  const facts = parseObject(input.completedTriggerCommand?.resultJson);
-  const completedTriggerRun = input.completedTriggerCommand?.status === 'SUCCEEDED'
-    && facts.state === 'AGENT_EXITED'
-    && facts.traceId === input.traceId
-    && facts.exitCode === 0
-    && facts.timedOut === false
-    && !facts.signal
-    && !facts.failureDetectedAt
-    && facts.modelActivityObserved === true;
-  if (!session.endTime && !completedTriggerRun) return null;
-  const executions = await prisma.execution.findMany({
-    where: { user: input.user, taskId: input.traceId, isSubagent: false },
-    take: 2,
-  });
-  const execution = executions.length === 1 ? executions[0] : null;
-  if (!session.endTime && !execution?.finalResult?.trim()) return null;
-  return execution;
+  {
+    const context = requireCoreExperimentContext();
+    try {
+      const {evidence} = await readTraceEvidence(context.request, {taskId: input.traceId}, context.options);
+      if (!evidence.session || !hasUsableTraceInteractions(JSON.stringify(evidence.session.interactions))) return null;
+      if (!evidence.execution || evidence.execution.user !== input.user) return null;
+      if (!evidence.session.endTime && (!completedTriggerRunHasEvidence(input.completedTriggerCommand, input.traceId) || !evidence.execution.finalResult?.trim())) return null;
+      return evidence.execution as unknown as NonNullable<Awaited<ReturnType<typeof prisma.execution.findFirst>>>;
+    } catch (error) {if ([404,422,503].includes((error as {status?: number}).status || 0)) return null; throw error;}
+  }
 }
 
 async function waitForExecutionByTraceId(input: {
@@ -337,84 +324,26 @@ export async function reconcileGeneratedTraceCase(input: {
   user: string;
   caseId: string;
   minAttemptNo?: number;
-}): Promise<boolean> {
-  const previous = await prisma.experimentTraceAttempt.findMany({
-    where: {
-      caseId: input.caseId,
-      ...(input.minAttemptNo ? { attemptNo: { gte: input.minAttemptNo } } : {}),
-    },
-    orderBy: { attemptNo: 'desc' },
-    take: 1,
-    select: {
-      id: true,
-      traceId: true,
-      commandId: true,
-      failureCode: true,
-    },
-  });
-  for (const attempt of previous) {
-    if (!canReconcileGeneratedTraceAttempt(attempt.failureCode)) continue;
-    let traceId = attempt.traceId;
-    if (!traceId && attempt.commandId) {
-      const command = await getCommand(attempt.commandId);
-      traceId = await traceIdFromCompletedCommand(command?.resultJson, 0);
-      if (traceId) {
-        await prisma.experimentTraceAttempt.updateMany({
-          where: { id: attempt.id, traceId: null, case: { traceAttempts: { none: { id: { not: attempt.id }, traceId } } } },
-          data: { traceId },
-        });
-      }
-    }
-    if (!traceId) continue;
-    const execution = await findExecutionByTraceId({ user: input.user, traceId });
-    if (!execution) continue;
-    const bound = await bindExecution({
-      caseId: input.caseId,
-      attemptId: attempt.id,
-      traceId,
-      execution,
-    });
-    if (bound) return true;
+} ): Promise<boolean> {
+  {
+    const context = requireCoreExperimentContext();
+    const identity = await context.rpc('case_lookup', {case_id: input.caseId}) as {experiment_id: string};
+    const snapshot = await context.rpc('read', {experiment_id: identity.experiment_id, case_ids: [input.caseId]}) as {experiment: {cases: Array<{id: string; traceAttempts: Array<{id: string; failureCode?: string; commandId?: string; traceId?: string; attemptNo: number}>}>}};
+    const attempt = snapshot.experiment.cases[0]?.traceAttempts[0];
+    if (!attempt || !canReconcileGeneratedTraceAttempt(attempt.failureCode) || (input.minAttemptNo && attempt.attemptNo < input.minAttemptNo)) return false;
+    const traceId = attempt.traceId || await traceIdFromCompletedCommand(attempt.commandId ? (await getCommand(attempt.commandId))?.resultJson : null, 0);
+    if (!traceId) return false;
+    const payload = {experiment_id: identity.experiment_id, case_id: input.caseId, attempt_id: attempt.id, command_id: attempt.commandId, trace_id: traceId};
+    const result = await context.rpc('execute_reconcile', {...payload, operation_key: `trace-reconcile:${attempt.id}:${traceId}`, operation_request: payload}) as {ready?: boolean};
+    return result.ready === true;
   }
-  return false;
 }
 
 export async function reserveTraceRetry(req: TraceGenerationRequest): Promise<Record<string, string>> {
-  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const locked = await tx.experiment.updateMany({
-      where: { id: req.experimentId, user: req.user, deletedAt: null, status: { not: 'cancelled' } },
-      data: { updatedAt: new Date() },
-    });
-    if (!locked.count) throw new TraceGenerationError('EXPERIMENT_CANCELLED', '实验已取消', 409);
-    const reservations: Record<string, string> = {};
-    for (const item of req.cases) {
-      const row = await tx.experimentCase.findFirst({ where: { id: item.caseId, experimentId: req.experimentId, deletedAt: null },
-        include: { traceAttempts: { orderBy: { attemptNo: 'desc' }, take: 1 }, results: true } });
-      if (!row) throw new TraceGenerationError('CASE_NOT_FOUND', 'Case 不存在', 404);
-      const latest = row.traceAttempts[0];
-      if ((req.retryFromAttemptId !== undefined && (latest?.id || null) !== req.retryFromAttemptId)
-        || latest && ['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(latest.status)
-        || row.results.some(result => ['pending', 'running'].includes(result.status))) {
-        throw new TraceGenerationError('trace_retry_in_progress', '该 Case 已开始新的执行或评测，请刷新后重试', 409);
-      }
-      const attempt = await tx.experimentTraceAttempt.create({ data: {
-        experimentId: req.experimentId, caseId: item.caseId, attemptNo: (latest?.attemptNo || 0) + 1,
-        workerId: req.workerId, platform: req.platform, agent: req.agent, model: req.model || null,
-        timeoutSeconds: req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS, status: 'queued',
-      } });
-      await tx.experimentCase.update({ where: { id: item.caseId }, data: {
-        executionId: null, taskId: null, actualOutput: '', traceGenerationCommandId: null, traceGenerationError: null,
-      } });
-      await tx.experimentEvalResult.updateMany({ where: { caseId: item.caseId, experimentId: req.experimentId }, data: {
-        status: 'pending', verdict: null, summary: null, score: null, pointsJson: null, evidenceJson: null,
-        errorMessage: null, attempts: { increment: 1 }, durationMs: null,
-        humanScore: null, humanReason: null, humanBy: null, humanAt: null,
-      } });
-      reservations[item.caseId] = attempt.id;
-    }
-    await tx.experiment.update({ where: { id: req.experimentId }, data: { status: 'running' } });
-    return reservations;
-  });
+  {
+    const runId = await (await import('@/lib/storage-core/experiment-trace-worker')).prepareCoreTraceRun(requireCoreExperimentContext(), req, true);
+    return Object.fromEntries(req.cases.map(item => [item.caseId, runId]));
+  }
 }
 
 async function runAttempt(input: {
@@ -544,8 +473,7 @@ async function runAttempt(input: {
     if (input.req.signal?.aborted) cancel();
     input.req.signal?.throwIfAborted();
     await assertExperimentActive(input.req.experimentId, input.item.caseId);
-    const dispatched = await dispatchCommand(input.req.workerId, frame);
-    if (dispatched.delivered) await markSent(frame.commandId, 'wss');
+    await dispatchTraceGenerationCommand(input.req.workerId, frame);
     const command = await waitForCommand(frame.commandId, commandWaitMs, input.req.signal);
     const traceId = command?.status === 'SUCCEEDED'
       ? await traceIdFromCompletedCommand(command.resultJson, TRACE_INGEST_TIMEOUT_MS)
@@ -663,150 +591,54 @@ export async function generateExperimentTraces(
   req: TraceGenerationRequest,
   options: TraceGenerationOptions = {},
 ): Promise<TraceGenerationResult> {
-  const timeoutSeconds = Math.max(
-    MIN_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
-    Math.min(
-      req.timeoutSeconds ?? DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
-      MAX_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
-    ),
-  );
-  const latestAttempts = await prisma.experimentTraceAttempt.findMany({
-    where: { caseId: { in: req.cases.map((item) => item.caseId) } },
-    orderBy: { attemptNo: 'desc' },
-    select: { id: true, caseId: true, attemptNo: true },
-  });
-  const nextAttemptByCase = new Map<string, number>();
-  for (const attempt of latestAttempts) {
-    if (!nextAttemptByCase.has(attempt.caseId)) {
-      nextAttemptByCase.set(attempt.caseId, attempt.attemptNo + 1);
-    }
-  }
-  let pending: PendingCase[] = req.cases.map((item) => {
-    const reservedAttemptId = options.reservedAttemptIds?.[item.caseId];
-    const reserved = reservedAttemptId ? latestAttempts.find((attempt: { id: string; attemptNo: number }) => attempt.id === reservedAttemptId) : undefined;
-    const nextAttemptNo = reserved?.attemptNo ?? nextAttemptByCase.get(item.caseId) ?? 1;
-    return { ...item, nextAttemptNo, cycleStartAttemptNo: nextAttemptNo, reservedAttemptId };
-  });
-  const readyCaseIds: string[] = [];
-  const triggerDecisions: Record<string, TriggerDecision> = {};
-
-  for (let round = 0; round <= AUTO_RETRY_DELAYS_MS.length && pending.length; round += 1) {
-    if (round > 0) await sleep(AUTO_RETRY_DELAYS_MS[round - 1]);
-    const nextRound: PendingCase[] = [];
-    const outcomes = await mapConcurrent(pending, parseExecutionConcurrency(req.executionConcurrency), async (item) => {
-      req.signal?.throwIfAborted();
-      const execute = (signal?: AbortSignal) => runAttempt({
-        req: { ...req, signal: req.signal && signal ? AbortSignal.any([req.signal, signal]) : signal || req.signal },
-        item, timeoutSeconds, canRetry: round < AUTO_RETRY_DELAYS_MS.length,
-        reconcilePrevious: !options.forceNewTrace || round > 0,
-      });
-      const result = req.skillExecution ? await execute() : await withExperimentCancellation(req.experimentId, item.caseId, execute)
-        .catch((error) => {
-          if (error?.code !== 'EXPERIMENT_CANCELLED') throw error;
-          return { ready: false, triggerDecision: undefined, failure: { code: 'EXPERIMENT_CANCELLED', message: '实验或 Case 已取消', retryable: false } };
-        });
-      return { item, result };
-    });
-    for (const { item, result } of outcomes) {
-      if (result.ready) {
-        readyCaseIds.push(item.caseId);
-        if (result.triggerDecision) triggerDecisions[item.caseId] = result.triggerDecision;
-      } else if (result.failure?.retryable && round < AUTO_RETRY_DELAYS_MS.length) {
-        nextRound.push({ ...item, reservedAttemptId: undefined, nextAttemptNo: item.nextAttemptNo + 1 });
-      }
-    }
-    pending = nextRound;
-  }
-
-  const readySet = new Set(readyCaseIds);
-  return {
-    readyCaseIds,
-    failedCaseIds: req.cases.map((item) => item.caseId).filter((caseId) => !readySet.has(caseId)),
-    ...(req.skillExecution?.version === 2 ? { triggerDecisions } : {}),
-  };
+  return (await import('@/lib/storage-core/experiment-trace-worker')).generateCoreExperimentTraces(requireCoreExperimentContext(), req, options);
 }
 
 export async function loadTraceGenerationRetryRequest(input: {
   user: string;
   experimentId: string;
   caseId: string;
-}): Promise<TraceGenerationRequest | null> {
-  const row = await prisma.experimentCase.findFirst({
-    where: {
-      id: input.caseId,
-      experimentId: input.experimentId,
-      experiment: { user: input.user },
-    },
-    select: {
-      id: true,
-      input: true,
-      traceGenerationCommandId: true,
-      experiment: { select: { scope: true, configSnapshotJson: true } },
-      traceAttempts: {
-        orderBy: { attemptNo: 'desc' },
-        take: 1,
-        select: {
-          id: true,
-          workerId: true,
-          commandId: true,
-          platform: true,
-          agent: true,
-          model: true,
-          timeoutSeconds: true,
-          status: true,
-        },
-      },
-    },
-  });
-  if (!row || !row.input.trim()) return null;
-  const attempt = row.traceAttempts[0];
-  if (attempt) {
-    if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(attempt.status)) {
-      throw new TraceGenerationError('trace_retry_in_progress', '该 Case 正在生成 Trace', 409);
-    }
+} ): Promise<TraceGenerationRequest | null> {
+  {
+    const context = requireCoreExperimentContext();
+    const snapshot = await context.rpc('read', {experiment_id: input.experimentId, case_ids: [input.caseId]}) as {experiment: {cases: Array<{id: string; input: string; traceAttempts: Array<{id: string; status: string; workerId: string; platform: string; agent: string; model?: string; timeoutSeconds: number; commandId?: string}>}>}};
+    const row = snapshot.experiment.cases[0];
+    if (!row?.input?.trim()) return null;
+    const attempt = row.traceAttempts[0];
+    if (!attempt) return null;
+    if (['queued','dispatching','running','waiting_trace','retry_wait'].includes(attempt.status)) throw new TraceGenerationError('trace_retry_in_progress','该 Case 正在生成 Trace',409);
     const payload = attempt.commandId ? parseObject((await getCommand(attempt.commandId))?.payloadJson) : {};
-    return {
-      user: input.user,
-      retryFromAttemptId: attempt.id,
-      experimentId: input.experimentId,
-      executionConcurrency: !row.experiment.scope ? parseExecutionConcurrency(parseObject(row.experiment.configSnapshotJson).executionConcurrency) : 1,
-      workerId: attempt.workerId,
-      platform: attempt.platform,
-      agent: attempt.agent,
-      model: attempt.model,
-      agentOptions: normalizeAgentOptions(payload.agentOptions),
-      ...(payload.skillExecution ? { skillExecution: payload.skillExecution as NonNullable<TraceGenerationRequest['skillExecution']> } : {}),
-      timeoutSeconds: attempt.timeoutSeconds,
-      cases: [{ caseId: row.id, input: row.input.trim() }],
-    };
+    return {user: context.actor.username, experimentId: input.experimentId, retryFromAttemptId: attempt.id, workerId: attempt.workerId, platform: attempt.platform, agent: attempt.agent, model: attempt.model, timeoutSeconds: attempt.timeoutSeconds, agentOptions: normalizeAgentOptions(payload.agentOptions), ...(payload.skillExecution ? {skillExecution: payload.skillExecution as NonNullable<TraceGenerationRequest['skillExecution']>} : {}), cases: [{caseId: row.id, input: row.input.trim()}]};
   }
+}
 
-  if (!row.traceGenerationCommandId) return null;
-  const legacyCommand = await prisma.reliabilityCommand.findFirst({
-    where: {
-      commandId: row.traceGenerationCommandId,
-      user: input.user,
-      action: 'RUN_EXPERIMENT_CASE',
-    },
-    select: { clientId: true, payloadJson: true, status: true },
-  });
-  if (!legacyCommand) return null;
-  if (!isTraceGenerationCommandTerminal(legacyCommand.status)) {
-    throw new TraceGenerationError('trace_retry_in_progress', '该 Case 正在生成 Trace', 409);
-  }
-  const payload = parseObject(legacyCommand.payloadJson);
-  const platform = typeof payload.platform === 'string' ? payload.platform.trim() : '';
-  const agent = typeof payload.agent === 'string' ? payload.agent.trim() : '';
-  if (!platform || !agent) return null;
-  return {
-    user: input.user,
-    experimentId: input.experimentId,
-    workerId: legacyCommand.clientId,
-    platform,
-    agent,
-    model: typeof payload.model === 'string' ? payload.model : null,
-    agentOptions: normalizeAgentOptions(payload.agentOptions),
-    timeoutSeconds: Number(payload.timeoutSeconds) || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS,
-    cases: [{ caseId: row.id, input: row.input.trim() }],
-  };
+export async function dispatchTraceGenerationCommand(workerId: string, frame: Awaited<ReturnType<typeof createCommand>>): Promise<void> {
+  const dispatched = await dispatchCommand(workerId, frame);
+  if (dispatched.delivered) await markSent(frame.commandId, 'wss');
+}
+
+export async function cancelTraceGenerationCommand(user: string, workerId: string, commandId: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  do {
+    const stop = await createCommand({user, clientId: workerId, action: 'CANCEL_EXPERIMENT_RUN', payload: {kind: 'ordinary', runId: commandId}});
+    await dispatchTraceGenerationCommand(workerId, stop);
+    const receipt = await waitForCommand(stop.commandId, Math.max(1, deadline - Date.now()));
+    const facts = parseObject(receipt?.resultJson);
+    const result = facts.result && typeof facts.result === 'object' ? facts.result as Record<string, unknown> : facts;
+    if (receipt?.status === 'SUCCEEDED' && result.status === 'cancelled') return;
+    await sleep(250);
+  } while (Date.now() < deadline);
+  throw Object.assign(new Error('客户端进程停止尚未确认，已禁止重试'), {code: 'EVALUATION_CLEANUP_UNCONFIRMED', status: 409});
+}
+
+function completedTriggerRunHasEvidence(command: {status: string; resultJson: string | null} | undefined, traceId: string): boolean {
+  const facts = parseObject(command?.resultJson);
+  return command?.status === 'SUCCEEDED'
+    && facts.state === 'AGENT_EXITED'
+    && facts.traceId === traceId
+    && facts.exitCode === 0
+    && facts.timedOut === false
+    && !facts.signal
+    && !facts.failureDetectedAt
+    && facts.modelActivityObserved === true;
 }

@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+import { createHash, randomUUID } from 'node:crypto';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { frozenModelConfiguration } from '@/lib/storage-core/frozen-model';
+import { getTrustedCoreAgentContext, runWithTrustedCoreAgentContext, type TrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
+import { withSessionCancellation } from '@/lib/engine/general-agent/session-cancellation';
+import { experimentSignal } from '@/lib/engine/experiment/cancellation-context';
+import { evaluationAttemptSignal } from '@/lib/engine/experiment/evaluation-attempt';
+import { recordEvaluatorExecution, isCoreTraceRecordingError } from './evaluator-execution-recorder';
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError, type CustomEvaluatorRuntime } from './custom-evaluator-runtime';
 /**
@@ -316,6 +324,81 @@ export async function syncCustomEvaluatorRegisteredAgents(
     }
 }
 
+async function runCoreCustomLlmEvaluator(
+    user: string, bundle: CustomEvaluatorBundle, input: CustomEvaluatorInput,
+    trusted: TrustedCoreAgentContext, signal: AbortSignal, skillName?: string | null, skillVersion?: number | null,
+): Promise<CustomEvaluatorResult> {
+    const startedAt = Date.now();
+    const model = trusted.trustedModel.modelID;
+    const base = { evaluatorId: bundle.id, evaluatorName: bundle.name, score: null, reason: '', rawResponse: '', model, durationMs: 0 };
+    if (!isValidCustomEvaluatorName(bundle.name)) return { ...base, error: '自建评估器名称必须是英文 agent 名称：以字母开头，仅支持字母、数字、下划线、连字符' };
+    const unsupportedVars = findUnsupportedCustomEvaluatorVariables(`${bundle.config.systemPrompt || ''}\n${bundle.config.userPrompt || ''}`);
+    if (unsupportedVars.length) return { ...base, error: `System Prompt 包含不支持的变量：${unsupportedVars.map(v => `{{${v}}}`).join(', ')}` };
+    const payload: SendPromptPayload = { text: buildUserMessage(bundle.config, input), agent: OPENCODE_FALLBACK_AGENT_NAME,
+        model: trusted.trustedModel, system: buildSystemPrompt(bundle.config, input), permission: buildEvaluatorPermissions() };
+    const secrets = [trusted.trustedModel.apiKey, ...Object.values(trusted.trustedModel.headers || {})].filter((v): v is string => typeof v === 'string' && !!v);
+    const redactText = (text: string) => secrets.reduce((value, secret) => value.split(secret).join('[REDACTED]'), text);
+    const redact = <T>(value: T): T => JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'string' ? redactText(item) : item));
+    signal.throwIfAborted();
+    return withBackgroundOpencodeSlot(async () => {
+        signal.throwIfAborted();
+        const [{ runWithEphemeralOpencodeServer }, { AgentInsight }] = await Promise.all([
+            import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'),
+            import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-client'),
+        ]);
+        return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true, captureMode: 'core-recorded', frozenModel: trusted.trustedModel, signal }, async serverUrl => {
+            signal.throwIfAborted();
+            const insight = new AgentInsight({ baseURL: serverUrl, logLevel: 'warn' });
+            let sessionId = '';
+            let raw = '';
+            let runtimeError: Error | null = null;
+            let evaluationTraceId: string | undefined;
+            const handlers: ChatHandlers = { onText: event => { raw += event.delta; }, onError: error => { runtimeError = error; } };
+            const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+            const chatSignal = AbortSignal.any([signal, timeout]);
+            try {
+                const session = await insight.createSession({ title: `${bundle.name}-${Date.now()}`, directory: trusted.trustedWorkspaceDir });
+                sessionId = String(session?.id || session?.ID || '');
+                if (!sessionId) throw new Error('Failed to create opencode session for custom evaluation');
+                signal.throwIfAborted();
+                const agentId = await ensureCustomRegisteredAgent(user, bundle.name);
+                tagOpencodeSession(sessionId, { agentName: bundle.name, agentId, displayQuery: input.caseInput, user });
+                const result = await withSessionCancellation(chatSignal, () => insight.abortSession(sessionId), () => insight.chat(sessionId, payload, handlers, {
+                    streamTimeoutMs: DEFAULT_TIMEOUT_MS, idleTimeoutMs: DEFAULT_TIMEOUT_MS, signal: chatSignal,
+                }));
+                raw = result.text || raw;
+            } catch (error) {
+                runtimeError = error instanceof Error ? error : new Error(String(error));
+            } finally {
+                try {
+                    const failure = runtimeError || (signal.aborted ? new Error(String(signal.reason)) : parseCustomEvaluatorScore(raw) == null ? new Error('未能从模型响应中解析出 0-100 分数') : null);
+                    const taskId = sessionId || `custom-evaluator-${randomUUID()}`;
+                    await runWithTrustedCoreAgentContext({ ...trusted, recordCoreTrace: async captured => {
+                        captured.record.interactions = [{ role: 'system', content: payload.system, agent: bundle.name, timestamp: new Date(startedAt).toISOString() }, ...(captured.record.interactions || [])];
+                        if (!sessionId) captured.record.source_messages_unavailable = true;
+                        await trusted.recordCoreTrace(redact(captured));
+                    } }, () => recordEvaluatorExecution(sessionId ? insight : { listMessages: async () => [] }, {
+                        taskId, agentName: bundle.name, user, query: payload.text, skill: skillName, skillVersion,
+                        fallbackOutput: raw, startedAt: new Date(startedAt).toISOString(), completedAt: new Date().toISOString(),
+                        ...(failure ? { failure: { code: signal.aborted ? 'EXPERIMENT_CANCELLED' : 'CUSTOM_EVALUATOR_FAILED', message: redactText(failure.message) } } : {}),
+                    }));
+                    evaluationTraceId = taskId;
+                } finally {
+                    if (sessionId) await insight.deleteSession(sessionId).catch(() => {});
+                }
+            }
+            signal.throwIfAborted();
+            const runtime: CustomEvaluatorRuntime = { configHash: createHash('sha256').update(JSON.stringify(bundle.card)).digest('hex'), model, transport: 'opencode', skills: [], tools: [], durationMs: Date.now() - startedAt, evaluationTraceId };
+            if (runtimeError && parseCustomEvaluatorScore(raw || runtimeError.message) == null) return {
+                ...base, rawResponse: redactText(raw), durationMs: runtime.durationMs, runtime, error: `自建评估器调用失败：${redactText(runtimeError.message)}`,
+            };
+            const score = parseCustomEvaluatorScore(raw);
+            return { ...base, score, reason: redactText(deriveReason(raw)), rawResponse: redactText(raw), durationMs: runtime.durationMs, runtime,
+                error: score == null ? '未能从模型响应中解析出 0-100 分数' : undefined };
+        });
+    }, { taskType: 'custom-llm-eval', user, skill: skillName ?? undefined, skillVersion: skillVersion ?? null, label: `custom-eval: ${bundle.id}`, silent: true });
+}
+
 export async function runCustomLlmEvaluator(
     user: string,
     evaluatorId: string,
@@ -325,18 +408,35 @@ export async function runCustomLlmEvaluator(
     frozenCard?: EvaluatorCard | null,
     signal?: AbortSignal,
 ): Promise<CustomEvaluatorResult> {
+  const core = isStorageCoreEnabled();
+  const trusted = (getTrustedCoreAgentContext());
+  if (core && frozenCard === undefined) throw new Error('Frozen custom evaluator is required');
+  const frozen = (frozenModelConfiguration(user));
+  if (core && !trusted && !(frozen?.active && !frozen.config)) throw new Error('Trusted core custom evaluator runtime is required');
+  const coreSignal = (AbortSignal.any([signal, trusted?.cancelSignal, experimentSignal(), evaluationAttemptSignal()].filter((value): value is AbortSignal => !!value)));
+  coreSignal?.throwIfAborted();
   const bundle = frozenCard === undefined ? await loadCustomEvaluator(user, evaluatorId)
     : frozenCard?.llmConfig ? { id: frozenCard.id, name: frozenCard.name, config: frozenCard.llmConfig, card: frozenCard } : null;
+  if (core && !trusted) return { evaluatorId, evaluatorName: bundle?.name || evaluatorId, score: null, reason: '', rawResponse: '', model: '', durationMs: 0, error: MISSING_EVALUATION_MODEL_MESSAGE };
+  if (core && bundle && !bundle.config.skills?.length) return runCoreCustomLlmEvaluator(user, bundle, input, trusted!, coreSignal!, skillName, skillVersion);
+  if (core && !bundle) throw new Error(`未找到冻结的自建评估器 ${evaluatorId}`);
   if (bundle?.config.skills?.length) {
     try {
       const result = await runCustomEvaluatorWithSkills(user, bundle.card, {
         input: input.caseInput, datasetInput: input.datasetInput, output: input.actualOutput,
         referenceOutput: input.expectedOutput, trajectory: input.traceText,
-      }, { signal });
+      }, { signal: coreSignal || signal });
       return { evaluatorId, evaluatorName: bundle.name, score: result.output.score ?? null,
         reason: result.output.summary || '', rawResponse: result.raw, model: result.runtime.model,
         durationMs: result.runtime.durationMs, runtime: result.runtime, output: result.output };
     } catch (error) {
+      {
+        const seen = new Set<unknown>();
+        for (let cause: unknown = error; cause && !seen.has(cause); cause = typeof cause === 'object' && 'cause' in cause ? cause.cause : undefined) {
+          seen.add(cause);
+          if (coreSignal?.aborted || isCoreTraceRecordingError(cause)) throw error;
+        }
+      }
       return { evaluatorId, evaluatorName: bundle.name, score: null, reason: '', rawResponse: '', model: '', durationMs: 0,
         error: error instanceof Error ? error.message : String(error),
         ...(error instanceof CustomEvaluatorExecutionError ? { runtime: error.runtime, model: error.runtime.model, durationMs: error.runtime.durationMs } : {}) };

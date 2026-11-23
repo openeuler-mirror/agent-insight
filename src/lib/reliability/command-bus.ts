@@ -22,7 +22,7 @@ import type { Prisma } from '@prisma/client'
  * ACK 窗口内没收到就是 DELIVERY_FAILED。指令不在重连后自动补发。
  */
 import { randomBytes } from 'node:crypto'
-import { mergeTraceFacts, traceIdFromFacts } from '@/lib/trace-reference'
+import { mergeTraceFacts } from '@/lib/trace-reference'
 
 import { prisma } from '@/lib/storage/prisma'
 import { ReliabilityError } from '@/lib/reliability/client-registry'
@@ -136,7 +136,7 @@ export function commandTtlMs(): number {
   return Math.max(5, Number.isFinite(sec) ? sec : 30) * 1000
 }
 
-function newCommandId(): string {
+export function newCommandId(): string {
   return `cmd_${Date.now().toString(36)}_${randomBytes(5).toString('hex')}`
 }
 
@@ -155,6 +155,7 @@ export async function createCommand(input: {
   action: CommandAction
   payload?: Record<string, unknown>
   ttlMs?: number
+  commandId?: string
 }, store = prisma): Promise<CommandFrame> {
   if (!isWhitelistedAction(input.action)) {
     throw new ReliabilityError('COMMAND_ACTION_UNKNOWN', `未知 action: ${input.action}`, 400)
@@ -162,7 +163,15 @@ export async function createCommand(input: {
   const payload = input.payload || {}
   assertPayloadSafe(input.action, payload)
 
-  const commandId = newCommandId()
+  const commandId = input.commandId || newCommandId()
+  if (input.commandId) {
+    if (!/^cmd_[A-Za-z0-9_-]{1,160}$/.test(commandId)) throw new ReliabilityError('COMMAND_ID_INVALID', '指令标识无效', 400)
+    const previous = await store.reliabilityCommand.findUnique({where: {commandId}})
+    if (previous) {
+      if (previous.clientId !== input.clientId || previous.user !== input.user || previous.action !== input.action || previous.payloadJson !== JSON.stringify(payload)) throw new ReliabilityError('COMMAND_ID_CONFLICT', '指令标识已绑定其他输入', 409)
+      return {type: 'COMMAND', commandId, action: input.action, payload, createdAt: previous.createdAt.toISOString(), expiresAt: previous.expiresAt.toISOString()}
+    }
+  }
   const now = new Date()
   const expiresAt = new Date(now.getTime() + (input.ttlMs ?? commandTtlMs()))
   await store.reliabilityCommand.create({
@@ -303,24 +312,6 @@ async function applyCommandStatusRow(
     const result = command.action === 'RUN_EXPERIMENT_CASE'
       ? mergeTraceFacts(safeParse(command.resultJson), input.result, (code, message) => new ReliabilityError(code, message, 409))
       : input.result
-    const traceId = traceIdFromFacts(result)
-    if (command.action === 'RUN_EXPERIMENT_CASE' && traceId) {
-      const payload = safeParse(command.payloadJson)
-      const correlation = payload.correlation as Record<string, unknown> | undefined
-      const attempt = await tx.experimentTraceAttempt.findFirst({ where: {
-        id: String(correlation?.traceAttemptId || ''), commandId: input.commandId, workerId: input.clientId,
-        caseId: String(correlation?.caseRunId || ''), experimentId: String(correlation?.experimentId || ''),
-      } })
-      if (attempt) {
-        const reused = await tx.experimentTraceAttempt.count({ where: { caseId: attempt.caseId, id: { not: attempt.id }, traceId } })
-        if (reused) throw new ReliabilityError('TRACE_ID_REUSED', '客户端返回了其他执行的主链路 ID', 409)
-        if (attempt.traceId && attempt.traceId !== traceId) throw new ReliabilityError('TRACE_ID_CONFLICT', '本次执行已绑定其他主链路，拒绝覆盖', 409)
-        await tx.experimentTraceAttempt.updateMany({ where: {
-          id: attempt.id, commandId: input.commandId, traceId: attempt.traceId,
-          case: { deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } },
-        }, data: { traceId } })
-      }
-    }
     data.resultJson = JSON.stringify(result)
   }
   if (input.error) {

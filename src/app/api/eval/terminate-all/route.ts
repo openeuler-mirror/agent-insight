@@ -15,6 +15,8 @@
  */
 
 import { NextResponse } from 'next/server';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,requireCoreExperimentContext,withCoreExperimentMutationRoute} from '@/lib/storage-core/experiments';
 import { markUserTerminated } from '@/server/user_termination_registry';
 import { abortTrajectoryEvalRunsForUser } from '@/server/trajectory_eval_run_registry';
 import { killOpencodeForUser } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
@@ -35,26 +37,30 @@ import { prismaRaw } from '@/lib/storage/prisma';
  *   5) DB 兜底:把该 user 仍 running/pending 的评测行(含进程重启后无 controller 的僵尸)置失败「已终止」。
  */
 export async function POST(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,POST);
     try {
         const body = await request.json().catch(() => ({}));
-        const user = String(body?.user || '').trim();
+        const user = (requireCoreExperimentContext().actor.username);
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
 
+        let cancelledEvalRows = 0;
+        {
+            const context=requireCoreExperimentContext();
+            const value=await context.rpc('read_view',{scope:'trajectory-direct'}) as {coverage:string;snapshots:Array<{experiment:{id:string;user:string;cases:Array<{directTrajectory?:{status:string};results:Array<{status:string}>}>}}>};
+            if(value?.coverage!=='complete'||!Array.isArray(value.snapshots))throw Object.assign(new Error('Complete direct evaluation snapshot required'),{status:503});
+            for(const snapshot of value.snapshots){
+                if(snapshot.experiment.user!==context.actor.username)continue;
+                const active=snapshot.experiment.cases.filter(item=>{const status=item.results.some(row=>row.status==='pending'||row.status==='running')?'running':item.results[0]?.status||item.directTrajectory?.status;return status==='pending'||status==='running';});
+                if(!active.length)continue;
+                const payload={experiment_id:snapshot.experiment.id};await context.rpc('cancel',{...payload,operation_key:context.operationKey+':direct-cancel:'+snapshot.experiment.id,operation_request:payload});cancelledEvalRows+=active.length;
+            }
+        }
         markUserTerminated(user);
         const killedOpencode = killOpencodeForUser(user);
         const abortedEvalRuns = abortTrajectoryEvalRunsForUser(user);
         const batch = await abortBatchRunsForUser(user);
 
-        let cancelledEvalRows = 0;
-        try {
-            const r = await prismaRaw.trajectoryEvalResult.updateMany({
-                where: { user, status: { in: ['running', 'pending'] } },
-                data: { status: 'failed', errorMessage: '已终止：用户中止了该批次评测' },
-            });
-            cancelledEvalRows = r.count;
-        } catch (e) {
-            console.warn('[terminate-all] eval rows DB cleanup failed:', e);
-        }
+
 
         console.warn(
             `[terminate-all] user=${user} killedOpencode=${killedOpencode} evalRuns=${abortedEvalRuns} ` +

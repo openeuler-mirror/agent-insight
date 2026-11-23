@@ -1,3 +1,4 @@
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -16,7 +17,7 @@
 
 import { NextResponse } from 'next/server';
 
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import {
   GOAL_PLUS_MAX_BATCH_BYTES,
   GOAL_PLUS_MAX_SNAPSHOT_BYTES,
@@ -34,7 +35,7 @@ import {
 } from '@/lib/ingest/goal-plus/persist';
 import { relinkGoalPlusSource } from '@/lib/ingest/goal-plus/correlate';
 import { projectGoalPlusCollaborations } from '@/lib/ingest/collaboration/providers/goal-plus';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw} from '@/lib/storage-core/semantic-sources';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,7 +44,7 @@ function jsonSize(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const { username, apiKey } = await resolveUser(request);
   if (!apiKey || !username) {
     return NextResponse.json({ error: 'A valid x-witty-api-key is required' }, { status: 401 });
@@ -153,3 +154,5 @@ export async function POST(request: Request) {
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204 });
 }
+
+export async function POST(request: Request) {return semanticRoute(request,()=>handlePOST(request));}

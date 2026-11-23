@@ -18,6 +18,8 @@
 // 与 correlate.ts（单条 execution → infra）方向相反：这里是「某段时间这个源上有哪些 session 在干活」。
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {readCoreInfraExecutions,getCoreInfraLinks,setCoreInfraLinks} from '@/lib/storage-core/infra';
 
 export interface SessionForEndpoint {
   id: string;
@@ -32,28 +34,13 @@ export interface SessionForEndpoint {
 /** 该 endpoint 在 [fromMs, toMs] 内命中的 execution 总数（分页用）。 */
 export async function countSessionsForEndpoint(endpoint: string, fromMs: number, toMs: number): Promise<number> {
   if (!endpoint) return 0;
-  return prismaRaw.execution.count({ where: { endpoint, timestamp: { gte: new Date(fromMs), lte: new Date(toMs) } } });
+  return (await readCoreInfraExecutions()).filter(row=>row.endpoint===endpoint&&row.timestamp.getTime()>=fromMs&&row.timestamp.getTime()<=toMs).length;
 }
 
 /** 列出 [fromMs, toMs] 内、endpoint 命中该源的 execution（按时间降序=最近优先，支持 offset/limit 分页）。 */
 export async function listSessionsForEndpoint(endpoint: string, fromMs: number, toMs: number, opts: { limit?: number; offset?: number } = {}): Promise<SessionForEndpoint[]> {
   if (!endpoint) return [];
-  const rows = await prismaRaw.execution.findMany({
-    where: { endpoint, timestamp: { gte: new Date(fromMs), lte: new Date(toMs) } },
-    orderBy: { timestamp: 'desc' },
-    skip: Math.max(0, opts.offset ?? 0),
-    take: Math.min(200, Math.max(1, opts.limit ?? 20)),
-    select: { id: true, taskId: true, timestamp: true, latency: true, model: true, outputTokens: true, agentName: true },
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    taskId: r.taskId ?? null,
-    tsMs: r.timestamp.getTime(),
-    latencyMs: r.latency ?? null,
-    model: r.model ?? null,
-    outputTokens: r.outputTokens ?? null,
-    agentName: r.agentName ?? null,
-  }));
+  {const rows=(await readCoreInfraExecutions()).filter(row=>row.endpoint===endpoint&&row.timestamp.getTime()>=fromMs&&row.timestamp.getTime()<=toMs).sort((a,b)=>b.timestamp.getTime()-a.timestamp.getTime()),offset=Math.max(0,opts.offset??0);return rows.slice(offset,offset+Math.min(200,Math.max(1,opts.limit??20))).map(row=>({id:row.id,taskId:row.taskId,tsMs:row.timestamp.getTime(),latencyMs:row.latency,model:row.model,outputTokens:row.outputTokens,agentName:row.agentName}));}
 }
 
 // ---- 会话级（整棵 trace 树）→ 多个 (endpoint, 模型) 关联目标 ----
@@ -87,26 +74,10 @@ export interface SessionLink { sourceId: string; model: string | null }
 
 /** 读某棵树的人工覆盖关联集合（无 = 空数组 = 走自动推断）。 */
 export async function getSessionLinks(rootExecutionId: string): Promise<SessionLink[]> {
-  const rows = await prismaRaw.sessionInfraLink.findMany({
-    where: { rootExecutionId },
-    select: { sourceId: true, model: true },
-    orderBy: { createdAt: 'asc' },
-  });
-  return rows.map((r) => ({ sourceId: r.sourceId, model: r.model ?? null }));
+  return getCoreInfraLinks(rootExecutionId);
 }
 
 /** 覆盖式保存某棵树的人工关联集合（整体替换；空数组 = 清空，回落到自动推断）。 */
 export async function setSessionLinks(rootExecutionId: string, links: SessionLink[]): Promise<void> {
-  // 去重（含 model=null）
-  const seen = new Set<string>();
-  const uniq = links.filter((l) => {
-    const k = `${l.sourceId}\u0000${l.model ?? ''}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-  await prismaRaw.$transaction([
-    prismaRaw.sessionInfraLink.deleteMany({ where: { rootExecutionId } }),
-    ...uniq.map((l) => prismaRaw.sessionInfraLink.create({ data: { rootExecutionId, sourceId: l.sourceId, model: l.model } })),
-  ]);
+  {await setCoreInfraLinks(rootExecutionId,links);return;}
 }

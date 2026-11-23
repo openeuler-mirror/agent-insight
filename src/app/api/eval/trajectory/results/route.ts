@@ -15,7 +15,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { prismaRaw as prisma } from '@/lib/storage/prisma';
+import { prismaRaw as legacyPrisma } from '@/lib/storage/prisma';
+import {directTrajectorySource} from '@/lib/eval/direct-trajectory-source';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,requireCoreExperimentContext,withCoreExperimentMutationRoute} from '@/lib/storage-core/experiments';
+const prisma=legacyPrisma;
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
 import { selectLatestDatasetCaseResults } from '@/lib/eval/latest-trajectory-results';
 import { selectKeepIdsByTaskId } from '@/lib/storage/data-service';
@@ -69,7 +73,7 @@ async function loadExecutionDisplayByTraceId(rows: { taskId: string | null; exec
     const executionIds = Array.from(new Set(rows.map(row => row.executionId).filter((id): id is string => Boolean(id))));
     if (taskIds.length === 0 && executionIds.length === 0) return new Map();
 
-    const executionRows = await prisma.execution.findMany({
+    const executionRows = await (await directTrajectorySource(legacyPrisma)).execution.findMany({
         where: {
             OR: [
                 ...(taskIds.length > 0 ? [{ taskId: { in: taskIds } }] : []),
@@ -107,6 +111,8 @@ async function loadExecutionDisplayByTraceId(rows: { taskId: string | null; exec
  * 安全约束：若命中行里有 running / pending（评测/执行进行中），整体拒绝删除（409）。
  */
 export async function DELETE(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,DELETE);
+    const prisma=await directTrajectorySource(legacyPrisma);
     try {
         const { searchParams } = new URL(request.url);
         let body: Record<string, unknown> = {};
@@ -147,6 +153,8 @@ export async function DELETE(request: Request) {
 }
 
 export async function GET(request: Request) {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,GET);
+    const prisma=await directTrajectorySource(legacyPrisma);
     try {
         const { searchParams } = new URL(request.url);
         const user = (searchParams.get('user') || '').trim();

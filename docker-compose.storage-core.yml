@@ -1,0 +1,70 @@
+name: agent-insight-storage-core-check
+
+services:
+  core-volume-init:
+    image: python:3.11-slim
+    command: ["sh", "-c", "chown -R 1000:1000 /core"]
+    volumes:
+      - core-data:/core
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD for the isolated deployment}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+  agent-insight:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+      args:
+        BASE_NODE_IMAGE: node:22-bookworm-slim
+        NPM_CONFIG_LOGLEVEL: verbose
+        NPM_CONFIG_FETCH_RETRIES: "0"
+        NPM_CONFIG_FETCH_TIMEOUT: "15000"
+    restart: unless-stopped
+    environment:
+      AGENT_INSIGHT_TRACE_STORAGE: core
+      AGENT_INSIGHT_STORAGE_CORE_URL: http://127.0.0.1:4319
+      AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE: /core/controller-key
+    network_mode: service:storage-core
+    volumes:
+      - web-data:/data/agent-insight
+      - core-data:/core:ro
+    depends_on:
+      core-volume-init:
+        condition: service_completed_successfully
+      storage-core:
+        condition: service_healthy
+
+  storage-core:
+    build:
+      context: .
+      dockerfile: Dockerfile.storage-core
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${AGENT_INSIGHT_PORT:-3000}:3000
+    environment:
+      CLICKHOUSE_ENDPOINT: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD for the isolated deployment}
+    volumes:
+      - core-data:/core
+    depends_on:
+      core-volume-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_started
+    command: ["sh", "-c", "python3 scripts/storage-core-docker-bootstrap.py && exec python3 -m services.storage.trace_service --config /core/trace-service.json"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4319/v1/health', timeout=3).close()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+volumes:
+  clickhouse-data:
+  core-data:
+  web-data:

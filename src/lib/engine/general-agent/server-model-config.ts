@@ -69,6 +69,7 @@ export function mapServerModelConfig(
     apiKey: cfg.apiKey?.trim() ?? '',
     baseURL: connection.baseUrl || defaultBaseUrlForProvider(providerID),
     headers: cfg.headers,
+    ...(cfg.protocol ? { protocol: cfg.protocol } : {}),
   };
 }
 

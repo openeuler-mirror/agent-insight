@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {experimentReadSource,getCoreExperimentContext,withCoreExperimentReadRoute,coreExperimentFailure} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -71,7 +73,9 @@ function buildCaseResult(caseRow: { id: string; taskId: string | null; execution
   };
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.readView){try{return await withCoreExperimentReadRoute(req,GET);}catch(error){return coreExperimentFailure(error);}}
+  const experimentReads=experimentReadSource(prisma);
   try {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
@@ -87,7 +91,7 @@ export async function GET(req: Request) {
     if (runId) caseWhere.experimentId = runId;
     if (taskId) caseWhere.taskId = taskId;
     // 权限：case 必须属于本人的实验
-    const cases = await prisma.experimentCase.findMany({
+    const cases = await experimentReads.experimentCase.findMany({
       where: { ...caseWhere, experiment: { user: username } },
       orderBy: { createdAt: 'desc' },
       take: taskId && !runId ? 1 : limit,

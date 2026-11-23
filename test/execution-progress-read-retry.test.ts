@@ -20,8 +20,8 @@ function harness(failures: Array<{code: string; delayMs: number}>) {
     if (failure) {now += failure.delayMs;throw Object.assign(new Error('Read transaction failed'), {code: failure.code});}
     return read({});
   }};
-  const load = new Function('prisma', 'Date', 'setTimeout', 'loadCaseExecutionProgressInTransaction', `${compiled}\nreturn loadCaseExecutionProgress;`)(
-    prisma, {now: () => now}, (resolve: () => void, delay: number) => {now += delay;resolve();}, async () => output,
+  const load = new Function('prisma', 'Date', 'setTimeout', 'getCoreExperimentContext', 'isStorageCoreEnabled', 'loadCaseExecutionProgressInTransaction', `${compiled}\nreturn loadCaseExecutionProgress;`)(
+    prisma, {now: () => now}, (resolve: () => void, delay: number) => {now += delay;resolve();}, () => undefined, () => false, async () => output,
   ) as (...args: unknown[]) => Promise<unknown>;
   return {attempts, output, run: () => load('experiment', 'test@example.com', ['case'], ['judge'], false)};
 }

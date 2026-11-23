@@ -1,16 +1,14 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
+import { createIsolatedDatabase } from './helpers/isolated-database'
 
-test('completed reviewer uploads retain automatic secondary analysis', async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'reviewer-upload-'))
-  process.env.AGENT_INSIGHT_HOME = root
-  process.env.DATABASE_URL = 'file:' + path.join(root, 'test.db')
-  execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' })
-  const { prisma } = await import('@/lib/storage/prisma')
+test('completed reviewer uploads retain automatic secondary analysis', async (t) => {
+  const database = createIsolatedDatabase()
+  let prisma: typeof import('@/lib/storage/prisma')['prisma'] | undefined
+  t.after(async () => {
+    try { await prisma?.$disconnect() } finally { database.dispose() }
+  })
+  ;({ prisma } = await import('@/lib/storage/prisma'))
   const { POST } = await import('@/app/api/ingest/upload/route')
   const taskId = 'ses_internal_reviewer_regression'
   const interactions = [
@@ -48,7 +46,5 @@ test('completed reviewer uploads retain automatic secondary analysis', async () 
     for (const handle of scheduled) clearTimeout(handle)
     if (previousDelay === undefined) delete process.env.UPLOAD_ASYNC_DEBOUNCE_MS
     else process.env.UPLOAD_ASYNC_DEBOUNCE_MS = previousDelay
-    await prisma.$disconnect()
-    rmSync(root, { recursive: true, force: true })
   }
 })

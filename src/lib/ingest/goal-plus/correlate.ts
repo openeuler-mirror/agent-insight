@@ -1,3 +1,4 @@
+import {hasCoreCollectorTraceSource,findCoreTraceExecutions,findCoreTraceSession,queryCoreTraceSources} from '@/lib/storage-core/collector-read-source';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,7 +15,7 @@
  * limitations under the License.
  */
 
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw,semanticContext} from '@/lib/storage-core/semantic-sources';
 
 type Tx = Omit<typeof prismaRaw, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 type RelinkResult = { linked: number; ambiguous: number; unresolved: number };
@@ -223,7 +224,7 @@ async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkRe
   let unresolved = 0;
   for (const intent of intents) {
     const exactMatches = intent.exactIds.length
-      ? await tx.execution.findMany({
+      ? hasCoreCollectorTraceSource()?await findCoreTraceExecutions(source.user,{agent_session_ids:intent.exactIds,framework:intent.expectedFramework,limit:2000}):await tx.execution.findMany({
         where: {
           user: source.user,
           ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
@@ -245,7 +246,7 @@ async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkRe
       };
     });
     if (candidates.length === 0 && intent.taskName && !duplicateTaskNames.has(intent.taskName)) {
-      const matches = await tx.execution.findMany({
+      const matches = hasCoreCollectorTraceSource()?(await findCoreTraceExecutions(source.user,{framework:intent.expectedFramework,limit:2000})).filter(item=>[item.taskId,item.agentSessionId,item.agentName,item.subagentName].includes(intent.taskName)):await tx.execution.findMany({
         where: {
           user: source.user,
           ...(intent.expectedFramework ? { framework: intent.expectedFramework } : {}),
@@ -322,13 +323,14 @@ async function relinkInTransaction(tx: Tx, sourceDbId: string): Promise<RelinkRe
 }
 
 export function relinkGoalPlusSource(sourceDbId: string): Promise<RelinkResult> {
-  const pending = relinks.get(sourceDbId);
+  const actor=hasCoreCollectorTraceSource()?semanticContext().actor:null;const storageKey=actor?actor.workspace+'\0'+actor.principal+'\0'+sourceDbId:sourceDbId;
+  const pending = relinks.get(storageKey);
   if (pending) {
     pending.dirty = true;
     return pending.promise;
   }
   const state = { dirty: true, promise: Promise.resolve({ linked: 0, ambiguous: 0, unresolved: 0 }) };
-  relinks.set(sourceDbId, state);
+  relinks.set(storageKey, state);
   state.promise = (async () => {
     let result: RelinkResult = { linked: 0, ambiguous: 0, unresolved: 0 };
     try {
@@ -347,7 +349,7 @@ export function relinkGoalPlusSource(sourceDbId: string): Promise<RelinkResult> 
       } while (state.dirty);
       return result;
     } finally {
-      relinks.delete(sourceDbId);
+      relinks.delete(storageKey);
     }
   })();
   return state.promise;

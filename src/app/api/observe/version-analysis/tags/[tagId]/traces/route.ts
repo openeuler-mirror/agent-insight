@@ -17,20 +17,23 @@
 import { NextResponse } from 'next/server';
 import { TraceTagError } from '@/lib/trace-tags';
 import { getVersionTagTraces } from '@/lib/version-analysis';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreExperiments,requireCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
 
 export const dynamic = 'force-dynamic';
 
 type RouteContext = { params: Promise<{ tagId: string }> };
 
 function toErrorResponse(error: unknown) {
-  if (error instanceof TraceTagError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
-  }
-  console.error('[version-analysis/tag/traces] request failed:', error);
-  return NextResponse.json({ error: 'failed to load version traces' }, { status: 500 });
+  return coreExperimentFailure(error);
 }
 
 export async function GET(request: Request, context: RouteContext) {
+  {
+    try{return await withCoreExperiments(request,()=>{const url=new URL(request.url);url.searchParams.set('user',requireCoreExperimentContext().actor.username);return tracesRequest(new Request(url,{headers:request.headers}),context);});}catch(error){return coreExperimentFailure(error);}
+  }
+}
+async function tracesRequest(request:Request,context:RouteContext){
   try {
     const { tagId } = await context.params;
     const { searchParams } = new URL(request.url);

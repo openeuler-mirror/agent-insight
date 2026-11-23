@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -39,6 +40,7 @@ export function benchmarkErrorResponse(error: unknown, source: string): NextResp
       { status: error.httpStatus },
     )
   }
+  if(isStorageCoreEnabled()&&error&&typeof error==='object'&&'status'in error&&typeof error.status==='number'&&[400,401,403,404,409,410,413,415,422,428,429,502,503].includes(error.status))return NextResponse.json({error:{code:'CORE_BENCHMARK_REQUEST_FAILED',message:'Benchmark数据存储请求失败',retryable:error.status>=500}},{status:error.status})
   console.error(`[${source}]`, error)
   return NextResponse.json(
     { error: { code: 'INTERNAL_ERROR', message: 'Benchmark 服务内部错误', retryable: false } },

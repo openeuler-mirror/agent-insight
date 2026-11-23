@@ -1,0 +1,95 @@
+CREATE TABLE collector_trace_threads (
+  workspace_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  owner_principal_id TEXT NOT NULL,
+  framework TEXT NOT NULL,
+  source_thread_id TEXT NOT NULL,
+  legacy_username TEXT NOT NULL,
+  source_kind TEXT,
+  started_at_ms BIGINT,
+  updated_at_ms BIGINT,
+  metadata_json TEXT,
+  revision BIGINT NOT NULL DEFAULT 1,
+  created_at_ms BIGINT NOT NULL,
+  modified_at_ms BIGINT NOT NULL,
+  PRIMARY KEY (workspace_id,thread_id),
+  UNIQUE (workspace_id,owner_principal_id,framework,source_thread_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces (workspace_id) ON DELETE NO ACTION,
+  FOREIGN KEY (owner_principal_id) REFERENCES iam_principals (principal_id) ON DELETE NO ACTION,
+  CHECK (length(workspace_id) BETWEEN 1 AND 512),
+  CHECK (length(thread_id) BETWEEN 1 AND 512),
+  CHECK (length(owner_principal_id) BETWEEN 1 AND 512),
+  CHECK (length(framework) BETWEEN 1 AND 512),
+  CHECK (length(source_thread_id) BETWEEN 1 AND 512),
+  CHECK (length(legacy_username) BETWEEN 1 AND 512),
+  CHECK (started_at_ms IS NULL OR (started_at_ms>=0 AND started_at_ms<=9223372036854775807)),
+  CHECK (updated_at_ms IS NULL OR (updated_at_ms>=0 AND updated_at_ms<=9223372036854775807)),
+  CHECK ((revision>=1 AND revision<=9223372036854775807)),
+  CHECK ((created_at_ms>=0 AND created_at_ms<=9223372036854775807)),
+  CHECK ((modified_at_ms>=0 AND modified_at_ms<=9223372036854775807)),
+  CHECK (modified_at_ms>=created_at_ms)
+);
+CREATE INDEX idx_ct_threads_0 ON collector_trace_threads (workspace_id,owner_principal_id,framework,updated_at_ms,thread_id);
+CREATE FUNCTION collector_trace_threads_guard() RETURNS trigger AS $$ BEGIN IF NEW.workspace_id IS DISTINCT FROM OLD.workspace_id OR NEW.thread_id IS DISTINCT FROM OLD.thread_id OR NEW.owner_principal_id IS DISTINCT FROM OLD.owner_principal_id OR NEW.framework IS DISTINCT FROM OLD.framework OR NEW.source_thread_id IS DISTINCT FROM OLD.source_thread_id OR NEW.legacy_username IS DISTINCT FROM OLD.legacy_username OR NEW.created_at_ms IS DISTINCT FROM OLD.created_at_ms OR NEW.revision<>OLD.revision+1 OR NEW.modified_at_ms<OLD.modified_at_ms THEN RAISE EXCEPTION 'collector Thread identity or revision differs'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER collector_trace_threads_guard BEFORE UPDATE ON collector_trace_threads FOR EACH ROW EXECUTE PROCEDURE collector_trace_threads_guard();
+CREATE TABLE collector_trace_thread_events (
+  workspace_id TEXT NOT NULL,
+  event_key TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  execution_trace_id TEXT,
+  related_trace_id TEXT,
+  kind TEXT NOT NULL,
+  status TEXT,
+  source_turn_id TEXT,
+  phase_id TEXT,
+  started_at_ms BIGINT NOT NULL,
+  completed_at_ms BIGINT,
+  payload_json TEXT,
+  revision BIGINT NOT NULL DEFAULT 1,
+  created_at_ms BIGINT NOT NULL,
+  modified_at_ms BIGINT NOT NULL,
+  PRIMARY KEY (workspace_id,event_key),
+  UNIQUE (workspace_id,event_id),
+  FOREIGN KEY (workspace_id,thread_id) REFERENCES collector_trace_threads (workspace_id,thread_id) ON DELETE NO ACTION,
+  FOREIGN KEY (workspace_id,execution_trace_id) REFERENCES trace_locators (workspace_id,trace_id) ON DELETE NO ACTION,
+  FOREIGN KEY (workspace_id,related_trace_id) REFERENCES trace_locators (workspace_id,trace_id) ON DELETE NO ACTION,
+  CHECK (length(workspace_id) BETWEEN 1 AND 512),
+  CHECK (length(event_key) BETWEEN 1 AND 1024),
+  CHECK (length(event_id) BETWEEN 1 AND 512),
+  CHECK (length(thread_id) BETWEEN 1 AND 512),
+  CHECK (length(kind) BETWEEN 1 AND 512),
+  CHECK ((started_at_ms>=0 AND started_at_ms<=9223372036854775807)),
+  CHECK (completed_at_ms IS NULL OR (completed_at_ms>=0 AND completed_at_ms<=9223372036854775807)),
+  CHECK ((revision>=1 AND revision<=9223372036854775807)),
+  CHECK ((created_at_ms>=0 AND created_at_ms<=9223372036854775807)),
+  CHECK ((modified_at_ms>=0 AND modified_at_ms<=9223372036854775807)),
+  CHECK (modified_at_ms>=created_at_ms)
+);
+CREATE INDEX idx_ct_thread_events_0 ON collector_trace_thread_events (workspace_id,thread_id,started_at_ms,event_key);
+CREATE INDEX idx_ct_thread_events_1 ON collector_trace_thread_events (workspace_id,execution_trace_id,started_at_ms,event_key);
+CREATE FUNCTION collector_trace_thread_events_guard() RETURNS trigger AS $$ BEGIN IF NEW.workspace_id IS DISTINCT FROM OLD.workspace_id OR NEW.event_key IS DISTINCT FROM OLD.event_key OR NEW.event_id IS DISTINCT FROM OLD.event_id OR NEW.thread_id IS DISTINCT FROM OLD.thread_id OR NEW.created_at_ms IS DISTINCT FROM OLD.created_at_ms OR NEW.revision<>OLD.revision+1 OR NEW.modified_at_ms<OLD.modified_at_ms THEN RAISE EXCEPTION 'collector Thread identity or revision differs'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER collector_trace_thread_events_guard BEFORE UPDATE ON collector_trace_thread_events FOR EACH ROW EXECUTE PROCEDURE collector_trace_thread_events_guard();
+CREATE TABLE collector_trace_thread_executions (
+  workspace_id TEXT NOT NULL,
+  trace_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  owner_principal_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  source_execution_id TEXT,
+  timestamp_ms BIGINT NOT NULL,
+  PRIMARY KEY (workspace_id,trace_id),
+  FOREIGN KEY (workspace_id,trace_id) REFERENCES trace_locators (workspace_id,trace_id) ON DELETE NO ACTION,
+  FOREIGN KEY (workspace_id,thread_id) REFERENCES collector_trace_threads (workspace_id,thread_id) ON DELETE NO ACTION,
+  FOREIGN KEY (owner_principal_id) REFERENCES iam_principals (principal_id) ON DELETE NO ACTION,
+  CHECK (length(workspace_id) BETWEEN 1 AND 512),
+  CHECK (length(trace_id) BETWEEN 1 AND 512),
+  CHECK (length(thread_id) BETWEEN 1 AND 512),
+  CHECK (length(owner_principal_id) BETWEEN 1 AND 512),
+  CHECK (length(execution_id) BETWEEN 1 AND 512),
+  CHECK (length(task_id) BETWEEN 1 AND 512),
+  CHECK ((timestamp_ms>=0 AND timestamp_ms<=9223372036854775807))
+);
+CREATE INDEX idx_ct_thread_executions_0 ON collector_trace_thread_executions (workspace_id,thread_id,timestamp_ms,trace_id);
+CREATE INDEX idx_ct_thread_executions_1 ON collector_trace_thread_executions (workspace_id,thread_id,source_execution_id);

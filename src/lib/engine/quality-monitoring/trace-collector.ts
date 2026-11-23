@@ -14,38 +14,17 @@
  * limitations under the License.
  */
 
-// trace-collector — 圈定分析集合 T（FR-001 / DC-001）。
-// 只读已落库字段做投影查询 + join 轨迹 + 解析 JSON；绝不在此触发 judge/轨迹评测（D-001）。
+// Core 分析快照的纯投影；不访问事务库或触发评测。
 
-import { prisma } from '@/lib/storage/prisma';
 import type { FailureItem, SkillImprovementItem } from '@/lib/engine/evaluation/judge';
 import type { TraceLite, TrajectoryLite } from './types';
-import { MAX_TRACES } from './config';
-
-export interface CollectInput {
-    user: string | null;
-    agent: string;
-    from: Date;
-    to: Date;
-    filters?: { skill?: string };
-}
 
 export interface CollectResult {
     traces: TraceLite[];
     truncated: boolean;
 }
 
-// 投影：仅取聚合所需列（对齐 dashboard/stats 的 select 范式，避免拉大字段）。
-const EXEC_SELECT = {
-    id: true, taskId: true, query: true, timestamp: true,
-    agentName: true, framework: true, model: true,
-    toolCallErrorCount: true, failures: true,
-    toolCallCount: true, llmCallCount: true, skillTriggerRate: true, invokedSkills: true,
-    tokens: true, cost: true, latency: true, skillIssues: true,
-} as const;
-
-// 选中行的形状（prisma 客户端在本仓库返回弱类型，显式标注以避免 implicit-any）。
-interface SelectedExecRow {
+export interface SelectedExecRow {
     id: string;
     taskId: string | null; query: string | null; timestamp: Date;
     agentName: string | null; framework: string | null; model: string | null;
@@ -76,7 +55,7 @@ function parseInvokedSkills(json: string | null | undefined): { name: string; ve
 }
 
 /** 解析 TrajectoryEvalResult.dimensionScoresJson → TrajectoryLite。 */
-function toTrajectoryLite(row: { trajectoryScore: number | null; dimensionScoresJson: string | null }): TrajectoryLite | null {
+export function toTrajectoryLite(row: { trajectoryScore: number | null; dimensionScoresJson: string | null }): TrajectoryLite | null {
     if (row.trajectoryScore == null && !row.dimensionScoresJson) return null;
     let dims: TrajectoryLite['dims'] = { toolChoice: 0, redundancy: 0 };
     try {
@@ -91,52 +70,8 @@ function toTrajectoryLite(row: { trajectoryScore: number | null; dimensionScores
     return { score: row.trajectoryScore ?? 0, dims };
 }
 
-/**
- * collectTraces — 按 (agentName + isSubagent=false + timestamp∈[from,to] + {user}OR{null} + skill) 投影取回 T，
- * join TrajectoryEvalResult（按 executionId），解析 failures/skillIssues。
- */
-export async function collectTraces(input: CollectInput): Promise<CollectResult> {
-    const { user, agent, from, to, filters } = input;
-
-    const where = {
-        agentName: agent,
-        isSubagent: false,                       // 强制只取 root（BR / 安全作用域）
-        timestamp: { gte: from, lte: to },
-        ...(user ? { OR: [{ user }, { user: null }] } : {}), // 用户作用域（对齐 listObservedAgentNames）
-        ...(filters?.skill ? { skill: filters.skill } : {}),
-    };
-
-    const rows = await prisma.execution.findMany({
-        where,
-        select: EXEC_SELECT,
-        orderBy: { timestamp: 'desc' },
-        take: MAX_TRACES + 1,                    // 多取 1 条用于探测是否截断
-    });
-
-    const truncated = rows.length > MAX_TRACES;
-    const sliced: SelectedExecRow[] = (truncated ? rows.slice(0, MAX_TRACES) : rows) as SelectedExecRow[];
-
-    // join 轨迹评测（独立表，1:1 by executionId）
-    const ids = sliced.map((r) => r.id).filter(Boolean);
-    const trajByExec = new Map<string, TrajectoryLite>();
-    if (ids.length) {
-        try {
-            const trajRows = await prisma.trajectoryEvalResult.findMany({
-                where: { executionId: { in: ids }, status: 'done' },
-                select: { executionId: true, trajectoryScore: true, dimensionScoresJson: true },
-                orderBy: { createdAt: 'desc' },
-            });
-            for (const tr of trajRows) {
-                if (!tr.executionId || trajByExec.has(tr.executionId)) continue; // 取最新一条
-                const lite = toTrajectoryLite(tr);
-                if (lite) trajByExec.set(tr.executionId, lite);
-            }
-        } catch (e) {
-            console.warn('[quality] trajectory join failed, falling back to deterministic-only:', e);
-        }
-    }
-
-    const traces: TraceLite[] = sliced.map((r) => {
+export function projectQualityRows(sliced: SelectedExecRow[], trajByExec: Map<string, TrajectoryLite> = new Map()): TraceLite[] {
+    return sliced.map((r) => {
         const toolCallCount = r.toolCallCount ?? undefined;
         const llmCallCount = r.llmCallCount ?? undefined;
         return {
@@ -164,5 +99,4 @@ export async function collectTraces(input: CollectInput): Promise<CollectResult>
         };
     });
 
-    return { traces, truncated };
 }

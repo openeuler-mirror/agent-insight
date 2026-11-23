@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -37,6 +38,7 @@ function baseUrlOf(req: Request): string {
 
 /** IF-N01：创建一次性安装令牌并返回安装命令。 */
 export async function POST(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const body = await req.json().catch(() => ({}))
     const { username } = await resolveUser(req, body.user)
@@ -68,4 +70,6 @@ export async function POST(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/install-tokens')
   }
+
+  },["write"]);
 }

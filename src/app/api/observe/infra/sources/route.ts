@@ -17,22 +17,25 @@
 // 接入源注册表 CRUD。endpoint 由 normalizeEndpoint 归一作主键（裸机源=scheme://host:port，
 // 网关托管源保留实例路径）。authHeaders 含明文凭证 → GET 一律脱敏后返回。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { redactSource, toAuthHeadersJson } from '@/lib/infra/auth-headers';
-import { ensureSource } from '@/lib/infra/store';
+import { ensureSource,listInfraSources,updateInfraSource,deleteInfraSource } from '@/lib/infra/store';
 import { metricsUrl, normalizeEndpoint } from '@/lib/ingest/vllm/scrape';
-import { prismaRaw } from '@/lib/storage/prisma';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const sources = await prismaRaw.infraSource.findMany({ orderBy: { createdAt: 'desc' } });
-  // 绝不把 authHeaders 原样吐出去：这个接口没有任何鉴权，谁打开页面谁就能读。
+export async function GET(req:Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req||new Request('http://localhost/api/observe/infra'),()=>GET(req));
+  const sources = await listInfraSources();
+  // legacy 路由无鉴权，两个模式都只返回凭证摘要。
   return NextResponse.json({ sources: sources.map(redactSource) });
 }
 
-export async function POST(req: Request) {
+export async function POST(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>POST(req));
   try {
     const body = await req.json();
     if (!body?.endpoint) {
@@ -53,12 +56,14 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ source: redactSource(src) });
   } catch (err) {
+    if(isStorageCoreEnabled()&&err&&typeof err==='object'&&'status' in err&&[401,403,409,503].includes(Number(err.status)))throw err;
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ status: 'error', message }, { status: 400 });
   }
 }
 
-export async function PATCH(req: Request) {
+export async function PATCH(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>PATCH(req));
   try {
     const body = await req.json();
     if (!body?.id) {
@@ -85,23 +90,23 @@ export async function PATCH(req: Request) {
     const nextAuth = toAuthHeadersJson(body.authHeaders);
     if (nextAuth !== undefined) data.authHeaders = nextAuth;
 
-    const source = await prismaRaw.infraSource.update({ where: { id: body.id }, data });
+    const source = await updateInfraSource(body.id,data);
     return NextResponse.json({ source: redactSource(source) });
   } catch (err) {
+    if(isStorageCoreEnabled()&&err&&typeof err==='object'&&'status' in err&&[401,403,409,503].includes(Number(err.status)))throw err;
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ status: 'error', message }, { status: 400 });
   }
 }
 
-export async function DELETE(req: Request) {
+export async function DELETE(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>DELETE(req));
   const { searchParams } = new URL(req.url);
   const id = searchParams.get('id');
   const endpoint = searchParams.get('endpoint');
   if (!id && !endpoint) {
     return NextResponse.json({ error: 'Provide id or endpoint' }, { status: 400 });
   }
-  const { count } = await prismaRaw.infraSource.deleteMany({
-    where: id ? { id } : { endpoint: endpoint as string },
-  });
+  const count=await deleteInfraSource(id?{id}:{endpoint:endpoint as string});
   return NextResponse.json({ deleted: count });
 }

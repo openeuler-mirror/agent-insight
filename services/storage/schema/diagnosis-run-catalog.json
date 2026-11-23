@@ -1,0 +1,314 @@
+{
+  "version": 11,
+  "name": "diagnosis_runs",
+  "tables": [
+    {
+      "name": "diagnosis_runs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "diagnosis_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_fingerprint",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "input_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "generator",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "diagnosis_id"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "diagnosis_id"
+          ],
+          "references": {
+            "table": "runs",
+            "columns": [
+              "workspace_id",
+              "run_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "references": {
+            "table": "iam_principals",
+            "columns": [
+              "principal_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "references": {
+            "table": "experiment_heads",
+            "columns": [
+              "workspace_id",
+              "experiment_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "case_id"
+          ],
+          "references": {
+            "table": "experiment_cases",
+            "columns": [
+              "workspace_id",
+              "case_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "references": {
+            "table": "trace_locators",
+            "columns": [
+              "workspace_id",
+              "trace_id"
+            ]
+          }
+        }
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "actor_principal_id",
+          "request_key"
+        ],
+        [
+          "workspace_id",
+          "diagnosis_id",
+          "actor_principal_id"
+        ]
+      ],
+      "indexes": [
+        {
+          "name": "idx_diagnosis_runs_source",
+          "columns": [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "created_at_ms"
+          ]
+        },
+        {
+          "name": "idx_diagnosis_runs_actor",
+          "columns": [
+            "workspace_id",
+            "actor_principal_id",
+            "created_at_ms"
+          ]
+        }
+      ],
+      "checks": [
+        "source_kind IN ('experiment','trace-report')",
+        "(source_kind='experiment' AND experiment_id IS NOT NULL AND case_id IS NOT NULL) OR (source_kind='trace-report' AND experiment_id IS NULL AND case_id IS NULL)",
+        "length(request_key) BETWEEN 1 AND 512",
+        "length(generator) BETWEEN 1 AND 300",
+        "length(snapshot_ref)>0",
+        "created_at_ms>=0",
+        "length(source_fingerprint)=64",
+        "length(input_hash)=64",
+        "length(snapshot_hash)=64"
+      ],
+      "invariants": [
+        "Append only immutable actor-bound identity; mutable state remains in core001"
+      ]
+    },
+    {
+      "name": "diagnosis_judge_traces",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "diagnosis_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "diagnosis_id",
+            "owner_principal_id"
+          ],
+          "references": {
+            "table": "diagnosis_runs",
+            "columns": [
+              "workspace_id",
+              "diagnosis_id",
+              "actor_principal_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "attempt_id"
+          ],
+          "references": {
+            "table": "work_attempts",
+            "columns": [
+              "workspace_id",
+              "attempt_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "references": {
+            "table": "trace_locators",
+            "columns": [
+              "workspace_id",
+              "trace_id"
+            ]
+          }
+        }
+      ],
+      "unique": [],
+      "indexes": [
+        {
+          "name": "idx_diagnosis_judge_traces_run",
+          "columns": [
+            "workspace_id",
+            "diagnosis_id",
+            "attempt_id"
+          ]
+        }
+      ],
+      "checks": [
+        "created_at_ms>=0"
+      ],
+      "invariants": [
+        "Append only immutable actor-bound identity; mutable state remains in core001"
+      ]
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -29,6 +30,7 @@ type PutBody = {
 };
 
 export async function GET(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const threadId = ensureThreadId(req.nextUrl);
     const rawPath = getQueryParam(req.nextUrl, "path");
@@ -48,9 +50,12 @@ export async function GET(req: NextRequest) {
       { status: 400 },
     );
   }
+
+  },["read"]);
 }
 
 export async function PUT(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const body = (await req.json()) as PutBody;
     const threadId = body.threadId?.trim();
@@ -97,5 +102,7 @@ export async function PUT(req: NextRequest) {
       { status: 400 },
     );
   }
+
+  },["write"]);
 }
 

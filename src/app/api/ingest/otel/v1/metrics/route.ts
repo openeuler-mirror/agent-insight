@@ -18,18 +18,20 @@
 // 归一到与 Path A 相同的 InfraMetricSample，并跑同一诊断内核给出即时 verdict。
 // CodeAgent metrics 在解码后、归一化和持久化前按 resource 分区丢弃。
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraIngest} from '@/lib/storage-core/infra';
 import { gunzipSync } from 'node:zlib';
 import { NextResponse } from 'next/server';
 import { aggregate, diagnose } from '@/lib/infra/diagnose';
-import { ensureSource, saveSample } from '@/lib/infra/store';
+import { ensureInfraMetricsSource, saveSample } from '@/lib/infra/store';
 import { partitionCodeAgentOtlpPayload } from '@/lib/ingest/codeagent-otel/detect';
 import { normalizeEndpoint } from '@/lib/ingest/vllm/scrape';
 import { normalizeOtlpMetrics } from '@/lib/ingest/vllm/otlp-metrics';
 import type { OtlpMetricsPayload } from '@/lib/ingest/vllm/otlp-metrics';
 import { decodeOtlpMetricsProto } from '@/lib/ingest/vllm/otlp-proto';
-import { prismaRaw } from '@/lib/storage/prisma';
 
-export async function POST(req: Request) {
+export async function POST(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraIngest(req,()=>POST(req));
   try {
     const contentType = req.headers.get('content-type') || '';
     const contentEncoding = req.headers.get('content-encoding') || '';
@@ -77,12 +79,7 @@ export async function POST(req: Request) {
       if (sample.target && sample.target.startsWith('http')) {
         try { endpoint = normalizeEndpoint(sample.target); } catch { endpoint = null; }
       }
-      let src = endpoint ? await prismaRaw.infraSource.findUnique({ where: { endpoint } }) : null;
-      if (!src) {
-        // 推送带真实地址但未注册时自动登记；否则按 model 兜底。
-        const fallback = endpoint ?? `push://${sample.model ?? 'unknown'}`;
-        src = await ensureSource({ endpoint: fallback, scrapeUrl: '', kind: 'push', model: sample.model });
-      }
+      const src=await ensureInfraMetricsSource(endpoint,sample.model);
       await saveSample(src.id, sample);
       attachedTo = src.endpoint;
     } catch (persistErr) {
@@ -112,7 +109,7 @@ export async function POST(req: Request) {
   }
 }
 
-export async function OPTIONS() {
+export async function OPTIONS():Promise<Response> {
   return new NextResponse(null, {
     status: 204,
     headers: {

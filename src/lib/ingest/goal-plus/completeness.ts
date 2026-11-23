@@ -15,7 +15,7 @@
  */
 
 import type { Prisma } from '@prisma/client';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {semanticProjection as prismaRaw} from '@/lib/storage-core/semantic-sources';
 
 export interface GoalPlusTraceCompleteness {
   status: 'collecting' | 'complete' | 'partial' | 'unsupported';

@@ -570,13 +570,13 @@ async function main() {
         void (async () => {
           try {
             const payload = await runCollector(cfg, run, python)
-            await uploadResult(cfg, run.runId, payload)
+            await uploadResult(cfg, run.runId, payload, { workerId: cfg.workerId, ...(run.claimToken ? { claimToken: run.claimToken } : {}) })
             console.log(`[fi-worker] completed ${run.runId}`)
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
             console.error(`[fi-worker] failed ${run.runId}:`, message)
             try {
-              await uploadResult(cfg, run.runId, {}, { error: message, interactions: [] })
+              await uploadResult(cfg, run.runId, {}, { error: message, interactions: [], workerId: cfg.workerId, ...(run.claimToken ? { claimToken: run.claimToken } : {}) })
             } catch (uploadErr) {
               console.error('[fi-worker] upload failed', uploadErr)
             }

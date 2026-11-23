@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -21,6 +22,7 @@ import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function GET(request: Request) {
+  return withCoreControlRoute(request,async()=>{
     const { searchParams } = new URL(request.url);
     const user = searchParams.get('user');
     if (searchParams.get('section') === 'runtime-parameters') {
@@ -29,9 +31,12 @@ export async function GET(request: Request) {
     // Mask model API keys before they reach the browser — the client only needs
     // a masked value for rendering. Real keys never leave the server.
     return NextResponse.json(maskUserSettings(await getStoredUserSettings(user)));
+
+  },["read"]);
 }
 
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { settings, user, usageSource, action, template } = await request.json();
         if (!user) return NextResponse.json({ error: 'User is required' }, { status: 400 });
@@ -52,4 +57,6 @@ export async function POST(request: Request) {
     } catch (e: unknown) {
         return NextResponse.json({ error: e instanceof Error ? e.message : '保存设置失败' }, { status: e instanceof ModelTestValidationError || e instanceof TypeError ? 400 : 500 });
     }
+
+  },["write"]);
 }

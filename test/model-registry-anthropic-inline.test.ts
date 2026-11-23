@@ -1,3 +1,13 @@
+import { startIsolatedControlCore } from './helpers/isolated-control-core';
+let core: Awaited<ReturnType<typeof startIsolatedControlCore>>;
+test.before(async () => { core = await startIsolatedControlCore(['test-only']); });
+test.after(async () => { await core?.dispose(); });
+function authenticatedRequest(url: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('authorization', 'Bearer ' + core.tokens['test-only']);
+  return new Request(url, { ...init, headers });
+}
+
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -60,7 +70,9 @@ function mockTransport(t: test.TestContext) {
   resetProxyConfigCache();
   t.after(resetProxyConfigCache);
   const requests: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
+  const realFetch = globalThis.fetch;
   t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(url instanceof Request ? url.url : String(url)).origin === core.origin) return realFetch(url, init);
     requests.push({ url: String(url), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
     return Response.json(nativeReply);
   });
@@ -68,7 +80,7 @@ function mockTransport(t: test.TestContext) {
 }
 
 function settingsRequest(settings: unknown) {
-  return new Request('http://localhost/api/eval/settings', {
+  return authenticatedRequest('http://localhost/api/eval/settings', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user: USER, settings }),
   });
@@ -89,7 +101,7 @@ test('行内 Anthropic 模型：保存 → 掩码回读 → 连接测试全程�
   assert.match(masked.headers?.Authorization ?? '', /•/);
   assert.notEqual(masked.headers?.Authorization, inlineAnthropic.headers?.Authorization);
 
-  const testResponse = await testConnection(new Request('http://localhost/api/eval/settings/test', {
+  const testResponse = await testConnection(authenticatedRequest('http://localhost/api/eval/settings/test', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       provider: masked.provider, protocol: masked.protocol, apiKey: masked.apiKey,
@@ -117,7 +129,7 @@ test('行内 Anthropic 模型：Custom 供应商显式选 Anthropic 协议同样
   assert.deepEqual(readStored().configs[0].headers, customAnthropic.headers);
 
   const masked = (await saveResponse.json()).configs[0] as ModelConfig;
-  const testResponse = await testConnection(new Request('http://localhost/api/eval/settings/test', {
+  const testResponse = await testConnection(authenticatedRequest('http://localhost/api/eval/settings/test', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       provider: masked.provider, protocol: masked.protocol, apiKey: masked.apiKey,
@@ -137,7 +149,7 @@ test('行内 Anthropic 模型：编辑页原样回存掩码设置不会把真实
   mockTransport(t);
   await saveSettings(settingsRequest({ activeConfigId: inlineAnthropic.id, configs: [inlineAnthropic] }));
 
-  const maskedSettings = await (await readSettings(new Request(`http://localhost/api/eval/settings?user=${USER}`))).json();
+  const maskedSettings = await (await readSettings(authenticatedRequest(`http://localhost/api/eval/settings?user=${USER}`))).json();
   const resaveResponse = await saveSettings(settingsRequest({
     activeConfigId: maskedSettings.activeConfigId, configs: maskedSettings.configs,
   }));

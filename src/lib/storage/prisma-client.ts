@@ -75,8 +75,9 @@ export const executionBigIntToNumber = Prisma.defineExtension({
   },
 });
 
-export function createPrismaClient() {
-  return new PrismaClient().$extends(executionBigIntToNumber);
-}
+const extendHistoricalTypes = (client: PrismaClient) => client.$extends(executionBigIntToNumber);
+export type ExtendedPrismaClient = ReturnType<typeof extendHistoricalTypes>;
 
-export type ExtendedPrismaClient = ReturnType<typeof createPrismaClient>;
+export function createPrismaClient(): ExtendedPrismaClient {
+  throw new Error('Legacy Prisma connections are retired; use Storage Core repositories');
+}

@@ -1,0 +1,136 @@
+{
+  "version": 3,
+  "name": "projects",
+  "default_project_id": "default",
+  "routing_only": true,
+  "tables": [
+    {
+      "name": "projects",
+      "columns": [
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "project_id"
+      ],
+      "checks": [
+        "length(project_id) BETWEEN 1 AND 512",
+        "project_id = trim(project_id)",
+        "length(trim(name)) > 0",
+        "length(name) <= 512",
+        "status IN ('active','disabled')",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [],
+      "indexes": []
+    },
+    {
+      "name": "project_workspaces",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "project_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id"
+      ],
+      "checks": [
+        "length(project_id) BETWEEN 1 AND 512",
+        "project_id = trim(project_id)",
+        "created_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "project_id"
+          ],
+          "table": "projects",
+          "target": [
+            "project_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_project_workspaces_project",
+          "columns": [
+            "project_id",
+            "workspace_id"
+          ]
+        }
+      ]
+    }
+  ],
+  "identifier_columns": {
+    "projects": [
+      "project_id"
+    ],
+    "project_workspaces": [
+      "project_id"
+    ]
+  },
+  "invariants": [
+    "Project directory membership never grants IAM access",
+    "Initial default project seeded once by versioned migration",
+    "Existing workspaces retain IDs and map to default",
+    "All project-workspace UPDATE and DELETE forbidden",
+    "All project IDs immutable; default row cannot be deleted",
+    "Default name/status may change; disabled default must fail closed at public resolver",
+    "Existing workspace_id is inherited verbatim from workspaces001 with no new format restrictions"
+  ]
+}

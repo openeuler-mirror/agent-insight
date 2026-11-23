@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {coreBenchmarkCallbackContext,coreBenchmarkCallbackJson} from '@/lib/benchmark/core-public-callback'
+import {benchmarkCallbackRpc} from '@/lib/benchmark/core-store'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,8 +31,7 @@ export async function POST(
 ) {
   try {
     const { evaluationId } = await params
-    const progress = await req.json() as BenchmarkEvaluationProgress
-    return NextResponse.json(await recordBenchmarkEvaluationProgress({ evaluationId, progress }))
+    {const context=coreBenchmarkCallbackContext(req);return NextResponse.json(await benchmarkCallbackRpc(context,'progress',{job_id:evaluationId,progress:await coreBenchmarkCallbackJson(req)}))}
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/evaluations/progress')
   }

@@ -1,3 +1,4 @@
+import {apiFetch as fetch} from '@/lib/client/api';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *

@@ -25,6 +25,12 @@
  * - 测试可 setJudgeLlmCallerForTest 注入
  */
 
+import { randomUUID } from 'node:crypto';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { frozenModelConfiguration } from '@/lib/storage-core/frozen-model';
+import { getTrustedCoreAgentContext, runWithTrustedCoreAgentContext, type TrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
+import { withSessionCancellation } from '@/lib/engine/general-agent/session-cancellation';
+import { isCoreTraceRecordingError, recordDirectEvaluatorExecution, recordEvaluatorExecution } from '@/lib/engine/evaluation/evaluator-execution-recorder';
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { getModelClientConfig } from '@/lib/server/model-client';
@@ -122,10 +128,15 @@ export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Prom
   try {
     return await directJudgeCaller(username, req);
   } catch (directErr) {
+    if (isCoreTraceRecordingError(directErr)) throw directErr;
+    getTrustedCoreAgentContext()?.cancelSignal?.throwIfAborted();
+    req.signal?.throwIfAborted();
     experimentSignal()?.throwIfAborted();
     console.warn(
       '[experiment-judge] direct LLM path failed, falling back to opencode transport:',
-      (directErr as Error)?.message || directErr,
+      isStorageCoreEnabled() && getTrustedCoreAgentContext()
+        ? redactCoreJudge(getTrustedCoreAgentContext()!, (directErr as Error)?.message || String(directErr))
+        : (directErr as Error)?.message || directErr,
     );
     return opencodeJudgeCaller(username, req);
   }
@@ -133,187 +144,144 @@ export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Prom
 
 /** 现行主路径：ChatOpenAI 单轮 invoke；只返回文本，不合成观测 Trace。 */
 const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
-  const [
-    { ChatOpenAI },
-    { HumanMessage, SystemMessage },
-    { getActiveConfig },
-  ] = await Promise.all([
-    import('@langchain/openai'),
-    import('@langchain/core/messages'),
-    import('@/lib/storage/server-config'),
-  ]);
-
-  const config = await getActiveConfig(username);
-  if (!config || !isModelConnectionReady(config)) {
-    throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
-  }
-
-  const modelId = (config.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash';
-  const timeoutMs = remainingEvaluationTimeMs() ?? req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const model = new ChatOpenAI({
-    apiKey: getModelSdkApiKey(config),
-    model: modelId,
-    configuration: getModelClientConfig({ ...config, baseUrl: config.baseUrl || 'https://api.deepseek.com' }),
-    ...buildDirectJudgeSamplingOptions(modelId, req.samplingProfile),
-    timeout: timeoutMs,
-    maxRetries: remainingEvaluationTimeMs() === undefined ? 2 : 0,
-  });
-
-  const response = await model.invoke([
-    new SystemMessage(req.system),
-    new HumanMessage(req.user),
-  ], { signal: req.signal || experimentSignal() });
-  const raw = typeof response.content === 'string'
-    ? response.content
-    : JSON.stringify(response.content);
-
-  if (!String(raw).trim()) {
-    if (remainingEvaluationTimeMs() !== undefined) throw new JudgeOutputParseError('judge 未返回任何文本输出', '');
-    throw new Error('judge 未返回任何文本输出');
-  }
-  return String(raw);
+  return coreDirectJudgeCaller(username, req);
 };
 
 /** 旧路径 / 强制回退：per-call 临时 opencode server。 */
 export const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  return coreOpencodeJudgeCaller(username, req);
+};
+
+
+function requireCoreJudgeRuntime(username: string): TrustedCoreAgentContext {
+  const trusted = getTrustedCoreAgentContext();
+  if (trusted) return trusted;
+  const frozen = frozenModelConfiguration(username);
+  if (frozen.active && !frozen.config) throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
+  throw new Error('Trusted core Judge runtime is required');
+}
+
+function coreJudgeSignal(trusted: TrustedCoreAgentContext, req: JudgeLlmRequest): AbortSignal {
+  return AbortSignal.any([trusted.cancelSignal, req.signal, experimentSignal(), evaluationAttemptSignal()].filter((signal): signal is AbortSignal => !!signal));
+}
+
+function redactCoreJudge<T>(trusted: TrustedCoreAgentContext, value: T): T {
+  const secrets = [trusted.trustedModel.apiKey, ...Object.values(trusted.trustedModel.headers || {})].filter((value): value is string => typeof value === 'string' && !!value);
+  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'string' ? secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), item) : item));
+}
+
+const coreDirectJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  const trusted = requireCoreJudgeRuntime(username);
+  const signal = coreJudgeSignal(trusted, req);
+  signal.throwIfAborted();
+  const [{ ChatOpenAI }, { HumanMessage, SystemMessage }] = await Promise.all([import('@langchain/openai'), import('@langchain/core/messages')]);
+  const frozen = trusted.trustedModel;
+  const modelId = frozen.modelID;
+  const timeoutMs = remainingEvaluationTimeMs() ?? req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const model = new ChatOpenAI({ apiKey: frozen.apiKey || 'no-api-key', model: modelId,
+    configuration: getModelClientConfig({ ...frozen, baseUrl: frozen.baseURL }),
+    ...buildDirectJudgeSamplingOptions(modelId, req.samplingProfile), timeout: timeoutMs,
+    maxRetries: remainingEvaluationTimeMs() === undefined ? 2 : 0 });
+  req.onModel?.(modelId);
+  const taskId = `experiment-judge-${randomUUID()}`;
+  const startedAt = new Date().toISOString();
+  let raw = '';
+  let usage: { input?: number; output?: number; total?: number } | undefined;
+  let failure: unknown;
+  try {
+    const response = await model.invoke([new SystemMessage(req.system), new HumanMessage(req.user)], { signal });
+    raw = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+    usage = response.usage_metadata ? { input: response.usage_metadata.input_tokens, output: response.usage_metadata.output_tokens, total: response.usage_metadata.total_tokens } : undefined;
+    signal.throwIfAborted();
+    if (!raw.trim()) {
+      if (remainingEvaluationTimeMs() !== undefined) throw new JudgeOutputParseError('judge 未返回任何文本输出', '');
+      throw new Error('judge 未返回任何文本输出');
+    }
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    await runWithTrustedCoreAgentContext({ ...trusted, recordCoreTrace: captured => trusted.recordCoreTrace(redactCoreJudge(trusted, captured)) }, () => recordDirectEvaluatorExecution({
+      taskId, agentName: req.recordTrace?.agentName || 'experiment-judge', user: username, query: req.recordTrace?.query || req.user,
+      systemPrompt: req.system, userMessage: req.user, assistantOutput: raw, modelID: modelId, usage,
+      startedAtISO: startedAt, completedAtISO: new Date().toISOString(),
+      ...(failure ? { failure: { code: signal.aborted ? 'EXPERIMENT_CANCELLED' : 'agent-evaluation-failed', message: redactCoreJudge(trusted, failure instanceof Error ? failure.message : String(failure)) } } : {}),
+    }));
+  }
+  signal.throwIfAborted();
+  req.onTraceSaved?.(taskId);
+  return raw;
+};
+
+const coreOpencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  const trusted = requireCoreJudgeRuntime(username);
+  const signal = coreJudgeSignal(trusted, req);
+  signal.throwIfAborted();
   const configured = hasEvaluatorExecutionPolicy();
-  const executionController = new AbortController();
-  const runtimeSignal = AbortSignal.any([executionController.signal, ...[req.signal, experimentSignal()].filter((s): s is AbortSignal => Boolean(s))]);
-  const [
-    { AgentInsight },
-    { runWithEphemeralOpencodeServer },
-    { withBackgroundOpencodeSlot },
-    { buildEvaluatorPermissions },
-    { getActiveConfig },
-    { inferProviderFromBaseUrl, loadServerModelForUser, normalizeProviderID },
-  ] = await Promise.all([
-    import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-client'),
-    import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'),
-    import('@/lib/engine/general-agent/concurrency-limiter'),
-    import('@/lib/engine/general-agent/workspace'),
-    import('@/lib/storage/server-config'),
-    import('@/lib/engine/general-agent/server-model-config'),
+  const [{ AgentInsight }, { runWithEphemeralOpencodeServer }, { withBackgroundOpencodeSlot }, { buildEvaluatorPermissions }] = await Promise.all([
+    import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-client'), import('@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'),
+    import('@/lib/engine/general-agent/concurrency-limiter'), import('@/lib/engine/general-agent/workspace'),
   ]);
-
-  return withBackgroundOpencodeSlot(async () =>
-    runWithEphemeralOpencodeServer({ user: username, verbose: false, isolateHome: true, signal: runtimeSignal, requireCleanup: configured }, async (serverUrl: string) => {
-      const config = await getActiveConfig(username);
-      if (!config || !isModelConnectionReady(config)) {
-        throw new Error(MISSING_EVALUATION_MODEL_MESSAGE);
-      }
-      const activeModel = await loadServerModelForUser(username);
-      const providerID =
-        activeModel?.providerID
-        || normalizeProviderID(config.provider || inferProviderFromBaseUrl(config.baseUrl));
-      const modelID = activeModel?.modelID || config.model || 'deepseek-v4-flash';
-      const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      req.onModel?.(modelID);
-
+  const frozen = trusted.trustedModel;
+  return withBackgroundOpencodeSlot(async () => {
+    signal.throwIfAborted();
+    return runWithEphemeralOpencodeServer({ user: username, verbose: false, isolateHome: true, signal, requireCleanup: configured, captureMode: 'core-recorded', frozenModel: frozen }, async serverUrl => {
+      signal.throwIfAborted();
+      const insight = new AgentInsight({ baseURL: serverUrl, logLevel: 'warn' });
+      const directory = req.directory || trusted.trustedWorkspaceDir;
+      req.onModel?.(frozen.modelID);
+      const startedAt = new Date().toISOString();
+      let sessionId = '';
       let raw = '';
       let runtimeError: Error | null = null;
-
-      const insight = new AgentInsight({ baseURL: serverUrl, logLevel: 'warn' });
-      const sessionResp = await insight.createSession({
-        title: req.sessionTitle ?? `experiment-judge-${Date.now()}`,
-        directory: req.directory || '/tmp',
-      });
-      const session = sessionResp as { id?: unknown; ID?: unknown } | null | undefined;
-      const sessionId = String(session?.id || session?.ID || '');
-      if (!sessionId) throw new Error('Failed to create opencode session for experiment judge');
-
-      const startedAt = new Date().toISOString();
-      let executionFailure: unknown;
-      let timer: ReturnType<typeof setTimeout> | null = null;
+      let failure: unknown;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const executionController = new AbortController();
+      const runtimeSignal = AbortSignal.any([signal, executionController.signal]);
       try {
+        const session = await insight.createSession({ title: req.sessionTitle ?? `experiment-judge-${Date.now()}`, directory });
+        sessionId = String(session?.id || session?.ID || '');
+        if (!sessionId) throw new Error('Failed to create opencode session for experiment judge');
         const execute = async () => {
-          const attemptSignal = evaluationAttemptSignal();
-          const stop = () => executionController.abort(attemptSignal?.reason);
-          attemptSignal?.addEventListener('abort', stop, { once: true });
-          const executionTimeout = remainingEvaluationTimeMs() ?? timeoutMs;
-          try {
-            return await Promise.race([
-              insight.chat(
-                sessionId,
-                {
-                  text: req.user,
-                  directory: req.directory,
-                  agent: 'build',
-                  model: {
-                    providerID,
-                    modelID,
-                    apiKey: config.apiKey,
-                    baseURL: config.baseUrl,
-                    headers: config.headers,
-                  },
-                  ...(req.modelOptions ? { modelOptions: req.modelOptions } : {}),
-                  system: req.system,
-                  permission: buildEvaluatorPermissions(),
-                },
-                {
-                  onText: (e: { delta: string }) => { raw += e.delta; },
-                  onError: (e: Error) => { runtimeError = e; },
-                  onTool: (e) => {
-                    const secrets = [config.apiKey, ...Object.values(config.headers || {})].filter((s): s is string => typeof s === 'string' && s.length > 4);
-                    let encoded = JSON.stringify(e);
-                    for (const secret of secrets) encoded = encoded.split(secret).join('[REDACTED]');
-                    req.onTool?.(JSON.parse(encoded));
-                  },
-                },
-                { streamTimeoutMs: executionTimeout, idleTimeoutMs: executionTimeout, signal: attemptSignal || runtimeSignal },
-              ),
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(
-                  () => { executionController.abort(); reject(new Error(`LLM 调用超时（${executionTimeout}ms）`)); },
-                  executionTimeout,
-                );
-              }),
-            ]);
-          } finally {
-            attemptSignal?.removeEventListener('abort', stop);
-            if (timer) { clearTimeout(timer); timer = null; }
-          }
+          const timeoutMs = remainingEvaluationTimeMs() ?? req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+          timer = setTimeout(() => executionController.abort(new Error(`LLM 调用超时（${timeoutMs}ms）`)), timeoutMs);
+          return withSessionCancellation(runtimeSignal, () => insight.abortSession(sessionId), () => insight.chat(sessionId, {
+            text: req.user, directory, agent: 'build', model: frozen,
+            ...(req.modelOptions ? { modelOptions: req.modelOptions } : {}), system: req.system, permission: buildEvaluatorPermissions(),
+          }, { onText: event => { raw += event.delta; }, onError: error => { runtimeError = error; }, onTool: event => req.onTool?.(redactCoreJudge(trusted, event)) },
+          { streamTimeoutMs: timeoutMs, idleTimeoutMs: timeoutMs, signal: runtimeSignal }));
         };
         const result = configured ? await withConfiguredEvaluationTimeout(execute) : await execute();
-        raw = (result as { text?: string }).text || raw;
+        raw = result.text || raw;
         if (runtimeError) throw runtimeError;
+        signal.throwIfAborted();
+        if (!raw.trim()) {
+          if (configured) throw new JudgeOutputParseError('judge 未返回任何文本输出', raw);
+          throw new Error('judge 未返回任何文本输出');
+        }
       } catch (error) {
-        executionFailure = error;
+        failure = error;
         throw error;
       } finally {
-        if (req.recordTrace) {
-          try {
-            const { recordAgentJudgeExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
-            const secrets = [config.apiKey, ...Object.values(config.headers || {})].filter((s): s is string => typeof s === 'string' && s.length > 4);
-            const redact = <T,>(value: T): T => {
-              let encoded = JSON.stringify(value);
-              for (const secret of secrets) encoded = encoded.split(secret).join('[REDACTED]');
-              return JSON.parse(encoded);
-            };
-            const traceId = await recordAgentJudgeExecution({ listMessages: async id => redact(await insight.listMessages(id)) }, {
-              taskId: sessionId, agentName: req.recordTrace.agentName, user: username,
-              query: req.recordTrace.query, systemPrompt: redact(req.system), fallbackOutput: redact(raw), startedAt,
-              completedAt: new Date().toISOString(),
-              ...(executionFailure ? { failure: { code: 'agent-evaluation-failed', message: redact(executionFailure instanceof Error ? executionFailure.message : String(executionFailure)) } } : {}),
-            });
-            if (traceId) req.onTraceSaved?.(traceId);
-          } catch { console.warn('[experiment-judge] 评估链路未能保存，本次结果不提供链路入口'); }
-        }
         if (timer) clearTimeout(timer);
-        try { await insight.deleteSession(sessionId); } catch { /* best-effort cleanup */ }
+        try {
+          const taskId = sessionId || `experiment-judge-${randomUUID()}`;
+          await runWithTrustedCoreAgentContext({ ...trusted, recordCoreTrace: async captured => {
+            captured.record.interactions = [{ role: 'system', content: req.system, agent: req.recordTrace?.agentName || 'experiment-judge', timestamp: startedAt }, ...(captured.record.interactions || [])];
+            if (!sessionId) captured.record.source_messages_unavailable = true;
+            await trusted.recordCoreTrace(redactCoreJudge(trusted, captured));
+          } }, () => recordEvaluatorExecution(sessionId ? insight : { listMessages: async () => [] }, {
+            taskId, agentName: req.recordTrace?.agentName || 'experiment-judge', user: username, query: req.recordTrace?.query || req.user,
+            fallbackOutput: raw, startedAt, completedAt: new Date().toISOString(),
+            ...(failure ? { failure: { code: signal.aborted ? 'EXPERIMENT_CANCELLED' : 'agent-evaluation-failed', message: redactCoreJudge(trusted, failure instanceof Error ? failure.message : String(failure)) } } : {}),
+          }));
+          if (!failure && !signal.aborted) req.onTraceSaved?.(taskId);
+        } finally {
+          if (sessionId) await insight.deleteSession(sessionId).catch(() => {});
+        }
       }
-
-      if (runtimeError) throw runtimeError;
-      if (!raw.trim()) {
-        if (configured) throw new JudgeOutputParseError('judge 未返回任何文本输出', raw);
-        throw new Error('judge 未返回任何文本输出');
-      }
+      signal.throwIfAborted();
       return raw;
-    }),
-  {
-    taskType: 'experiment-judge',
-    user: username,
-    label: `experiment-judge: ${req.sessionTitle ?? ''}`.trim(),
-    silent: true,
-    signal: runtimeSignal,
-  });
+    });
+  }, { taskType: 'experiment-judge', user: username, label: `experiment-judge: ${req.sessionTitle ?? ''}`.trim(), silent: true, signal });
 };

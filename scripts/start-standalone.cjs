@@ -45,7 +45,10 @@ function syncStandaloneAssets(packageRoot) {
   return standaloneDir;
 }
 
-function main() {
+async function main() {
+  const { loadEnvironment, preflight } = require("./storage-core-preflight.cjs");
+  loadEnvironment();
+  await preflight();
   const packageRoot = path.resolve(__dirname, "..");
   const serverPath = path.join(packageRoot, ".next", "standalone", "server.js");
   if (!fs.existsSync(serverPath)) {
@@ -65,6 +68,6 @@ function main() {
   });
 }
 
-if (require.main === module) main();
+if (require.main === module) main().catch((error) => { console.error(error.message); process.exitCode = 1; });
 
 module.exports = { syncStandaloneAssets };

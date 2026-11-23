@@ -1,0 +1,895 @@
+{
+  "version": 2,
+  "name": "iam",
+  "tables": [
+    {
+      "name": "iam_principals",
+      "columns": [
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "normalized_login_name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "display_name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "auth_version",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "principal_id"
+      ],
+      "checks": [
+        "status IN ('active','disabled')",
+        "length(normalized_login_name) > 0",
+        "normalized_login_name = trim(normalized_login_name)",
+        "auth_version > 0 AND auth_version <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "normalized_login_name"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": []
+    },
+    {
+      "name": "iam_password_credentials",
+      "columns": [
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "password_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "scheme",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "parameters_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "credential_version",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "changed_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "principal_id"
+      ],
+      "checks": [
+        "length(scheme) > 0",
+        "length(parameters_json) > 0",
+        "credential_version > 0 AND credential_version <= 9223372036854775807",
+        "changed_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": []
+    },
+    {
+      "name": "iam_api_credentials",
+      "columns": [
+        {
+          "name": "credential_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "token_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "capabilities_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "auth_version",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "issued_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "expires_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revoked_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "credential_id"
+      ],
+      "checks": [
+        "expires_at_ms >= issued_at_ms",
+        "revoked_at_ms IS NULL OR revoked_at_ms >= issued_at_ms",
+        "auth_version > 0 AND auth_version <= 9223372036854775807",
+        "issued_at_ms >= 0",
+        "expires_at_ms >= 0",
+        "revoked_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_api_credentials_principal_scope",
+          "columns": [
+            "principal_id",
+            "workspace_id",
+            "revoked_at_ms"
+          ]
+        },
+        {
+          "name": "idx_iam_api_credentials_expiry",
+          "columns": [
+            "expires_at_ms"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_external_identities",
+      "columns": [
+        {
+          "name": "external_identity_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "issuer",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "subject",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "external_identity_id"
+      ],
+      "checks": [
+        "length(provider) > 0",
+        "length(issuer) > 0",
+        "length(subject) > 0",
+        "created_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "provider",
+          "issuer",
+          "subject"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_external_identities_principal",
+          "columns": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_sessions",
+      "columns": [
+        {
+          "name": "session_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "session_token_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "auth_version",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "issued_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "expires_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revoked_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "session_id"
+      ],
+      "checks": [
+        "expires_at_ms >= issued_at_ms",
+        "revoked_at_ms IS NULL OR revoked_at_ms >= issued_at_ms",
+        "auth_version > 0 AND auth_version <= 9223372036854775807",
+        "issued_at_ms >= 0",
+        "expires_at_ms >= 0",
+        "revoked_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "session_token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_sessions_principal",
+          "columns": [
+            "principal_id",
+            "revoked_at_ms"
+          ]
+        },
+        {
+          "name": "idx_iam_sessions_expiry",
+          "columns": [
+            "expires_at_ms"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_groups",
+      "columns": [
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "group_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "policy_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "group_id"
+      ],
+      "checks": [
+        "status IN ('active','disabled')",
+        "length(group_key) > 0",
+        "policy_revision > 0 AND policy_revision <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "group_key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "created_by"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_groups_created_by",
+          "columns": [
+            "created_by"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_group_memberships",
+      "columns": [
+        {
+          "name": "group_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "group_id",
+        "principal_id"
+      ],
+      "checks": [
+        "role IN ('owner','admin','member','viewer')",
+        "status IN ('active','disabled')",
+        "etag > 0 AND etag <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "group_id"
+          ],
+          "table": "iam_groups",
+          "target": [
+            "group_id"
+          ]
+        },
+        {
+          "columns": [
+            "principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_group_memberships_principal",
+          "columns": [
+            "principal_id",
+            "status",
+            "group_id"
+          ]
+        },
+        {
+          "name": "idx_iam_group_memberships_owners",
+          "columns": [
+            "group_id",
+            "role",
+            "status"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_workspace_bindings",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_group_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "binding_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id"
+      ],
+      "checks": [
+        "(owner_type = 'group' AND owner_group_id IS NOT NULL AND owner_principal_id IS NULL) OR (owner_type = 'personal' AND owner_principal_id IS NOT NULL AND owner_group_id IS NULL)",
+        "binding_revision > 0 AND binding_revision <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "owner_group_id"
+          ],
+          "table": "iam_groups",
+          "target": [
+            "group_id"
+          ]
+        },
+        {
+          "columns": [
+            "owner_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_workspace_bindings_group",
+          "columns": [
+            "owner_group_id"
+          ]
+        },
+        {
+          "name": "idx_iam_workspace_bindings_principal",
+          "columns": [
+            "owner_principal_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_resource_access",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resource_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resource_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "visibility",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "private"
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "resource_kind",
+        "resource_id"
+      ],
+      "checks": [
+        "resource_kind IN ('trace','asset','run','snapshot','artifact')",
+        "visibility IN ('private','group')",
+        "length(resource_id) > 0",
+        "etag > 0 AND etag <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "iam_workspace_bindings",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "owner_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_resource_access_owner",
+          "columns": [
+            "owner_principal_id",
+            "workspace_id",
+            "resource_kind"
+          ]
+        },
+        {
+          "name": "idx_iam_resource_access_visibility",
+          "columns": [
+            "workspace_id",
+            "visibility",
+            "resource_kind"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "iam_resource_grants",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resource_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resource_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "grantee_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "resource_kind",
+        "resource_id",
+        "grantee_principal_id"
+      ],
+      "checks": [
+        "created_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "resource_kind",
+            "resource_id"
+          ],
+          "table": "iam_resource_access",
+          "target": [
+            "workspace_id",
+            "resource_kind",
+            "resource_id"
+          ]
+        },
+        {
+          "columns": [
+            "grantee_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_iam_resource_grants_principal",
+          "columns": [
+            "grantee_principal_id",
+            "workspace_id",
+            "resource_kind"
+          ]
+        }
+      ]
+    }
+  ],
+  "hash_columns": {
+    "iam_password_credentials": [
+      "password_hash"
+    ],
+    "iam_api_credentials": [
+      "token_hash"
+    ],
+    "iam_sessions": [
+      "session_token_hash"
+    ]
+  },
+  "invariants": [
+    "last active owner protected for active groups",
+    "membership and principal status changes bump group policy_revision",
+    "workspace binding identity and ownership immutable including delete",
+    "group reactivation requires effective active owner; initial bootstrap insert allowed"
+  ]
+}

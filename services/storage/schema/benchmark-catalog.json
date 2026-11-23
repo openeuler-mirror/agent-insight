@@ -1,0 +1,1081 @@
+{
+  "version": 12,
+  "name": "benchmark",
+  "tables": [
+    {
+      "name": "benchmark_dataset_heads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "public_dataset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "public_asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "public_release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "private_asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "private_release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "adapter_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lifecycle_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "dataset_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "public_dataset_id"
+        ],
+        [
+          "workspace_id",
+          "private_asset_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "public_dataset_id"
+          ],
+          "references": {
+            "table": "dataset_compat_heads",
+            "columns": [
+              "workspace_id",
+              "dataset_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "public_asset_id",
+            "public_release_id"
+          ],
+          "references": {
+            "table": "asset_release_seals",
+            "columns": [
+              "workspace_id",
+              "asset_id",
+              "release_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "private_asset_id",
+            "private_release_id"
+          ],
+          "references": {
+            "table": "asset_release_seals",
+            "columns": [
+              "workspace_id",
+              "asset_id",
+              "release_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "created_by"
+          ],
+          "references": {
+            "table": "iam_principals",
+            "columns": [
+              "principal_id"
+            ]
+          }
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "adapter_key",
+          "state",
+          "updated_at_ms"
+        ]
+      ],
+      "checks": [
+        "state IN ('active','deleted')",
+        "length(adapter_key)>0",
+        "public_asset_id<>private_asset_id",
+        "length(content_hash)=64",
+        "revision>=1 AND revision<=9223372036854775807",
+        "lifecycle_revision>=1 AND lifecycle_revision<=9223372036854775807",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807",
+        "updated_at_ms>=0 AND updated_at_ms<=9223372036854775807",
+        "updated_at_ms>=created_at_ms"
+      ],
+      "mutable": [
+        "state",
+        "revision",
+        "lifecycle_revision",
+        "updated_at_ms"
+      ],
+      "identity": [
+        "workspace_id",
+        "dataset_id",
+        "public_dataset_id",
+        "public_asset_id",
+        "public_release_id",
+        "private_asset_id",
+        "private_release_id",
+        "adapter_key",
+        "content_hash",
+        "created_by",
+        "created_at_ms"
+      ]
+    },
+    {
+      "name": "benchmark_experiment_bindings",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "public_release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "private_release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "binding_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "binding_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "experiment_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "references": {
+            "table": "experiment_heads",
+            "columns": [
+              "workspace_id",
+              "experiment_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "dataset_id"
+          ],
+          "references": {
+            "table": "benchmark_dataset_heads",
+            "columns": [
+              "workspace_id",
+              "dataset_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "public_release_id"
+          ],
+          "references": {
+            "table": "asset_release_seals",
+            "columns": [
+              "workspace_id",
+              "release_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "private_release_id"
+          ],
+          "references": {
+            "table": "asset_release_seals",
+            "columns": [
+              "workspace_id",
+              "release_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "references": {
+            "table": "iam_principals",
+            "columns": [
+              "principal_id"
+            ]
+          }
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "dataset_id",
+          "experiment_id"
+        ]
+      ],
+      "checks": [
+        "length(binding_hash)=64",
+        "length(binding_ref)>0",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807"
+      ],
+      "mutable": [],
+      "identity": [
+        "workspace_id",
+        "experiment_id",
+        "dataset_id",
+        "public_release_id",
+        "private_release_id",
+        "binding_hash",
+        "binding_ref",
+        "actor_principal_id",
+        "created_at_ms"
+      ]
+    },
+    {
+      "name": "benchmark_jobs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "job_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "parent_job_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "adapter_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evaluator_key",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "attempt_no",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "retry_of_job_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "origin_credential_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "origin_credential_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "protocol_state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "request_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "progress_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "progress_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "completion_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "completion_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "callback_epoch",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "callback_token_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "callback_expires_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "callback_attempt_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "callback_fence",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "job_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "case_id",
+          "job_id"
+        ],
+        [
+          "workspace_id",
+          "parent_job_id",
+          "attempt_no"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "references": {
+            "table": "benchmark_experiment_bindings",
+            "columns": [
+              "workspace_id",
+              "experiment_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id",
+            "case_id"
+          ],
+          "references": {
+            "table": "experiment_cases",
+            "columns": [
+              "workspace_id",
+              "experiment_id",
+              "case_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id",
+            "run_id"
+          ],
+          "references": {
+            "table": "experiment_runs",
+            "columns": [
+              "workspace_id",
+              "experiment_id",
+              "run_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_id"
+          ],
+          "references": {
+            "table": "work_items",
+            "columns": [
+              "workspace_id",
+              "run_id",
+              "work_item_id",
+              "case_key"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "work_item_id",
+            "callback_attempt_id"
+          ],
+          "references": {
+            "table": "work_attempts",
+            "columns": [
+              "workspace_id",
+              "work_item_id",
+              "attempt_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "parent_job_id"
+          ],
+          "references": {
+            "table": "benchmark_jobs",
+            "columns": [
+              "workspace_id",
+              "experiment_id",
+              "case_id",
+              "job_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id",
+            "case_id",
+            "retry_of_job_id"
+          ],
+          "references": {
+            "table": "benchmark_jobs",
+            "columns": [
+              "workspace_id",
+              "experiment_id",
+              "case_id",
+              "job_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "references": {
+            "table": "iam_principals",
+            "columns": [
+              "principal_id"
+            ]
+          }
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "case_id",
+          "kind",
+          "created_at_ms"
+        ],
+        [
+          "workspace_id",
+          "protocol_state",
+          "updated_at_ms"
+        ],
+        [
+          "workspace_id",
+          "origin_credential_id"
+        ]
+      ],
+      "checks": [
+        "kind IN ('execute','evaluate')",
+        "origin_credential_kind IN ('api','session')",
+        "protocol_state IN ('pending','preparing','dispatching','dispatch_unknown','running_agent','collecting','uploading','cleaning','submitted','queued','running_evaluator','normalizing','normalization_failed','completed','failed','cancelled','blocked','execution_failed','dispatch_failed','evaluation_failed','submission_invalid')",
+        "(kind='execute' AND parent_job_id IS NULL) OR (kind='evaluate' AND parent_job_id IS NOT NULL)",
+        "(callback_token_hash IS NULL AND callback_expires_ms IS NULL AND callback_attempt_id IS NULL AND callback_fence IS NULL) OR (callback_token_hash IS NOT NULL AND callback_expires_ms IS NOT NULL AND callback_attempt_id IS NOT NULL AND callback_fence IS NOT NULL)",
+        "parent_job_id IS NULL OR parent_job_id<>job_id",
+        "retry_of_job_id IS NULL OR retry_of_job_id<>job_id",
+        "attempt_no>=1 AND attempt_no<=9223372036854775807",
+        "revision>=1 AND revision<=9223372036854775807",
+        "length(request_hash)=64",
+        "length(request_ref)>0",
+        "length(progress_hash)=64",
+        "length(progress_ref)>0",
+        "length(completion_hash)=64",
+        "length(completion_ref)>0",
+        "callback_epoch>=0 AND callback_epoch<=9223372036854775807",
+        "length(callback_token_hash)=64",
+        "callback_expires_ms>=0 AND callback_expires_ms<=9223372036854775807",
+        "callback_fence>=1 AND callback_fence<=9223372036854775807",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807",
+        "updated_at_ms>=0 AND updated_at_ms<=9223372036854775807",
+        "updated_at_ms>=created_at_ms",
+        "(request_hash IS NULL)=(request_ref IS NULL)",
+        "(progress_hash IS NULL)=(progress_ref IS NULL)",
+        "(completion_hash IS NULL)=(completion_ref IS NULL)"
+      ],
+      "mutable": [
+        "protocol_state",
+        "revision",
+        "request_hash",
+        "request_ref",
+        "progress_hash",
+        "progress_ref",
+        "completion_hash",
+        "completion_ref",
+        "callback_epoch",
+        "callback_token_hash",
+        "callback_expires_ms",
+        "callback_attempt_id",
+        "callback_fence",
+        "updated_at_ms"
+      ],
+      "identity": [
+        "workspace_id",
+        "job_id",
+        "experiment_id",
+        "case_id",
+        "run_id",
+        "work_item_id",
+        "kind",
+        "parent_job_id",
+        "adapter_key",
+        "evaluator_key",
+        "attempt_no",
+        "retry_of_job_id",
+        "origin_credential_id",
+        "origin_credential_kind",
+        "actor_principal_id",
+        "created_at_ms"
+      ]
+    },
+    {
+      "name": "benchmark_artifacts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "job_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "artifact_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "media_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "size_bytes",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "storage_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "storage_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "contract_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "artifact_id"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "job_id",
+          "name"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "job_id"
+          ],
+          "references": {
+            "table": "benchmark_jobs",
+            "columns": [
+              "workspace_id",
+              "job_id"
+            ]
+          }
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "job_id",
+          "created_at_ms"
+        ],
+        [
+          "workspace_id",
+          "content_hash"
+        ]
+      ],
+      "checks": [
+        "length(name) BETWEEN 1 AND 512",
+        "size_bytes BETWEEN 0 AND 67108864",
+        "length(media_type) BETWEEN 1 AND 256",
+        "length(content_hash)=64",
+        "size_bytes>=0 AND size_bytes<=9223372036854775807",
+        "length(storage_hash)=64",
+        "length(storage_ref)>0",
+        "length(contract_hash)=64",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807"
+      ],
+      "mutable": [],
+      "identity": [
+        "workspace_id",
+        "job_id",
+        "artifact_id",
+        "name",
+        "kind",
+        "media_type",
+        "content_hash",
+        "size_bytes",
+        "storage_hash",
+        "storage_ref",
+        "contract_hash",
+        "created_at_ms"
+      ]
+    },
+    {
+      "name": "benchmark_operation_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "operation_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "experiment_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "job_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "response_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "response_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "actor_principal_id",
+        "operation_kind",
+        "operation_key"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "references": {
+            "table": "workspaces",
+            "columns": [
+              "workspace_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "references": {
+            "table": "iam_principals",
+            "columns": [
+              "principal_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "experiment_id"
+          ],
+          "references": {
+            "table": "experiment_heads",
+            "columns": [
+              "workspace_id",
+              "experiment_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "dataset_id"
+          ],
+          "references": {
+            "table": "benchmark_dataset_heads",
+            "columns": [
+              "workspace_id",
+              "dataset_id"
+            ]
+          }
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "job_id"
+          ],
+          "references": {
+            "table": "benchmark_jobs",
+            "columns": [
+              "workspace_id",
+              "job_id"
+            ]
+          }
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "experiment_id",
+          "created_at_ms"
+        ],
+        [
+          "workspace_id",
+          "job_id",
+          "created_at_ms"
+        ]
+      ],
+      "checks": [
+        "length(operation_kind) BETWEEN 1 AND 128",
+        "length(operation_key) BETWEEN 1 AND 512",
+        "(CASE WHEN experiment_id IS NOT NULL THEN 1 ELSE 0 END)+(CASE WHEN dataset_id IS NOT NULL THEN 1 ELSE 0 END)+(CASE WHEN job_id IS NOT NULL THEN 1 ELSE 0 END)=1",
+        "length(request_hash)=64",
+        "length(response_hash)=64",
+        "length(response_ref)>0",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807"
+      ],
+      "mutable": [],
+      "identity": [
+        "workspace_id",
+        "actor_principal_id",
+        "operation_kind",
+        "operation_key",
+        "request_hash",
+        "experiment_id",
+        "dataset_id",
+        "job_id",
+        "response_hash",
+        "response_ref",
+        "created_at_ms"
+      ]
+    }
+  ]
+}

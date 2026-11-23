@@ -16,6 +16,8 @@
 
 'use client';
 
+import { apiFetch as fetch } from '@/lib/client/api';
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';

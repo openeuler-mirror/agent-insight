@@ -1,3 +1,7 @@
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { handleCompatibleSession } from '@/lib/storage-core/compat';
+import {getCoreSessionScope,withCoreSessionRead,readCoreStoredSession,readCoreSessionRelations,revalidateCoreSession} from '@/lib/storage-core/session-source';
+import {withCoreReadRetry,isCoreReadTransition} from '@/lib/storage-core/read-retry';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -177,10 +181,12 @@ async function loadTraceThread(traceThreadId: string | null | undefined, user: s
 }
 
 async function loadParsedSession(taskId: string, user?: string): Promise<ParsedSession | null> {
-    const session = await db.findSessionByTaskId(taskId);
+    const core=getCoreSessionScope();
+    const stored=core?await readCoreStoredSession(taskId):null;
+    const session = core?stored?.session:await db.findSessionByTaskId(taskId);
     if (!session) return null;
 
-    const executions = await db.findExecutions({ taskId, ...(session.user ? { user: session.user } : {}) }, { timestamp: 'desc' }, {
+    const executions = core?(stored?.execution?[stored.execution]:[]):await db.findExecutions({ taskId, ...(session.user ? { user: session.user } : {}) }, { timestamp: 'desc' }, {
         id: true,
         user: true,
         framework: true,
@@ -198,11 +204,13 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
     if (user !== undefined && owner !== user) return null;
     const executionRow = executions?.[0];
     const framework = executionRow?.framework;
-    const thread = executionRow && owner
+    const thread = core?(stored?.thread as TraceThreadDto|null)??undefined:executionRow && owner
         ? await loadTraceThread(executionRow.traceThreadId, owner, executionRow.id)
         : undefined;
-    const signature = sessionSignature(session, framework, { ...executionRow, user: owner }, thread);
-    const cached = parsedSessionCache.get(taskId);
+    const sourceVersion=core&&stored?JSON.stringify([stored.source.trace_id,stored.source.identity_hash,stored.source.source_revision,stored.source.annotation_revision]):'';
+    const signature = sourceVersion+sessionSignature(session, framework, { ...executionRow, user: owner }, thread);
+    const cacheKey=core?[core.actor.workspace,core.actor.principal,taskId].join('\0'):taskId;
+    const cached = parsedSessionCache.get(cacheKey);
     if (cached && cached.signature === signature && cached.expiresAt > Date.now()) {
         return cached.value;
     }
@@ -236,7 +244,7 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
         timestamp: executionRow.timestamp ?? null,
     } : null;
     const value = { session, owner, execution, executionSummary, thread, interactions, langfuseTraceNodes, framework };
-    rememberParsedSession(taskId, signature, value);
+    rememberParsedSession(cacheKey, signature, value);
     return value;
 }
 
@@ -280,6 +288,17 @@ async function loadCollaborationProjection(taskId: string, parsed: ParsedSession
 }
 
 export async function GET(request: Request) {
+
+  if(new URL(request.url).searchParams.get('paged')==='1')return handleCompatibleSession(request);
+  try{return await withCoreReadRetry(request,()=>withCoreSessionRead(request,async()=>{
+    const taskId=new URL(request.url).searchParams.get('taskId');
+    if(taskId&&!await readCoreStoredSession(taskId))return handleCompatibleSession(request);
+    const response=await sessionRequest(request);
+    if(taskId&&response.ok)await revalidateCoreSession(taskId);
+    return response;
+  }));}catch(error){const status=Number((error as {status?:number}).status)||503;return NextResponse.json({error:status===409?'Session changed; retry the request':'Session storage unavailable'},{status:[400,401,403,404,409,413,503].includes(status)?status:503});}
+}
+async function sessionRequest(request:Request){
     const { searchParams } = new URL(request.url);
     const taskId = searchParams.get('taskId');
     const view = searchParams.get('view') || 'full';
@@ -289,7 +308,8 @@ export async function GET(request: Request) {
     }
 
     try {
-        const scope = await resolveTraceReadScope(request);
+        const core=getCoreSessionScope();
+        const scope = core?{username:core.actor.username,canViewAllTraces:true}:await resolveTraceReadScope(request);
         if (!scope.username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
         const parsed = await loadParsedSession(taskId);
         if (!parsed) {
@@ -331,8 +351,8 @@ export async function GET(request: Request) {
         }
 
         const traceRelations = relationPlan && username && (view === 'structure' || view === 'full')
-            ? await sessionTraceRelations(db, username, [...new Set<string>([taskId, ...displayInteractions.flatMap(item =>
-                item._collaboration?.taskId ? [item._collaboration.taskId] : [])])], relationPlan) : undefined;
+            ? await (core?readCoreSessionRelations([...new Set<string>([taskId,...displayInteractions.flatMap(item=>item._collaboration?.taskId?[item._collaboration.taskId]:[])])],relationPlan):sessionTraceRelations(db, username, [...new Set<string>([taskId, ...displayInteractions.flatMap(item =>
+                item._collaboration?.taskId ? [item._collaboration.taskId] : [])])], relationPlan)) : undefined;
         const parentAgent = traceRelations?.[taskId]?.parent ?? null;
 
         if (view === 'structure') {
@@ -383,14 +403,16 @@ export async function GET(request: Request) {
         }
 
         let query = session.query;
-        if (!query && interactions.length > 0) {
+        if (!query && interactions.length > 0 && (!core||core.values.get(taskId)?.can_execute)) {
             try {
-                const analysis = await analyzeSession(interactions, session.user);
+                const analysis = core?await (async()=>{const {runCoreSessionModel,patchCoreCollectorSession}=await import('@/lib/storage-core/collector-entry');return runCoreSessionModel(core.request,taskId,async()=>{const result=await analyzeSession(interactions,session.user);if(result.query)await patchCoreCollectorSession(core.request,taskId,{query:result.query});return result;});})():await analyzeSession(interactions, session.user);
                 if (analysis.query) {
                     query = analysis.query;
-                    db.updateSession(taskId, { query }).catch(console.error);
+                    if(core)await readCoreStoredSession(taskId,true);
+                    else db.updateSession(taskId, { query }).catch(console.error);
                 }
             } catch (e) {
+                if(core&&(isCoreReadTransition(e)||(e as {code?:string})?.code==='TRACE_READ_INVALIDATED'))throw e;
                 console.warn('Failed to extract query on the fly', e);
             }
         }
@@ -419,6 +441,7 @@ export async function GET(request: Request) {
             ...(thread ? { thread } : {}),
         });
     } catch (e) {
+        if(getCoreSessionScope())throw e;
         console.error('Error reading session from DB:', e);
         return NextResponse.json({ error: 'Failed to read session' }, { status: 500 });
     }

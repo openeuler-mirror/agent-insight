@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ platform: string }> },
 ) {
+  return withCoreControlRoute(_req,async()=>{
   try {
     const { platform } = await ctx.params
     if (!isReliabilityPlatformId(platform)) {
@@ -40,4 +42,6 @@ export async function GET(
     console.error('[reliability/config-schemas GET]', error)
     return NextResponse.json({ error: 'Failed to load schema' }, { status: 500 })
   }
+
+  },["read"]);
 }

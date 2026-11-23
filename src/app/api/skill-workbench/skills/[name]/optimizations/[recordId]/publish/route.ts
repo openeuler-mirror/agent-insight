@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,13 +15,18 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
 import { publishOptimizationCandidate, WorkbenchPublishError } from '@/lib/skill-workbench/publish-service';
 import { getSkillWorkbenchSession } from '@/lib/skill-workbench/session-service';
 
-export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json();
     const { username } = await resolveUser(request, body.user);
@@ -45,4 +51,6 @@ export async function POST(request: NextRequest, context: { params: Promise<{ na
     console.error('[skill-workbench optimization publish POST] failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : '发布优化候选失败' }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

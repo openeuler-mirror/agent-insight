@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {experimentReadSource,getCoreExperimentContext,withCoreExperimentReadRoute,coreExperimentFailure} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -39,7 +41,9 @@ function caseStatus(results: { status: string }[]): 'done' | 'running' | 'failed
   return 'pending';
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.readView){try{return await withCoreExperimentReadRoute(req,GET);}catch(error){return coreExperimentFailure(error);}}
+  const experimentReads=experimentReadSource(prisma);
   try {
     const url = new URL(req.url);
     const q = url.searchParams;
@@ -63,7 +67,7 @@ export async function GET(req: Request) {
       where.skillVersion = Number(skillVersionRaw);
     }
 
-    const rows = await prisma.experiment.findMany({
+    const rows = await experimentReads.experiment.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: limit + 1,
@@ -78,7 +82,7 @@ export async function GET(req: Request) {
     // includeRunId：确保指定实验也在列表里（不在分页窗口时补拉一条）
     let extra: typeof rows = [];
     if (includeRunId && !rows.some((r: { id: string }) => r.id === includeRunId)) {
-      extra = await prisma.experiment.findMany({
+      extra = await experimentReads.experiment.findMany({
         where: { id: includeRunId, user: username, deletedAt: null },
         select: {
           id: true, name: true, scope: true, skillName: true, skillVersion: true,

@@ -270,7 +270,7 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     benchmarks: { 'zsoft-l1': { dataset: { source, autoImport } } },
   }))
   const bootstrap = () => spawnSync(process.execPath, ['scripts/benchmark/bootstrap-zsoft-dataset.cjs'], {
-    env: { ...process.env, AGENT_INSIGHT_HOME: path.join(testDir, 'managed') }, encoding: 'utf8', timeout: 15_000,
+    env: { ...process.env, AGENT_INSIGHT_HOME: path.join(testDir, 'managed'), npm_config_update_notifier: 'false', npm_config_offline: 'true' }, encoding: 'utf8', timeout: 15_000,
   })
   configureZsoft(officialDirectory)
   const startup = bootstrap()

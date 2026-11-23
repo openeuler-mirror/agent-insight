@@ -18,9 +18,10 @@
 // pollOnce 设计成可被定时器/路由触发；fetch 可注入便于测试。
 
 import { parseAuthHeaders } from '@/lib/infra/auth-headers';
-import { saveSample } from '@/lib/infra/store';
+import { saveSample, listInfraSources } from '@/lib/infra/store';
 import { scrapeVllmTargetModels } from '@/lib/ingest/vllm/scrape';
-import { prismaRaw } from '@/lib/storage/prisma';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,pollCoreInfraOwners,authorizeCoreInfra,coreInfraOwnerKey,assertCoreInfraPollable} from '@/lib/storage-core/infra';
 
 export interface PollResult {
   polled: number;
@@ -76,13 +77,9 @@ export async function pollOnce(
   opts: { fetchImpl?: typeof fetch; tsMs?: number; endpoints?: string[] } = {},
 ): Promise<PollResult> {
   const { fetchImpl, tsMs = Date.now(), endpoints } = opts;
-  const sources = await prismaRaw.infraSource.findMany({
-    where: {
-      enabled: true,
-      kind: 'pull',
-      ...(endpoints ? { endpoint: { in: endpoints } } : {}),
-    },
-  });
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return pollCoreInfraOwners(()=>pollOnce(opts));
+  await authorizeCoreInfra('write');
+  const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints,liveOnly:true});
 
   let polled = 0;
   let failed = 0;
@@ -90,6 +87,7 @@ export async function pollOnce(
 
   for (const src of sources) {
     try {
+      await assertCoreInfraPollable(src.id);
       const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
         fetchImpl,
         tsMs,
@@ -117,12 +115,13 @@ async function runPollDue(
   failureLogs?: Map<string, FailureLog>,
 ): Promise<PollResult> {
   const { nowMs = Date.now(), fetchImpl, endpoints } = opts;
-  const sources = await prismaRaw.infraSource.findMany({
-    where: { enabled: true, kind: 'pull', ...(endpoints ? { endpoint: { in: endpoints } } : {}) },
-  });
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return pollCoreInfraOwners(()=>runPollDue(opts,failureLogs));
+  await authorizeCoreInfra('write');
+  const sources=await listInfraSources({ownOnly:true,enabled:true,kind:'pull',endpoints,liveOnly:true});
+  const ownerPrefix=(coreInfraOwnerKey());
   if (failureLogs) {
-    const activeIds = new Set(sources.map(source => source.id));
-    for (const id of failureLogs.keys()) if (!activeIds.has(id)) failureLogs.delete(id);
+    const activeIds = new Set(sources.map(source => ownerPrefix+source.id));
+    for (const id of failureLogs.keys()) if (id.startsWith(ownerPrefix)&&!activeIds.has(id)) failureLogs.delete(id);
   }
 
   let polled = 0;
@@ -139,6 +138,7 @@ async function runPollDue(
     }
     lastPollAt.set(src.id, nowMs);
     try {
+      await assertCoreInfraPollable(src.id);
       const samples = await scrapeVllmTargetModels(src.scrapeUrl || src.endpoint, {
         fetchImpl,
         tsMs: nowMs,
@@ -146,12 +146,12 @@ async function runPollDue(
       });
       for (const s of samples) await saveSample(src.id, s);
       polled += 1;
-      if (failureLogs) logRecovery(failureLogs, src.id, nowMs, src.endpoint);
+      if (failureLogs) logRecovery(failureLogs, ownerPrefix+src.id, nowMs, src.endpoint);
     } catch (e) {
       failed += 1;
       const error = e instanceof Error ? e.message : String(e);
       errors.push({ endpoint: src.endpoint, error });
-      if (failureLogs) logFailure(failureLogs, src.id, error, nowMs, src.endpoint);
+      if (failureLogs) logFailure(failureLogs, ownerPrefix+src.id, error, nowMs, src.endpoint);
     }
   }
   return { polled, failed, skipped, errors };

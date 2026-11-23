@@ -1,0 +1,2048 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "schema_meta",
+      "columns": [
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "checksum",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "applied_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "version"
+      ],
+      "checks": [
+        "version > 0",
+        "applied_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [],
+      "indexes": [],
+      "immutable": false
+    },
+    {
+      "name": "workspaces",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id"
+      ],
+      "checks": [
+        "state IN ('active','suspended','deleted')",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [],
+      "indexes": [],
+      "immutable": false
+    },
+    {
+      "name": "asset_identities",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "visibility",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "private"
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "''"
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "asset_id"
+      ],
+      "checks": [
+        "kind IN ('skill','agent','evaluator','dataset','benchmark')",
+        "visibility IN ('private','workspace','public')",
+        "etag > 0",
+        "length(name) > 0",
+        "etag <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "kind",
+          "name"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "kind",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "asset_releases",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "version_label",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "manifest_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "schema_version",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "publisher_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "release_id"
+      ],
+      "checks": [
+        "length(content_hash) = 64",
+        "schema_version > 0",
+        "length(version_label) > 0",
+        "created_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "asset_id",
+          "version_label"
+        ],
+        [
+          "workspace_id",
+          "asset_id",
+          "release_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id"
+          ],
+          "table": "asset_identities",
+          "target": [
+            "workspace_id",
+            "asset_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "asset_id",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": true
+    },
+    {
+      "name": "asset_drafts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "draft_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "branch_name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "base_release_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "manifest_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "edit_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "draft_id"
+      ],
+      "checks": [
+        "edit_revision > 0",
+        "edit_revision <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "asset_id",
+          "branch_name"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id"
+          ],
+          "table": "asset_identities",
+          "target": [
+            "workspace_id",
+            "asset_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id",
+            "base_release_id"
+          ],
+          "table": "asset_releases",
+          "target": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": false
+    },
+    {
+      "name": "asset_release_dependencies",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dependency_release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "release_id",
+        "role",
+        "dependency_release_id"
+      ],
+      "checks": [
+        "release_id <> dependency_release_id",
+        "created_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "release_id"
+          ],
+          "table": "asset_releases",
+          "target": [
+            "workspace_id",
+            "release_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "dependency_release_id"
+          ],
+          "table": "asset_releases",
+          "target": [
+            "workspace_id",
+            "release_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "dependency_release_id"
+        ]
+      ],
+      "immutable": true
+    },
+    {
+      "name": "asset_release_seals",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dependency_count",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "release_id"
+      ],
+      "checks": [
+        "dependency_count >= 0",
+        "created_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "asset_id",
+          "release_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ],
+          "table": "asset_releases",
+          "target": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": true
+    },
+    {
+      "name": "asset_aliases",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "asset_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "alias",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "asset_id",
+        "alias"
+      ],
+      "checks": [
+        "etag > 0",
+        "etag <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id"
+          ],
+          "table": "asset_identities",
+          "target": [
+            "workspace_id",
+            "asset_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ],
+          "table": "asset_release_seals",
+          "target": [
+            "workspace_id",
+            "asset_id",
+            "release_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": false
+    },
+    {
+      "name": "runs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "plan_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "plan_manifest_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "dataset_release_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "expected_case_count",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "draft"
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "run_id"
+      ],
+      "checks": [
+        "length(plan_hash) = 64",
+        "expected_case_count >= 0",
+        "etag > 0",
+        "status IN ('draft','queued','running','done','partial','failed','cancelled')",
+        "etag <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "dataset_release_id"
+          ],
+          "table": "asset_release_seals",
+          "target": [
+            "workspace_id",
+            "release_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "status",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "run_inputs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "slot",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "release_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "config_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "run_id",
+        "slot"
+      ],
+      "checks": [
+        "length(config_hash) = 64",
+        "created_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "run_id"
+          ],
+          "table": "runs",
+          "target": [
+            "workspace_id",
+            "run_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "release_id"
+          ],
+          "table": "asset_release_seals",
+          "target": [
+            "workspace_id",
+            "release_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": true
+    },
+    {
+      "name": "work_items",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "phase",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evaluator_slot",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "default"
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "queued"
+        },
+        {
+          "name": "priority",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "next_attempt_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "cancel_requested",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "work_item_id"
+      ],
+      "checks": [
+        "etag > 0",
+        "cancel_requested IN (0,1)",
+        "phase IN ('execute','evaluate','snapshot','publish','migrate')",
+        "status IN ('queued','running','done','failed','cancelled')",
+        "etag <= 9223372036854775807",
+        "next_attempt_at_ms >= 0",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "run_id",
+          "case_key",
+          "phase",
+          "evaluator_slot"
+        ],
+        [
+          "workspace_id",
+          "run_id",
+          "work_item_id"
+        ],
+        [
+          "workspace_id",
+          "run_id",
+          "work_item_id",
+          "case_key"
+        ],
+        [
+          "workspace_id",
+          "run_id",
+          "work_item_id",
+          "case_key",
+          "evaluator_slot"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "run_id"
+          ],
+          "table": "runs",
+          "target": [
+            "workspace_id",
+            "run_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "status",
+          "next_attempt_at_ms",
+          "priority"
+        ],
+        [
+          "workspace_id",
+          "run_id",
+          "status"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "work_attempts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_no",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "fence",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "worker_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lease_until_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "started_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "finished_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_code",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "attempt_id"
+      ],
+      "checks": [
+        "attempt_no > 0",
+        "fence > 0",
+        "status IN ('running','done','failed','cancelled','expired')",
+        "lease_until_ms >= started_at_ms",
+        "fence <= 9223372036854775807",
+        "lease_until_ms >= 0",
+        "started_at_ms >= 0",
+        "finished_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "work_item_id",
+          "attempt_no"
+        ],
+        [
+          "workspace_id",
+          "work_item_id",
+          "fence"
+        ],
+        [
+          "workspace_id",
+          "work_item_id",
+          "attempt_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "work_item_id"
+          ],
+          "table": "work_items",
+          "target": [
+            "workspace_id",
+            "work_item_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "status",
+          "lease_until_ms"
+        ],
+        [
+          "workspace_id",
+          "work_item_id",
+          "attempt_no"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "result_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "work_item_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evaluator_slot",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "default"
+        },
+        {
+          "name": "receipt_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "receipt_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "artifact_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "accepted"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "receipt_id"
+      ],
+      "checks": [
+        "length(content_hash) = 64",
+        "state IN ('accepted','indexed','published','quarantined')",
+        "created_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "attempt_id",
+          "receipt_key"
+        ],
+        [
+          "workspace_id",
+          "result_id"
+        ],
+        [
+          "workspace_id",
+          "run_id",
+          "result_id"
+        ],
+        [
+          "workspace_id",
+          "run_id",
+          "case_key",
+          "evaluator_slot",
+          "result_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "work_item_id",
+            "attempt_id"
+          ],
+          "table": "work_attempts",
+          "target": [
+            "workspace_id",
+            "work_item_id",
+            "attempt_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_key",
+            "evaluator_slot"
+          ],
+          "table": "work_items",
+          "target": [
+            "workspace_id",
+            "run_id",
+            "work_item_id",
+            "case_key",
+            "evaluator_slot"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "state",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "result_selections",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evaluator_slot",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "selection_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "run_id",
+        "case_key",
+        "evaluator_slot"
+      ],
+      "checks": [
+        "selection_revision > 0",
+        "selection_revision <= 9223372036854775807",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "run_id"
+          ],
+          "table": "runs",
+          "target": [
+            "workspace_id",
+            "run_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "run_id",
+            "case_key",
+            "evaluator_slot",
+            "result_id"
+          ],
+          "table": "result_receipts",
+          "target": [
+            "workspace_id",
+            "run_id",
+            "case_key",
+            "evaluator_slot",
+            "result_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": false
+    },
+    {
+      "name": "outbox_events",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "aggregate_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "aggregate_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "payload_json",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "pending"
+        },
+        {
+          "name": "attempts",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "next_attempt_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "lease_owner",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "lease_until_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "event_id"
+      ],
+      "checks": [
+        "aggregate_revision > 0",
+        "attempts >= 0",
+        "state IN ('pending','dispatching','sent','dead')",
+        "next_attempt_at_ms >= 0",
+        "lease_until_ms >= 0",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "aggregate_id",
+          "aggregate_revision",
+          "event_type"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "state",
+          "next_attempt_at_ms",
+          "created_at_ms"
+        ],
+        [
+          "workspace_id",
+          "aggregate_id",
+          "aggregate_revision"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "inbox_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "processed_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "source_id",
+        "event_id"
+      ],
+      "checks": [
+        "length(content_hash) = 64",
+        "processed_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": true
+    },
+    {
+      "name": "trace_locators",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_namespace",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "native_trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "route_epoch",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "incarnation",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "active"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id"
+      ],
+      "checks": [
+        "route_epoch > 0",
+        "incarnation > 0",
+        "state IN ('active','deleting','deleted')",
+        "route_epoch <= 9223372036854775807",
+        "incarnation <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "source_namespace",
+          "native_trace_id",
+          "incarnation"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "trace_bucket",
+          "state"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "snapshot_manifests",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "manifest_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "node_count",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "log_watermark",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "staging"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "published_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "snapshot_id"
+      ],
+      "checks": [
+        "node_count >= 0",
+        "length(content_hash) = 64",
+        "state IN ('staging','published','failed')",
+        "created_at_ms >= 0",
+        "published_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "state",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "artifact_metadata",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "artifact_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "namespace",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "object_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "size_bytes",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "media_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "staging"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "published_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "artifact_id"
+      ],
+      "checks": [
+        "length(content_hash) = 64",
+        "size_bytes >= 0",
+        "state IN ('staging','published','deleted')",
+        "created_at_ms >= 0",
+        "published_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "namespace",
+          "object_ref"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "state",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "deletion_requests",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "deletion_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resource_kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "resource_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "incarnation",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "barrier_revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "requested"
+        },
+        {
+          "name": "requested_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "deletion_id"
+      ],
+      "checks": [
+        "incarnation > 0",
+        "barrier_revision > 0",
+        "state IN ('requested','blocked','propagating','purged','failed')",
+        "incarnation <= 9223372036854775807",
+        "barrier_revision <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "resource_kind",
+          "resource_id",
+          "incarnation"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "state",
+          "created_at_ms"
+        ]
+      ],
+      "immutable": false
+    },
+    {
+      "name": "migration_checkpoints",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "migration_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_fingerprint",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_table",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "last_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "rows_processed",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "target_watermark",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "planned"
+        },
+        {
+          "name": "etag",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "migration_id",
+        "source_table"
+      ],
+      "checks": [
+        "length(source_fingerprint) = 64",
+        "rows_processed >= 0",
+        "etag > 0",
+        "state IN ('planned','running','verified','failed')",
+        "etag <= 9223372036854775807",
+        "created_at_ms >= 0",
+        "updated_at_ms >= 0"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id"
+          ],
+          "table": "workspaces",
+          "target": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "indexes": [],
+      "immutable": false
+    }
+  ]
+}

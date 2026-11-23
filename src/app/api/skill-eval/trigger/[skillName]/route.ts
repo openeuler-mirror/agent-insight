@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {isCoreTriggerRoute,withCoreTriggerRoute,coreTriggerFailure} from '@/lib/storage-core/trigger';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
@@ -41,7 +43,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ skillName: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'read',scoped=>GET(scoped,{params}));
   try {
     const { skillName } = await params;
     const { searchParams } = new URL(request.url);
@@ -68,6 +71,7 @@ export async function GET(
     }
     return NextResponse.json({ set, versions });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger GET error:', error);
     return NextResponse.json({ error: 'failed to load trigger eval set' }, { status: 500 });
   }
@@ -88,7 +92,8 @@ export async function GET(
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ skillName: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'save',scoped=>POST(scoped,{params}));
   try {
     const { skillName } = await params;
     const body = await request.json();
@@ -129,6 +134,7 @@ export async function POST(
 
     return NextResponse.json({ success: true, set: updated });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger POST error:', error);
     return NextResponse.json({ error: 'failed to save trigger eval set' }, { status: 500 });
   }
@@ -142,7 +148,8 @@ export async function POST(
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ skillName: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'delete',scoped=>DELETE(scoped,{params}));
   try {
     const { skillName } = await params;
     const { searchParams } = new URL(request.url);
@@ -150,12 +157,13 @@ export async function DELETE(
     if (!user) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
-    const ok = await deleteTriggerEvalSet(user, decodeURIComponent(skillName));
+    const ok = isCoreTriggerRoute()?await (await import('@/lib/storage-core/trigger-draft')).deleteCoreTriggerSets(decodeURIComponent(skillName)):await deleteTriggerEvalSet(user, decodeURIComponent(skillName));
     if (!ok) {
       return NextResponse.json({ error: 'trigger eval set not found' }, { status: 404 });
     }
     return NextResponse.json({ success: true });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger DELETE error:', error);
     return NextResponse.json({ error: 'failed to delete trigger eval set' }, { status: 500 });
   }

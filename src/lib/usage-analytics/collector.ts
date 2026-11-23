@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {bindCoreUsageEvent} from '@/lib/storage-core/usage';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -65,6 +67,7 @@ export function recordUsageEvent(input: RecordUsageInput): void {
             route: normalizeRoute(input.route),
         };
 
+        if(isStorageCoreEnabled()&&!bindCoreUsageEvent(event))return;
         queue.enqueue(event);
     } catch {
         // 统计异常在此吞掉：绝不改变业务状态码、响应体或成功结果。

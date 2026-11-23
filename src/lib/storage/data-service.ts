@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { projectAgentNodeExecution, findSubagentSpawnDescription, findSubagentRoleName, extractExplicitSkillsFromNode, type InvokedSkill } from '@/lib/engine/observability/agent-execution-projection';
+export { projectAgentNodeExecution, type AgentNodeExecutionProjection, extractExplicitSkillsFromNode, type InvokedSkill } from '@/lib/engine/observability/agent-execution-projection';
+
+
 import { withTraceTiming, timeTraceStage, traceTimingEvent, beginTraceStage } from '@/lib/logger/trace-timing';
 import { aggregateExecutionList, selectExecutionListIds } from '@/lib/storage/execution-list-sql';
 import { selectComputedRecordPage, type ComputedRecordPageOptions } from '@/lib/storage/computed-record-page';
@@ -53,7 +57,7 @@ import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
 import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type ExtractedKeyAction, type ParsedFlowResult } from '@/lib/engine/observability/flow-parser';
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
-import { buildAgentCallTree, getAgentActiveDurationMs, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, walkTree } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
@@ -87,30 +91,24 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'jiuwenswarm',
 ]);
 
-export interface InvokedSkill {
-    name: string;
-    version: number | null;
-}
-
 /**
  * ExecutionSkill(可索引的 trace↔skill 绑定)在 SQLite 路径启用。
  * OpenGauss(配了 DB_HOST)未建表/未接适配器,这里整体降级回旧的 skill 列行为,避免运行期报错。
  */
 const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
-const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
+export function supportsSubagentExecutionDerivation(framework:string|null|undefined):boolean {
+    return typeof framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(framework);
+}
+
+export function resolveExecutionPreparationFramework(data:ExecutionRecord,existingExecution?:{framework?:string|null}):string|null|undefined {
+    return Object.prototype.hasOwnProperty.call(data,'framework') ? data.framework : existingExecution?.framework || undefined;
+}
 
 export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
     const adapter = getAdapter(framework);
     return adapter.capabilities?.allowSnapshotShrink === true
         || (adapter.descriptor.id === 'jiuwenswarm' && process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true');
-}
-
-/** semver 如 "1.0.0"（skill frontmatter 常用格式）解析为整数主版本号；无法解析返回 null。 */
-function numericSemverMajor(value: unknown): number | null {
-    if (value === undefined || value === null || value === '') return null;
-    const semver = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value).trim());
-    return semver ? Number(semver[1]) : null;
 }
 
 export function inferUserQueryFromInteractions(interactions: unknown): string | undefined {
@@ -138,29 +136,6 @@ export function shouldRefreshStoredQueryFromInteractions(
     }
     if (getAdapter(fw).isPlaceholderQuery?.(current, fw)) return true;
     return current.toLowerCase() === `${fw} session`;
-}
-
-/**
- * 从单个 AgentNode 抽取**本层 agent 自己显式调用**的 skill(kind==='skill',即 skill/load_skill;
- * 天然排除 task() 预加载与子 agent 的事件)。用于 opencode 的逐层 agent 作用域绑定。
- */
-export function extractExplicitSkillsFromNode(node: AgentNode): InvokedSkill[] {
-    const seen = new Set<string>();
-    const out: InvokedSkill[] = [];
-    for (const ev of node.events || []) {
-        if (ev.kind !== 'skill') continue;
-        const a = (ev.args && typeof ev.args === 'object') ? ev.args : {};
-        // Accept id only when the call-tree classifier resolved it as a Skill name.
-        const idName = typeof a.id === 'string' && ev.name === a.id.trim() ? a.id : undefined;
-        const rawName = a.name ?? a.skill_name ?? a.skillName ?? a.skill ?? idName;
-        if (rawName == null || !String(rawName).trim()) continue;
-        const s = String(rawName).trim().replace(/^['"]+|['"]+$/g, '');
-        if (!SKILL_NAME_PATTERN.test(s) || seen.has(s)) continue;
-        seen.add(s);
-        const v = a.version != null ? Number(a.version) : null;
-        out.push({ name: s, version: v !== null && !isNaN(v) ? v : numericSemverMajor(a.version) });
-    }
-    return out;
 }
 
 /**
@@ -203,9 +178,30 @@ function preferExplicitPrimarySkillVersion(
  * 幂等地把某条 Execution(= 某一层 agent)本层用到的 skill 写入 ExecutionSkill:
  * 先按 executionId 清空再重建,不依赖 NULL 版本的唯一约束。
  */
+export function prepareExecutionSkills(skills:InvokedSkill[],opts:{user?:string|null;primaryName?:string|null;origins?:Array<{skillName?:string;skillVersion?:number|null;clientId?:string|null;platform?:string;targetMode?:string;originRef?:string|null;displayPath?:string|null;observedContentHash?:string|null}>}={},previous:Array<{skillName:string;skillVersion:number|null;origin?:any}>=[]) {
+    const seen=new Set<string>();
+    const result:Array<{skillName:string;skillVersion:number|null;isPrimary:boolean;user:string|null;origin:any}>=[];
+    for(const skill of skills){
+        if(!skill?.name)continue;
+        const key=`${skill.name}@@${skill.version??''}`;if(seen.has(key))continue;seen.add(key);
+        const row={skillName:skill.name,skillVersion:skill.version??null,isPrimary:opts.primaryName!=null&&skill.name===opts.primaryName,user:opts.user??null,origin:null as any};
+        const incoming=opts.origins?.find(origin=>origin.skillName===row.skillName&&(origin.skillVersion==null||row.skillVersion==null||origin.skillVersion===row.skillVersion));
+        const prior=previous.find(item=>item.skillName===row.skillName&&(item.skillVersion==null||row.skillVersion==null||item.skillVersion===row.skillVersion))?.origin;
+        const origin=incoming||prior;
+        if(origin?.clientId&&origin?.platform&&origin?.targetMode){
+            const platform=String(origin.platform).trim().toLowerCase(),targetMode=String(origin.targetMode),originRef=typeof origin.originRef==='string'?origin.originRef.trim():'';
+            if(['opencode','pi-agent','xiaoo','jiuwenswarm'].includes(platform)&&(targetMode==='execution_origin'||targetMode==='framework_global')&&(targetMode!=='execution_origin'||/^origin_[a-f0-9]{24}$/.test(originRef))&&(targetMode!=='framework_global'||platform==='jiuwenswarm')){
+                row.origin={clientId:origin.clientId,platform,targetMode,originRef:originRef||null,displayPath:typeof origin.displayPath==='string'?origin.displayPath.slice(0,2048):null,observedSkillVersion:incoming?.skillVersion??row.skillVersion,observedContentHash:origin.observedContentHash||null};
+            }
+        }
+        result.push(row);
+    }
+    return result;
+}
+
 async function persistExecutionSkills(
-    executionId: string,
-    skills: InvokedSkill[],
+    executionId:string,
+    skills:InvokedSkill[],
     opts: {
         user?: string | null;
         primaryName?: string | null;
@@ -220,61 +216,21 @@ async function persistExecutionSkills(
             observedContentHash?: string | null;
         }>;
     } = {},
-): Promise<void> {
-    if (!EXECUTION_SKILL_ENABLED || !executionId) return;
-    try {
-        const previous = await prismaRaw.executionSkill.findMany({
-            where: { executionId }, include: { origin: true },
-        }).catch(() => []);
-        await prismaRaw.executionSkill.deleteMany({ where: { executionId } });
-        if (!skills.length) return;
-        const seen = new Set<string>();
-        const data = [] as { executionId: string; skillName: string; skillVersion: number | null; isPrimary: boolean; user: string | null }[];
-        for (const s of skills) {
-            if (!s?.name) continue;
-            const key = `${s.name}@@${s.version ?? ''}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            data.push({
-                executionId,
-                skillName: s.name,
-                skillVersion: s.version ?? null,
-                isPrimary: opts.primaryName != null && s.name === opts.primaryName,
-                user: opts.user ?? null,
-            });
+):Promise<void> {
+    if(!EXECUTION_SKILL_ENABLED||!executionId)return;
+    try{
+        const previous=await prismaRaw.executionSkill.findMany({where:{executionId},include:{origin:true}}).catch(()=>[]);
+        await prismaRaw.executionSkill.deleteMany({where:{executionId}});
+        if(!skills.length)return;
+        const prepared=prepareExecutionSkills(skills,opts,previous);
+        const data=prepared.map(({origin:_origin,...row})=>({executionId,...row}));
+        if(data.length)await prismaRaw.executionSkill.createMany({data});
+        const created=await prismaRaw.executionSkill.findMany({where:{executionId}});
+        for(const row of created){
+            const origin=prepared.find(item=>item.skillName===row.skillName&&item.skillVersion===row.skillVersion)?.origin;
+            if(origin)await prismaRaw.executionSkillOrigin.create({data:{executionSkillId:row.id,...origin}});
         }
-        if (data.length) await prismaRaw.executionSkill.createMany({ data });
-        const created = await prismaRaw.executionSkill.findMany({ where: { executionId } });
-        for (const row of created) {
-            const incoming = opts.origins?.find(origin => origin.skillName === row.skillName
-                && (origin.skillVersion == null || row.skillVersion == null || origin.skillVersion === row.skillVersion));
-            const prior = previous.find(item => item.skillName === row.skillName
-                && (item.skillVersion == null || row.skillVersion == null || item.skillVersion === row.skillVersion))?.origin;
-            const origin = incoming || prior;
-            if (!origin?.clientId || !origin?.platform || !origin?.targetMode) continue;
-            const platform = String(origin.platform).trim().toLowerCase();
-            const targetMode = String(origin.targetMode);
-            const originRef = typeof origin.originRef === 'string' ? origin.originRef.trim() : '';
-            if (!['opencode', 'pi-agent', 'xiaoo', 'jiuwenswarm'].includes(platform)) continue;
-            if (targetMode !== 'execution_origin' && targetMode !== 'framework_global') continue;
-            if (targetMode === 'execution_origin' && !/^origin_[a-f0-9]{24}$/.test(originRef)) continue;
-            if (targetMode === 'framework_global' && platform !== 'jiuwenswarm') continue;
-            await prismaRaw.executionSkillOrigin.create({
-                data: {
-                    executionSkillId: row.id,
-                    clientId: origin.clientId,
-                    platform,
-                    targetMode,
-                    originRef: originRef || null,
-                    displayPath: typeof origin.displayPath === 'string' ? origin.displayPath.slice(0, 2048) : null,
-                    observedSkillVersion: incoming?.skillVersion ?? row.skillVersion,
-                    observedContentHash: origin.observedContentHash || null,
-                },
-            });
-        }
-    } catch (e) {
-        console.warn(`[Data-Service] persistExecutionSkills failed for ${executionId}:`, e);
-    }
+    }catch(e){console.warn(`[Data-Service] persistExecutionSkills failed for ${executionId}:`,e);}
 }
 
 /**
@@ -611,7 +567,7 @@ export interface ConfigItem {
 
 type ConfigMatchMode = 'any' | 'routing' | 'outcome';
 
-const NO_OUTCOME_MATCH_REASON = '未找到匹配的效果评测配置';
+export const NO_OUTCOME_MATCH_REASON = '未找到匹配的效果评测配置';
 
 function normalizeQueryForMatch(input: string): string {
     let s = input.trim();
@@ -653,10 +609,10 @@ export function findBestMatchConfig(
     matchMode: ConfigMatchMode = 'any'
 ): ConfigItem | undefined {
     if (!userQuery) return undefined;
-    
+
     const trimmedUserQuery = normalizeQueryForMatch(userQuery);
     if (!trimmedUserQuery) return undefined;
-    
+
     const matchingConfigs = configs
         .filter(c => c.query && c.query.trim())
         .filter(c => {
@@ -670,9 +626,9 @@ export function findBestMatchConfig(
             }
             return configSupportsDatasetType(c.dataset_type, matchMode);
         });
-    
+
     if (matchingConfigs.length === 0) return undefined;
-    
+
     return matchingConfigs.reduce((best, current) => {
         const bestLen = normalizeQueryForMatch(best.query || '').length;
         const currentLen = normalizeQueryForMatch(current.query || '').length;
@@ -855,7 +811,7 @@ export function findBestOutcomeConfig(
     });
 }
 
-function getEvaluationContextLabel(
+export function getEvaluationContextLabel(
     record: Pick<ExecutionRecord, 'query' | 'skill' | 'skill_version'>,
     outcomeConfig?: Pick<ConfigItem, 'query' | 'skill' | 'skillVersion'>
 ): string {
@@ -866,7 +822,7 @@ function getEvaluationContextLabel(
     }, 'Skill execution benchmark');
 }
 
-function getRoutingExpectedSkills(config?: ConfigItem): { skill: string; version: number | null }[] {
+export function getRoutingExpectedSkills(config?: ConfigItem): { skill: string; version: number | null }[] {
     if (!config) return [];
 
     const expectedSkills = normalizeExpectedSkills(config.expectedSkills);
@@ -1002,9 +958,10 @@ function getKeyActionFlowTargets(config: ConfigItem): { skill: string; version: 
     return Array.from(targets.values());
 }
 
-async function fillConfigKeyActionsFromParsedFlows(
+export async function fillConfigKeyActionsFromParsedFlows(
     config: ConfigItem,
-    user?: string | null
+    user?: string | null,
+    source?: {findSkill:typeof db.findSkill; findParsedFlow:typeof db.findParsedFlow; updateConfig?:typeof db.updateConfig},
 ): Promise<void> {
     if (!config || (Array.isArray(config.key_actions) && config.key_actions.length > 0)) {
         return;
@@ -1018,7 +975,7 @@ async function fillConfigKeyActionsFromParsedFlows(
     const allActions: { name: string; actions: ExtractedKeyAction[] }[] = [];
 
     for (const target of targets) {
-        const skill = await db.findSkill(target.skill, user || null);
+        const skill = await (source ? source.findSkill(target.skill,user || null) : db.findSkill(target.skill,user || null));
         if (!skill) {
             continue;
         }
@@ -1031,7 +988,7 @@ async function fillConfigKeyActionsFromParsedFlows(
             continue;
         }
 
-        const parsedFlow = await db.findParsedFlow(skill.id, resolvedVersion, user || null);
+        const parsedFlow = await (source ? source.findParsedFlow(skill.id,resolvedVersion,user || null) : db.findParsedFlow(skill.id,resolvedVersion,user || null));
         if (!parsedFlow?.flowJson) {
             continue;
         }
@@ -1068,8 +1025,9 @@ async function fillConfigKeyActionsFromParsedFlows(
     }));
     config.extractedKeyActions = extractedActions;
 
+    if (source && !source.updateConfig) return;
     try {
-        await db.updateConfig(config.id, {
+        await (source?.updateConfig ? source.updateConfig.bind(source) : db.updateConfig.bind(db))(config.id, {
             keyActions: JSON.stringify(config.key_actions),
             extractedKeyActions: JSON.stringify(extractedActions),
         });
@@ -1082,7 +1040,8 @@ async function fillConfigKeyActionsFromParsedFlows(
 async function buildRoutingEvaluationSnapshot(
     record: Pick<ExecutionRecord, 'query' | 'skill' | 'skill_version' | 'invokedSkills' | 'skills' | 'user'>,
     routingConfig?: ConfigItem,
-    evaluationUser?: string | null
+    evaluationUser?: string | null,
+    frozenSkills?: ReadonlyArray<{name:string;activeVersion?:number|null}>,
 ): Promise<RoutingEvaluationSnapshot> {
     const invokedSkills = getEffectiveInvokedSkills(record);
     const skillContexts = collectSkillContexts(record, routingConfig);
@@ -1125,7 +1084,7 @@ async function buildRoutingEvaluationSnapshot(
 
     if (skillNamesForLookup.length > 0) {
         try {
-            const skills = await db.findSkills({
+            const skills = frozenSkills ?? await db.findSkills({
                 name: { in: skillNamesForLookup },
                 user: evaluationUser || null,
             });
@@ -1272,14 +1231,28 @@ function buildOutcomeEvaluationSnapshot(
     };
 }
 
+export async function buildRecordEvaluationSnapshots(
+    record: ExecutionRecord,
+    configs: ConfigItem[],
+    evaluationUser?: string | null,
+    frozenSkills?: ReadonlyArray<{name:string;activeVersion?:number|null}>,
+): Promise<ExecutionRecord> {
+    const routingConfig = record.query ? await findBestRoutingConfig(configs, record.query, evaluationUser ?? record.user ?? null) : undefined;
+    const outcomeConfig = findBestOutcomeConfig(configs, record);
+    const routingEvaluation = await buildRoutingEvaluationSnapshot(record, routingConfig, evaluationUser ?? record.user ?? null, frozenSkills);
+    return {
+        ...record,
+        routing_evaluation: routingEvaluation,
+        outcome_evaluation: buildOutcomeEvaluationSnapshot(record, outcomeConfig, routingConfig, routingEvaluation),
+    };
+}
+
 async function attachEvaluationSnapshots(
     record: ExecutionRecord,
     configs: ConfigItem[],
     evaluationUser?: string | null
 ): Promise<ExecutionRecord> {
-    const routingConfig = record.query ? await findBestRoutingConfig(configs, record.query, evaluationUser ?? record.user ?? null) : undefined;
-    const outcomeConfig = findBestOutcomeConfig(configs, record);
-    const routingEvaluation = await buildRoutingEvaluationSnapshot(record, routingConfig, evaluationUser ?? record.user ?? null);
+    const snapshot = await buildRecordEvaluationSnapshots(record, configs, evaluationUser);
     const executionId = record.task_id || record.upload_id || '';
     let executionMatch: {
         matchJson?: string | null;
@@ -1303,9 +1276,7 @@ async function attachEvaluationSnapshots(
     }
 
     return {
-        ...record,
-        routing_evaluation: routingEvaluation,
-        outcome_evaluation: buildOutcomeEvaluationSnapshot(record, outcomeConfig, routingConfig, routingEvaluation),
+        ...snapshot,
         execution_match: executionMatch,
     };
 }
@@ -2312,11 +2283,11 @@ export async function readConfig(
     const normalizedConfigs = configs.map((c: any) => {
         const parse = (s: string | null, fieldName: string) => {
             if (!s) return undefined;
-            try { 
-                return JSON.parse(s); 
-            } catch (e) { 
+            try {
+                return JSON.parse(s);
+            } catch (e) {
                 console.error(`[readConfig] Failed to parse ${fieldName} for config ${c.id}:`, e);
-                return undefined; 
+                return undefined;
             }
         };
         return {
@@ -2505,26 +2476,16 @@ export function scopeTraceThreadEventKey(
     return `trace-thread:${scope}:${eventKey}`;
 }
 
-async function persistTraceThreadRecord(
-    data: ExecutionRecord,
-    recordId?: string,
-): Promise<string | undefined> {
+export function prepareTraceThread(options: {data:ExecutionRecord; recordId?:string; threadId?:string}) {
+    const {data, recordId, threadId} = options;
     const input = data.traceThread;
-    if (!TRACE_THREAD_STORAGE_ENABLED || !input?.sourceThreadId || !data.framework || !data.user) {
-        return data.traceThreadId;
+    if (!input?.sourceThreadId || !data.framework || !data.user) {
+        return null;
     }
 
     const startedAt = traceThreadDate(input.startedAt);
     const updatedAt = traceThreadDate(input.updatedAt) || startedAt;
-    const thread = await prismaRaw.traceThread.upsert({
-        where: {
-            user_framework_sourceThreadId: {
-                user: data.user,
-                framework: data.framework,
-                sourceThreadId: input.sourceThreadId,
-            },
-        },
-        create: {
+    const create = {
             framework: data.framework,
             sourceThreadId: input.sourceThreadId,
             sourceKind: input.sourceKind || data.sourceKind,
@@ -2532,14 +2493,14 @@ async function persistTraceThreadRecord(
             startedAt,
             updatedAt,
             metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
-        },
-        update: {
+        };
+    const update = {
             sourceKind: input.sourceKind || data.sourceKind,
             ...(startedAt ? { startedAt } : {}),
             ...(updatedAt ? { updatedAt } : {}),
             ...(input.metadata ? { metadataJson: JSON.stringify(input.metadata) } : {}),
-        },
-    });
+        };
+    const events: any[] = [];
 
     for (const event of input.events || []) {
         const eventStartedAt = traceThreadDate(event.startedAt);
@@ -2559,7 +2520,7 @@ async function persistTraceThreadRecord(
             ...(event.relatedSourceTurnId ? { relatedSourceExecutionId: event.relatedSourceTurnId } : {}),
         };
         const values = {
-            traceThreadId: thread.id,
+            traceThreadId: threadId,
             executionId: primaryExecutionId,
             relatedExecutionId: undefined,
             kind: event.kind,
@@ -2570,11 +2531,26 @@ async function persistTraceThreadRecord(
             completedAt: eventCompletedAt,
             payloadJson: Object.keys(payload).length > 0 ? JSON.stringify(payload) : null,
         };
-        await prismaRaw.traceThreadEvent.upsert({
-            where: { eventKey: scopedEventKey },
-            create: { eventKey: scopedEventKey, ...values },
-            update: values,
-        });
+        events.push({eventKey:scopedEventKey, ...values});
+    }
+    return {thread:{id:threadId, ...create}, create, update, events};
+}
+
+async function persistTraceThreadRecord(
+    data: ExecutionRecord,
+    recordId?: string,
+): Promise<string | undefined> {
+    if (!TRACE_THREAD_STORAGE_ENABLED) return data.traceThreadId;
+    const plan = prepareTraceThread({data, recordId});
+    if (!plan) return data.traceThreadId;
+    const thread = await prismaRaw.traceThread.upsert({
+        where:{user_framework_sourceThreadId:{user:data.user!,framework:data.framework!,sourceThreadId:data.traceThread!.sourceThreadId}},
+        create:plan.create, update:plan.update,
+    });
+    const linked = prepareTraceThread({data, recordId, threadId:thread.id})!;
+    for (const event of linked.events) {
+        const {eventKey,...values} = event;
+        await prismaRaw.traceThreadEvent.upsert({where:{eventKey}, create:{eventKey,...values}, update:values});
     }
     return thread.id;
 }
@@ -2615,53 +2591,19 @@ async function reconcileTraceThreadExecutions(traceThreadId: string | undefined)
     }
 }
 
-export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
-    return withTraceTiming({ scope: 'save', traceId: data.task_id, uploadId: data.upload_id, framework: data.framework },
-        () => saveExecutionRecordInternal(data, options));
+export interface ExecutionPreparationInput {
+    data: ExecutionRecord;
+    recordId: string;
+    existingExecution?: any;
+    existingSession?: any;
+    defaultTimestamp: string;
+    allowSnapshotShrink: boolean;
 }
 
-async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
-    const receivedAt = options?.receivedAt === null ? null : options?.receivedAt ?? new Date();
-    const id = data.upload_id || data.task_id;
-    let recordId = id || crypto.randomUUID();
-
-    // A Codex automatic unit without direct/unique parent evidence is written to
-    // the spool with a `pending:` execution id. It is retained there for a later
-    // correlated replay, but is never a user-authored root task and must not
-    // leak through a generic ingestion fallback into the execution list.
-    if (String(data.framework || '').toLowerCase() === 'codex' && recordId.startsWith('pending:')) {
-        return { success: true, record: { ...data, task_id: data.task_id || recordId, interactions: [] } };
-    }
-
-    if (data.task_id) {
-        try {
-            const where: any = { taskId: data.task_id };
-            if (data.framework) where.framework = data.framework;
-            const existingByTask = await timeTraceStage('identity-query', () => db.findExecutions(where, { timestamp: 'desc' }));
-            if (existingByTask && existingByTask.length > 0 && existingByTask[0]?.id) {
-                const exact = existingByTask.find((x: any) => x.id === data.task_id);
-                const canonicalId = (exact && exact.id) ? exact.id : existingByTask[0].id;
-                if (canonicalId !== recordId) {
-                    recordId = canonicalId;
-                }
-            }
-        } catch {}
-    }
-
-    const persistedTraceThreadId = await persistTraceThreadRecord(data, recordId);
-    if (data.threadOnly) {
-        await reconcileTraceThreadExecutions(persistedTraceThreadId);
-        return {
-            success: true,
-            record: { ...data, traceThreadId: persistedTraceThreadId, interactions: [] },
-        };
-    }
-
+export function prepareExecutionRecordState(input: ExecutionPreparationInput) {
+    const {recordId, existingExecution:dbRecord, existingSession, defaultTimestamp, allowSnapshotShrink} = input;
+    const data = structuredClone(input.data);
     let existingRecord: ExecutionRecord | null = null;
-    const dbRecord = await timeTraceStage('execution-read', () => db.findExecutionById(recordId));
-
-    traceTimingEvent('identity-resolved', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
-    const finishPreparation = beginTraceStage('prepare');
 
     if (dbRecord) {
         existingRecord = {
@@ -2714,7 +2656,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
     const isUpdate = !!existingRecord;
 
     if (!isUpdate && !targetRecord.timestamp && !data.timestamp) {
-        targetRecord.timestamp = new Date().toISOString();
+        targetRecord.timestamp = defaultTimestamp;
     } else if (data.timestamp) {
         targetRecord.timestamp = data.timestamp;
     }
@@ -2758,13 +2700,6 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         incomingSkillVersion: targetRecord.skill_version ?? null,
         explicitRewrite: explicitSkillVersionRewrite,
     });
-    if (guarded.blocked) {
-        console.warn(
-            `[Data-Service] Preserving existing skill_version for execution ${recordId}: ` +
-            `existing=${existingRecord?.skill_version}, incoming=${targetRecord.skill_version} blocked. ` +
-            `Skill version is immutable history; only NULL → value or explicit label-binding rewrite is allowed.`
-        );
-    }
     targetRecord.skill_version = guarded.resolved ?? undefined;
     if (!targetRecord.agentName && targetRecord.agent) {
         targetRecord.agentName = targetRecord.agent;
@@ -2784,36 +2719,11 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
     targetRecord.upload_id = recordId;
 
     if ((!targetRecord.label || !targetRecord.model || !targetRecord.user) && targetRecord.task_id) {
-        const session = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
+        const session = existingSession;
         if (session) {
             if (!targetRecord.label && session.label) targetRecord.label = session.label;
             if (!targetRecord.model && session.model) targetRecord.model = session.model;
             if (!targetRecord.user && session.user) targetRecord.user = session.user;
-        }
-    }
-
-    if (!targetRecord.user) {
-        const defaultUser = getDefaultIngestUser();
-        if (defaultUser) {
-            // 无 key / 无法解析 user 时，确定性地归到配置的默认账号（开箱即用共享账号场景）。
-            // 覆盖 OTLP / proxy / opencode 等所有「不 reject、user 落空」的路径 —— 它们都汇到这里。
-            targetRecord.user = defaultUser;
-            console.log(`[Data-Service] No user on record for task ${targetRecord.task_id}, defaulting to AGENT_INSIGHT_DEFAULT_INGEST_USER=${defaultUser}`);
-        } else {
-            // 未配置默认账号：保留旧兜底（DB 第一个用户）。注意这是**非确定性**的（取决于建表顺序），
-            // 生产建议配 AGENT_INSIGHT_DEFAULT_INGEST_USER 明确指定，避免数据莫名归到某个账号。
-            try {
-                const client = db.getClient();
-                if ('query' in client) {
-                    const res = await (client as any).query('SELECT username FROM "User" LIMIT 1');
-                    if (res.rows[0]) {
-                        targetRecord.user = res.rows[0].username;
-                        console.log(`[Data-Service] Fallback resolved user for task ${targetRecord.task_id} to: ${targetRecord.user}`);
-                    }
-                }
-            } catch (e) {
-                console.warn('[Data-Service] Fallback user lookup failed:', e);
-            }
         }
     }
 
@@ -2844,7 +2754,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         try {
             const mergeStrategy = targetRecord.session_merge_strategy || storageAdapter.sessionMergeStrategy || 'monotonic';
             if (mergeStrategy !== 'snapshot-replace') {
-                const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
+
                 let existingInteractions = existingSession?.interactions
                     ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                     : [];
@@ -2859,9 +2769,9 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
                 // 严格更小则判为退化快照，保留库里现有记录、不覆盖。只有适配器声明完整快照
                 // 能力的框架允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
+                const allowShrink = allowSnapshotShrink;
                 if (!allowShrink) {
-                    const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
+
                     let existingInteractions = existingSession?.interactions
                         ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                         : [];
@@ -2869,25 +2779,11 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                     const existingCount = Array.isArray(existingInteractions) ? existingInteractions.length : 0;
                     const incomingCount = Array.isArray(incomingInteractions) ? incomingInteractions.length : 0;
                     if (existingCount > 0 && incomingCount < existingCount) {
-                        console.warn(
-                            `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
-                            `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            (storageAdapter.descriptor.id === 'jiuwenswarm'
-                                ? `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`
-                                : `当前框架未声明允许快照缩小。`),
-                        );
-                        finishPreparation();
-                        traceTimingEvent('save-skipped', { executionId: recordId, reason: 'smaller-snapshot' });
-                        return { success: true, record: targetRecord };
+                        return {targetRecord, existingRecord, mergedInteractionsForSession, explicitSkillVersionRewrite, skipped:true, data};
                     }
                 }
             }
-        } catch (e) {
-            // 护栏/合并的 DB 读取失败时 fail-open：按原逻辑继续落库，不因检查本身报错而阻断写入。
-            if (e && typeof e === 'object' && 'task_id' in (targetRecord as any)) {
-                console.warn('[Data-Service] snapshot-replace 退化检查异常，按原逻辑继续：', (e as Error)?.message || e);
-            }
-        }
+        } catch {}
 
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
@@ -2916,478 +2812,12 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             if (derived.reasoning_tokens !== undefined) targetRecord.reasoning_tokens = derived.reasoning_tokens;
         }
     }
-    let isSkillCorrect = false; // Reset to false and recalculate based on current config
-    let isAnswerCorrect = targetRecord.is_answer_correct || false;
-    let judgmentReason = targetRecord.judgment_reason || NO_OUTCOME_MATCH_REASON;
-    targetRecord.skill_trigger_rate = null;
+    return {targetRecord, existingRecord, mergedInteractionsForSession, explicitSkillVersionRewrite, skipped:false, data};
+}
 
-    const configs = await timeTraceStage('config-read', () => readConfig(targetRecord.user));
-    if (configs.length > 0) {
-        const routingConfig = await findBestRoutingConfig(configs, targetRecord.query, targetRecord.user);
-        const outcomeConfig = findBestOutcomeConfig(configs, targetRecord);
-
-        if (routingConfig) {
-            const invokedSkillsWithVersion = Array.isArray(targetRecord.invokedSkills) ? targetRecord.invokedSkills : [];
-            const skillsFallback = Array.isArray(targetRecord.skills) ? targetRecord.skills : [];
-            const invokedSkillsFallback = skillsFallback.map(name => ({ name, version: null as number | null }));
-
-            const expectedSkillsList = getRoutingExpectedSkills(routingConfig);
-            
-            if (expectedSkillsList.length > 0) {
-                const skillsToCheck = invokedSkillsWithVersion.length > 0 
-                    ? invokedSkillsWithVersion 
-                    : invokedSkillsFallback;
-                
-                if (skillsToCheck.length > 0) {
-                    let correctInvokedSkills = 0;
-                    
-                    const validExpectedSkills = expectedSkillsList.filter(e => e.skill?.trim());
-                    
-                    const skillNames = validExpectedSkills.map(e => e.skill.trim());
-                    const skillsMap = new Map<string, any>();
-                    
-                    if (skillNames.length > 0) {
-                        try {
-                            const skills = await db.findSkills({
-                                name: { in: skillNames },
-                                user: targetRecord.user || null
-                            });
-                            
-                            for (const skill of skills) {
-                                skillsMap.set(skill.name, skill);
-                            }
-                        } catch (err) {
-                            console.error('[Judgment] Error fetching skills for version check:', err);
-                        }
-                    }
-                    
-                    for (const expected of validExpectedSkills) {
-                        const expectedName = expected.skill.trim();
-                        const expectedVer = expected.version ?? null;
-                        
-                        const matchingInvoked = skillsToCheck.find(
-                            (s) => s.name === expectedName
-                        );
-                        
-                        if (matchingInvoked) {
-                            let isVersionMatch = false;
-                            
-                            if (expectedVer === null) {
-                                isVersionMatch = true;
-                            } else if (matchingInvoked.version !== null) {
-                                isVersionMatch = matchingInvoked.version === expectedVer;
-                            } else {
-                                const skill = skillsMap.get(expectedName);
-                                if (skill) {
-                                    const actualVersion = skill.activeVersion || 0;
-                                    isVersionMatch = actualVersion === expectedVer;
-                                } else {
-                                    isVersionMatch = false;
-                                }
-                            }
-                            
-                            if (isVersionMatch) {
-                                correctInvokedSkills++;
-                                if (!isSkillCorrect) {
-                                    isSkillCorrect = true;
-                                }
-                            }
-                        }
-                    }
-                    
-                    if (validExpectedSkills.length > 0) {
-                        targetRecord.skill_trigger_rate = correctInvokedSkills / validExpectedSkills.length;
-                    }
-                }
-            }
-            targetRecord.is_skill_correct = isSkillCorrect;
-        }
-
-        if (outcomeConfig) {
-            await fillConfigKeyActionsFromParsedFlows(outcomeConfig, targetRecord.user);
-            if (targetRecord.final_result !== undefined) {
-                let needsJudgment = true;
-
-                if (isUpdate && !data.force_judgment) {
-                    if (existingRecord && existingRecord.query === targetRecord.query && existingRecord.final_result === targetRecord.final_result) {
-                        needsJudgment = false;
-                    }
-                }
-
-                if (data.skip_internal_judgment) {
-                    needsJudgment = false;
-                }
-
-                if (needsJudgment && !targetRecord.skip_evaluation) {
-                    let skillDefinition: string | undefined = undefined;
-                    const skillName = (
-                        targetRecord.skill
-                        || outcomeConfig.skill
-                        || routingConfig?.skill
-                        || ''
-                    ).trim();
-
-                    if (skillName) {
-                        try {
-                            const skill = await db.findSkill(skillName, targetRecord.user || null);
-                            if (skill) {
-                                const targetVersion = outcomeConfig.skillVersion
-                                    ?? targetRecord.skill_version
-                                    ?? skill.activeVersion
-                                    ?? 0;
-                                const sv = skill.versions?.find((v: any) => v.version === targetVersion);
-                                if (sv && sv.content) {
-                                    skillDefinition = sv.content;
-                                    if (targetRecord.skill_version === undefined || targetRecord.skill_version === null) {
-                                        targetRecord.skill_version = sv.version;
-                                    }
-                                } else if (skill.versions && skill.versions.length > 0) {
-                                    const latestSv = skill.versions[0];
-                                    if (latestSv && latestSv.content) {
-                                        skillDefinition = latestSv.content;
-                                        if (targetRecord.skill_version === undefined || targetRecord.skill_version === null) {
-                                            targetRecord.skill_version = latestSv.version;
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (err) {
-                            console.error('[Judgment] Error fetching skill definition:', err);
-                        }
-                    }
-
-                    let executionSteps: { name: string; description: string; type: string }[] | null = null;
-                    try {
-                        const matchRecord = await db.findExecutionMatch(targetRecord.task_id || targetRecord.upload_id || '');
-                        if (matchRecord?.extractedSteps) {
-                            executionSteps = typeof matchRecord.extractedSteps === 'string' 
-                                ? JSON.parse(matchRecord.extractedSteps) 
-                                : matchRecord.extractedSteps;
-                        }
-                    } catch (e) {
-                        console.warn('[Judgment] Failed to load execution steps for KA evaluation:', e);
-                    }
-
-                    const judgment = await judgeAnswer(
-                        getEvaluationContextLabel(targetRecord, outcomeConfig),
-                        {
-                            standard_answer_example: outcomeConfig.standard_answer,
-                            root_causes: outcomeConfig.root_causes,
-                            key_actions: outcomeConfig.key_actions,
-                            skill_definition: skillDefinition
-                        },
-                        targetRecord.final_result,
-                        targetRecord.user,
-                        executionSteps
-                    );
-                    isAnswerCorrect = judgment.is_correct;
-                    targetRecord.answer_score = judgment.score;
-                    judgmentReason = judgment.reason || 'Judged by Evaluation Model';
-                }
-            }
-        } else {
-            if (!isUpdate || data.force_judgment) {
-                isAnswerCorrect = false;
-                judgmentReason = NO_OUTCOME_MATCH_REASON;
-                targetRecord.answer_score = null;
-            }
-        }
-    }
-
-    if (data.skip_evaluation) {
-        targetRecord.answer_score = null;
-        isAnswerCorrect = false;
-        judgmentReason = '结果评估中...';
-    }
-
-    targetRecord.is_skill_correct = isSkillCorrect;
-    targetRecord.is_answer_correct = isAnswerCorrect;
-    targetRecord.judgment_reason = judgmentReason;
-    targetRecord = await attachEvaluationSnapshots(targetRecord, configs, targetRecord.user);
-
-    const skillForScore = Array.isArray(targetRecord.skills) && targetRecord.skills.length > 0 ? targetRecord.skills[0] : undefined;
-    if (skillForScore) {
-        const evalResults = readEvaluationResults();
-        const scoreStr = evalResults[skillForScore];
-        if (scoreStr) targetRecord.skill_score = parseFloat(scoreStr);
-    }
-
-    targetRecord.label = chooseExecutionLabel({
-        existingLabel: existingRecord?.label,
-        incomingLabel: data.label,
-        skill: targetRecord.skill,
-        skillVersion: targetRecord.skill_version ?? null
-    });
-    targetRecord.traceThreadId = persistedTraceThreadId || targetRecord.traceThreadId;
-
-    const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(targetRecord.framework);
-    const storedAgentName = targetRecord.agentName || frameworkPrimaryAgentName;
-    const observedAgentOptions = undefined;
-
-    let agentId: string | undefined = undefined;
-    if (targetRecord.framework) {
-        const platform = targetRecord.framework;
-        const user = targetRecord.user || null;
-
-        const observedAgents = extractObservedAgentRegistrations(
-            mergedInteractionsForSession,
-            storedAgentName,
-            observedAgentOptions,
-        );
-
-        // 并发安全 + 单点隔离：try/catch 收细到**单个 agent**，一个失败不再中断整条 trace 的其余登记
-        // 与 agentId 关联；create 撞 @@unique([platform,name,user]) 时回查拿现有行（多人共用同一账号、
-        // 首次并发登记同名 agent 的场景）——不重复、不覆盖、不报错。
-        for (const observed of observedAgents) {
-            try {
-                let existingAgent = await prisma.registeredAgent.findFirst({
-                    where: { platform, name: observed.name, user: user }
-                });
-
-                if (!existingAgent) {
-                    try {
-                        existingAgent = await prisma.registeredAgent.create({
-                            data: {
-                                platform,
-                                name: observed.name,
-                                user,
-                                // 已知系统/内置 Agent 名（评估器等）直接落 system，避免它们换 framework
-                                // （如评估器的 direct-llm 路径）被 ingest 登记成 user、污染用户视图/统计。
-                                agentOwnership: isInternalSystemAgentTrace(observed.name) ? 'system' : 'user',
-                                agentType: observed.agentType === 'main'
-                                    ? (targetRecord.agentType || 'main')
-                                    : 'subagent'
-                            }
-                        });
-                    } catch (createErr) {
-                        // 并发下另一个请求刚建了同一 (platform,name,user) 行 → 撞唯一约束。回查拿到它即可。
-                        existingAgent = await prisma.registeredAgent.findFirst({
-                            where: { platform, name: observed.name, user: user }
-                        });
-                        if (!existingAgent) {
-                            console.warn(`[Data-Service] register observed agent failed (non-fatal): ${observed.name}`, createErr);
-                        }
-                    }
-                }
-
-                if (existingAgent && observed.agentType === 'main' && observed.name === storedAgentName) {
-                    agentId = existingAgent.id;
-                }
-            } catch (e) {
-                // 单个 agent 的意外错误不影响其余 agent 与本条 trace 的保存。
-                console.warn(`[Data-Service] observed-agent registration error (non-fatal): ${observed.name}`, e);
-            }
-        }
-    }
-
-    // 写入时预解析 agents 列表并 denormalize 存入 observedAgents,供轻量列表(fields=light)直接读取,
-    // 无需加载/解析 session interactions。与读侧 extractObservedAgentNames(interactions) 同源同口径
-    // (含 opencode 'build' 等只出现在 interactions 里的 agent 名),保证 light 与 heavy 的 agents 一致、不丢数据。
-    const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
-        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession, storedAgentName, observedAgentOptions))
-        : null;
-    const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
-    const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt, receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
-    finishPreparation();
-    await timeTraceStage('execution-upsert', () => db.upsertExecution({
-        where: { id: recordId },
-        create: {
-            id: recordId,
-            taskId: targetRecord.task_id,
-            query: targetRecord.query,
-            framework: targetRecord.framework,
-            traceThreadId: targetRecord.traceThreadId,
-            sourceExecutionId: targetRecord.sourceExecutionId,
-            sourceKind: targetRecord.sourceKind,
-            executionStatus: targetRecord.executionStatus,
-            tokens: targetRecord.tokens,
-            cost: targetRecord.cost,
-            latency: targetRecord.latency,
-            timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
-            lastIngestedAt,
-            finalResult: targetRecord.final_result,
-            skill: targetRecord.skill,
-            skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
-            invokedSkills: targetRecord.invokedSkills ? JSON.stringify(targetRecord.invokedSkills) : null,
-            isSkillCorrect: targetRecord.is_skill_correct,
-            isAnswerCorrect: targetRecord.is_answer_correct,
-            answerScore: targetRecord.answer_score,
-            skillScore: targetRecord.skill_score,
-            judgmentReason: targetRecord.judgment_reason,
-            failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
-            skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
-            label: targetRecord.label,
-            user: targetRecord.user,
-            agentName: storedAgentName,
-            agentId: agentId,
-            skillVersion: targetRecord.skill_version,
-            model: targetRecord.model,
-            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
-            clientId: targetRecord.clientId,
-            hostIp: targetRecord.hostIp,
-            hostName: targetRecord.hostName,
-            observedIp: targetRecord.observedIp,
-            toolCallCount: targetRecord.tool_call_count,
-            llmCallCount: targetRecord.llm_call_count,
-            inputTokens: targetRecord.input_tokens,
-            outputTokens: targetRecord.output_tokens,
-            toolCallErrorCount: targetRecord.tool_call_error_count,
-            skillTriggerRate: targetRecord.skill_trigger_rate,
-            cacheReadInputTokens: targetRecord.cache_read_input_tokens,
-            cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
-            maxSingleCallTokens: targetRecord.max_single_call_tokens,
-            reasoningTokens: targetRecord.reasoning_tokens,
-            observedAgents: observedAgentsJson,
-        },
-        update: {
-            taskId: targetRecord.task_id,
-            query: targetRecord.query,
-            framework: targetRecord.framework,
-            traceThreadId: targetRecord.traceThreadId,
-            sourceExecutionId: targetRecord.sourceExecutionId,
-            sourceKind: targetRecord.sourceKind,
-            executionStatus: targetRecord.executionStatus,
-            tokens: targetRecord.tokens,
-            cost: targetRecord.cost,
-            latency: targetRecord.latency,
-            timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(),
-            lastIngestedAt,
-            finalResult: targetRecord.final_result,
-            skill: targetRecord.skill,
-            skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
-            invokedSkills: targetRecord.invokedSkills ? JSON.stringify(targetRecord.invokedSkills) : null,
-            isSkillCorrect: targetRecord.is_skill_correct,
-            isAnswerCorrect: targetRecord.is_answer_correct,
-            answerScore: targetRecord.answer_score,
-            skillScore: targetRecord.skill_score,
-            judgmentReason: targetRecord.judgment_reason,
-            failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
-            skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
-            label: targetRecord.label,
-            user: targetRecord.user,
-            agentName: storedAgentName,
-            agentId: agentId,
-            skillVersion: targetRecord.skill_version,
-            model: targetRecord.model,
-            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
-            clientId: targetRecord.clientId,
-            hostIp: targetRecord.hostIp,
-            hostName: targetRecord.hostName,
-            observedIp: targetRecord.observedIp,
-            toolCallCount: targetRecord.tool_call_count,
-            llmCallCount: targetRecord.llm_call_count,
-            inputTokens: targetRecord.input_tokens,
-            outputTokens: targetRecord.output_tokens,
-            toolCallErrorCount: targetRecord.tool_call_error_count,
-            skillTriggerRate: targetRecord.skill_trigger_rate,
-            cacheReadInputTokens: targetRecord.cache_read_input_tokens,
-            cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
-            maxSingleCallTokens: targetRecord.max_single_call_tokens,
-            reasoningTokens: targetRecord.reasoning_tokens,
-            observedAgents: observedAgentsJson,
-        }
-    }));
-    traceTimingEvent('execution-written', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
-    const finishPostExecution = beginTraceStage('post-execution');
-    await reconcileTraceThreadExecutions(targetRecord.traceThreadId);
-
-    if (data.upload_id && data.task_id && data.upload_id !== recordId) {
-        try {
-            const dup = await db.findExecutionById(data.upload_id);
-            if (dup && dup.taskId === data.task_id) {
-                if (AUDIT_DATA_MUTATIONS) {
-                    console.warn(`[Data-Audit] deleteExecution (dedup on save): upload_id=${data.upload_id} task_id=${data.task_id} recordId=${recordId}`);
-                }
-                await db.deleteExecution(data.upload_id);
-            }
-        } catch {}
-    }
-
-    // 写入 root 这一层 agent 自己用到的 skill 到 ExecutionSkill(agent 作用域,不含子 agent)。
-    //   - opencode：用 agent-call-tree 取 root 节点本层显式 skill 调用（剥离子 agent 冒泡）。
-    //   - claude/openclaw / label 显式绑定：targetRecord.invokedSkills 已是单 agent + 显式口径,直接复用。
-    // 版本写时定格(snapshotSkillVersions)。子 agent 的绑定在 deriveSubagentExecutions 里各自写。
-    if (EXECUTION_SKILL_ENABLED) {
-        try {
-            let rootSkills: InvokedSkill[];
-            const hasInteractions = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0;
-            if (explicitSkillVersionRewrite) {
-                // label 显式绑定:用绑定的 skill(权威),不从 interactions 重算
-                rootSkills = Array.isArray(targetRecord.invokedSkills) ? (targetRecord.invokedSkills as InvokedSkill[]) : [];
-            } else if (hasInteractions) {
-                rootSkills = computeOwnSkills(targetRecord.framework, mergedInteractionsForSession as any[]);
-            } else {
-                rootSkills = Array.isArray(targetRecord.invokedSkills) ? (targetRecord.invokedSkills as InvokedSkill[]) : [];
-            }
-            const pinnedRootSkills = preferExplicitPrimarySkillVersion(
-                rootSkills,
-                targetRecord.skill ?? null,
-                targetRecord.skill_version ?? null,
-            );
-            const snapped = await snapshotSkillVersions(pinnedRootSkills, targetRecord.user);
-            await persistExecutionSkills(recordId, snapped, {
-                user: targetRecord.user,
-                primaryName: targetRecord.skill ?? null,
-                origins: Array.isArray(targetRecord.skill_origins)
-                    ? targetRecord.skill_origins.map(origin => ({
-                        ...origin,
-                        clientId: origin.clientId || targetRecord.clientId || undefined,
-                    }))
-                    : undefined,
-            });
-            await prismaRaw.execution.update({
-                where: { id: recordId },
-                data: {
-                    skills: snapped.length ? JSON.stringify(snapped.map((skill) => skill.name)) : null,
-                    invokedSkills: snapped.length ? JSON.stringify(snapped) : null,
-                },
-            });
-        } catch (e) {
-            console.warn(`[Data-Service] root ExecutionSkill persist failed for ${recordId}:`, e);
-        }
-    }
-
-    // 多 Agent 拆分：把 root execution 里挂着的 sub-agent 切片单独派生成 Execution + Session 行，
-    // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
-    // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
-    // 现在反过来——保留它们，并补齐父子链接。
-    if (typeof targetRecord.framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
-        try {
-            await deriveSubagentExecutions({
-                parentExecutionId: recordId,
-                lastIngestedAt,
-                parentTaskId: targetRecord.task_id,
-                parentFramework: targetRecord.framework,
-                parentUser: targetRecord.user,
-                clientId: targetRecord.clientId,
-                hostIp: targetRecord.hostIp,
-                hostName: targetRecord.hostName,
-                observedIp: targetRecord.observedIp,
-                interactions: mergedInteractionsForSession,
-            });
-        } catch (e) {
-            console.warn(`[Data-Service] deriveSubagentExecutions failed for parent=${recordId}:`, e);
-        }
-    }
-
-    if (frameworkPrimaryAgentName && !['pi-agent', 'codex'].includes(targetRecord.framework || '')) {
-        try {
-            await normalizeFrameworkAgentIdentityHistory(
-                targetRecord.framework,
-                targetRecord.user || null,
-                frameworkPrimaryAgentName,
-            );
-        } catch (e) {
-            console.warn(`[Data-Service] normalize framework agent identity failed framework=${targetRecord.framework}:`, e);
-        }
-    }
-
-    try {
-        await normalizeLegacyCodexSessionHistory(targetRecord.framework, targetRecord.user || null);
-    } catch (e) {
-        console.warn(`[Data-Service] normalize legacy Codex session history failed user=${targetRecord.user}:`, e);
-    }
-
+export function prepareExecutionSession(input: {record:ExecutionRecord; interactions:any[]|null; existingSession?:any; defaultTimestamp:string}) {
+    const targetRecord = structuredClone(input.record);
+    const {interactions:mergedInteractionsForSession, existingSession, defaultTimestamp} = input;
     const explicitTraceStartedAt = targetRecord.trace_started_at
         ? new Date(targetRecord.trace_started_at)
         : null;
@@ -3414,14 +2844,12 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         && Number.isFinite(traceCompletedAtForSession.getTime())
         && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
 
-    finishPostExecution();
-    const finishSession = beginTraceStage('session-save');
     if (targetRecord.task_id && mergedInteractionsForSession) {
         const isLangfuseTrace = ['langfuse', 'langfuse-langgraph', 'dify'].includes(targetRecord.framework || '');
         let langfuseTraceNodesJson: string | undefined;
         if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
-            const existingSession = await timeTraceStage('session-read', () => db.findSessionByTaskId(targetRecord.task_id!));
-            let existingNodes: LangfuseTraceNode[] = [];
+
+            let existingNodes: LangfuseTraceNode[] = Array.isArray(existingSession?.langfuseTraceNodes) ? existingSession.langfuseTraceNodes : [];
             if (typeof existingSession?.langfuseTraceNodes === 'string' && existingSession.langfuseTraceNodes.trim()) {
                 try {
                     const parsed = JSON.parse(existingSession.langfuseTraceNodes);
@@ -3431,9 +2859,7 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             targetRecord.langfuseTraceNodes = mergeLangfuseTraceNodes(existingNodes, targetRecord.langfuseTraceNodes);
             langfuseTraceNodesJson = JSON.stringify(targetRecord.langfuseTraceNodes);
         }
-        await timeTraceStage('session-upsert', () => db.upsertSession(
-            targetRecord.task_id!,
-            {
+        const create =             {
                 taskId: targetRecord.task_id,
                 query: targetRecord.query,
                 label: targetRecord.label,
@@ -3443,8 +2869,8 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
                 ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
                 ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
-            },
-            {
+            };
+        const update = {
                 query: targetRecord.query,
                 label: targetRecord.label,
                 user: targetRecord.user,
@@ -3452,61 +2878,174 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
                 ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
-            }
-        ));
-        if (hasTraceCompletion) {
-            await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
-        }
-        if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true && !hasTraceCompletion) {
-            await db.updateSession(targetRecord.task_id, { endTime: new Date() });
-        }
+            };
+        const completionAt = hasTraceCompletion ? traceCompletedAtForSession
+            : targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true ? new Date(defaultTimestamp) : null;
+        const defined = (value: Record<string, any>) => Object.fromEntries(Object.entries(value).filter(([,item]) => item !== undefined));
+        const merged = {...(existingSession || {label:null, query:null, model:null, user:null, startTime:defaultTimestamp, endTime:null}), ...defined(existingSession ? update : create)} as Record<string, any>;
+        const iso = (value: any) => value instanceof Date ? value.toISOString() : value;
+        return {record:targetRecord, create, update, completionAt, session:{...merged,
+            startTime:iso(merged.startTime), endTime:completionAt ? completionAt.toISOString() : iso(merged.endTime ?? null),
+            interactions:mergedInteractionsForSession,
+            ...(langfuseTraceNodesJson !== undefined ? {langfuseTraceNodes:targetRecord.langfuseTraceNodes} : {}),
+        }};
     }
+    return {record:targetRecord, session:existingSession ? structuredClone(existingSession) : null, create:null, update:null, completionAt:null};
+}
 
-    finishSession();
-    const finishPostSave = beginTraceStage('post-save');
+export function prepareExecutionRouting(record:ExecutionRecord, routingConfig:ConfigItem|undefined, skills:ReadonlyArray<{name:string;activeVersion?:number|null}>) {
+    const targetRecord = structuredClone(record);
+    let isSkillCorrect = false;
+    targetRecord.skill_trigger_rate = null;
+        if (routingConfig) {
+            const invokedSkillsWithVersion = Array.isArray(targetRecord.invokedSkills) ? targetRecord.invokedSkills : [];
+            const skillsFallback = Array.isArray(targetRecord.skills) ? targetRecord.skills : [];
+            const invokedSkillsFallback = skillsFallback.map(name => ({ name, version: null as number | null }));
 
-    // 大盘 B 档：基于内存中的全量 merged interactions 预解析 per-call 摘要（零额外 JSON.parse，
-    // 单遍 O(n)，全量重算幂等覆盖）。失败降级 null，绝不阻断主写入。
-    if (Array.isArray(mergedInteractionsForSession)) {
-        let callStatsJson: string | null = null;
-        try {
-            callStatsJson = JSON.stringify(computeCallStats(mergedInteractionsForSession, {
-                fallbackModel: targetRecord.model ?? null,
-                failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
-            }));
-        } catch (e) {
-            console.warn(`[Data-Service] computeCallStats failed for ${recordId}:`, e);
+            const expectedSkillsList = getRoutingExpectedSkills(routingConfig);
+
+            if (expectedSkillsList.length > 0) {
+                const skillsToCheck = invokedSkillsWithVersion.length > 0
+                    ? invokedSkillsWithVersion
+                    : invokedSkillsFallback;
+
+                if (skillsToCheck.length > 0) {
+                    let correctInvokedSkills = 0;
+
+                    const validExpectedSkills = expectedSkillsList.filter(e => e.skill?.trim());
+
+                    const skillsMap = new Map(skills.map(skill=>[skill.name,skill]));
+
+                    for (const expected of validExpectedSkills) {
+                        const expectedName = expected.skill.trim();
+                        const expectedVer = expected.version ?? null;
+
+                        const matchingInvoked = skillsToCheck.find(
+                            (s) => s.name === expectedName
+                        );
+
+                        if (matchingInvoked) {
+                            let isVersionMatch = false;
+
+                            if (expectedVer === null) {
+                                isVersionMatch = true;
+                            } else if (matchingInvoked.version !== null) {
+                                isVersionMatch = matchingInvoked.version === expectedVer;
+                            } else {
+                                const skill = skillsMap.get(expectedName);
+                                if (skill) {
+                                    const actualVersion = skill.activeVersion || 0;
+                                    isVersionMatch = actualVersion === expectedVer;
+                                } else {
+                                    isVersionMatch = false;
+                                }
+                            }
+
+                            if (isVersionMatch) {
+                                correctInvokedSkills++;
+                                if (!isSkillCorrect) {
+                                    isSkillCorrect = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (validExpectedSkills.length > 0) {
+                        targetRecord.skill_trigger_rate = correctInvokedSkills / validExpectedSkills.length;
+                    }
+                }
+            }
+            targetRecord.is_skill_correct = isSkillCorrect;
         }
-        if (callStatsJson) {
+    targetRecord.is_skill_correct = isSkillCorrect;
+    return targetRecord;
+}
+
+export async function prepareUploadQuickData(data:ExecutionRecord, username:string|null|undefined, findSkill:typeof db.findSkill = (name,user)=>db.findSkill(name,user)) {
+    const normalized = normalizeInteractions(data.interactions || []);
+    const invokedSkills = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
+    const skills = invokedSkills.map(skill=>skill.name);
+    let skillVersion = invokedSkills[0]?.version ?? data.skill_version;
+    if (skillVersion == null) {
+        const primary = skills.length ? skills[0] : data.skill;
+        if (primary) {
             try {
-                await prismaRaw.execution.update({ where: { id: recordId }, data: { callStats: callStatsJson } });
-            } catch (e) {
-                console.warn(`[Data-Service] callStats persist failed for ${recordId}:`, e);
-            }
+                const record = await findSkill(primary,username || null);
+                if (record?.versions?.length) {
+                    const selected = record.versions.find((version:any)=>version.version === (record.activeVersion || 0)) ?? record.versions[0];
+                    skillVersion = selected.version;
+                }
+            } catch {}
         }
     }
+    return {normalized, quickData:{...data,skip_evaluation:true,skills,invokedSkills,skill:skills.length ? skills[0] : data.skill,skill_version:skillVersion}};
+}
 
-    if (targetRecord.user) {
-        try {
-            const { relinkGoalPlusForExecution } = await import('@/lib/ingest/goal-plus/correlate');
-            await relinkGoalPlusForExecution(targetRecord.user);
-        } catch (e) {
-            console.warn(`[Data-Service] Goal Plus relink failed for ${recordId}:`, e);
-        }
-        try {
-            const { resolveCollaborationEndpointsForExecution } = await import('@/lib/ingest/collaboration/resolve');
-            await resolveCollaborationEndpointsForExecution(targetRecord.user, [
-                targetRecord.task_id || '',
-                targetRecord.agent_session_id || '',
-            ]);
-        } catch (e) {
-            console.warn(`[Data-Service] collaboration relink failed for ${recordId}:`, e);
-        }
+export function prepareExecutionWrite(input:{record:ExecutionRecord;existingExecution?:any;recordId:string;agentId?:string;receivedAt:Date|null;interactions:any[]|null;defaultTimestamp:string}) {
+    const {record:targetRecord,existingExecution:dbRecord,recordId,agentId,receivedAt,interactions:mergedInteractionsForSession,defaultTimestamp} = input;
+    const storedAgentName = targetRecord.agentName || getFrameworkPrimaryAgentName(targetRecord.framework);
+    const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
+        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession,storedAgentName)) : null;
+    const previousReceivedAt = dbRecord?.lastIngestedAt ? new Date(dbRecord.lastIngestedAt).getTime() : 0;
+    const lastIngestedAt = receivedAt ? new Date(Math.max(previousReceivedAt,receivedAt.getTime())) : dbRecord?.lastIngestedAt ?? null;
+    return {id:recordId,
+            taskId: targetRecord.task_id,
+            query: targetRecord.query,
+            framework: targetRecord.framework,
+            traceThreadId: targetRecord.traceThreadId,
+            sourceExecutionId: targetRecord.sourceExecutionId,
+            sourceKind: targetRecord.sourceKind,
+            executionStatus: targetRecord.executionStatus,
+            tokens: targetRecord.tokens,
+            cost: targetRecord.cost,
+            latency: targetRecord.latency,
+            timestamp: targetRecord.timestamp ? new Date(targetRecord.timestamp) : new Date(defaultTimestamp),
+            lastIngestedAt,
+            finalResult: targetRecord.final_result,
+            skill: targetRecord.skill,
+            skills: targetRecord.skills ? JSON.stringify(targetRecord.skills) : null,
+            invokedSkills: targetRecord.invokedSkills ? JSON.stringify(targetRecord.invokedSkills) : null,
+            isSkillCorrect: targetRecord.is_skill_correct,
+            isAnswerCorrect: targetRecord.is_answer_correct,
+            answerScore: targetRecord.answer_score,
+            skillScore: targetRecord.skill_score,
+            judgmentReason: targetRecord.judgment_reason,
+            failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
+            skillIssues: targetRecord.skill_issues ? JSON.stringify(targetRecord.skill_issues) : null,
+            label: targetRecord.label,
+            user: targetRecord.user,
+            agentName: storedAgentName,
+            agentId: agentId,
+            skillVersion: targetRecord.skill_version,
+            model: targetRecord.model,
+            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
+            clientId: targetRecord.clientId,
+            hostIp: targetRecord.hostIp,
+            hostName: targetRecord.hostName,
+            observedIp: targetRecord.observedIp,
+            toolCallCount: targetRecord.tool_call_count,
+            llmCallCount: targetRecord.llm_call_count,
+            inputTokens: targetRecord.input_tokens,
+            outputTokens: targetRecord.output_tokens,
+            toolCallErrorCount: targetRecord.tool_call_error_count,
+            skillTriggerRate: targetRecord.skill_trigger_rate,
+            cacheReadInputTokens: targetRecord.cache_read_input_tokens,
+            cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
+            maxSingleCallTokens: targetRecord.max_single_call_tokens,
+            reasoningTokens: targetRecord.reasoning_tokens,
+            observedAgents: observedAgentsJson,
+        };
+}
+
+export async function saveExecutionRecord(data: ExecutionRecord, options?: { receivedAt?: Date | null }): Promise<{ success: boolean; record: ExecutionRecord }> {
+    const {isStorageCoreEnabled}=await import('@/lib/storage-core/mode');
+    {
+        const {getCollectorEffect}=await import('@/lib/storage-core/collector-effect');const effect=getCollectorEffect();if(effect)return effect.save(data);
+        const {getActiveCoreCollectorIdentity}=await import('@/lib/storage-core/collector-identity');const identity=getActiveCoreCollectorIdentity();
+        if(!identity)throw Object.assign(new Error('Verified collector context required for Trace writes'),{status:403});
+        if(data.user&&data.user!==identity.username)throw Object.assign(new Error('Collector owner differs'),{status:403});
+        const {writeCoreCollectorRecord}=await import('@/lib/storage-core/collector-entry');return writeCoreCollectorRecord(identity,{...data,user:identity.username},{channel:'consumer',receivedAt:options?.receivedAt});
     }
-
-    finishPostSave();
-    traceTimingEvent('saved', { executionId: recordId, existingBeforeSave: Boolean(dbRecord) });
-    return { success: true, record: targetRecord };
 }
 
 interface DeriveSubagentArgs {
@@ -3520,149 +3059,6 @@ interface DeriveSubagentArgs {
     hostName?: string | null;
     observedIp?: string | null;
     interactions: any[];
-}
-
-export interface AgentNodeExecutionProjection {
-    query: string;
-    finalResult: string | null;
-    model: string | null;
-    tokens: number;
-    inputTokens: number;
-    outputTokens: number;
-    reasoningTokens: number;
-    cacheReadInputTokens: number;
-    cacheCreationInputTokens: number;
-    latency: number | null;
-    llmCallCount: number;
-    toolCallCount: number;
-    toolCallErrorCount: number;
-}
-
-function interactionContentText(content: any): string {
-    if (content == null) return '';
-    if (typeof content === 'string') {
-        const trimmed = content.trim();
-        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-            try {
-                return interactionContentText(JSON.parse(trimmed));
-            } catch {}
-        }
-        return content;
-    }
-    if (Array.isArray(content)) {
-        return content
-            .map((part) => interactionContentText(part?.text ?? part?.content ?? part))
-            .filter(Boolean)
-            .join('\n');
-    }
-    if (typeof content === 'object') return interactionContentText(content.text ?? content.content ?? '');
-    return String(content);
-}
-
-function isFailedAgentToolEvent(event: any): boolean {
-    const calls = Array.isArray(event?.interaction?.tool_calls) ? event.interaction.tool_calls : [];
-    const eventId = event?._toolCallId;
-    const call = calls.find((item: any) => !eventId || item?.id === eventId);
-    const state = String(call?.state || '').toLowerCase();
-    if (state === 'error' || state === 'failed') return true;
-    const output = event?.output ?? call?.output ?? call?.result;
-    if (output && typeof output === 'object') {
-        const status = String(output.status || output.state || '').toLowerCase();
-        return status === 'error' || status === 'failed' || !!output.error;
-    }
-    if (typeof output === 'string' && output.trim().startsWith('{')) {
-        try {
-            return isFailedAgentToolEvent({ ...event, output: JSON.parse(output), interaction: undefined });
-        } catch {}
-    }
-    return false;
-}
-
-function parsedToolArguments(call: any): Record<string, any> {
-    const value = call?.function?.arguments ?? call?.arguments;
-    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-    if (typeof value !== 'string') return {};
-    try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-        return {};
-    }
-}
-
-function findSubagentSpawnDescription(interactions: any[], sessionId: string): string | null {
-    const sid = String(sessionId || '').trim();
-    if (!sid) return null;
-    for (const interaction of interactions) {
-        const calls = Array.isArray(interaction?.tool_calls) ? interaction.tool_calls : [];
-        for (const call of calls) {
-            const name = call?.function?.name ?? call?.name;
-            if (name !== 'task') continue;
-            const args = parsedToolArguments(call);
-            const argSessionId = String(args.subagent_session_id ?? args.session_id ?? args.agent_session_id ?? '').trim();
-            if (argSessionId !== sid) continue;
-            const description = interactionContentText(args.description ?? args.task_description ?? args.prompt ?? args.subagent_type).trim();
-            if (description) return description;
-        }
-    }
-    return null;
-}
-
-function findSubagentRoleName(
-    node: AgentNode,
-    interactions: Array<Record<string, unknown>>,
-): string {
-    for (const index of node.interactionIndices || []) {
-        const role = interactions[index]?.subagent_name;
-        if (typeof role === 'string' && role.trim()) return role.trim();
-    }
-    if (typeof node.subagentType === 'string' && node.subagentType.trim()) {
-        return node.subagentType.trim();
-    }
-    return 'Codex subagent';
-}
-
-export function projectAgentNodeExecution(node: AgentNode, interactions: any[]): AgentNodeExecutionProjection {
-    const ownTurns = (node.interactionIndices || []).map((index) => interactions[index]).filter(Boolean);
-    const textTurns = ownTurns
-        .map((interaction) => interactionContentText(interaction?.content).trim())
-        .filter(Boolean);
-    const query = textTurns[0] || node.agentName || node.sessionId;
-    const llmEvents = (node.events || []).filter((event) => event.kind === 'llm');
-    const meteredLlmEvents = llmEvents.filter((event) => {
-        const usage = event.usage;
-        return !!usage && ((usage.total || 0) > 0 || (usage.input || 0) > 0 || (usage.output || 0) > 0 || (usage.reasoning || 0) > 0);
-    });
-    const firstOwnIndex = node.interactionIndices?.[0];
-    const fallbackLlmCalls = llmEvents.filter((event) =>
-        event.interactionIndex !== firstOwnIndex &&
-        (!!event.summary?.trim() || (event.interaction?.tool_calls?.length || 0) > 0)
-    ).length;
-    const toolEvents = (node.events || []).filter((event) =>
-        event.kind === 'tool' || event.kind === 'skill' || event.kind === 'task'
-    );
-    const model = ownTurns
-        .map((interaction) => interaction?.model ?? interaction?.modelID)
-        .find((value) => typeof value === 'string' && value.trim()) || null;
-
-    return {
-        query,
-        finalResult: textTurns.length > 1 ? textTurns[textTurns.length - 1]
-            : meteredLlmEvents.map(event => interactionContentText(event.interaction?.content).trim()).filter(Boolean).at(-1) ?? null,
-        model,
-        tokens: node.stats.totalTokens,
-        inputTokens: node.stats.inputTokens,
-        outputTokens: node.stats.outputTokens,
-        reasoningTokens: node.stats.reasoningTokens,
-        cacheReadInputTokens: node.stats.cacheReadTokens,
-        cacheCreationInputTokens: node.stats.cacheWriteTokens,
-        // 与主记录 Execution.latency 统一为毫秒（此前派生子记录存的是秒，
-        // 导致调用方无法区分单位，见 docs/tasks/bugs/issue-159-codex-open.md Bug 2）。
-        latency: getAgentActiveDurationMs(node) ?? null,
-        llmCallCount: meteredLlmEvents.length || fallbackLlmCalls,
-        toolCallCount: toolEvents.length,
-        toolCallErrorCount: toolEvents.filter(isFailedAgentToolEvent).length,
-    };
 }
 
 /**
@@ -3685,15 +3081,12 @@ export function projectAgentNodeExecution(node: AgentNode, interactions: any[]):
  * 幂等：deterministic id `<parentExecId>__sub__<sid>`，多次重放同一份 interactions 不会重复建行。
  * 同 sessionID 多次 parallel spawn → 合并成同一 execution（取第一次的父）。
  */
-export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promise<void> {
+export function prepareSubagentExecutions(args: DeriveSubagentArgs, defaultTimestamp:string) {
     const { parentExecutionId, parentTaskId, parentFramework, parentUser, clientId, hostIp, hostName, observedIp, interactions } = args;
-    if (!Array.isArray(interactions) || interactions.length === 0) return;
+    if (!Array.isArray(interactions) || interactions.length === 0) return {children:[], sweep:false};
 
     const tree = buildAgentCallTree(interactions as any);
-    if (!tree) {
-        await sweepStaleSubagents(parentExecutionId, new Set());
-        return;
-    }
+    if (!tree) return {children:[], sweep:true};
 
     // 收集所有非 root node。同 sessionID 只取首次出现的 node（保留真实父）。
     type SubNode = {
@@ -3711,7 +3104,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         seenSid.add(sid);
         subNodes.push({ node: n, sessionId: sid, parentNodeId: n.parentId });
     });
-    if (subNodes.length === 0) return;
+    if (subNodes.length === 0) return {children:[], sweep:false};
 
     // BFS：父先于子处理，这样查 parent exec id 时 mapping 一定已就绪
     subNodes.sort((a, b) => a.node.depth - b.node.depth);
@@ -3724,6 +3117,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
     // 历史上 derive 逻辑变化（如平铺 → 嵌套）会留下旧 id 的孤儿行；用 sweep 修正。
     const freshExecIds = new Set<string>();
 
+    const children: any[] = [];
     for (const sn of subNodes) {
         const { node, sessionId, parentNodeId } = sn;
         const directParentExecId = nodeIdToExecId.get(parentNodeId) ?? parentExecutionId;
@@ -3770,16 +3164,10 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         const spawnDescription = findSubagentSpawnDescription(interactions, sessionId);
         const subagentRoleName = findSubagentRoleName(node, interactions);
         const queryText = (spawnDescription || projection.query).slice(0, 500);
-        let ownSkills = extractExplicitSkillsFromNode(node);
-        if (EXECUTION_SKILL_ENABLED) {
-            try {
-                ownSkills = await snapshotSkillVersions(ownSkills, parentUser);
-            } catch (e) {
-                console.warn(`[Data-Service] sub skill version snapshot failed sub=${sessionId}:`, e);
-            }
-        }
+        const ownSkills = extractExplicitSkillsFromNode(node);
 
-        const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
+
+        const timestamp = node.startedAt ? new Date(node.startedAt) : new Date(defaultTimestamp);
         const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
             const frameworkPrimaryAgentName = getFrameworkPrimaryAgentName(parentFramework);
             const storedAgentName = node.agentName || frameworkPrimaryAgentName || null;
@@ -3820,57 +3208,36 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions, storedAgentName, observedAgentOptions)),
         } as const;
 
-        try {
-            await db.upsertExecution({
-                where: { id: childExecutionId },
-                create: { id: childExecutionId, ...baseFields },
-                update: { ...baseFields },
-            });
-        } catch (e) {
-            console.warn(`[Data-Service] upsertExecution(sub) failed sub=${sessionId}:`, e);
-            continue;
-        }
-
-        // 这一层 sub-agent 自己显式调用的 skill(agent 作用域,不含其更深子孙)。
-        if (EXECUTION_SKILL_ENABLED) {
-            try {
-                await persistExecutionSkills(childExecutionId, ownSkills, { user: parentUser ?? null });
-            } catch (e) {
-                console.warn(`[Data-Service] sub ExecutionSkill persist failed sub=${sessionId}:`, e);
-            }
-        }
-
-        try {
-            await db.upsertSession(
-                sessionId,
-                {
-                    taskId: sessionId,
-                    label: subagentRoleName,
-                    user: parentUser ?? null,
-                    query: queryText,
-                    interactions: JSON.stringify(childInteractions),
-                    ...(node.startedAt != null ? { startTime: timestamp } : {}),
-                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
-                },
-                {
-                    label: subagentRoleName,
-                    user: parentUser ?? null,
-                    query: queryText,
-                    interactions: JSON.stringify(childInteractions),
-                    ...(node.startedAt != null ? { startTime: timestamp } : {}),
-                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
-                },
-            );
-        } catch (e) {
-            console.warn(`[Data-Service] upsertSession(sub) failed sub=${sessionId}:`, e);
-        }
+        children.push({execution:{id:childExecutionId,...baseFields}, skills:ownSkills, session:{taskId:sessionId,label:subagentRoleName,user:parentUser ?? null,query:queryText,interactions:childInteractions,
+            startTime:node.startedAt != null ? timestamp.toISOString() : defaultTimestamp,endTime:childCompletedAt?.toISOString() ?? null}, sessionHasStart:node.startedAt != null});
     }
+    return {children, sweep:true};
+}
 
-    // 派生完成 → 删掉同 root 下"本轮没派生出来"的 sub-agent 行（孤儿）。
-    // 触发场景：上次 derive 用旧 (扁平) 逻辑写过的行、interactions 被截短后部分 sub-agent 消失、
-    // sub-agent 重命名导致 sessionId 变化等。Session 表按 taskId @unique，新 derive 已经把
-    // 切片覆盖到正确的 Session 行，所以删掉孤儿 Execution 是安全的（不影响保留行的 interactions）。
-    await sweepStaleSubagents(parentExecutionId, freshExecIds);
+export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promise<void> {
+    const {parentExecutionId,parentUser} = args;
+    const prepared = prepareSubagentExecutions(args, new Date().toISOString());
+    const freshExecIds = new Set<string>();
+    for (const child of prepared.children) {
+        const {id:childExecutionId,...baseFields} = child.execution;
+        const sessionId = child.session.taskId;
+        let ownSkills:InvokedSkill[] = child.skills;
+        if (EXECUTION_SKILL_ENABLED) {
+            try {ownSkills = await snapshotSkillVersions(ownSkills,parentUser);} catch {}
+        }
+        baseFields.skills = ownSkills.length ? JSON.stringify(ownSkills.map(skill=>skill.name)) : null;
+        baseFields.invokedSkills = ownSkills.length ? JSON.stringify(ownSkills) : null;
+        freshExecIds.add(childExecutionId);
+        try {await db.upsertExecution({where:{id:childExecutionId},create:{id:childExecutionId,...baseFields},update:baseFields});}
+        catch (e) {console.warn(`[Data-Service] upsertExecution(sub) failed sub=${sessionId}:`,e);continue;}
+        if (EXECUTION_SKILL_ENABLED) {
+            try {await persistExecutionSkills(childExecutionId,ownSkills,{user:parentUser ?? null});} catch {}
+        }
+        const {startTime,endTime,interactions,...fields} = child.session;
+        const values = {...fields,interactions:JSON.stringify(interactions),...(child.sessionHasStart ? {startTime:new Date(startTime)} : {}),...(endTime ? {endTime:new Date(endTime)} : {})};
+        try {await db.upsertSession(sessionId,values,values);} catch (e) {console.warn(`[Data-Service] upsertSession(sub) failed sub=${sessionId}:`,e);}
+    }
+    if (prepared.sweep) await sweepStaleSubagents(parentExecutionId,freshExecIds);
 }
 
 /**

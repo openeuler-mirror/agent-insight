@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -30,6 +31,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { id } = await params;
     if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -47,6 +49,8 @@ export async function GET(
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 /**
@@ -57,6 +61,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { id } = await params;
     if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -79,6 +84,8 @@ export async function PATCH(
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["write"]);
 }
 
 /**
@@ -89,6 +96,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { id } = await params;
     if (!await canAccessDiagnosisSession(req, id)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -106,4 +114,6 @@ export async function DELETE(
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  },["write","delete"]);
 }

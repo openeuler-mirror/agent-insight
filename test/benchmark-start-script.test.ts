@@ -181,7 +181,7 @@ test('start.sh accepts a one-shot port override before startup side effects', ()
   }
 })
 
-test('start.sh explains an inaccessible custom SQLite target before destructive startup work', () => {
+test('start.sh requires Core configuration and ignores the obsolete Web SQLite target', () => {
   const managedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-start-sqlite-'))
   const missingDir = path.join(managedHome, 'missing', 'nested')
   fs.writeFileSync(path.join(managedHome, '.env'), `DATABASE_URL=file:${missingDir}/test.db\n`, 'utf8')
@@ -189,11 +189,13 @@ test('start.sh explains an inaccessible custom SQLite target before destructive 
     const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: managedHome }
     delete env.AGENT_INSIGHT_DATA_DIR
     delete env.DATABASE_URL
+    delete env.AGENT_INSIGHT_STORAGE_CORE_URL
+    delete env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE
     const result = spawnSync('bash', [startScript, '--port', '31999'], { encoding: 'utf8', env })
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /SQLite 数据库父目录不存在/)
-    assert.match(result.stderr, new RegExp(missingDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-    assert.match(result.stderr, /mkdir -p/)
+    assert.match(result.stderr, /Storage Core startup check failed/)
+    assert.match(result.stderr, /Legacy database fallback is disabled/)
+    assert.equal(fs.existsSync(missingDir), false)
     assert.doesNotMatch(result.stdout, /Clearing Next\.js build cache/)
     assert.doesNotMatch(result.stdout, /Syncing database schema/)
   } finally {

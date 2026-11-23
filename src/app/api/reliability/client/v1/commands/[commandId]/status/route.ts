@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ export async function POST(
   req: Request,
   ctx: { params: Promise<{ commandId: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { clientId } = await authenticateDevice(req)
     const { commandId } = await ctx.params
@@ -44,4 +46,6 @@ export async function POST(
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/commands/status')
   }
+
+  },["write"]);
 }

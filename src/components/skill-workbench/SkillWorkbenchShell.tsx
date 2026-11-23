@@ -36,6 +36,7 @@ import {
 
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { downloadApiFile } from '@/lib/client/download';
 import type { SkillWorkbenchActiveView } from '@/lib/skill-workbench/domain';
 import { generatedSessionSyncPolicy } from '@/lib/skill-workbench/generated-session-sync';
 import { publishWorkbenchSync } from '@/lib/skill-workbench/sync-channel';
@@ -730,8 +731,7 @@ export function SkillWorkbenchShell() {
       setError('正式版本信息尚未同步，请刷新后重试');
       return;
     }
-    const prefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
-    window.open(`${prefix}/api/skills/${encodeURIComponent(record.skillId)}/versions/${record.publishedVersion}/download?user=${encodeURIComponent(user)}`, '_blank');
+    void downloadApiFile(`/api/skills/${encodeURIComponent(record.skillId)}/versions/${record.publishedVersion}/download?user=${encodeURIComponent(user)}`, `${record.skillName}-v${record.publishedVersion}.zip`).catch(console.error);
   };
 
   const recordPublishedVerification = async (record: OptimizationRecordView, result: 'passed' | 'failed') => {

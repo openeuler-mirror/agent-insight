@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -45,6 +46,7 @@ function ensureDir(dirPath: string) {
  *   ("already saved" — nothing changed).
  */
 export async function POST(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const body = await request.json();
         const { sessionId } = body;
@@ -171,4 +173,6 @@ export async function POST(request: NextRequest) {
         console.error('[Publish] Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write","execute"]);
 }

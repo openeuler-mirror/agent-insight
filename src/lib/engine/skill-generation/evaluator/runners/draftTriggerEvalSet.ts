@@ -102,11 +102,11 @@ interface DraftItemRaw {
   rationale?: unknown;
 }
 
-function rawToTriggerItem(raw: DraftItemRaw): TriggerItem | null {
+function rawToTriggerItem(raw: DraftItemRaw,id?:string): TriggerItem | null {
   const query = typeof raw.query === 'string' ? raw.query.trim() : '';
   if (!query) return null;
   return {
-    id: randomUUID(),
+    id: id??randomUUID(),
     query,
     shouldTrigger: Boolean(raw.shouldTrigger),
     rationale: typeof raw.rationale === 'string' && raw.rationale.trim() ? raw.rationale.trim() : undefined,
@@ -153,6 +153,13 @@ async function loadSkillContent(
 export interface DraftTriggerEvalSetArgs {
   user: string;
   skillName: string;
+  coreRuntime?:{
+    skillContent:{description:string;body:string;contentHash:string};
+    model:Awaited<ReturnType<typeof resolveDraftModelConfig>>;
+    itemId:(index:number)=>string;
+    invoke:(request:{systemPrompt:string;userPrompt:string},perform:()=>Promise<{content:unknown;usage_metadata?:unknown}>)=>Promise<{content:unknown}>;
+    signal?:AbortSignal;
+  };
   /**
    * 用户已注册模型配置的 id（来自 /modelconfig 页注册的 ModelConfig.id）。
    * 不传 → 用该 user 的 active config（getActiveConfig）。
@@ -177,7 +184,7 @@ export interface DraftTriggerEvalSetArgs {
  * 第 1/2 步用注册模型时，`createModel` 拿到的是 user 注册时填的 apiKey/baseUrl，
  * **不再**只允许 anthropic env var——这是这次修法的核心。
  */
-async function resolveDraftModelConfig(
+export async function resolveDraftModelConfig(
   user: string,
   modelConfigId?: string,
 ): Promise<{
@@ -259,28 +266,22 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
   logger.log('Starting trigger eval set draft', { user, skillName, modelConfigId: args.modelConfigId });
 
   // 1. 拿 skill 当前状态
-  const { description, body, contentHash } = await loadSkillContent(user, skillName);
+  const { description, body, contentHash } = args.coreRuntime?.skillContent??await loadSkillContent(user, skillName);
 
   // 2. 解析用 哪个 模型起草（优先 UI 显式选 → user active config → env 兜底）
-  const resolved = await resolveDraftModelConfig(user, args.modelConfigId);
+  const resolved = args.coreRuntime?.model??await resolveDraftModelConfig(user, args.modelConfigId);
   logger.log('Resolved draft model', {
     source: resolved.source,
     modelId: resolved.modelId,
     baseUrl: resolved.baseUrl ?? null,
     provider: resolved.provider ?? null,
   });
-  const model = createModel({
-    modelId: resolved.modelId,
-    apiKey: resolved.apiKey,
-    baseUrl: resolved.baseUrl,
-    headers: resolved.headers,
-    provider: resolved.provider,
-        protocol: resolved.protocol,
-  });
-  const response = await model.invoke([
-    new SystemMessage(SYSTEM_PROMPT),
-    new HumanMessage(USER_PROMPT_TEMPLATE(skillName, description, body)),
-  ]);
+  const systemPrompt=SYSTEM_PROMPT,userPrompt=USER_PROMPT_TEMPLATE(skillName,description,body);
+  const perform=async()=>{
+    const model=createModel({modelId:resolved.modelId,apiKey:resolved.apiKey,baseUrl:resolved.baseUrl,headers:resolved.headers,provider:resolved.provider,protocol:resolved.protocol});
+    return model.invoke([new SystemMessage(systemPrompt),new HumanMessage(userPrompt)],...(args.coreRuntime?[{signal:args.coreRuntime.signal}]:[]));
+  };
+  const response=args.coreRuntime?await args.coreRuntime.invoke({systemPrompt,userPrompt},perform):await perform();
   const text = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
   logger.debug('LLM draft response', { length: text.length });
 
@@ -291,8 +292,8 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
     throw new Error('LLM 起草输出无法解析为 JSON 数组；查看 server 日志');
   }
   const draftItems: TriggerItem[] = [];
-  for (const raw of rawArr) {
-    const item = rawToTriggerItem(raw as DraftItemRaw);
+  for (const [index,raw] of rawArr.entries()) {
+    const item = rawToTriggerItem(raw as DraftItemRaw,args.coreRuntime?.itemId(index));
     if (item) draftItems.push(item);
   }
   if (draftItems.length === 0) {

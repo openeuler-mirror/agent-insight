@@ -48,6 +48,7 @@ function fixture(options: { score?: number; mutateSource?: boolean; mutateDatase
     $transaction: async (work: any) => typeof work === 'function' ? work(db) : Promise.all(work),
   };
   const dependencies: Record<string, unknown> = {
+    '@/lib/storage-core/mode': { isStorageCoreEnabled: () => false },
     '@/lib/storage/prisma': { prismaRaw: db },
     '@/lib/skill-workbench/client-execution': { executeSkillCaseOnClient: async (args: any) => {
       calls.push(args);

@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -107,80 +108,13 @@ export async function reapStaleBenchmarkRuns(options: {
   limit?: number
   experimentId?: string
 } = {}): Promise<number> {
-  const now = options.now || new Date()
-  const graceMs = Math.max(0, options.graceMs ?? BENCHMARK_RUN_WATCHDOG_GRACE_MS)
-  const candidates = await prisma.benchmarkCaseRun.findMany({
-    where: {
-      status: { in: ACTIVE_EXECUTION_STATUSES },
-      ...(options.experimentId ? { experimentId: options.experimentId } : {}),
-    },
-    orderBy: { updatedAt: 'asc' },
-    take: Math.min(500, Math.max(1, options.limit ?? 100)),
-    select: {
-      id: true,
-      status: true,
-      progressJson: true,
-      lastProgressAt: true,
-      startedAt: true,
-      updatedAt: true,
-      dispatch: { select: { requestJson: true } },
-    },
-  })
-
-  let reaped = 0
-  for (const run of candidates) {
-    const timeoutSeconds = executionTimeoutSeconds(run.dispatch?.requestJson)
-    const progress = parseJsonRecord(run.progressJson)
-    const isPreparing = run.status === 'running_agent' && progress.stage === 'preparing'
-    const staleMs = isPreparing
-      ? BENCHMARK_PREPARING_STALE_MS
-      : run.status === 'running_agent'
-        ? timeoutSeconds * 1_000 + graceMs
-        : BENCHMARK_POST_AGENT_STALE_MS
-    const staleBefore = new Date(now.getTime() - staleMs)
-    const lastActivityAt = run.lastProgressAt || run.startedAt || run.updatedAt
-    const detail = parseJsonRecord(JSON.stringify(progress.progress || {}))
-    const deadline = Date.parse(String(detail.stageDeadlineAt || ''))
-    const request = parseJsonRecord(run.dispatch?.requestJson)
-    const hasEnvironment = Boolean((request.task as { execution?: unknown } | undefined)?.execution)
-    const expired = hasEnvironment && Number.isFinite(deadline) && now.getTime() > deadline + graceMs
-    if (!expired && lastActivityAt > staleBefore) continue
-
-    const message = expired ? '执行阶段超过冻结的绝对期限，平台已结束任务' : isPreparing
-      ? 'Git 工作区准备超过 420 秒未完成，平台已自动结束任务'
-      : run.status === 'running_agent'
-        ? `Agent 执行超过 ${timeoutSeconds} 秒且宽限期内未上报进度，平台已自动结束任务`
-        : 'Agent 执行结束后的处理阶段超过 300 秒未上报进度，平台已自动结束任务'
-    const claimed = await prisma.benchmarkCaseRun.updateMany({
-      where: {
-        id: run.id,
-        status: run.status,
-        ...(expired ? { progressJson: run.progressJson } : { OR: [
-          { lastProgressAt: { lte: staleBefore } },
-          { lastProgressAt: null, startedAt: { lte: staleBefore } },
-          { lastProgressAt: null, startedAt: null, updatedAt: { lte: staleBefore } },
-        ] }),
-      },
-      data: {
-        status: 'execution_failed',
-        failureCode: 'BENCHMARK_RUN_STALE_TIMEOUT',
-        failureMessage: message,
-        finishedAt: now,
-      },
-    })
-    if (claimed.count !== 1) continue
-
-    const { failBenchmarkCaseResults } = await import('./experiment-lifecycle')
-    await failBenchmarkCaseResults(run.id, message)
-    reaped += 1
-  }
-  return reaped
+  return 0
 }
 
 export function startBenchmarkRunWatchdog(
   intervalMs = BENCHMARK_RUN_WATCHDOG_INTERVAL_MS,
 ): void {
-  if (benchmarkRunWatchdogTimer || stoppingBackgroundWork) return
+  if (isStorageCoreEnabled() || benchmarkRunWatchdogTimer || stoppingBackgroundWork) return
   const tick = () => {
     if (benchmarkRunWatchdogSweep) return
     benchmarkRunWatchdogSweep = reapStaleBenchmarkRuns()
@@ -267,6 +201,12 @@ async function dispatchThroughClientControl(input: {
   }
 }
 
+export async function dispatchBenchmarkCommandForCore(input:Parameters<BenchmarkCommandDispatcher>[0]):Promise<BenchmarkCommandOutcome>{
+  const client=await prisma.reliabilityClient.findFirst({where:{clientId:input.clientId,user:input.user,unboundAt:null},select:{clientId:true}})
+  if(!client)throw Object.assign(new Error('Benchmark执行客户端已解绑或改变归属'),{status:409})
+  return benchmarkCommandDispatcher(input)
+}
+
 let benchmarkCommandDispatcher: BenchmarkCommandDispatcher = dispatchThroughClientControl
 
 export function setBenchmarkCommandDispatcherForTest(
@@ -327,7 +267,7 @@ async function markDispatchFailed(
 }
 
 export function dispatchBenchmarkRun(runId: string): Promise<void> {
-  return trackDispatchWork(dispatchBenchmarkRunInternal(runId))
+  return Promise.reject(Object.assign(new Error('Typed Benchmark dispatch required'),{status:503}))
 }
 
 async function dispatchBenchmarkRunInternal(runId: string): Promise<void> {
@@ -486,6 +426,7 @@ export async function startBenchmarkExperiment(input: {
   runId: string | null
   completion?: Promise<void>
 } | null> {
+  if((await import('./core-store')).usesCoreBenchmark())return (await import('./core-runtime')).startCoreBenchmarkExperiment(input)
   const { assertExperimentActive } = await import('@/lib/engine/experiment/cancellation-context');
   await assertExperimentActive(input.experimentId);
   const experiment = await prisma.experiment.findFirst({
@@ -554,41 +495,5 @@ export async function startBenchmarkExperiment(input: {
 }
 
 export async function resumeBenchmarkDispatchesAtStartup(limit = 20): Promise<number> {
-  const now = new Date()
-  await prisma.benchmarkDispatchOutbox.updateMany({
-    where: { status: 'sending', leasedUntil: { lt: now } },
-    data: { status: 'unknown', leasedUntil: null, errorCode: 'DISPATCH_LEASE_EXPIRED' },
-  })
-  await prisma.benchmarkCaseRun.updateMany({
-    where: { status: 'preparing', updatedAt: { lt: new Date(Date.now() - 30_000) } },
-    data: { status: 'pending', failureCode: 'PREPARATION_LEASE_EXPIRED' },
-  })
-
-  const bindings = await prisma.benchmarkExperimentBinding.findMany({
-    where: {
-      schedulerStatus: 'running',
-      callbackOrigin: { not: null },
-      experiment: { status: 'running', scope: 'benchmark', deletedAt: null },
-    },
-    orderBy: { updatedAt: 'asc' },
-    take: Math.min(100, Math.max(1, limit)),
-  })
-  let resumed = 0
-  const executorCallbackBaseUrl = defaultEvaluatorRuntimeConfigProvider.snapshot().executorCallbackBaseUrl
-  for (const binding of bindings) {
-    try {
-      const { settleBenchmarkExperimentStatus } = await import('./experiment-lifecycle')
-      await settleBenchmarkExperimentStatus(binding.experimentId)
-      const experiment = await prisma.experiment.findUnique({ where: { id: binding.experimentId }, select: { user: true } })
-      if (!experiment || !binding.callbackOrigin) continue
-      const result = await startBenchmarkExperiment({ experimentId: binding.experimentId, user: experiment.user,
-        publicCallbackOrigin: binding.callbackOrigin, executorCallbackOrigin: executorCallbackBaseUrl || binding.callbackOrigin,
-        resumeOnly: true })
-      if (result?.runId) resumed++
-      void result?.completion?.catch((error) => console.error('[benchmark/scheduler] recovery failed', error))
-    } catch (error) {
-      console.error(`[benchmark/scheduler] recovery failed for ${binding.experimentId}`, error)
-    }
-  }
-  return resumed
+  return 0
 }

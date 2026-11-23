@@ -20,13 +20,16 @@
 //   GET  → 返回 cards[] + sessionWindow + manual 标记 + rootExecutionId
 //   POST → body { links: [{sourceId, model}] } 覆盖式保存人工关联集合
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {hasCoreInfraContext,withCoreInfraRequest} from '@/lib/storage-core/infra';
 import { NextResponse } from 'next/server';
 
 import { classify, infraContextFor } from '@/lib/infra/correlate';
 import { groupSessionInfraTargets, getSessionLinks, setSessionLinks } from '@/lib/infra/sessions';
 import type { ExecRef, InfraTarget } from '@/lib/infra/sessions';
-import { querySamples } from '@/lib/infra/store';
+import { querySamples,listInfraSources,findInfraSource } from '@/lib/infra/store';
 import { prismaRaw } from '@/lib/storage/prisma';
+import {readCoreInfraExecutions} from '@/lib/storage-core/infra';
 import type { HardwareProfile } from '@/lib/infra/types';
 
 export const dynamic = 'force-dynamic';
@@ -35,10 +38,11 @@ interface TreeExec { endpoint: string | null; model: string | null; startMs: num
 
 /** 解析整棵 trace 树：返回 rootId + 树内所有 execution 的 ref（含 token）。 */
 async function loadTree(id: string): Promise<{ rootId: string; execs: TreeExec[] } | null> {
-  const self = await prismaRaw.execution.findUnique({ where: { id }, select: { rootExecutionId: true } });
+  const coreRows=(await readCoreInfraExecutions());
+  const self=coreRows?coreRows.find(row=>row.id===id):await prismaRaw.execution.findUnique({ where: { id }, select: { rootExecutionId: true } });
   if (!self) return null;
   const rootId = self.rootExecutionId || id;
-  const rows = await prismaRaw.execution.findMany({
+  const rows=coreRows?coreRows.filter(row=>row.rootExecutionId===rootId||row.id===rootId):await prismaRaw.execution.findMany({
     where: { OR: [{ rootExecutionId: rootId }, { id: rootId }] },
     select: { endpoint: true, timestamp: true, latency: true, outputTokens: true, model: true },
   });
@@ -50,8 +54,8 @@ async function loadTree(id: string): Promise<{ rootId: string; execs: TreeExec[]
 }
 
 /** 把一个 (endpoint, model, window) 目标做成关联卡（找源 → 窗口采样 → 诊断 → 归因）。 */
-async function buildCard(target: InfraTarget, execs: TreeExec[]) {
-  const source = await prismaRaw.infraSource.findUnique({ where: { endpoint: target.endpoint } });
+async function buildCard(target: InfraTarget, execs: TreeExec[],rootExecutionId:string) {
+  const source = await findInfraSource({endpoint:target.endpoint,ownerExecution:rootExecutionId});
   const base = { endpoint: target.endpoint, model: target.model, window: { startMs: target.startMs, endMs: target.endMs, latencyMs: target.endMs - target.startMs } };
   if (!source) {
     return { ...base, correlated: false, sourceId: null, reason: '该 endpoint 尚未注册为 infra 源', verdict: null, bottleneck: null, samples: 0, classification: null, findings: [] };
@@ -78,7 +82,8 @@ async function buildCard(target: InfraTarget, execs: TreeExec[]) {
   };
 }
 
-export async function GET(_req: Request, context: { params: Promise<{ executionId: string }> }) {
+export async function GET(_req: Request, context: { params: Promise<{ executionId: string }> }):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(_req,()=>GET(_req,context));
   const { executionId: id } = await context.params;
   const tree = await loadTree(id);
   if (!tree) return NextResponse.json({ error: 'execution not found' }, { status: 404 });
@@ -97,7 +102,7 @@ export async function GET(_req: Request, context: { params: Promise<{ executionI
   const manualLinks = await getSessionLinks(rootId);
   let targets: InfraTarget[];
   if (manualLinks.length > 0 && fullWindow) {
-    const sources = await prismaRaw.infraSource.findMany({ where: { id: { in: manualLinks.map((l) => l.sourceId) } }, select: { id: true, endpoint: true } });
+    const sources = await listInfraSources({ids:manualLinks.map(link=>link.sourceId)});
     const epById = new Map(sources.map((s) => [s.id, s.endpoint]));
     targets = manualLinks
       .map((l) => ({ endpoint: epById.get(l.sourceId), model: l.model, startMs: fullWindow.startMs, endMs: fullWindow.endMs }))
@@ -106,7 +111,7 @@ export async function GET(_req: Request, context: { params: Promise<{ executionI
     targets = groupSessionInfraTargets(execs as ExecRef[]);
   }
 
-  const cards = await Promise.all(targets.map((t) => buildCard(t, execs)));
+  const cards = await Promise.all(targets.map((t) => buildCard(t, execs,rootId)));
 
   return NextResponse.json({
     correlated: cards.some((c) => c.correlated),
@@ -119,9 +124,11 @@ export async function GET(_req: Request, context: { params: Promise<{ executionI
   });
 }
 
-export async function POST(req: Request, context: { params: Promise<{ executionId: string }> }) {
+export async function POST(req: Request, context: { params: Promise<{ executionId: string }> }):Promise<Response> {
+  if(isStorageCoreEnabled()&&!hasCoreInfraContext())return withCoreInfraRequest(req,()=>POST(req,context));
   const { executionId: id } = await context.params;
-  const self = await prismaRaw.execution.findUnique({ where: { id }, select: { rootExecutionId: true } });
+  const coreRows=(await readCoreInfraExecutions());
+  const self=coreRows?coreRows.find(row=>row.id===id):await prismaRaw.execution.findUnique({ where: { id }, select: { rootExecutionId: true } });
   if (!self) return NextResponse.json({ error: 'execution not found' }, { status: 404 });
   const rootId = self.rootExecutionId || id;
 

@@ -1,0 +1,1119 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "obs_trace_current",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "source_namespace",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "native_trace_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "root_trace_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "agent_name",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "framework",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "started_at_ms",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "ended_at_ms",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "last_activity_at_ms",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "execution_status",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "span_count",
+          "type": "UInt64",
+          "default": "0"
+        },
+        {
+          "name": "llm_call_count",
+          "type": "UInt64",
+          "default": "0"
+        },
+        {
+          "name": "tool_call_count",
+          "type": "UInt64",
+          "default": "0"
+        },
+        {
+          "name": "input_tokens",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "output_tokens",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "cost_decimal",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "currency",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "price_rule_version",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "attributes_json",
+          "type": "String",
+          "default": "'{}'"
+        },
+        {
+          "name": "schema_version",
+          "type": "UInt16",
+          "default": "1"
+        },
+        {
+          "name": "revision",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "is_deleted",
+          "type": "UInt8",
+          "default": "0"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "trace_id"
+      ],
+      "version": "revision",
+      "checks": [
+        "is_deleted IN (0,1)",
+        "schema_version > 0",
+        "revision > 0 AND revision <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "obs_span_current",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "span_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "parent_span_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "source_namespace",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "native_span_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "kind",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "name",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "started_at_ms",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "ended_at_ms",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "duration_us",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "model",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "tool_name",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "execution_status",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "error_type",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "input_tokens",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "output_tokens",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "payload_revision",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "attributes_json",
+          "type": "String",
+          "default": "'{}'"
+        },
+        {
+          "name": "schema_version",
+          "type": "UInt16",
+          "default": "1"
+        },
+        {
+          "name": "revision",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "is_deleted",
+          "type": "UInt8",
+          "default": "0"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "trace_id",
+        "span_id"
+      ],
+      "version": "revision",
+      "checks": [
+        "is_deleted IN (0,1)",
+        "schema_version > 0",
+        "revision > 0 AND revision <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "obs_payload_chunks",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "span_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload_revision",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "section",
+          "type": "LowCardinality(String)",
+          "default": null
+        },
+        {
+          "name": "chunk_no",
+          "type": "UInt32",
+          "default": null
+        },
+        {
+          "name": "chunk_count",
+          "type": "UInt32",
+          "default": null
+        },
+        {
+          "name": "uncompressed_bytes",
+          "type": "UInt32",
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "body",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "trace_id",
+        "span_id",
+        "payload_revision",
+        "section",
+        "chunk_no"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "chunk_count > 0",
+        "chunk_no < chunk_count",
+        "uncompressed_bytes <= 262144",
+        "length(content_hash) = 64",
+        "length(body) = uncompressed_bytes",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "obs_payload_manifests",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "span_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "payload_revision",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "manifest_json",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "trace_id",
+        "span_id",
+        "payload_revision"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0",
+        "length(payload_revision) = 64",
+        "length(manifest_json) > 0"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "obs_events",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "source_namespace",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "event_type",
+          "type": "LowCardinality(String)",
+          "default": null
+        },
+        {
+          "name": "occurred_at_ms",
+          "type": "Nullable(UInt64)",
+          "default": "NULL"
+        },
+        {
+          "name": "source_sequence",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "payload_ref",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "schema_version",
+          "type": "UInt16",
+          "default": "1"
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "trace_id",
+        "event_id"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "schema_version > 0",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "obs_entity_relations",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "relation_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "relation_kind",
+          "type": "LowCardinality(String)",
+          "default": null
+        },
+        {
+          "name": "source_entity_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "target_entity_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "attributes_json",
+          "type": "String",
+          "default": "'{}'"
+        },
+        {
+          "name": "revision",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "is_deleted",
+          "type": "UInt8",
+          "default": "0"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "relation_id"
+      ],
+      "version": "revision",
+      "checks": [
+        "is_deleted IN (0,1)",
+        "revision > 0 AND revision <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "snapshot_nodes",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "snapshot_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "snapshot_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "node_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "span_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "parent_node_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "payload_revision",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "node_json",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "snapshot_bucket",
+        "snapshot_id",
+        "node_id"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "snapshot_bucket"
+    },
+    {
+      "name": "dataset_sample_revisions",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "sample_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "dataset_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "sample_revision_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "public_payload_ref",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "private_payload_ref",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "field_schema_release_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "source_snapshot_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "attributes_json",
+          "type": "String",
+          "default": "'{}'"
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "sample_bucket",
+        "dataset_id",
+        "sample_revision_id"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "sample_bucket"
+    },
+    {
+      "name": "dataset_release_members",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "release_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "dataset_release_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "sample_revision_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "sample_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "release_bucket",
+        "dataset_release_id",
+        "ordinal"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "release_bucket"
+    },
+    {
+      "name": "eval_result_facts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "result_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "attempt_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "evaluator_release_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "input_snapshot_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "verdict",
+          "type": "LowCardinality(String)",
+          "default": null
+        },
+        {
+          "name": "summary",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "evidence_ref",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "schema_version",
+          "type": "UInt16",
+          "default": "1"
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "result_bucket",
+        "result_id"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "verdict IN ('pass','warn','fail','inconclusive','not_applicable','error')",
+        "schema_version > 0",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "result_bucket"
+    },
+    {
+      "name": "eval_metric_facts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "result_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "metric_definition_release_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "metric_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "dimension_key",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "value_type",
+          "type": "LowCardinality(String)",
+          "default": null
+        },
+        {
+          "name": "value_int",
+          "type": "Nullable(Int64)",
+          "default": "NULL"
+        },
+        {
+          "name": "value_float",
+          "type": "Nullable(Float64)",
+          "default": "NULL"
+        },
+        {
+          "name": "value_decimal",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "value_text",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "unit",
+          "type": "LowCardinality(String)",
+          "default": "''"
+        },
+        {
+          "name": "method",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "evidence_ref",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "result_bucket",
+        "result_id",
+        "metric_definition_release_id",
+        "metric_key",
+        "dimension_key"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "value_type IN ('integer','float','decimal','boolean','category','missing')",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "result_bucket"
+    },
+    {
+      "name": "eval_result_selection_current",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "run_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "evaluator_slot",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "review_decision_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "selection_revision",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "is_deleted",
+          "type": "UInt8",
+          "default": "0"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "run_bucket",
+        "run_id",
+        "case_key",
+        "evaluator_slot"
+      ],
+      "version": "selection_revision",
+      "checks": [
+        "is_deleted IN (0,1)",
+        "selection_revision > 0 AND selection_revision <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "run_bucket"
+    },
+    {
+      "name": "eval_publication_members",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "publication_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "publication_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "ordinal",
+          "type": "UInt64",
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "case_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "evaluator_slot",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "result_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "review_decision_id",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "excluded_reason",
+          "type": "String",
+          "default": "''"
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "publication_bucket",
+        "publication_id",
+        "ordinal"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash) = 64",
+        "retry_version > 0 AND retry_version <= 9223372036854775807",
+        "length(workspace_id) > 0"
+      ],
+      "partition": "publication_bucket"
+    }
+  ]
+}

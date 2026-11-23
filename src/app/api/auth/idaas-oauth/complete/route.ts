@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {bootstrapCoreControlUser} from '@/lib/storage-core/control-auth';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -67,7 +69,7 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const user = await db.findUserByUsername(payload.username);
+  const user = (await bootstrapCoreControlUser(payload.username));
   if (!user) {
     const response = NextResponse.json({ error: 'User not found' }, { status: 401 });
     clearLoginCookie(response, path, secure);

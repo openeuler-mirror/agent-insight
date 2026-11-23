@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ const MAX_WAIT_SEC = 30
 
 /** IF-N07：WSS 不可用时的长轮询兜底。单次等待不超过 30 秒。 */
 export async function GET(req: Request) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const { clientId } = await authenticateDevice(req)
     const url = new URL(req.url)
@@ -48,4 +50,6 @@ export async function GET(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/commands/next')
   }
+
+  },["read"]);
 }

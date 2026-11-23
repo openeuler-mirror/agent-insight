@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,22 +15,29 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { getCoreExperimentContext, requireCoreExperimentContext, withCoreExperiments, coreExperimentFailure } from '@/lib/storage-core/experiments';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
 import { retestOptimizationCandidate, RetestError } from '@/lib/skill-workbench/retest-service';
 
-export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ name: string; recordId: string }> }): Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if (isStorageCoreEnabled() && !getCoreExperimentContext()) {
+    try { return await withCoreExperiments(request, () => POST(request, context)); } catch (error) { return coreExperimentFailure(error); }
+  }
   try {
     const body = await request.json();
-    const { username } = await resolveUser(request, body.user);
+    const { username } = ({ username: requireCoreExperimentContext().actor.username });
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
     const { name, recordId } = await context.params;
     const result = await retestOptimizationCandidate({ user: username, skillName: decodeURIComponent(name), recordId });
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof RetestError) return NextResponse.json({ error: error.message }, { status: error.status });
-    console.error('[skill-workbench retest POST] failed:', error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : '候选复测失败' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
+
+  },["write","execute"]);
 }

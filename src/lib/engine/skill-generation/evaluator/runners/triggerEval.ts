@@ -46,7 +46,7 @@ import {
   loadServerModelForUser,
   normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
-import { getUserSettings } from '@/lib/storage/server-config';
+import { getUserSettings, type ModelConfig } from '@/lib/storage/server-config';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
@@ -167,6 +167,7 @@ export interface RunTriggerEvalLiveArgs {
    * 把 in-flight chat 一起 abort；随后 runTriggerEvalLive 抛 AbortError，由调用方 finalize 成 cancelled。
    */
   signal?: AbortSignal;
+  coreRuntime?: {model:ModelConfig;skills:Array<{name:string;version:number;content:string}>;sample:(identity:string,perform:()=>Promise<SingleRunOutcome>)=>Promise<SingleRunOutcome>};
 }
 
 export interface RunTriggerEvalLiveResult {
@@ -176,7 +177,7 @@ export interface RunTriggerEvalLiveResult {
   falsePositiveRate: number;
 }
 
-interface SingleRunOutcome {
+export interface SingleRunOutcome {
   triggered: boolean;
   sessionId?: string;
   /** 结束原因。聚合时据此分出"跑完/超时/出错"，前端可见。 */
@@ -246,6 +247,9 @@ async function evalOne(
     agentId: string | null;
     /** 外部中止信号（用户点终止）。abort 时把本条 in-flight chat 一起 abort。 */
     externalSignal?: AbortSignal;
+    core?: {skillVersion:number};
+    sampleIdentity?:string;
+    sample?:RunTriggerEvalLiveArgs['coreRuntime'];
   },
 ): Promise<SingleRunOutcome> {
   const ac = new AbortController();
@@ -262,6 +266,7 @@ async function evalOne(
     else args.externalSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
   const startedAt = Date.now();
+  let decisionLatencyMs=0;
   let triggered = false;
   let competingSkill: string | undefined;
   let sessionError: string | undefined;
@@ -389,12 +394,18 @@ async function evalOne(
       });
     }
   } finally {
+    decisionLatencyMs=Date.now()-startedAt;
     clearTimeout(timer);
     args.externalSignal?.removeEventListener('abort', onExternalAbort);
     // 不等 finish，直接 close session 释放资源
     if (sessionId) {
-      client.deleteSession(sessionId).catch(() => {});
-    }
+      if(args.core){
+        if(ac.signal.aborted&&!(await client.abortSession(sessionId)))throw Object.assign(new Error('Trigger Session stop is not confirmed'),{code:'EVALUATION_CLEANUP_UNCONFIRMED'});
+        const {recordEvaluatorExecution}=await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+        await recordEvaluatorExecution(client,{taskId:sessionId,agentName:TRIGGER_AGENT_NAME,user:args.user,query:args.query,skill:args.targetSkillName,skillVersion:args.core.skillVersion,startedAt:new Date(startedAt).toISOString(),completedAt:new Date().toISOString(),...(sessionError?{failure:{code:'TRIGGER_SESSION_ERROR',message:sessionError}}:timedOut?{failure:{code:'TRIGGER_TIMEOUT',message:'Trigger sample timed out'}}:{})});
+        if(!(await client.deleteSession(sessionId)))throw Object.assign(new Error('Trigger Session deletion is not confirmed'),{code:'EVALUATION_CLEANUP_UNCONFIRMED'});
+      }else client.deleteSession(sessionId).catch(() => {});
+    }else if(args.core)throw Object.assign(new Error('Trigger Session was not created'),{code:'CORE_TRIGGER_NOT_SUBMITTED'});
   }
   // endReason 判定抽到 triggerEvalRetry.classifyEndReason（纯函数，单测覆盖）。
   // 外部终止（用户点终止）也会 abort，但那条路径上层会 throwIfAborted 抛掉、不进聚合，这里不单独分类。
@@ -404,7 +415,7 @@ async function evalOne(
     endReason: classifyEndReason({ triggered, sessionError, timedOut }),
     competingSkill,
     sessionError,
-    latencyMs: Date.now() - startedAt,
+    latencyMs: args.core?decisionLatencyMs:Date.now()-startedAt,
     attempts: 1,
   };
 }
@@ -418,7 +429,8 @@ async function evalOneWithRetry(
   args: Parameters<typeof evalOne>[1],
   maxTimeoutRetries = MAX_TIMEOUT_RETRIES,
 ): Promise<SingleRunOutcome> {
-  return retryOnTimeout(() => evalOne(client, args), {
+  let attempt=0;
+  return retryOnTimeout(() => {const identity=args.sampleIdentity+':'+attempt++;return args.sample?args.sample.sample(identity,()=>evalOne(client,args)):evalOne(client,args);}, {
     maxRetries: maxTimeoutRetries,
     isAborted: () => !!args.externalSignal?.aborted,
     onRetry: attempt =>
@@ -438,18 +450,20 @@ async function runPool<T, R>(
   concurrency: number,
   worker: (task: T, idx: number) => Promise<R>,
   signal?: AbortSignal,
+  propagateErrors=false,
 ): Promise<R[]> {
   const results: R[] = new Array(tasks.length);
-  let cursor = 0;
+  let cursor = 0;let failure:unknown;let failed=false;
   const launch = async () => {
     while (true) {
       // 用户终止：不再领新任务（在跑的那批由 evalOne 内部 abort 自行收尾）。
-      if (signal?.aborted) return;
+      if (signal?.aborted||propagateErrors&&failed) return;
       const i = cursor++;
       if (i >= tasks.length) return;
       try {
         results[i] = await worker(tasks[i], i);
-      } catch {
+      } catch(error) {
+        if(propagateErrors){failed=true;failure ||=error;return;}
         // worker 已经 try/catch，这里不应该到；fallback 给空对象避免 hole
         results[i] = undefined as unknown as R;
       }
@@ -457,6 +471,7 @@ async function runPool<T, R>(
   };
   const n = Math.max(1, Math.min(concurrency, tasks.length));
   await Promise.all(Array.from({ length: n }, () => launch()));
+  if(failed)throw failure;
   return results;
 }
 
@@ -535,6 +550,10 @@ async function resolveOpencodeModelForUser(
       'https://api.deepseek.com',
     source: 'env',
   };
+}
+
+export async function resolveTriggerModelConfiguration(user:string,modelConfigId?:string):Promise<ModelConfig>{
+ const value=await resolveOpencodeModelForUser(user,modelConfigId);return {id:'trigger-live-'+value.source,name:'Trigger frozen model',provider:value.providerID,model:value.modelID,apiKey:value.apiKey||'',baseUrl:value.baseURL||'',headers:value.headers} as ModelConfig;
 }
 
 /**
@@ -616,6 +635,7 @@ async function materializeUserSkillsToOpencode(
    * 不传 → 全部走 latest（向后兼容）。
    */
   targetSkillPin?: { name: string; version: number },
+  frozenSkills?:Array<{name:string;version:number;content:string}>,
 ): Promise<{ count: number; names: string[] }> {
   const opencodeDir = join(workspaceRoot, '.opencode');
   const skillsDir = join(opencodeDir, 'skills');
@@ -658,7 +678,7 @@ async function materializeUserSkillsToOpencode(
 
   // 拉 user 的全部 skill + 各自的 latest version。若 targetSkillPin 命中本 skill
   // 则在下面单独拉指定版本的 content 覆盖；其它 skill 仍走 latest。
-  const skills = await prismaRaw.skill.findMany({
+  const skills = frozenSkills?frozenSkills.map(value=>({name:value.name,versions:[{content:value.content}]})):await prismaRaw.skill.findMany({
     where: { user },
     include: {
       versions: {
@@ -671,7 +691,7 @@ async function materializeUserSkillsToOpencode(
   // 目标 skill 的指定版本 content（仅当 pin 命中且 version != latest 时才查）
   let pinnedTargetContent: string | null = null;
   if (targetSkillPin) {
-    const pinnedRow = await prismaRaw.skillVersion.findFirst({
+    const pinnedRow = frozenSkills?frozenSkills.find(value=>value.name===targetSkillPin.name&&value.version===targetSkillPin.version):await prismaRaw.skillVersion.findFirst({
       where: {
         version: targetSkillPin.version,
         // Prisma relation 字段在 schema 里叫 `Skill`（大写）——不是 `skill`
@@ -739,7 +759,7 @@ export async function runTriggerEvalLive(
   args: RunTriggerEvalLiveArgs,
 ): Promise<RunTriggerEvalLiveResult> {
  return withBackgroundOpencodeSlot(async () => {
-  return runWithEphemeralOpencodeServer({ user: args.user, verbose: false, isolateHome: true }, async (baseURL) => {
+  return runWithEphemeralOpencodeServer({ user: args.user, verbose: false, isolateHome: true,...(args.coreRuntime?{signal:args.signal,captureMode:'core-recorded' as const,frozenModel:{providerID:args.coreRuntime.model.provider!,modelID:args.coreRuntime.model.model!,...(args.coreRuntime.model.apiKey?{apiKey:args.coreRuntime.model.apiKey}:{}),baseURL:args.coreRuntime.model.baseUrl,headers:args.coreRuntime.model.headers},requireCleanup:true}:{}) }, async (baseURL) => {
   const {
     triggerSet,
     skillName,
@@ -791,6 +811,7 @@ export async function runTriggerEvalLive(
     user,
     workspaceRoot,
     skillVersion != null ? { name: skillName, version: skillVersion } : undefined,
+    args.coreRuntime?.skills,
   );
 
   // 1. opencode server: baseURL 由外层 runWithEphemeralOpencodeServer 注入 ——
@@ -803,7 +824,7 @@ export async function runTriggerEvalLive(
     logLevel: (process.env.OPENCODE_LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error' | 'off' | undefined) || 'warn',
   });
   // 2. 解析模型：显式 id > active config > env 兜底（找不到 apiKey 抛错）
-  const modelConfig = await resolveOpencodeModelForUser(user, modelConfigId);
+  const modelConfig = args.coreRuntime?{providerID:args.coreRuntime.model.provider||'',modelID:args.coreRuntime.model.model||'',...(args.coreRuntime.model.apiKey?{apiKey:args.coreRuntime.model.apiKey}:{}),baseURL:args.coreRuntime.model.baseUrl,headers:args.coreRuntime.model.headers,source:'frozen' as const}:await resolveOpencodeModelForUser(user, modelConfigId);
   logger.log('Resolved opencode model', {
     source: modelConfig.source,
     providerID: modelConfig.providerID,
@@ -813,7 +834,7 @@ export async function runTriggerEvalLive(
 
   // 拿触发分析专属 agent 的 cuid（来自 SYSTEM_AGENTS 注册）。DB 不可用时拿到 null，
   // upload 路由仍会按 agentName 落 Execution，只是少一层 RegisteredAgent 外键。
-  const triggerAgentId = await getSystemAgentId('opencode', TRIGGER_AGENT_NAME);
+  const triggerAgentId = args.coreRuntime?null:await getSystemAgentId('opencode', TRIGGER_AGENT_NAME);
 
   // 2. 展开 (item, runIdx) 任务列表
   type Task = { itemIdx: number; runIdx: number };
@@ -824,7 +845,6 @@ export async function runTriggerEvalLive(
 
   // 3. 跑！
   const outcomes: SingleRunOutcome[][] = triggerSet.items.map(() => []);
-  const competingMap = new Map<number, Map<string, number>>();
   await runPool(tasks, concurrency, async task => {
     const item = triggerSet.items[task.itemIdx];
     const sessionTitle = `trigger-eval-${shortUuid()}-${item.id.slice(0, 4)}-r${task.runIdx}`;
@@ -838,20 +858,30 @@ export async function runTriggerEvalLive(
       user,
       agentId: triggerAgentId,
       externalSignal: signal,
+      ...(args.coreRuntime?{core:{skillVersion:skillVersion!},sample:args.coreRuntime,sampleIdentity:`${task.itemIdx}:${task.runIdx}`}:{})
     }, maxTimeoutRetries);
     outcomes[task.itemIdx].push(outcome);
-    if (outcome.competingSkill) {
-      const m = competingMap.get(task.itemIdx) ?? new Map<string, number>();
-      m.set(outcome.competingSkill, (m.get(outcome.competingSkill) ?? 0) + 1);
-      competingMap.set(task.itemIdx, m);
-    }
     return outcome;
-  }, signal);
+  }, signal,!!args.coreRuntime);
 
   // 用户终止：pool 已停止领新任务、在跑的也 abort 收尾了。这里抛出去，让调用方把这条
   // run finalize 成 cancelled（而不是把残缺结果当 done 落库）。
   throwIfAborted();
 
+  return aggregateTriggerOutcomes(triggerSet,outcomes,triggerThreshold,skillName);
+  });
+ }, {
+   taskType: 'trigger-eval',
+   user: args.user,
+   label: `trigger-eval: ${args.skillName}${args.skillVersion ? ` v${args.skillVersion}` : ''}`,
+   skill: args.skillName,
+   skillVersion: args.skillVersion ?? null,
+ });
+}
+
+export function aggregateTriggerOutcomes(triggerSet:RunTriggerEvalLiveArgs['triggerSet'],outcomes:SingleRunOutcome[][],triggerThreshold:number,skillName:string):RunTriggerEvalLiveResult{
+  const competingMap=new Map<number,Map<string,number>>();
+  for(const [index,runs] of outcomes.entries())for(const run of runs)if(run.competingSkill){const values=competingMap.get(index)||new Map<string,number>();values.set(run.competingSkill,(values.get(run.competingSkill)||0)+1);competingMap.set(index,values);}
   // 3.5 systemic-error 早退：如果所有 run 都因为 opencode 报错根本没问到模型
   // （例如 agent 名拼错、apiKey 失效、provider 拒绝、模型不存在等），
   // 不能继续走"按 triggered=false 聚合"那条路——那会把全错算成
@@ -935,12 +965,4 @@ export async function runTriggerEvalLive(
   });
 
   return { items, passRate, truePositiveRate, falsePositiveRate };
-  });
- }, {
-   taskType: 'trigger-eval',
-   user: args.user,
-   label: `trigger-eval: ${args.skillName}${args.skillVersion ? ` v${args.skillVersion}` : ''}`,
-   skill: args.skillName,
-   skillVersion: args.skillVersion ?? null,
- });
 }

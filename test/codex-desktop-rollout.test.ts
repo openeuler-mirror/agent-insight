@@ -22,6 +22,8 @@ import path from "node:path"
 import test from "node:test"
 import { createRequire } from "node:module"
 import { PassThrough } from "node:stream"
+import { isolateTestDatabase } from "./helpers/isolated-test-db"
+isolateTestDatabase("codex-desktop-rollout")
 
 const require = createRequire(import.meta.url)
 const {
@@ -397,8 +399,34 @@ test("server persistence and session API retain Codex source identity and status
   ])
   for (const field of ["sourceExecutionId", "sourceKind", "executionStatus"]) {
     assert.match(schema, new RegExp(`\\b${field}\\s+String\\?`))
-    assert.ok(storage.split(`${field}: targetRecord.${field}`).length >= 3, `${field} must be persisted on create and update`)
     assert.match(sessionRoute, new RegExp(`\\b${field}\\b`))
+  }
+  const { saveExecutionRecord } = await import("../src/lib/storage/data-service")
+  const { prismaRaw } = await import("../src/lib/storage/prisma")
+  const taskId = "codex-source-persistence"
+  const user = "codex-source-persistence-owner"
+  try {
+    await saveExecutionRecord({ task_id: taskId, framework: "codex", user, query: "source identity", sourceExecutionId: "turn-first", sourceKind: "desktop", executionStatus: "running", interactions: [], skip_evaluation: true, traceThread: { sourceThreadId: "codex-preparation-thread", events: [{ eventKey: "first-turn", kind: "turn", sourceTurnId: "turn-first", startedAt: "2026-11-16T12:00:00Z" }] } })
+    const created = await prismaRaw.execution.findUniqueOrThrow({ where: { id: taskId } })
+    assert.deepEqual([created.sourceExecutionId, created.sourceKind, created.executionStatus], ["turn-first", "desktop", "running"])
+    await saveExecutionRecord({ task_id: taskId, framework: "codex", user, sourceExecutionId: "turn-updated", sourceKind: "desktop-replay", executionStatus: "done", interactions: [], skip_evaluation: true })
+    const updated = await prismaRaw.execution.findUniqueOrThrow({ where: { id: taskId } })
+    assert.deepEqual([updated.sourceExecutionId, updated.sourceKind, updated.executionStatus], ["turn-updated", "desktop-replay", "done"])
+    await saveExecutionRecord({ task_id: taskId, framework: "codex", user, sourceExecutionId: null, sourceKind: null, executionStatus: null, interactions: [], skip_evaluation: true } as any)
+    const cleared = await prismaRaw.execution.findUniqueOrThrow({ where: { id: taskId } })
+    assert.deepEqual([cleared.sourceExecutionId, cleared.sourceKind, cleared.executionStatus], [null, null, null])
+    const thread = await prismaRaw.traceThread.findUniqueOrThrow({ where: { user_framework_sourceThreadId: { user, framework: "codex", sourceThreadId: "codex-preparation-thread" } } })
+    assert.equal(cleared.traceThreadId, thread.id)
+    assert.equal((await prismaRaw.traceThreadEvent.findMany({ where: { traceThreadId: thread.id } }))[0].sourceTurnId, "turn-first")
+    await saveExecutionRecord({ task_id: "codex-thread-only", framework: "codex", user, threadOnly: true, traceThread: { sourceThreadId: "codex-preparation-thread", events: [{ eventKey: "interrupt", kind: "interrupt", startedAt: "2026-11-16T12:00:01Z" }] } })
+    assert.equal(await prismaRaw.execution.findUnique({ where: { id: "codex-thread-only" } }), null)
+    assert.equal(await prismaRaw.traceThreadEvent.count({ where: { traceThreadId: thread.id } }), 2)
+
+  } finally {
+    await prismaRaw.execution.deleteMany({ where: { user } })
+    await prismaRaw.session.deleteMany({ where: { user } })
+    await prismaRaw.registeredAgent.deleteMany({ where: { user } })
+    await prismaRaw.traceThread.deleteMany({ where: { user } })
   }
   assert.match(schema, /model TraceThread \{/)
   assert.match(schema, /model TraceThreadEvent \{/)

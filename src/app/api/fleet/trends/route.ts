@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 // 舰队监控大盘 · 系统趋势 + 健康总览 KPI 聚合端点。
 //
 // 口径依据《视图数据计算口径说明》，共享逻辑见 src/lib/fleet/agg.ts：
@@ -69,9 +73,11 @@ function aggregate(rows: FleetRow[], missing: Set<string>) {
 export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
-        const { username, user } = await resolveTraceReadScope(req);
+        const analytics = (await readCoreAnalytics(req));
+        const executionReader = analytics ?? prisma.execution;
+        const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
-        const userFilter = user ? { user } : {};
+        const userFilter = analytics ? {} : user ? { user } : {};
 
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);
@@ -82,7 +88,7 @@ export async function GET(req: Request) {
         const spanMs = plan.count * plan.step;
         const prevFrom = currentFrom - spanMs;
 
-        const rows = (await prisma.execution.findMany({
+        const rows = (await executionReader.findMany({
             where: { ...userFilter, isSubagent: false, timestamp: { gte: new Date(prevFrom) } },
             select: {
                 timestamp: true, latency: true, isAnswerCorrect: true,
@@ -169,6 +175,7 @@ export async function GET(req: Request) {
             };
         });
 
+        if (analytics) await analytics.validate();
         return NextResponse.json({
             window,
             granularity: plan.gran,
@@ -180,7 +187,6 @@ export async function GET(req: Request) {
             buckets,
         });
     } catch (error) {
-        console.error('[Fleet Trends Error]', error);
-        return NextResponse.json({ error: 'Failed to load fleet trends' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

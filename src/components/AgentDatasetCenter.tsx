@@ -22,6 +22,7 @@ import { ClipboardList, Pencil, PlayCircle, Sparkles, Trash2 } from 'lucide-reac
 import TraceDatasetFlow, { cleanTraceDataset } from '@/components/TraceDatasetFlow';
 import type { GenerationConfig } from '@/lib/trace-datasets/contracts';
 import { apiFetch } from '@/lib/client/api';
+import { captureDatasetSnapshot, datasetWriteHeaders } from '@/lib/agent-dataset-concurrency';
 import {
   type DatasetKind,
   type AgentDataset,
@@ -39,6 +40,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
 
 interface DatasetDraft {
+  _storageEtag?: string;
   generationSource?: string | null;
   id?: string;
   name: string;
@@ -70,6 +72,7 @@ const emptyDraft: DatasetDraft = {
 function toDraft(dataset: AgentDataset): DatasetDraft {
   return {
     id: dataset.id,
+    _storageEtag: dataset._storageEtag,
     generationSource: dataset.generationSource,
     name: dataset.name,
     description: dataset.description || '',
@@ -291,6 +294,7 @@ export default function AgentDatasetCenter() {
       try {
         const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`);
         const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || '评测集加载失败');
         list = Array.isArray(data) ? data : [];
         setDatasets(list);
         if (!opts?.isRefresh) {
@@ -401,7 +405,7 @@ export default function AgentDatasetCenter() {
     }
     startTransition(() => {
       setCreating(false);
-      setDraft(toDraft(detail as AgentDataset));
+      setDraft(toDraft(captureDatasetSnapshot(detail as AgentDataset, res.headers)));
       setEditorOpen(true);
     });
   };
@@ -485,7 +489,7 @@ export default function AgentDatasetCenter() {
       }
       const res = await apiFetch(
         `/api/agent-datasets/${encodeURIComponent(item.id)}?user=${encodeURIComponent(user)}`,
-        { method: 'DELETE' },
+        { method: 'DELETE', headers: datasetWriteHeaders(item) },
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || '删除失败');
@@ -531,7 +535,7 @@ export default function AgentDatasetCenter() {
     try {
       const res = await apiFetch('/api/agent-datasets', {
         method: creating ? 'POST' : 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(!creating ? datasetWriteHeaders(draft) : {}) },
         body: JSON.stringify(draft.generationSource === 'trace' ? { user, id: draft.id, name: payload.name, description: payload.description } : payload),
       });
       const result = await res.json();

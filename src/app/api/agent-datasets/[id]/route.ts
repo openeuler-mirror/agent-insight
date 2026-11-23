@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreDatasetRoute,getCoreDatasetContext,coreDatasetFailure,coreDatasetVersionForWrite,listCoreDatasetVersions} from '@/lib/storage-core/datasets';
+import {coreGenerationRequest} from '@/lib/storage-core/dataset-generation';
+
 import { guardTraceDataset, generationErrorResponse, traceIdentity } from '@/server/trace-datasets/http';
 import { GenerationError } from '@/lib/trace-datasets/contracts';
 import { hash } from '@/lib/trace-datasets/sampling';
@@ -33,7 +37,10 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  return (withCoreDatasetRoute(request, normalized => datasetGET(normalized, context)));
+}
+async function datasetGET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);
@@ -42,14 +49,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
     }
 
+    const view = searchParams.get('view');
+    if (getCoreDatasetContext() && view === 'versions') return NextResponse.json(await listCoreDatasetVersions(id.trim()));
     await guardTraceDataset(request, id.trim(), user);
-    const dataset = await findAgentDataset(user, id.trim());
+    let dataset = await findAgentDataset(user, id.trim());
     if (!dataset) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
+    if (getCoreDatasetContext() && isBuiltinReliabilityDataset(dataset) && !searchParams.has('version')) {
+      const {ensureBuiltinReliabilityDataset} = await import('@/server/builtin-example/ensure-reliability-dataset');
+      await ensureBuiltinReliabilityDataset(user);
+      dataset = await findAgentDataset(user, id.trim()) || dataset;
+    }
 
     const decorated = (await decoratePublicBenchmarkDatasets(user, [dataset]))[0];
-    const view = searchParams.get('view');
     if (view === 'case') {
       const caseId = (searchParams.get('caseId') || '').trim();
       if (!caseId) return NextResponse.json({ error: 'caseId is required' }, { status: 400 });
@@ -60,12 +73,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json(view === 'items' ? buildAgentDatasetItemsView(decorated) : decorated);
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
+    if (getCoreDatasetContext()) return coreDatasetFailure(error);
     console.error('agent-datasets [id] GET error:', error);
     return NextResponse.json({ error: 'failed to load dataset' }, { status: 500 });
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
+  return (withCoreDatasetRoute(request, normalized => datasetDELETE(normalized, context)));
+}
+async function datasetDELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);
@@ -75,48 +92,22 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
     }
 
-    const owner = await traceIdentity(request, false);
-    if (owner === user) {
-      const manager = await getTraceDatasetManager().catch(() => null);
-      const job = manager && await manager.client.traceDatasetGenerationJob.findFirst({ where: { owner, datasetId: idTrim }, select: { id: true } });
-      const receipt = manager && await manager.client.traceDatasetOperationReceipt.findFirst({ where: { ownerKey: hash(owner), datasetId: idTrim, kind: 'delete' }, select: { id: true } });
-      if (manager && (job || receipt)) {
-        const result = await manager.remove(owner, idTrim);
-        return result ? NextResponse.json(result, { status: 202 }) : new Response(null, { status: 204 });
+    if (getCoreDatasetContext()) {
+      const current = await findAgentDataset(user, idTrim);
+      if (!current || current.generationSource === 'trace') {
+        const version = current ? await coreDatasetVersionForWrite(idTrim) : undefined;
+        const result = await coreGenerationRequest(request, 'remove', {datasetId:idTrim,expectedRevision:version?.revision});
+        return result ? NextResponse.json(result, {status:202}) : new Response(null, {status:204});
       }
+      if (isBuiltinReliabilityDataset(current) || current.datasetKind === 'benchmark') return NextResponse.json({error:'系统数据集不可删除'},{status:403});
+      await deleteAgentDataset(user, idTrim);
+      recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.delete' });
+      return NextResponse.json({success:true});
     }
-    if (await guardTraceDataset(request, idTrim, user)) {
-      const manager = await getTraceDatasetManager();
-      const result = await manager.remove(user, idTrim);
-      return result ? NextResponse.json(result, { status: 202 }) : new Response(null, { status: 204 });
-    }
-    const existing = await findAgentDataset(user, idTrim);
-    if (!existing) {
-      return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
-    }
-    if (isBuiltinReliabilityDataset(existing)) {
-      return NextResponse.json(
-        { error: '内置可靠性评测集不可删除' },
-        { status: 403 },
-      );
-    }
-    if (existing.datasetKind === 'benchmark' || await isReadOnlyBenchmarkDataset(user, idTrim)) {
-      return NextResponse.json(
-        { error: 'Benchmark 数据集由系统导入并维护，不可删除' },
-        { status: 403 },
-      );
-    }
-
-    const removed = await deleteAgentDataset(user, idTrim);
-    if (!removed) {
-      return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
-    }
-
-    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.delete' });
-
-    return NextResponse.json({ success: true });
+    throw new Error('Storage Core dataset context required');
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
+    if (getCoreDatasetContext()) return coreDatasetFailure(error);
     console.error('agent-datasets [id] DELETE error:', error);
     return NextResponse.json({ error: 'failed to delete dataset' }, { status: 500 });
   }

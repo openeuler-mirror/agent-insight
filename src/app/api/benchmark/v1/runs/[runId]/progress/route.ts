@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {coreBenchmarkCallbackContext,coreBenchmarkCallbackJson} from '@/lib/benchmark/core-public-callback'
+import {benchmarkCallbackRpc} from '@/lib/benchmark/core-store'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -36,17 +39,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ runId: 
       }
       throw error
     }
-    let progress: BenchmarkExecutionProgress
-    try {
-      progress = await req.json() as BenchmarkExecutionProgress
-    } catch {
-      throw new BenchmarkProtocolError('PROGRESS_JSON_INVALID', '执行进度不是合法 JSON', 400)
-    }
-    return NextResponse.json(await recordBenchmarkRunProgress({
-      runId,
-      clientId: identity.clientId,
-      progress,
-    }))
+    {const context=coreBenchmarkCallbackContext(req,identity.clientId);return NextResponse.json(await benchmarkCallbackRpc(context,'progress',{job_id:runId,progress:await coreBenchmarkCallbackJson(req)}))}
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/runs/progress')
   }

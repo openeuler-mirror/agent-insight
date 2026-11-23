@@ -67,9 +67,11 @@ test('Effective latency survives ingestion, list statistics, detail reads and sa
     await client.execution.update({ where: { id: 'active-test' }, data: { latency: 3650000 } });
     assert.equal((await repairTraceLatency(client)).changed, 1);
     assert.equal((await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } })).latency, 3650000);
-    for (const view of ['structure', 'full', 'interactions', 'interaction&index=0']) {
-        const oldDetail = await (await GET(new Request(`http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=${view}&source=raw`))).json();
-        assert.equal(oldDetail.execution.latency, 50000, 'historical detail uses recalculated metrics in every view');
+    const oldDetail = await (await GET(new Request('http://localhost/api/observe/session?user=timing-test&taskId=active-test&view=structure&source=raw'))).json();
+    assert.equal(oldDetail.execution.latency, 50000, 'historical detail uses recalculated metrics');
+    for (const view of ['full', 'interaction&index=1', 'interactions']) {
+        const detail = await (await GET(new Request(`http://localhost/api/observe/session?user=timing-test&taskId=active-test&source=raw&view=${view}`))).json();
+        assert.equal(detail.execution.latency, 50000, `${view} uses the same effective latency`);
     }
     assert.equal((await repairTraceLatency(client, { apply: true })).updated, 1);
     assert.deepEqual(await client.execution.findUniqueOrThrow({ where: { id: 'active-test' } }), before, 'only latency is repaired');

@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,withCoreExperimentMutationRoute,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {readTraceEvidence} from '@/lib/storage-core/evidence';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -110,7 +113,8 @@ async function resolveTraceToolCatalog(
   datasetIds: string[],
 ): Promise<EvaluatorCaseContext | null> {
   if (!datasetIds.length || !taskId) return null;
-  const exec = await prisma.execution.findFirst({
+  const core=getCoreExperimentContext();
+  const exec = core?(await readTraceEvidence(core.request,{taskId},core.options)).evidence.execution:await prisma.execution.findFirst({
     where: { taskId, OR: [{ user }, { user: null }] },
     orderBy: { timestamp: 'desc' },
     select: { query: true },
@@ -163,7 +167,8 @@ async function resolveTraceDatasetBinding(
   options: { requireExpectedOutput: boolean; allowSemanticMatch: boolean },
 ): Promise<Pick<DatasetEvaluationContext, 'datasetId' | 'datasetCaseId' | 'datasetInput' | 'referenceOutput'> | null> {
   if (!datasetIds.length || !taskId) return null;
-  const exec = await prisma.execution.findFirst({
+  const core=getCoreExperimentContext();
+  const exec = core?(await readTraceEvidence(core.request,{taskId},core.options)).evidence.execution:await prisma.execution.findFirst({
     where: { taskId, OR: [{ user }, { user: null }] },
     orderBy: { timestamp: 'desc' },
     select: { query: true },
@@ -193,7 +198,8 @@ async function resolveTraceDatasetBinding(
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(req: Request):Promise<Response> {
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(req,POST);
   try {
     const body = await req.json().catch(() => ({}));
     const { username } = await resolveUser(req, body.user);
@@ -350,11 +356,6 @@ export async function POST(req: Request) {
       { status: 202 },
     );
   } catch (error) {
-    if (error instanceof GenerationError) return generationErrorResponse(error);
-    console.error('[eval-traces POST Error]', error);
-    if (error instanceof EvaluatorContextValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
-    return NextResponse.json({ error: 'Failed to evaluate traces via experiment' }, { status: 500 });
+    return coreExperimentFailure(error);
   }
 }

@@ -1,3 +1,13 @@
+import { startIsolatedControlCore } from './helpers/isolated-control-core';
+let core: Awaited<ReturnType<typeof startIsolatedControlCore>>;
+test.before(async () => { core = await startIsolatedControlCore(['test-only']); });
+test.after(async () => { await core?.dispose(); });
+function authenticatedRequest(url: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('authorization', 'Bearer ' + core.tokens['test-only']);
+  return new Request(url, { ...init, headers });
+}
+
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -21,10 +31,10 @@ import { probeModelConnection, classifyModelTestError } from '../src/lib/server/
 import { isModelConnectionReady, supportsCustomHeaders, type ModelConnectionConfig } from '../src/lib/shared/model-connection';
 import { POST } from '../src/app/api/eval/settings/test/route';
 import { db } from '../src/lib/storage/prisma';
-import { saveUserSettings, getStoredUserSettings } from '../src/lib/storage/server-config';
+import { saveUserSettings as saveScopedSettings, getStoredUserSettings as readScopedSettings } from '../src/lib/storage/server-config';
 import { resetProxyConfigCache } from '../src/lib/ingest/proxy-config';
 import { createModel } from '../src/lib/engine/skill-generation/shared/model';
-import { extractRootCausesFromExpected } from '../src/lib/engine/evaluation/root-cause-extractor';
+import { extractRootCausesFromExpected as extractScopedRootCauses } from '../src/lib/engine/evaluation/root-cause-extractor';
 import { loadDefaultModelConfigs } from '../src/lib/shared/default-model-config';
 
 const base = { provider: 'custom', baseUrl: 'https://gateway.test/team/v1', model: 'test-model', apiKey: '' };
@@ -45,7 +55,9 @@ function mockTransport(t: test.TestContext, response: unknown = nativeReply) {
   resetProxyConfigCache();
   t.after(resetProxyConfigCache);
   const requests: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
+  const realFetch = globalThis.fetch;
   t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(url instanceof Request ? url.url : String(url)).origin === core.origin) return realFetch(url, init);
     requests.push({ url: String(url), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
     if (requests.at(-1)?.body.stream) {
       const chunk = { ...chatReply, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }] };
@@ -91,7 +103,7 @@ test('Anthropic 支持仅自定义头及无鉴权配置', () => {
 
 test('Anthropic Messages 连接测试发送原生协议和配置的请求头', async t => {
   const requests = mockTransport(t);
-  const response = await POST(new Request('http://localhost/api/eval/settings/test', {
+  const response = await POST(authenticatedRequest('http://localhost/api/eval/settings/test', {
     method: 'POST', body: JSON.stringify({ ...base, provider: 'anthropic', protocol: 'anthropic',
       headers: { Authorization: 'company-token', 'X-Tenant': 'tenant' } }),
   }));
@@ -108,7 +120,7 @@ test('Anthropic Messages 连接测试发送原生协议和配置的请求头', a
 
 test('非法协议在连接测试与保存时均被拒绝且不访问模型或写库', async t => {
   const requests = mockTransport(t);
-  const response = await POST(new Request('http://localhost/api/eval/settings/test', {
+  const response = await POST(authenticatedRequest('http://localhost/api/eval/settings/test', {
     method: 'POST', body: JSON.stringify({ ...base, protocol: 'unknown-protocol' }),
   }));
   assert.equal(response.status, 400);
@@ -187,7 +199,7 @@ test('清空已保存的 API Key 不会在测试时恢复旧 Key', async t => {
   const requests = mockTransport(t, chatReply);
   t.mock.method(db, 'findUserSettings', async () => ({ settingsJson: JSON.stringify({ activeConfigId: 'saved',
     configs: [{ ...base, id: 'saved', name: 'Saved', apiKey: 'old-key' }] }) }));
-  const response = await POST(new Request('http://localhost/api/eval/settings/test', {
+  const response = await POST(authenticatedRequest('http://localhost/api/eval/settings/test', {
     method: 'POST', body: JSON.stringify({ ...base, user: 'test-only', configId: 'saved', apiKey: '' }),
   }));
   assert.equal(response.status, 200);
@@ -255,3 +267,7 @@ test('原生响应体读取失败保留取消与网络错误语义', async () =>
       { signal: controller.signal }), error => classifyModelTestError(error).code === kind);
   }
 });
+
+function saveUserSettings(...args: Parameters<typeof saveScopedSettings>) { return core.run('test-only', () => saveScopedSettings(...args)); }
+function getStoredUserSettings(...args: Parameters<typeof readScopedSettings>) { return core.run('test-only', () => readScopedSettings(...args)); }
+function extractRootCausesFromExpected(...args: Parameters<typeof extractScopedRootCauses>) { return core.run('test-only', () => extractScopedRootCauses(...args)); }

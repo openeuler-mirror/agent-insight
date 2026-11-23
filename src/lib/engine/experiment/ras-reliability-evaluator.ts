@@ -254,6 +254,11 @@ export function buildRasReliabilityEvaluatorOutput(input: {
 }
 
 export async function loadRasEventEvidence(ctx: FaithfulPresetContext): Promise<RasEventEvidence[]> {
+  const frozen = ctx as FaithfulPresetContext & {frozenExperimentWork?: boolean; frozenRasEvents?: RasEventEvidence[]};
+  if (frozen.frozenExperimentWork) {
+    if (!Array.isArray(frozen.frozenRasEvents)) throw Object.assign(new Error('Frozen RAS evidence is unavailable'), {status: 503});
+    return frozen.frozenRasEvents;
+  }
   const taskId = String(ctx.taskId || '').trim()
   const executionId = String(ctx.executionId || '').trim()
   if (!taskId && !executionId) return []

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {usesCoreBenchmark} from './core-store'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -275,6 +276,7 @@ export async function retryBenchmarkEvaluation(input: {
   resultId: string
   user: string
 }): Promise<{ status: 'running'; evaluationRunId: string }> {
+  if(usesCoreBenchmark()){const {retryCoreBenchmarkEvaluation}=await import('./core-retry');return retryCoreBenchmarkEvaluation(input)}
   const lock = reevaluationLocks()
   const result = await prisma.experimentEvalResult.findFirst({
     where: {

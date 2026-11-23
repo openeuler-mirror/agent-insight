@@ -1,32 +1,29 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { createIsolatedDatabase } from './helpers/isolated-database'
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma']
 let fi: typeof import('@/lib/engine/experiment/fi-orchestrate')
 let detail: typeof import('@/app/api/experiments/[id]/route')['GET']
 let store: typeof import('@/lib/fault-injection/store')
+let database: ReturnType<typeof createIsolatedDatabase> | undefined
 let root: string
 let sequence = 0
 const user = 'fi-readiness-' + process.pid
 
 test.before(async () => {
-  root = mkdtempSync(path.join(os.tmpdir(), 'fi-trace-readiness-'))
-  process.env.AGENT_INSIGHT_HOME = root
-  process.env.DATABASE_URL = 'file:' + path.join(root, 'test.db')
-  execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' })
+  database = createIsolatedDatabase()
+  root = database.home
   ;({ prisma } = await import('@/lib/storage/prisma'))
   store = await import('@/lib/fault-injection/store')
   fi = await import('@/lib/engine/experiment/fi-orchestrate')
   ;({ GET: detail } = await import('@/app/api/experiments/[id]/route'))
 })
 test.after(async () => {
-  await prisma?.$disconnect()
-  if (root) rmSync(root, { recursive: true, force: true })
+  try { await prisma?.$disconnect() } finally { database?.dispose() }
 })
 
 /** Build real FI/Case records without executing any model or worker. */

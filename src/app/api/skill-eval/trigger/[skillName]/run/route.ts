@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {isCoreTriggerRoute,withCoreTriggerRoute,coreTriggerFailure,startCoreTriggerRun} from '@/lib/storage-core/trigger';
 import { NextResponse } from 'next/server';
 import {
   findLatestTriggerEvalSet,
@@ -151,7 +153,8 @@ async function executeTriggerEvalRun(args: {
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ skillName: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'run',scoped=>POST(scoped,{params}));
   try {
     const { skillName } = await params;
     const body = await request.json().catch(() => ({}));
@@ -160,6 +163,7 @@ export async function POST(
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
     const decodedSkillName = decodeURIComponent(skillName);
+    if(isCoreTriggerRoute())return startCoreTriggerRun(decodedSkillName,body);
 
     // 1. 加载触发集（按 triggerSetId 选具体版本；不传则跑 latest）
     const triggerSetId = body.triggerSetId ? String(body.triggerSetId).trim() : null;
@@ -295,6 +299,7 @@ export async function POST(
 
     return NextResponse.json({ success: true, run });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger/run POST error:', error);
     const msg = error instanceof Error ? error.message : 'failed to run trigger eval';
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -1,3 +1,5 @@
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {createExperimentReadView,type ExperimentViewSnapshot} from '@/lib/storage-core/experiment-view';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -237,7 +239,16 @@ export async function getExperimentBaselineTrend(input: {
   experimentId: string;
   user: string;
 }): Promise<ExperimentBaselineTrend | null> {
-  const current = await prisma.experiment.findFirst({
+  const context = getCoreExperimentContext();
+  let reads = prisma;
+  if (context) {
+    const value = await context.rpc('baseline_view', {experiment_id:input.experimentId}) as {coverage:string;snapshots:ExperimentViewSnapshot[]};
+    if (value?.coverage !== 'complete' || !Array.isArray(value.snapshots)) {
+      throw Object.assign(new Error('Complete Experiment baseline coverage required'), {status:503});
+    }
+    reads = createExperimentReadView(value.snapshots, {actorUsername:context.actor.username});
+  }
+  const current = await reads.experiment.findFirst({
     where: { id: input.experimentId, user: input.user },
     select: {
       id: true, name: true, type: true, user: true, agentName: true, status: true,
@@ -266,7 +277,7 @@ export async function getExperimentBaselineTrend(input: {
   };
   let candidates: BaselineExperimentLike[];
   if (current.scope === 'benchmark') {
-    const rows = await prisma.experiment.findMany({
+    const rows = await reads.experiment.findMany({
       where: candidateWhere,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 200,
@@ -279,7 +290,7 @@ export async function getExperimentBaselineTrend(input: {
     }) as Array<Omit<BaselineExperimentLike, 'cases'> & { _count: { cases: number } }>;
     candidates = rows.map(({ _count, ...row }) => ({ ...row, cases: [], caseCount: _count.cases }));
   } else {
-    candidates = await prisma.experiment.findMany({
+    candidates = await reads.experiment.findMany({
       where: candidateWhere,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 200,
@@ -301,7 +312,7 @@ export async function getExperimentBaselineTrend(input: {
     .slice(0, EXPERIMENT_BASELINE_TREND_MAX_POINTS);
   if (!comparable.some((candidate) => candidate.id === current.id)) comparable.unshift(current);
   const selected = comparable.slice(0, EXPERIMENT_BASELINE_TREND_MAX_POINTS);
-  const results = await prisma.experimentEvalResult.findMany({
+  const results = await reads.experimentEvalResult.findMany({
     where: { experimentId: { in: selected.map((candidate) => candidate.id) } },
     select: { experimentId: true, caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
   });

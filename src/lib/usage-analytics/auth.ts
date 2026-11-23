@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreUsageAdmin} from '@/lib/storage-core/usage';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,7 +16,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import { isUsageEnabled } from './config';
 
 /**
@@ -51,6 +53,6 @@ export async function gateUsageAdmin(request: Request): Promise<UsageAdminGate> 
 
     const { username } = await resolveUser(request);
     if (!username) return { ok: false, username: null, reason: 'unauthenticated' };
-    if (!isUsageAdmin(username)) return { ok: false, username, reason: 'forbidden' };
+    if (!((await coreUsageAdmin()))) return { ok: false, username, reason: 'forbidden' };
     return { ok: true, username };
 }

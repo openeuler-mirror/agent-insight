@@ -15,6 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import type {BatchEvalTask} from '@prisma/client';
 import { prisma } from '@/lib/storage/prisma';
 import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
@@ -26,6 +27,11 @@ import {
 } from '@/lib/engine/experiment/run-experiment';
 import { resolveBatchEvaluationExperimentId } from '@/lib/eval/batch-case-start';
 import { batchActiveRuns } from '@/server/batch_eval_run_registry';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,coreExperimentFailure} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
+import {projectCoreBatchTask,startCoreBatchTrace,abortCoreBatchTrace,preserveCoreBatchBindings,assertCoreBatchScope} from '@/lib/storage-core/batch-trace';
+import {startCoreBatchDataset,abortCoreBatchDataset} from '@/lib/storage-core/batch-dataset';
 
 /**
  * BatchEvalTask 用例分析的核心状态机 (跟 grayscale 对齐, 单 side):
@@ -99,16 +105,18 @@ interface BatchEvalTaskRow {
 export async function GET(
     req: NextRequest,
     { params }: { params: Promise<{ taskId: string }> }
-) {
+): Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>GET(normalized,{params}));
     try {
         const { taskId } = await params;
         const user = new URL(req.url).searchParams.get('user');
         if (!user || !taskId) {
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
         }
-        const task = await (prisma as any).batchEvalTask.findFirst({ where: { id: taskId, user } });
+        await assertCoreBatchScope('read');
+        const task = await prisma.batchEvalTask.findFirst({ where: { id: taskId, user } });
         if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-        const visible = await visibleExperimentTask({
+        const visible = await ((projectCoreBatchTask))({
             ...task,
             configJson: JSON.parse(task.configJson || '{}'),
             caseStatesJson: JSON.parse(task.caseStatesJson || '{}'),
@@ -117,7 +125,7 @@ export async function GET(
         return visible ? NextResponse.json(visible) : NextResponse.json({ error: 'Task deleted' }, { status: 404 });
     } catch (err) {
         console.error('[BATCH_TASKS_GET_ONE] Failed:', err);
-        return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
+        return coreExperimentFailure(err);
     }
 }
 
@@ -130,7 +138,8 @@ export async function GET(
 export async function PATCH(
     req: NextRequest,
     { params }: { params: Promise<{ taskId: string }> }
-) {
+): Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>PATCH(normalized,{params}));
     try {
         const { taskId } = await params;
         const body = await req.json();
@@ -140,29 +149,46 @@ export async function PATCH(
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
         }
 
+        let priorRecord: BatchEvalTask | undefined;
+        let priorConfig: Record<string,unknown> = {};
+        let priorStates: Record<string,unknown> = {};
+        {
+            await assertCoreBatchScope('patch');
+            const task=await prisma.batchEvalTask.findFirst({where:{id:taskId,user}});
+            if(!task)return NextResponse.json({error:'Task not found'},{status:404});
+            priorRecord=task;priorConfig=JSON.parse(task.configJson||'{}');priorStates=JSON.parse(task.caseStatesJson||'{}');
+            if((priorConfig.coreDatasetOperation as {phase?:string;cancelRequested?:boolean}|undefined)?.phase==='prepared'&&!(priorConfig.coreDatasetOperation as {cancelRequested?:boolean}).cancelRequested)throw Object.assign(new Error('Batch preparation is already running'),{status:409});
+        }
         const data: Record<string, string> = {};
-        if (configJson !== undefined) data.configJson = JSON.stringify(configJson);
-        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(caseStatesJson);
+        if (configJson !== undefined) data.configJson = JSON.stringify((preserveCoreBatchBindings(priorConfig,configJson)));
+        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(({
+            ...Object.fromEntries(Object.entries(caseStatesJson as Record<string,unknown>).map(([key])=>[key,{status:'pending'}])),...priorStates,
+        }));
         if (traceEvalStatesJson !== undefined) data.traceEvalStatesJson = JSON.stringify(traceEvalStatesJson);
 
         if (Object.keys(data).length === 0) {
             return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
         }
 
-        const updated = await (prisma as any).batchEvalTask.update({
-            where: { id: taskId, user },
-            data,
-        });
+        let updated: BatchEvalTask;
+        if(priorRecord){
+            const changed=await prisma.batchEvalTask.updateMany({where:{id:taskId,user,configJson:priorRecord.configJson,caseStatesJson:priorRecord.caseStatesJson,traceEvalStatesJson:priorRecord.traceEvalStatesJson},data});
+            if(changed.count!==1)throw Object.assign(new Error('Batch configuration changed'),{status:409});
+            updated=await prisma.batchEvalTask.findFirstOrThrow({where:{id:taskId,user}});
+        }else{
+            updated=await prisma.batchEvalTask.update({where:{id:taskId,user},data});
+        }
 
-        return NextResponse.json({
+        const parsed = {
             ...updated,
             configJson: JSON.parse(updated.configJson || '{}'),
             caseStatesJson: JSON.parse(updated.caseStatesJson || '{}'),
             traceEvalStatesJson: JSON.parse(updated.traceEvalStatesJson || '{}'),
-        });
+        };
+        return NextResponse.json((await projectCoreBatchTask(parsed)));
     } catch (err) {
         console.error('[BATCH_TASKS_PATCH] Failed:', err);
-        return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+        return coreExperimentFailure(err);
     }
 }
 
@@ -186,7 +212,8 @@ export async function PATCH(
 export async function POST(
     req: NextRequest,
     { params }: { params: Promise<{ taskId: string }> }
-) {
+): Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(req,normalized=>POST(normalized,{params}));
     try {
         const { taskId } = await params;
         const body = await req.json();
@@ -194,6 +221,27 @@ export async function POST(
         const user = String(body.user || '').trim();
         if (!user || !taskId) {
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
+        }
+        {
+            await assertCoreBatchScope(action);
+            const task=await prisma.batchEvalTask.findFirst({where:{id:taskId,user}});
+            if(!task)return NextResponse.json({error:'Task not found'},{status:404});
+            const config=JSON.parse(task.configJson||'{}');
+            if(config.sourceMode==='trace'){
+                if(action==='abort')return NextResponse.json(await abortCoreBatchTrace(task));
+                if(action==='evaluate'||action==='retry-evaluate'){
+                    const ids=Array.isArray(body.caseIds)?body.caseIds.map(String):[];
+                    await startCoreBatchTrace(task,ids,action==='retry-evaluate');
+                    return NextResponse.json(action==='evaluate'?{ok:true,taskId,mode:'evaluate',startedAt:Date.now()}:{ok:true,taskId,retriedAt:Date.now()});
+                }
+                return NextResponse.json({error:'Unknown action'},{status:400});
+            }
+            if(action==='abort')return NextResponse.json(await abortCoreBatchDataset(task));
+            if(action==='start'||action==='retry-execute'||action==='retry-evaluate'){
+                const ids=Array.isArray(body.caseIds)?body.caseIds.map(String):[];await startCoreBatchDataset(task,ids,action);
+                return NextResponse.json(action==='start'?{ok:true,taskId,startedAt:Date.now()}:{ok:true,taskId,retriedAt:Date.now()});
+            }
+            if(action==='evaluate')return NextResponse.json({error:'Trace source mode required'},{status:400});
         }
         // action='evaluate': Trace 模式专用 (跳过执行, 直接对已有 trace 评测)。
         // caseIds 这里实际是 trace 的 task_id 数组 (前端从 traceRecords[].task_id 选)。
@@ -256,7 +304,7 @@ export async function POST(
         return NextResponse.json({ ok: true, taskId, startedAt: Date.now() });
     } catch (err) {
         console.error('[BATCH_TASKS_POST] Failed:', err);
-        return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+        return coreExperimentFailure(err);
     }
 }
 

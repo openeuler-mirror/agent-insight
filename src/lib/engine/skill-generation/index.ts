@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getActiveCoreCollectorIdentity,collectorIdentityForBackgroundActor,type CoreCollectorIdentity} from '@/lib/storage-core/collector-identity';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -25,6 +27,7 @@ import { langfuseSpanProcessor } from "@/lib/engine/skill-generation/instrumenta
 const logger = createLogger("skill-generation:index");
 
 export interface GenerationOptions extends ModelOptions {
+  collectorIdentity?:CoreCollectorIdentity;
   enableEvaluation?: boolean;
   workspaceRoot?: string;
   sessionId?: string;
@@ -43,7 +46,7 @@ export async function generateSkill(spec: SkillSpec, options?: GenerationOptions
     workspaceRoot: options?.workspaceRoot ?? null,
   });
   const app = createSupervisorAgent(options);
-  const callback = new Callback4AgentInsight(options?.sessionId);
+  const callback = new Callback4AgentInsight(options?.sessionId,await generationCollector(options));
   const langfuseHandler = callback.getLangfuseHandler();
 
   const initialMessage = `Please generate a skill for the following specification: ${JSON.stringify(spec)}`;
@@ -77,7 +80,7 @@ export async function* generateSkillStream(spec: SkillSpec, options?: Generation
     workspaceRoot: options?.workspaceRoot ?? null,
   });
   const app = createSupervisorAgent(options);
-  const callback = new Callback4AgentInsight(options?.sessionId);
+  const callback = new Callback4AgentInsight(options?.sessionId,await generationCollector(options));
   const langfuseHandler = callback.getLangfuseHandler();
 
   const initialMessage = `Please generate a skill for the following specification: ${JSON.stringify(spec)}`;
@@ -109,3 +112,9 @@ export async function* generateSkillStream(spec: SkillSpec, options?: Generation
 // Export everything for external use
 export * from "./types";
 export { createSupervisorAgent } from "./supervisor/createSupervisorAgent";
+
+async function generationCollector(options?:GenerationOptions){
+ const active=options?.collectorIdentity||getActiveCoreCollectorIdentity();if(active)return active;
+ const {getDefaultIngestUser}=await import('@/lib/storage/data-service');const username=getDefaultIngestUser();if(!username)throw Object.assign(new Error('Skill generation requires an explicit trusted collector actor'),{status:403});
+ const {configuredCoreBackgroundActorForUser}=await import('@/lib/storage-core/compat');return collectorIdentityForBackgroundActor(await configuredCoreBackgroundActorForUser(username),{operation:'snapshot'});
+}

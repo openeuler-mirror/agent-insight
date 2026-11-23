@@ -1,3 +1,4 @@
+import { getModelAuthHeaders } from '@/lib/shared/model-connection';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,8 +29,11 @@ import { buildOpencodeSpawnEnv } from './opencode-spawn-policy'
 import { markTemporaryHome } from '@/lib/runtime-cleanup/temp'
 import { runtimePackageRoot } from '@/lib/runtime/package-root'
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server'
+import type { ModelConfig } from './opencode-client'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
+
+export type OpencodeCaptureMode = 'default' | 'core-recorded'
 
 type SingleServer = {
   process: ChildProcess
@@ -71,6 +75,10 @@ type ManagerState = {
   generations: Map<string, number>
   /** 所有当前存活的 opencode 子进程(含 ephemeral)。退出钩子据此按进程组全杀, 避免漏掉 ephemeral。 */
   liveProcs: Set<ChildProcess>
+  coreServers: Map<string, SingleServer>
+  coreStartingServers: Map<string, Promise<SingleServer>>
+  coreGenerations: Map<string, number>
+  coreStoreStarting: Map<string, Promise<void>>
 }
 const globalAny = globalThis as unknown as { [GLOBAL_KEY]?: ManagerState }
 if (!globalAny[GLOBAL_KEY]) {
@@ -79,18 +87,57 @@ if (!globalAny[GLOBAL_KEY]) {
     startingServers: new Map<string, Promise<SingleServer>>(),
     generations: new Map<string, number>(),
     liveProcs: new Set<ChildProcess>(),
+    coreServers: new Map(), coreStartingServers: new Map(), coreGenerations: new Map(), coreStoreStarting:new Map(),
   }
 }
 const state: ManagerState = globalAny[GLOBAL_KEY]!
 // HMR/旧 global 兼容: 老结构无 liveProcs 时补一个, 防 undefined。
 if (!state.liveProcs) state.liveProcs = new Set<ChildProcess>()
+if (!state.coreServers) state.coreServers = new Map()
+if (!state.coreStartingServers) state.coreStartingServers = new Map()
+if (!state.coreGenerations) state.coreGenerations = new Map()
+if (!state.coreStoreStarting) state.coreStoreStarting = new Map()
+function frozenModelSeed(model:ModelConfig):string {
+  if(!model || typeof model.providerID !== 'string' || !model.providerID.trim() || typeof model.modelID !== 'string' || !model.modelID.trim())throw new Error('Explicit frozen provider and model required')
+  const value=JSON.stringify(model,(_key,value:unknown)=>{
+    if(typeof value==='number' && !Number.isFinite(value))throw new Error('Invalid frozen model value')
+    return value && typeof value==='object' && !Array.isArray(value)?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))):value
+  })
+  if(Buffer.byteLength(value)>256*1024)throw new Error('Frozen model configuration exceeds bounded size')
+  return value
+}
+function frozenModelHash(model:ModelConfig):string {return createHash('sha256').update(frozenModelSeed(model)).digest('hex')}
+function serverCacheKey(user:string,mode:OpencodeCaptureMode,model?:ModelConfig):string {
+  return mode==='core-recorded' && model?JSON.stringify([user,frozenModelHash(model)]):user
+}
+async function frozenCoreConfig(user:string,model:ModelConfig) {
+  const seed=frozenModelSeed(model)
+  const {providerID,modelID,protocol,...frozenOptions}=model
+  const options:Record<string,unknown>={...frozenOptions}
+  const native=protocol ? protocol==='anthropic' : providerID==='anthropic'
+  const builtin=new Set(['deepseek','deepseek-official','openai','anthropic','google','qwen','moonshot'])
+  options.headers={authorization:null,'api-key':null,'x-api-key':null,...getModelAuthHeaders({...model,baseUrl:model.baseURL},native?'anthropic':'openai-compatible')}
+  if(native && typeof options.baseURL==='string' && !options.baseURL.replace(/\/+$/, '').endsWith('/v1'))options.baseURL=options.baseURL.replace(/\/+$/, '')+'/v1'
+  const entry:Record<string,unknown>={options,models:{[modelID]:{name:modelID,...(modelID.includes('reasoner')?{limit:{context:65536,output:32768}}:{})}}}
+  if(protocol || !builtin.has(providerID)){entry.npm=native?'@ai-sdk/anthropic':'@ai-sdk/openai-compatible';entry.name=providerID}
+  const config:Record<string,unknown>={$schema:'https://opencode.ai/config.json',provider:{[providerID]:entry},plugin:[],permission:OPENCODE_CONFIG_PERMISSION}
+  const mcp=await buildBuiltinMcpEntry(user)
+  if(mcp)config.mcp=mcp.mcp
+  return {config,configHash:createHash('sha256').update(seed+'|'+(mcp?.hashSeed||'')).digest('hex')}
+}
+function captureMaps(mode:OpencodeCaptureMode='default') {
+  if (mode !== 'default' && mode !== 'core-recorded') throw new Error('Unsupported OpenCode capture mode')
+  return mode === 'core-recorded'
+    ? {servers:state.coreServers,starting:state.coreStartingServers,generations:state.coreGenerations}
+    : {servers:state.servers,starting:state.startingServers,generations:state.generations}
+}
 
 /**
  * 暴露当前 user 的 server 代次。skill-generator-bridge 调它给 cached sessionId 打戳。
  * 没起过 server 时返回 0（caller 通常用 `!== current` 判断失效，0 也能正确触发新建）。
  */
-export function getOpencodeServerGeneration(user: string): number {
-  return state.generations.get(user || ANONYMOUS_USER_KEY) ?? 0
+export function getOpencodeServerGeneration(user: string, opts: {captureMode?:OpencodeCaptureMode;frozenModel?:ModelConfig} = {}): number {
+  return captureMaps(opts.captureMode).generations.get(serverCacheKey(user || ANONYMOUS_USER_KEY,opts.captureMode||'default',opts.frozenModel)) ?? 0
 }
 
 /**
@@ -525,19 +572,31 @@ export async function prepareIsolatedHome(
   return { isolatedHome: root, cleanup }
 }
 
-async function prepareIsolatedXdgConfigHome(user: string): Promise<{
+async function prepareIsolatedXdgConfigHome(user: string, captureMode:OpencodeCaptureMode = 'default',frozenModel?:ModelConfig): Promise<{
   xdgRoot: string
+  actorRoot:string
   configHash: string
 }> {
   const slug = userToSlug(user)
-  const root = resolveAgentInsightDataPath('.opencode-runtime', slug)
+  const normalRoot = resolveAgentInsightDataPath('.opencode-runtime', slug)
+  const actorRoot = captureMode === 'core-recorded' ? path.join(normalRoot, 'core-recorded-'+createHash('sha256').update(user).digest('hex')) : normalRoot
+  const root = captureMode === 'core-recorded' && frozenModel ? path.join(actorRoot,'models',frozenModelHash(frozenModel)) : actorRoot
+  if (captureMode === 'core-recorded') {
+    fs.mkdirSync(root,{recursive:true,mode:0o700})
+    if(fs.lstatSync(root).isSymbolicLink() || (fs.statSync(root).mode & 0o077))throw new Error('Core runtime requires a private real directory')
+  }
   const cfgDir = path.join(root, 'opencode')
-  fs.mkdirSync(cfgDir, { recursive: true })
+  fs.mkdirSync(cfgDir, { recursive: true, ...(captureMode === 'core-recorded' ? {mode:0o700}:{}) })
   const cfgPath = path.join(cfgDir, 'opencode.json')
-  const { config, configHash } = await buildIsolatedOpencodeConfig(user)
+  const { config, configHash } = captureMode==='core-recorded' && frozenModel?await frozenCoreConfig(user,frozenModel):await buildIsolatedOpencodeConfig(user)
   // 每次启动重写一遍，让用户在 UI 改 apiKey 后下次 spawn 立即生效。
-  fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2))
-  return { xdgRoot: root, configHash }
+  if(captureMode === 'core-recorded') {
+    const coreConfig={...(config as Record<string,unknown>),plugin:[]}
+    if(fs.existsSync(cfgPath) && fs.lstatSync(cfgPath).isSymbolicLink())throw new Error('Core config must be a real file')
+    fs.writeFileSync(cfgPath,JSON.stringify(coreConfig,null,2),{mode:0o600})
+    fs.chmodSync(cfgPath,0o600)
+  }else fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2))
+  return { xdgRoot: root,actorRoot, configHash }
 }
 
 /**
@@ -691,7 +750,7 @@ export function sweepOrphanedOpencodeProcesses(): void {
  */
 export function killOpencodeForUser(user: string): number {
   if (!user) return 0
-  const persistentPid = state.servers.get(user)?.process?.pid
+  const persistentPids = new Set([state.servers.get(user)?.process?.pid,...Array.from(state.coreServers.values()).filter(server=>server.user===user).map(server=>server.process.pid)])
   let files: string[]
   try {
     files = fs.readdirSync(OPENCODE_PGID_REGISTRY_DIR)
@@ -711,7 +770,7 @@ export function killOpencodeForUser(user: string): number {
     if (rec.ownerPid !== process.pid) continue // 只动本进程起的
     const pgid = Number(rec.pgid)
     if (!Number.isFinite(pgid)) continue
-    if (persistentPid && pgid === persistentPid) continue // 跳过常驻交互 server
+    if (persistentPids.has(pgid)) continue // 跳过常驻交互 server
     if (processGroupExists(pgid)) {
       try {
         process.kill(-pgid, 'SIGKILL')
@@ -824,27 +883,19 @@ async function buildPluginUploadEnvOverride(user: string): Promise<Record<string
   // host: 优先环境变量 (部署侧 PORT), 缺省 3000
   const localPort = process.env.PORT || process.env.NEXT_PORT || '3000'
   overrides.AGENT_INSIGHT_HOST = `http://127.0.0.1:${localPort}`
-  // api key: 查触发 user 在 DB 里登记的 apiKey, 让 plugin 上报数据时归这个 user
-  try {
-    const u = (await db.findUserByUsername(user)) as { apiKey?: string } | null
-    if (u?.apiKey) {
-      overrides.AGENT_INSIGHT_API_KEY = u.apiKey
-    } else {
-      console.warn(
-        `[opencode:${user}] user not in DB or has no apiKey — plugin 数据将仍按 process.env / ~/.agent-insight/.env 走, 可能归属错误`,
-      )
-    }
-  } catch (e) {
-    console.warn(
-      `[opencode:${user}] failed to look up user apiKey for plugin upload override:`,
-      (e as Error)?.message || e,
-    )
+  const {isStorageCoreEnabled}=await import('@/lib/storage-core/mode');
+  {
+    const {configuredCoreBackgroundActorForUser}=await import('@/lib/storage-core/compat');const actor=await configuredCoreBackgroundActorForUser(user);
+    const {collectorIdentityForBackgroundActor}=await import('@/lib/storage-core/collector-identity');await collectorIdentityForBackgroundActor(actor,{operation:'snapshot',framework:'opencode'});
+    overrides.AGENT_INSIGHT_API_KEY=actor.token;
+    overrides.AGENT_INSIGHT_OPENCODE_SPOOL_DIR=path.join(getAgentInsightHome(),'otel_data','opencode','core-owner',createHash('sha256').update(actor.workspace+'\0'+actor.principal).digest('hex'));
+    return overrides;
   }
-  return overrides
 }
 
-export function buildServerConfigHash(baseConfigHash: string, pluginUploadApiKey?: string): string {
-  return baseConfigHash + '|upload:' + (pluginUploadApiKey || 'no-key')
+export function buildServerConfigHash(baseConfigHash: string, pluginUploadApiKey?: string, captureMode:OpencodeCaptureMode = 'default'): string {
+  if(captureMode === 'core-recorded')return createHash('sha256').update(baseConfigHash).digest('hex')+'|upload:disabled|capture:core-recorded'
+  return baseConfigHash+'|upload:'+(pluginUploadApiKey||'no-key')
 }
 
 async function startServerForUser(
@@ -861,21 +912,29 @@ async function startServerForUser(
      */
     homeOverride?: string
     temporaryRoot?: string
+    captureMode?:OpencodeCaptureMode
+    frozenModel?:ModelConfig
     /** false: load opencode without Agent Insight plugin capture for internal evaluator transports. */
     telemetryEnabled?: boolean
   },
 ): Promise<SingleServer> {
-  const { verbose = false, homeOverride, temporaryRoot, telemetryEnabled = true } = opts
+  const { verbose = false, temporaryRoot, captureMode = 'default' } = opts
+  let homeOverride=opts.homeOverride
+  const telemetryEnabled=captureMode === 'core-recorded' ? false : opts.telemetryEnabled ?? true
   const port = await getOpenPort()
   const binary = resolveOpencodeBinary()
-  const { xdgRoot, configHash: baseConfigHash } = await prepareIsolatedXdgConfigHome(user)
-  const runtimeRoot = temporaryRoot ?? path.join(xdgRoot, `v1-${createHash('sha256').update(user).digest('hex')}`)
+  const { xdgRoot,actorRoot, configHash: baseConfigHash } = await prepareIsolatedXdgConfigHome(user,captureMode,opts.frozenModel)
+  const runtimeRoot = temporaryRoot ?? path.join(actorRoot, `v1-${createHash('sha256').update(user).digest('hex')}`)
   fs.mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 })
-  const pluginUploadEnv = await buildPluginUploadEnvOverride(user)
+  if(captureMode === 'core-recorded') {
+    homeOverride=temporaryRoot || path.join(actorRoot,'runtime-home')
+    for(const relative of ['', '.opencode/plugins','.opencode/skills','.claude/skills','.agents/skills'])fs.mkdirSync(path.join(homeOverride,relative),{recursive:true,mode:0o700})
+  }
+  const pluginUploadEnv:Record<string,string> = captureMode === 'core-recorded' ? {} : await buildPluginUploadEnvOverride(user)
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
   // 触发 ensureOpencodeServer 重启实例,新进程拿新 apiKey。
-  const configHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY)
+  const configHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY,captureMode)
 
   const proc = spawn(
     binary,
@@ -910,6 +969,7 @@ async function startServerForUser(
         // 强制让 plugin 上报到本机 + 归属触发 user (详见 buildPluginUploadEnvOverride 注释)
         ...pluginUploadEnv,
         ...(telemetryEnabled === false ? { AGENT_INSIGHT_OPENCODE_OTEL_ENABLE: 'false' } : {}),
+        ...(captureMode === 'core-recorded' ? {AGENT_INSIGHT_API_KEY:'',AGENT_INSIGHT_HOST:'',OPENCODE_MIN_CAPTURE_ENABLE:'false',OTEL_SDK_DISABLED:'true',OTEL_TRACES_EXPORTER:'none',OTEL_METRICS_EXPORTER:'none',OTEL_LOGS_EXPORTER:'none',OTEL_EXPORTER_OTLP_ENDPOINT:''} : {}),
       }),
     },
   )
@@ -948,12 +1008,14 @@ async function startServerForUser(
     state.liveProcs.delete(proc)
     // wrapper 退出后, 若整组确实也没了就清注册表; 若 .opencode 仍残留(组还在)则保留记录留给下次 sweep。
     if (typeof proc.pid === 'number' && !processGroupExists(proc.pid)) unregisterOpencodePgid(proc.pid)
-    const current = state.servers.get(user)
+    const servers=captureMaps(captureMode).servers
+    const cacheKey=serverCacheKey(user,captureMode,opts.frozenModel)
+    const current = servers.get(cacheKey)
     if (current?.process === proc) {
       console.error(
         `\n[opencode:${user}] server exited (code=${code}, signal=${signal})`,
       )
-      state.servers.delete(user)
+      servers.delete(cacheKey)
     }
   })
 
@@ -1008,20 +1070,27 @@ export async function ensureOpencodeServer(
   opts: {
     user?: string
     verbose?: boolean
+    captureMode?:OpencodeCaptureMode
+    frozenModel?:ModelConfig
   } = {},
 ): Promise<string> {
   const userKey = opts.user || ANONYMOUS_USER_KEY
+  const captureMode=opts.captureMode ?? 'default'
+  const maps=captureMaps(captureMode)
+  if(opts.frozenModel && captureMode!=='core-recorded')throw new Error('Frozen static model is reserved for trusted core capture')
+  const cacheKey=serverCacheKey(userKey,captureMode,opts.frozenModel)
 
   // 检查现有实例是否仍可用 + 配置是否还匹配
-  const existing = state.servers.get(userKey)
+  const existing = maps.servers.get(cacheKey)
   if (existing && existing.process.exitCode === null) {
+    if(captureMode==='core-recorded' && opts.frozenModel)return existing.baseUrl
     // 静默对照配置 hash——如果用户在 UI 改了 apiKey，老实例的 configHash 会和重新计算的不一致，
     // 此时先 graceful-then-forceful 干掉老实例（含真二进制），下面走 spawn 新的。
     let nextHash: string | null = null
     try {
       const { configHash: baseConfigHash } = await buildIsolatedOpencodeConfig(userKey)
-      const pluginUploadEnv = await buildPluginUploadEnvOverride(userKey)
-      nextHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY)
+      const pluginUploadEnv:Record<string,string> = captureMode === 'core-recorded' ? {} : await buildPluginUploadEnvOverride(userKey)
+      nextHash = buildServerConfigHash(baseConfigHash, pluginUploadEnv.AGENT_INSIGHT_API_KEY,captureMode)
     } catch {
       /* ignore，按现有实例继续用 */
     }
@@ -1031,7 +1100,7 @@ export async function ensureOpencodeServer(
     console.log(
       `[opencode:${userKey}] config changed (hash ${existing.configHash} → ${nextHash}), restarting instance`,
     )
-    state.servers.delete(userKey)
+    maps.servers.delete(cacheKey)
     // 必须等老实例（连同它 spawn 出的真 opencode 二进制）彻底死透再 spawn 新的，
     // 否则旧二进制变孤儿（PPID=1），next-server 跟它的 SSE 长连接永远不会断，
     // 用户 in-flight 请求永远收不到响应。详见 terminateOpencodeProcess 注释。
@@ -1039,24 +1108,34 @@ export async function ensureOpencodeServer(
   }
 
   // 复用 in-flight spawn
-  const inflight = state.startingServers.get(userKey)
+  const inflight = maps.starting.get(cacheKey)
   if (inflight) {
     const srv = await inflight
     return srv.baseUrl
   }
 
-  const starting = startServerForUser(userKey, opts)
-  state.startingServers.set(userKey, starting)
+  const starting = (async()=>{
+    if(captureMode!=='core-recorded')return startServerForUser(userKey,opts)
+    const previous=state.coreStoreStarting.get(userKey)||Promise.resolve()
+    let release!:()=>void
+    const gate=new Promise<void>(resolve=>{release=resolve})
+    const queued=previous.catch(()=>{}).then(()=>gate)
+    state.coreStoreStarting.set(userKey,queued)
+    await previous.catch(()=>{})
+    try{return await startServerForUser(userKey,opts)}
+    finally{release();if(state.coreStoreStarting.get(userKey)===queued)state.coreStoreStarting.delete(userKey)}
+  })()
+  maps.starting.set(cacheKey, starting)
   try {
     const srv = await starting
-    state.servers.set(userKey, srv)
+    maps.servers.set(cacheKey, srv)
     // 起新进程 → 代次 +1。旧进程内存里的 session ID 在新进程里都不认识，
     // caller 用代次戳跟"现存代次"对比能立刻识破失效缓存。
-    state.generations.set(userKey, (state.generations.get(userKey) ?? 0) + 1)
+    maps.generations.set(cacheKey, (maps.generations.get(cacheKey) ?? 0) + 1)
     return srv.baseUrl
   } finally {
-    if (state.startingServers.get(userKey) === starting) {
-      state.startingServers.delete(userKey)
+    if (maps.starting.get(cacheKey) === starting) {
+      maps.starting.delete(cacheKey)
     }
   }
 }
@@ -1065,37 +1144,27 @@ export async function ensureOpencodeServer(
  * 优雅关闭某个 user 的 server（进程退出时调用，或测试里手动 reset）。
  * 5 秒后强杀作为兜底。不传 user 时关掉所有实例（保持向后兼容旧 caller）。
  */
-export async function stopOpencodeServer(user?: string): Promise<void> {
+export async function stopOpencodeServer(user?: string, opts: {captureMode?:OpencodeCaptureMode;frozenModel?:ModelConfig} = {}): Promise<void> {
+  const maps=captureMaps(opts.captureMode)
   if (user) {
-    await stopOneServer(user)
+    if(opts.captureMode==='core-recorded' && !opts.frozenModel){
+      await Promise.all(Array.from(maps.servers.entries()).filter(([,server])=>server.user===user).map(([key])=>stopOneServer(key,maps.servers)))
+    }else await stopOneServer(serverCacheKey(user,opts.captureMode||'default',opts.frozenModel),maps.servers)
     return
   }
   // 全停
-  const users = Array.from(state.servers.keys())
-  await Promise.all(users.map((u) => stopOneServer(u)))
+  const variants=opts.captureMode ? [maps.servers] : [state.servers,state.coreServers]
+  await Promise.all(variants.flatMap(servers=>Array.from(servers.keys()).map(user=>stopOneServer(user,servers))))
 }
 
-async function stopOneServer(user: string): Promise<void> {
-  const inst = state.servers.get(user)
+async function stopOneServer(user: string, servers=state.servers): Promise<void> {
+  const inst = servers.get(user)
   if (!inst) return
-  state.servers.delete(user)
-  const { process: proc } = inst
-  if (proc.exitCode !== null) return
-  proc.kill('SIGTERM')
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      try {
-        proc.kill('SIGKILL')
-      } catch {
-        /* 已经死了 */
-      }
-      resolve()
-    }, 5000)
-    proc.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
-    })
-  })
+  servers.delete(user)
+  await terminateOpencodeProcess(inst.process,`stop persistent server for ${inst.user}`)
+  if(typeof inst.process.pid === 'number' && processGroupExists(inst.process.pid)) {
+    throw Object.assign(new Error('OpenCode process group cleanup could not be confirmed'),{code:'EVALUATION_CLEANUP_UNCONFIRMED'})
+  }
 }
 
 /**
@@ -1198,12 +1267,17 @@ export async function runWithEphemeralOpencodeServer<T>(
      * 不传时: isolateHome=true 的内部临时进程默认关闭; 非隔离/用户态进程默认开启。
      */
     telemetryEnabled?: boolean
+    captureMode?:OpencodeCaptureMode
+    frozenModel?:ModelConfig
   },
   fn: (serverUrl: string) => Promise<T>,
 ): Promise<T> {
   const userKey = opts.user || ANONYMOUS_USER_KEY
   const verbose = opts.verbose ?? false
-  const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
+  const captureMode=opts.captureMode||'default'
+  captureMaps(captureMode)
+  if(opts.frozenModel && captureMode!=='core-recorded')throw new Error('Frozen static model is reserved for trusted core capture')
+  const telemetryEnabled = captureMode==='core-recorded'?false:opts.telemetryEnabled ?? !opts.isolateHome
   const { experimentSignal, markExperimentCleanupUnconfirmed } = await import('@/lib/engine/experiment/cancellation-context')
   const parentSignal = experimentSignal()
   const cancellation = opts.signal && parentSignal ? AbortSignal.any([opts.signal, parentSignal]) : opts.signal || parentSignal
@@ -1214,7 +1288,7 @@ export async function runWithEphemeralOpencodeServer<T>(
   const homeOverride = opts.isolateHome ? temporaryRoot : undefined
   // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
   // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
-  const inst = await startServerForUser(userKey, { verbose, homeOverride, temporaryRoot, telemetryEnabled })
+  const inst = await startServerForUser(userKey, { verbose, homeOverride, temporaryRoot, telemetryEnabled,captureMode,frozenModel:opts.frozenModel })
     .catch(async error => {
       if (error?.code === 'EVALUATION_CLEANUP_UNCONFIRMED') markExperimentCleanupUnconfirmed()
       else await cleanup()

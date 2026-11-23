@@ -1,3 +1,4 @@
+import {withCoreControlInternalRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -25,6 +26,7 @@ export const dynamic = 'force-dynamic'
 
 /** 内部接口：control-server 报告 WSS 连接建立/断开。 */
 export async function POST(req: Request) {
+  return withCoreControlInternalRoute(req,async()=>{
   try {
     assertInternalCaller(req)
     const body = await req.json().catch(() => ({}))
@@ -45,4 +47,5 @@ export async function POST(req: Request) {
   } catch (error) {
     return reliabilityErrorResponse(error, 'reliability/control-presence')
   }
+  });
 }

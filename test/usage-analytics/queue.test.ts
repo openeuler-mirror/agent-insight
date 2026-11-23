@@ -17,11 +17,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {runWithCoreControlActor} from '@/lib/storage-core/control-context';
 import { UsageQueue, __setUsageQueueForTest } from '@/lib/usage-analytics/queue';
 import { InMemoryUsageStorage } from '@/lib/usage-analytics/storage';
 import { recordUsageEvent, normalizeRoute } from '@/lib/usage-analytics/collector';
 import { toDateKey } from '@/lib/usage-analytics/date';
 import type { UsageEvent } from '@/lib/usage-analytics/types';
+
+function recordVerifiedEvent(input: Parameters<typeof recordUsageEvent>[0]) {
+    const previous = process.env.AGENT_INSIGHT_STORAGE_CORE_URL;
+    process.env.AGENT_INSIGHT_STORAGE_CORE_URL = 'http://127.0.0.1:19000';
+    try {
+        return runWithCoreControlActor({token:'api_'+'A'.repeat(43),principal:'alice',workspace:'alice',username:'alice'}, {}, () => recordUsageEvent(input));
+    } finally {
+        if (previous === undefined) delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;
+        else process.env.AGENT_INSIGHT_STORAGE_CORE_URL = previous;
+    }
+}
 
 function ev(i: number): UsageEvent {
     const occurredAt = new Date('2026-08-03T02:00:00Z');
@@ -99,7 +111,7 @@ test('recordUsageEvent 同步返回且吞掉所有异常', () => {
     __setUsageQueueForTest(q);
 
     // 返回值必须是 undefined —— 业务调用方不应能 await 它
-    const r = recordUsageEvent({ user: 'alice', featureKey: 'trace', eventKey: 'trace.export' });
+    const r = recordVerifiedEvent({ user: 'alice', featureKey: 'trace', eventKey: 'trace.export' });
     assert.equal(r, undefined);
     assert.equal(q.depth, 1);
 
@@ -127,6 +139,22 @@ test('未知 event key 与错配 feature 被拒绝', () => {
 
     delete process.env.AGENT_INSIGHT_USAGE_ENABLED;
     __setUsageQueueForTest(null);
+});
+
+test('没有可信身份或用户不匹配的用量事件不入队', () => {
+    process.env.AGENT_INSIGHT_USAGE_ENABLED = '1';
+    const q = new UsageQueue(new InMemoryUsageStorage(), 100);
+    __setUsageQueueForTest(q);
+    try {
+        recordUsageEvent({user:'alice',featureKey:'trace',eventKey:'trace.export'});
+        recordVerifiedEvent({user:'bob',featureKey:'trace',eventKey:'trace.export'});
+        assert.equal(q.depth, 0);
+        recordVerifiedEvent({user:'alice',featureKey:'trace',eventKey:'trace.export'});
+        assert.equal(q.depth, 1);
+    } finally {
+        delete process.env.AGENT_INSIGHT_USAGE_ENABLED;
+        __setUsageQueueForTest(null);
+    }
 });
 
 test('route 只保留 pathname，去掉 query 与 hash', () => {

@@ -1,3 +1,7 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {withCoreExperiments,requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {coreBenchmarkCallbackContext,coreBenchmarkArtifactResponse} from '@/lib/benchmark/core-public-callback'
+import {benchmarkCallbackRpc} from '@/lib/benchmark/core-store'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -29,56 +33,14 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request, { params }: { params: Promise<{ artifactId: string }> }) {
   try {
     const { artifactId } = await params
-    const url = new URL(req.url)
-    const { username } = await resolveUser(req, url.searchParams.get('user'))
-    if (username) {
-      const artifact = await readBenchmarkRunArtifact({ artifactId, user: username })
-      return new Response(new Blob([new Uint8Array(artifact.bytes)]), {
-        status: 200,
-        headers: {
-          'content-type': artifact.mediaType,
-          'content-length': String(artifact.bytes.byteLength),
-          'content-disposition': `attachment; filename="${artifact.name}"`,
-          etag: `"${artifact.sha256}"`,
-          'cache-control': 'private, no-store',
-        },
-      })
+    {
+      if(req.headers.has('x-agent-insight-callback-token')){
+        const jobId=req.headers.get('x-agent-insight-evaluation-id')?.trim();if(!jobId)throw new BenchmarkProtocolError('EVALUATION_ID_MISSING','缺少评测Run标识',400)
+        const artifact=await benchmarkCallbackRpc<{name:string;media_type:string;sha256:string;bytes_base64:string}>(coreBenchmarkCallbackContext(req),'artifact_read',{job_id:jobId,artifact_id:artifactId})
+        return coreBenchmarkArtifactResponse({name:artifact.name,mediaType:artifact.media_type,sha256:artifact.sha256,bytes:Buffer.from(artifact.bytes_base64,'base64')})
+      }
+      return await withCoreExperiments(req,async()=>coreBenchmarkArtifactResponse(await readBenchmarkRunArtifact({artifactId,user:requireCoreExperimentContext().actor.username})))
     }
-    const evaluationId = req.headers.get('x-agent-insight-evaluation-id')?.trim()
-    if (!evaluationId) {
-      throw new BenchmarkProtocolError('EVALUATION_ID_MISSING', '缺少评测 Run 标识', 400)
-    }
-    const [artifact, evaluation] = await Promise.all([
-      prisma.benchmarkArtifact.findUnique({ where: { id: artifactId } }),
-      prisma.benchmarkEvaluation.findUnique({ where: { id: evaluationId } }),
-    ])
-    if (!artifact || !evaluation || artifact.runId !== evaluation.caseRunId) {
-      throw new BenchmarkProtocolError('ARTIFACT_NOT_FOUND', 'Artifact 不存在或不属于当前评测', 404)
-    }
-    let request: { artifacts?: Array<{ artifactId?: string }> }
-    try {
-      request = JSON.parse(evaluation.requestJson) as typeof request
-    } catch {
-      throw new BenchmarkProtocolError('EVALUATION_JOB_INVALID', '评测任务快照损坏', 500)
-    }
-    if (!request.artifacts?.some((item) => item.artifactId === artifactId)) {
-      throw new BenchmarkProtocolError('ARTIFACT_NOT_REFERENCED', '评测任务未引用该 Artifact', 403)
-    }
-    const bytes = await fs.readFile(benchmarkArtifactAbsolutePath(artifact.storagePath))
-    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
-    if (bytes.byteLength !== artifact.sizeBytes || digest !== artifact.sha256) {
-      throw new BenchmarkProtocolError('ARTIFACT_CONTENT_MISMATCH', 'Artifact 内容完整性校验失败', 409)
-    }
-    return new Response(new Blob([bytes]), {
-      status: 200,
-      headers: {
-        'content-type': artifact.mediaType,
-        'content-length': String(bytes.byteLength),
-        'content-disposition': `attachment; filename="${artifact.name}"`,
-        etag: `"${artifact.sha256}"`,
-        'cache-control': 'private, no-store',
-      },
-    })
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/artifacts/content')
   }

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -29,6 +30,7 @@ import { classifyModelTestError, probeModelConnection } from '@/lib/server/model
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
     const startedAt = Date.now();
     let timeoutMs = DEFAULT_MODEL_TEST_TIMEOUT_MS;
     try {
@@ -89,4 +91,6 @@ export async function POST(request: Request) {
             timeoutMs,
         }, { status: failure.status });
     }
+
+  },["write","execute"]);
 }

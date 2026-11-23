@@ -31,6 +31,7 @@
 
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { downloadApiFile } from '@/lib/client/download';
 import { copyText } from '@/lib/copy-text';
 import { STATIC_EVAL_STANDARDS } from '@/components/evaluation';
 import { Button } from '@/components/ui/button';
@@ -2564,7 +2565,7 @@ function TabContent({
 
     const handleDownload = () => {
         const qs = user ? `?user=${encodeURIComponent(user)}` : '';
-        window.open(`/api/skills/${skillId}/versions/${version.version}/download${qs}`, '_blank');
+        void downloadApiFile(`/api/skills/${skillId}/versions/${version.version}/download${qs}`, `skill-v${version.version}.zip`).catch(console.error);
     };
 
     const sizeLabel = fileMeta

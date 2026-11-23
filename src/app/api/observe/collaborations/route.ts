@@ -1,3 +1,4 @@
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -16,12 +17,12 @@
 
 import { NextResponse } from 'next/server';
 
-import { resolveUser } from '@/lib/auth/auth';
+import {resolveSemanticUser as resolveUser} from '@/lib/storage-core/semantic-sources';
 import { listCollaborations } from '@/lib/ingest/collaboration/query';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const url = new URL(request.url);
   const { username } = await resolveUser(request);
   if (!username) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -32,3 +33,5 @@ export async function GET(request: Request) {
   });
   return NextResponse.json(result);
 }
+
+export async function GET(request: Request) {return semanticRoute(request,()=>handleGET(request));}

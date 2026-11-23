@@ -1,0 +1,129 @@
+{
+  "from_immutable_original_helpers": true,
+  "cases": [
+    {
+      "id": "miss-false-competitor-unicode-history",
+      "passRate": 0,
+      "truePositiveRate": 0,
+      "falsePositiveRate": 1,
+      "currentDescription": "固定 v0 测试说明",
+      "history": [
+        {
+          "version": 1,
+          "description": "旧说明\n已测试",
+          "passRate": 0.25
+        },
+        {
+          "version": 2,
+          "description": "",
+          "passRate": 0
+        }
+      ],
+      "results": [
+        {
+          "itemId": "a",
+          "query": "  修复 中文\nquery  长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长",
+          "shouldTrigger": true,
+          "runsTriggered": 0,
+          "runsTotal": 3,
+          "triggerRate": 0,
+          "pass": false,
+          "latencyMsAvg": 0,
+          "competingSkill": "兄弟-agent"
+        },
+        {
+          "itemId": "b",
+          "query": "不应触发的 query",
+          "shouldTrigger": false,
+          "runsTriggered": 3,
+          "runsTotal": 3,
+          "triggerRate": 1,
+          "pass": false,
+          "latencyMsAvg": 0
+        }
+      ],
+      "shouldWrite": true,
+      "expected": {
+        "source": "trigger",
+        "generator": "trigger-evaluator@1.0",
+        "dedupKey": "trigger:fixture-trigger",
+        "severity": "high",
+        "summary": "触发评测通过率 0%（漏 1 · 误 1 · 抢路由 1）",
+        "evidence": "通过率 0% · TPR 0% · FPR 100% · 每条 query 跑 3 次 · 阈值 0.5\n\n【漏触发】\n- 修复 中文 query 长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长… → 触发 0/3\n\n【误触发】\n- 不应触发的 query → 触发 3/3\n\n【路由被抢】\n- 修复 中文 query 长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长… → 被 兄弟-agent 抢走（本 skill 触发 0/3）",
+        "suggestedFix": "skill「fixture-trigger」触发评测发现可优化点，请据此优化 description（SKILL.md frontmatter）。\n\n【当前 description】\n固定 v0 测试说明\n\n【本次评测得分】\n通过率 0% · TPR 0% · FPR 100%（每条 query 跑 3 次，阈值 0.5）\n\n【漏触发】（应触发但没触发）\n- \"修复 中文 query 长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长…\" → 触发 0/3\n\n【误触发】（不该触发但触发了）\n- \"不应触发的 query\" → 触发 3/3\n\n【路由被抢】（应触发但被兄弟 skill 拦走）\n- \"修复 中文 query 长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长…\" → 被 兄弟-agent 抢走（本 skill 触发 0/3）\n\n【历史尝试】（这些版本的 description 已经试过，分数如下——别重复老路）\n- v1「旧说明 已测试」→ 通过率 25%\n- v2「(空)」→ 通过率 0%\n\n方向：从失败 case 抽象成更广的用户意图类（勿照抄 query，避免过拟合）；命令式、100-200 字；显式写出与 兄弟-agent 的区分边界；漏+误触发并存时先扩边界、再用反例段（Do NOT trigger when...）收口。",
+        "reasoning": null,
+        "ruleId": null,
+        "dimension": null,
+        "category": "触发评测"
+      }
+    },
+    {
+      "id": "all-pass-with-competing-is-still-an-issue",
+      "passRate": 1,
+      "truePositiveRate": 1,
+      "falsePositiveRate": 0,
+      "currentDescription": "",
+      "history": [],
+      "results": [
+        {
+          "itemId": "a",
+          "query": "任务完成但曾竞争",
+          "shouldTrigger": true,
+          "runsTriggered": 2,
+          "runsTotal": 3,
+          "triggerRate": 0.6666666666666666,
+          "pass": true,
+          "latencyMsAvg": 0,
+          "competingSkill": "other-skill"
+        }
+      ],
+      "shouldWrite": true,
+      "expected": {
+        "source": "trigger",
+        "generator": "trigger-evaluator@1.0",
+        "dedupKey": "trigger:fixture-trigger",
+        "severity": "low",
+        "summary": "触发评测通过率 100%（抢路由 1）",
+        "evidence": "通过率 100% · TPR 100% · FPR 0% · 每条 query 跑 3 次 · 阈值 0.5\n\n【路由被抢】\n- 任务完成但曾竞争 → 被 other-skill 抢走（本 skill 触发 2/3）",
+        "suggestedFix": "skill「fixture-trigger」触发评测发现可优化点，请据此优化 description（SKILL.md frontmatter）。\n\n【当前 description】\n(空)\n\n【本次评测得分】\n通过率 100% · TPR 100% · FPR 0%（每条 query 跑 3 次，阈值 0.5）\n\n【路由被抢】（应触发但被兄弟 skill 拦走）\n- \"任务完成但曾竞争\" → 被 other-skill 抢走（本 skill 触发 2/3）\n\n方向：从失败 case 抽象成更广的用户意图类（勿照抄 query，避免过拟合）；命令式、100-200 字；显式写出与 other-skill 的区分边界；漏+误触发并存时先扩边界、再用反例段（Do NOT trigger when...）收口。",
+        "reasoning": null,
+        "ruleId": null,
+        "dimension": null,
+        "category": "触发评测"
+      }
+    },
+    {
+      "id": "all-pass-without-competitor-clears-current",
+      "passRate": 1,
+      "truePositiveRate": 1,
+      "falsePositiveRate": 0,
+      "currentDescription": "当前说明",
+      "history": [],
+      "results": [
+        {
+          "itemId": "a",
+          "query": "正常命中",
+          "shouldTrigger": true,
+          "runsTriggered": 3,
+          "runsTotal": 3,
+          "triggerRate": 1,
+          "pass": true,
+          "latencyMsAvg": 0
+        },
+        {
+          "itemId": "b",
+          "query": "正常不命中",
+          "shouldTrigger": false,
+          "runsTriggered": 0,
+          "runsTotal": 3,
+          "triggerRate": 0,
+          "pass": true,
+          "latencyMsAvg": 0
+        }
+      ],
+      "shouldWrite": false,
+      "expected": null
+    }
+  ],
+  "provenance": "Expected fields extracted from immutable pre-migration derive-trigger-opt-points helpers; not generated by the new builder."
+}

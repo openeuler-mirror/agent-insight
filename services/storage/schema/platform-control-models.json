@@ -1,0 +1,5094 @@
+{
+  "version": 19,
+  "models": {
+    "user": {
+      "name": "User",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "username": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "externalAccount": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "apiKey": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "username"
+        ],
+        [
+          "externalAccount"
+        ],
+        [
+          "apiKey"
+        ]
+      ]
+    },
+    "skill": {
+      "name": "Skill",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "name": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "category": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "Other"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "description": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "tags": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "visibility": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "private"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "author": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        },
+        "activeVersion": {
+          "type": "Int",
+          "nullable": true,
+          "default": {
+            "value": 0
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "isUploaded": {
+          "type": "Boolean",
+          "nullable": false,
+          "default": {
+            "value": false
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "versions": {
+          "model": "skillVersion",
+          "many": true
+        },
+        "evaluations": {
+          "model": "evaluation",
+          "many": true
+        },
+        "issues": {
+          "model": "skillIssue",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "name",
+          "user"
+        ]
+      ]
+    },
+    "skillVersion": {
+      "name": "SkillVersion",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "version": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "semanticVersion": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "enterpriseSkillId": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "content": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "assetPath": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "files": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "changeLog": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "verificationStatus": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "not_required"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "verificationMode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "verifiedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "verifiedBy": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "verificationNote": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "Skill": {
+          "model": "skill",
+          "many": false,
+          "fields": [
+            "skillId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "skillId",
+          "version"
+        ]
+      ]
+    },
+    "config": {
+      "name": "Config",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "query": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skill": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": ""
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillVersion": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "datasetType": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "combined"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "routingIntent": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "routingAnchors": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "expectedSkills": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "standardAnswer": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "rootCauses": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "keyActions": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "extractedKeyActions": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "parseStatus": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "completed"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "query",
+          "user",
+          "datasetType"
+        ]
+      ]
+    },
+    "userSettings": {
+      "name": "UserSettings",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "settingsJson": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "user"
+        ]
+      ]
+    },
+    "parsedFlow": {
+      "name": "ParsedFlow",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "version": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "flowJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "mermaidCode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "parsedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "skillId",
+          "version",
+          "user"
+        ]
+      ]
+    },
+    "userGuideState": {
+      "name": "UserGuideState",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "guideDisabled": {
+          "type": "Boolean",
+          "nullable": false,
+          "default": {
+            "value": false
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "currentStep": {
+          "type": "Int",
+          "nullable": false,
+          "default": {
+            "value": 0
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "completedSteps": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skippedSteps": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "lastShownAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "dismissedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "user"
+        ]
+      ]
+    },
+    "registeredAgent": {
+      "name": "RegisteredAgent",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "name": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "description": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentType": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "main"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentOwnership": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "user"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "platform",
+          "name",
+          "user"
+        ]
+      ]
+    },
+    "evaluation": {
+      "name": "Evaluation",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "type": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "version": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "executionId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "contentHash": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "l2ScoresJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "ranAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "ok"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "durationMs": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "generator": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "runId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "Skill": {
+          "model": "skill",
+          "many": false,
+          "fields": [
+            "skillId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        },
+        "issues": {
+          "model": "skillIssue",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillIssue": {
+      "name": "SkillIssue",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "evaluationId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "source": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "version": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "dedupKey": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "severity": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "summary": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "evidence": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "reasoning": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "suggestedFix": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "ruleId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "dimension": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "category": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resolvedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resolvedRunId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "Evaluation": {
+          "model": "evaluation",
+          "many": false,
+          "fields": [
+            "evaluationId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        },
+        "Skill": {
+          "model": "skill",
+          "many": false,
+          "fields": [
+            "skillId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillTriggerEvalSet": {
+      "name": "SkillTriggerEvalSet",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "version": {
+          "type": "Int",
+          "nullable": false,
+          "default": {
+            "value": 1
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "versionSource": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "manual"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "versionNote": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "description": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": ""
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "itemsJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "draftedFromSkillHash": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "ready"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "user",
+          "skillName",
+          "version"
+        ]
+      ]
+    },
+    "batchEvalTask": {
+      "name": "BatchEvalTask",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "taskName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "caseStatesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "traceEvalStatesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillGeneratorSession": {
+      "name": "SkillGeneratorSession",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "title": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "New Chat"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "files": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "opencodeSessionId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentName": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentTraceSkill": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "messages": {
+          "model": "skillGeneratorMessage",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillGeneratorMessage": {
+      "name": "SkillGeneratorMessage",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "role": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "content": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "blocks": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillGeneratorSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillOptSession": {
+      "name": "SkillOptSession",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "baseVersion": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "title": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "新对话"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "files": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "opencodeSessionId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentName": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentTraceSkill": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "messages": {
+          "model": "skillOptMessage",
+          "many": true
+        },
+        "iterations": {
+          "model": "skillOptIteration",
+          "many": true
+        },
+        "plan": {
+          "model": "skillOptPlan",
+          "many": false
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillOptPlan": {
+      "name": "SkillOptPlan",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "baseVersion": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "draft"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "operatorMeta": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillOptSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        },
+        "items": {
+          "model": "skillOptPlanItem",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "sessionId"
+        ]
+      ]
+    },
+    "skillOptPlanItem": {
+      "name": "SkillOptPlanItem",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "planId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "rank": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "route": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "pending"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "title": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "rationale": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "severity": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "medium"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "targetFile": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "anchorText": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "proposedEdit": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "conflictNote": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourceIssueIds": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourceRefsJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourcesBreakdown": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "prevalence": {
+          "type": "Int",
+          "nullable": false,
+          "default": {
+            "value": 1
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "plan": {
+          "model": "skillOptPlan",
+          "many": false,
+          "fields": [
+            "planId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillOptMessage": {
+      "name": "SkillOptMessage",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "role": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "content": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "blocks": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillOptSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillOptIteration": {
+      "name": "SkillOptIteration",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "draftNumber": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "summary": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "files": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resolvedIssueIds": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillOptSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "sessionId",
+          "draftNumber"
+        ]
+      ]
+    },
+    "skillWorkbenchSession": {
+      "name": "SkillWorkbenchSession",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "title": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "新对话"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "workVersion": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "source": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "activeView": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "detail"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "stage": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "empty"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "filesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "generatorSessionId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "optSessionId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "messages": {
+          "model": "skillWorkbenchMessage",
+          "many": true
+        },
+        "tasks": {
+          "model": "skillWorkbenchTask",
+          "many": true
+        },
+        "optimizations": {
+          "model": "skillOptimizationRecord",
+          "many": true
+        },
+        "snapshotEvaluations": {
+          "model": "skillSnapshotEvaluation",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillWorkbenchMessage": {
+      "name": "SkillWorkbenchMessage",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "role": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "content": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": ""
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "blocksJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "taskId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillWorkbenchSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillWorkbenchTask": {
+      "name": "SkillWorkbenchTask",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "type": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "pending"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "idempotencyKey": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "progressJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resultType": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resultId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillWorkbenchSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "sessionId",
+          "idempotencyKey"
+        ]
+      ]
+    },
+    "skillOptimizationRecord": {
+      "name": "SkillOptimizationRecord",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "baseVersion": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "candidateVersionLabel": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "candidateFilesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "candidateContentHash": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "summary": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": ""
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "diffJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourceKind": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "user"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourceRefsJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "staticEvaluationId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourceExperimentId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "retestExperimentId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "optimizing"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "publishedVersion": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "completedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "publishedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillWorkbenchSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillSnapshotEvaluation": {
+      "name": "SkillSnapshotEvaluation",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "proposedVersion": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "contentHash": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "generator": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "pending"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "scoresJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "issuesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "[]"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "durationMs": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "trigger": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "manual"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "session": {
+          "model": "skillWorkbenchSession",
+          "many": false,
+          "fields": [
+            "sessionId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "reliabilityInstallToken": {
+      "name": "ReliabilityInstallToken",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "tokenHash": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "name": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "expiresAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "consumedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "tokenHash"
+        ]
+      ]
+    },
+    "reliabilityClient": {
+      "name": "ReliabilityClient",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "name": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "hostname": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "reportedIp": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "observedIp": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "os": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "arch": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "offline"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "serviceHealth": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "unknown"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "supervisor": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "processStartedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "restartCount": {
+          "type": "Int",
+          "nullable": false,
+          "default": {
+            "value": 0
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "lastSeenAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agentVersion": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "capabilitiesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "capabilitiesRevision": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "unboundAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "unboundToClientId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "machineId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "credentials": {
+          "model": "reliabilityClientCredential",
+          "many": true
+        },
+        "commands": {
+          "model": "reliabilityCommand",
+          "many": true
+        },
+        "configs": {
+          "model": "reliabilityClientConfig",
+          "many": true
+        },
+        "deliveries": {
+          "model": "reliabilityConfigDelivery",
+          "many": true
+        },
+        "skillDeployments": {
+          "model": "skillDeployment",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "clientId"
+        ],
+        [
+          "user",
+          "machineId"
+        ]
+      ]
+    },
+    "reliabilityClientCredential": {
+      "name": "ReliabilityClientCredential",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "credentialHash": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "lastUsedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "revokedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "client": {
+          "model": "reliabilityClient",
+          "many": false,
+          "fields": [
+            "clientId"
+          ],
+          "references": [
+            "clientId"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "credentialHash"
+        ]
+      ]
+    },
+    "reliabilityCommand": {
+      "name": "ReliabilityCommand",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "commandId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "action": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "payloadJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "CREATED"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "channel": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "expiresAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sentAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "receivedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "startedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "completedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorCode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resultJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "client": {
+          "model": "reliabilityClient",
+          "many": false,
+          "fields": [
+            "clientId"
+          ],
+          "references": [
+            "clientId"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "commandId"
+        ]
+      ]
+    },
+    "reliabilityClientConfig": {
+      "name": "ReliabilityClientConfig",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "schemaVersion": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "1.0"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "revision": {
+          "type": "Int",
+          "nullable": false,
+          "default": {
+            "value": 0
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "overrideJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "client": {
+          "model": "reliabilityClient",
+          "many": false,
+          "fields": [
+            "clientId"
+          ],
+          "references": [
+            "clientId"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "clientId",
+          "platform"
+        ]
+      ]
+    },
+    "reliabilityConfigSnapshot": {
+      "name": "ReliabilityConfigSnapshot",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "configRef": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "scope": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "client"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "schemaVersion": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "1.0"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configVersion": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "checksum": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configJson": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "correlationJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "expiresAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "configRef"
+        ]
+      ]
+    },
+    "reliabilityConfigDelivery": {
+      "name": "ReliabilityConfigDelivery",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "deliveryId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configRef": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configVersion": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "checksum": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "commandId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "saved"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "pulledAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "writtenAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "loadedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorCode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "client": {
+          "model": "reliabilityClient",
+          "many": false,
+          "fields": [
+            "clientId"
+          ],
+          "references": [
+            "clientId"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "deliveryId"
+        ]
+      ]
+    },
+    "reliabilityConfigLoad": {
+      "name": "ReliabilityConfigLoad",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "scope": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "client"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configVersion": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "checksum": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "rasProcessId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorCode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "loadedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "skillDeployment": {
+      "name": "SkillDeployment",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "deploymentId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "targetSkillVersion": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "semanticVersion": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "artifactHash": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "artifactRef": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "artifactExpiresAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "artifactClaimedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "optimizationRecordId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sourceExecutionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "clientId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "targetMode": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "originRef": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "previousSkillVersion": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "previousContentHash": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "backupRef": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "direction": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "CREATED"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "commandId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorCode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "errorMessage": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resultJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "idempotencyKey": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "startedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "completedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "client": {
+          "model": "reliabilityClient",
+          "many": false,
+          "fields": [
+            "clientId"
+          ],
+          "references": [
+            "clientId"
+          ],
+          "cascade": false
+        },
+        "events": {
+          "model": "skillDeploymentEvent",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "deploymentId"
+        ],
+        [
+          "artifactRef"
+        ],
+        [
+          "user",
+          "idempotencyKey"
+        ]
+      ]
+    },
+    "skillDeploymentEvent": {
+      "name": "SkillDeploymentEvent",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "deploymentId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "phase": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "detailJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "deployment": {
+          "model": "skillDeployment",
+          "many": false,
+          "fields": [
+            "deploymentId"
+          ],
+          "references": [
+            "deploymentId"
+          ],
+          "cascade": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "faultInjectionTask": {
+      "name": "FaultInjectionTask",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "taskKey": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "name": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agent": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "prompt": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "workspace": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "model": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "requestJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "itemsJson": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "progressJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "error": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "startedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "finishedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "runs": {
+          "model": "faultInjectionRun",
+          "many": true
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "taskKey"
+        ]
+      ]
+    },
+    "faultInjectionRun": {
+      "name": "FaultInjectionRun",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "runId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "fiTaskId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "itemId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "platform": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "agent": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "fault": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "submode": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "injectionMethod": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "workerId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "stopRequested": {
+          "type": "Boolean",
+          "nullable": false,
+          "default": {
+            "value": false
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "queuedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "claimedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sessionTaskId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "faultActivated": {
+          "type": "Boolean",
+          "nullable": false,
+          "default": {
+            "value": false
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "faultActivatedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "requestJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "markersJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "outcome": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "faultContainmentStatus": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "judgeReason": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "judgeRawJson": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "judgedAt": {
+          "type": "DateTime",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "error": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {
+        "fiTask": {
+          "model": "faultInjectionTask",
+          "many": false,
+          "fields": [
+            "fiTaskId"
+          ],
+          "references": [
+            "id"
+          ],
+          "cascade": false
+        }
+      },
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "runId"
+        ]
+      ]
+    },
+    "faultInjectionWorker": {
+      "name": "FaultInjectionWorker",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "workerId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": true,
+          "id": false
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "hostname": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "version": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "lastSeenAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "inventoryJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "busySlots": {
+          "type": "Int",
+          "nullable": false,
+          "default": {
+            "value": 0
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "updatedAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": null,
+          "updated": true,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "workerId"
+        ]
+      ]
+    },
+    "grayscaleTask": {
+      "name": "GrayscaleTask",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillVersion": {
+          "type": "Int",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillVersionId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "taskName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "configJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "caseStatesJson": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "value": "{}"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ],
+        [
+          "user",
+          "skillName",
+          "skillVersion"
+        ],
+        [
+          "user",
+          "skillName",
+          "skillVersion",
+          "taskName"
+        ]
+      ]
+    },
+    "debugHistory": {
+      "name": "DebugHistory",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": {
+            "factory": "id"
+          },
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillId": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "skillName": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "versionA": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "versionB": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "query": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "temperature": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "resultsJson": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    },
+    "debugJobResult": {
+      "name": "DebugJobResult",
+      "fields": {
+        "id": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": true
+        },
+        "user": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "status": {
+          "type": "String",
+          "nullable": false,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "output": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "timeCost": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "tokenUsage": {
+          "type": "Int",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "sessionId": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "error": {
+          "type": "String",
+          "nullable": true,
+          "default": null,
+          "updated": false,
+          "unique": false,
+          "id": false
+        },
+        "createdAt": {
+          "type": "DateTime",
+          "nullable": false,
+          "default": {
+            "factory": "now"
+          },
+          "updated": false,
+          "unique": false,
+          "id": false
+        }
+      },
+      "relations": {},
+      "unique": [
+        [
+          "id"
+        ]
+      ]
+    }
+  }
+}

@@ -1,3 +1,5 @@
+import {withCoreControlRequest} from '@/lib/storage-core/control-context';
+import {bootstrapCoreControlUser} from '@/lib/storage-core/control-auth';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,14 +16,8 @@
  * limitations under the License.
  */
 
-import crypto from 'node:crypto';
 import { db } from '@/lib/storage/prisma';
 
-function isDuplicateUsernameError(error: any): boolean {
-  return error?.code === 'P2002'
-    || (error?.code === '23505'
-      && (error?.constraint?.includes('User_username_key') || error?.detail?.includes('username')));
-}
 
 interface ExternalAccountStore {
   findUserByExternalAccount(externalAccount: string): Promise<any>;
@@ -50,26 +46,11 @@ export async function syncLocalUserExternalAccount(
 }
 
 export async function findOrCreateLocalUser(username: string, rawExternalAccount?: string) {
-  const externalAccount = String(rawExternalAccount || '').trim();
-  let user = await db.findUserByUsername(username);
-
-  if (!user) {
-    const apiKey = 'wi_' + crypto.randomBytes(24).toString('hex');
-    try {
-      user = await db.createUser({
-        username,
-        apiKey,
-        ...(externalAccount ? { externalAccount } : {}),
-      });
-    } catch (error: any) {
-      if (!isDuplicateUsernameError(error)) throw error;
-      user = await db.findUserByUsername(username);
-      if (!user) throw error;
-    }
+  {
+    const user=await bootstrapCoreControlUser(username,rawExternalAccount);
+    return withCoreControlRequest(new Request('http://localhost/internal/local-user',{headers:{authorization:'Bearer '+user.apiKey}}),async()=>{
+      const synced=await syncLocalUserExternalAccount(user,rawExternalAccount);
+      return synced;
+    });
   }
-
-  if (!user) throw new Error('Failed to retrieve or create user');
-  user = await syncLocalUserExternalAccount(user, externalAccount);
-
-  return user;
 }

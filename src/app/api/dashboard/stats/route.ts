@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { withCoreControlRoute } from '@/lib/storage-core/control-route';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveTraceReadScope } from '@/lib/auth/admin';
@@ -56,10 +60,16 @@ function timeAgo(ts: Date, now: Date): string {
 }
 
 export async function GET(req: Request) {
+    return withCoreControlRoute(req, () => stats(req), ['read']);
+}
+
+async function stats(req: Request) {
     try {
-        const { username, user } = await resolveTraceReadScope(req);
+        const analytics = (await readCoreAnalytics(req));
+        const executionReader = analytics ?? prisma.execution;
+        const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
-        const userFilter = user ? { user } : {};
+        const userFilter = analytics ? {} : user ? { user } : {};
 
         const url = new URL(req.url);
         const platformParam = url.searchParams.get('platform') || '';
@@ -79,7 +89,7 @@ export async function GET(req: Request) {
 
         // Build agent filter clause
         const agentWhere = {
-            ...userFilter,
+            ...(analytics ? {user: {in: analytics.staticUsers}} : userFilter),
             ...(platformParam ? { platform: platformParam } : {}),
             ...(ownershipParam !== 'all' ? { agentOwnership: ownershipParam } : {}),
         };
@@ -92,7 +102,7 @@ export async function GET(req: Request) {
                 orderBy: { createdAt: 'desc' },
             }),
             prisma.registeredAgent.findMany({
-                where: userFilter,
+                where: analytics ? {user: {in: analytics.staticUsers}} : userFilter,
                 select: { platform: true },
             }),
         ]);
@@ -112,28 +122,28 @@ export async function GET(req: Request) {
 
         const [todayExecs, yesterdayCalls, lastHourExecs, sevenDaysExecs, recentExecs] =
             await Promise.all([
-                prisma.execution.findMany({
+                executionReader.findMany({
                     where: { ...execWhere, timestamp: { gte: todayStart } },
                     select: {
                         agentName: true, latency: true, isAnswerCorrect: true,
                         toolCallErrorCount: true, failures: true, cost: true, timestamp: true,
                     },
                 }),
-                prisma.execution.count({
+                executionReader.count({
                     where: { ...execWhere, timestamp: { gte: yesterdayStart, lt: todayStart } },
                 }),
-                prisma.execution.findMany({
+                executionReader.findMany({
                     where: { ...execWhere, timestamp: { gte: oneHourAgo } },
                     select: { isAnswerCorrect: true, toolCallErrorCount: true, failures: true },
                 }),
-                prisma.execution.findMany({
+                executionReader.findMany({
                     where: { ...execWhere, timestamp: { gte: sevenDaysAgo } },
                     select: {
                         timestamp: true, isAnswerCorrect: true, toolCallErrorCount: true,
                         failures: true, agentName: true, latency: true,
                     },
                 }),
-                prisma.execution.findMany({
+                executionReader.findMany({
                     where: execWhere,
                     orderBy: { timestamp: 'desc' },
                     take: 5,
@@ -270,6 +280,7 @@ export async function GET(req: Request) {
             href: '/trace',
         }));
 
+        if (analytics) await analytics.validate();
         return NextResponse.json({
             health: {
                 totalAgents: agents.length,
@@ -292,7 +303,6 @@ export async function GET(req: Request) {
             availablePlatforms,
         });
     } catch (error) {
-        console.error('[Dashboard Stats Error]', error);
-        return NextResponse.json({ error: 'Failed to load dashboard stats' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

@@ -34,13 +34,19 @@ const { loadSkillExecutionProgress } = loadModule('@/lib/skill-workbench/executi
 const { ownsSkillExecution } = loadModule('@/lib/grayscale/execution-fence') as typeof import('@/lib/grayscale/execution-fence')
 const { generateExperimentTraces } = loadModule('@/lib/engine/experiment/trace-generation') as typeof import('@/lib/engine/experiment/trace-generation')
 test.after(async () => {
-  const deadline = Date.now() + 10000
-  while ([...(globalThis.__grayscaleRunStore?.keys() || [])].some(key => key.startsWith(`${user}:`))) {
-    assert.ok(Date.now() < deadline, 'Fixture retries must finish before disposing their database')
-    await new Promise(resolve => setTimeout(resolve, 10))
+  try {
+    const deadline = Date.now() + 10_000
+    while (globalThis.__grayscaleRunStore?.size && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(globalThis.__grayscaleRunStore?.size || 0, 0, `retry completion must finish before disposing its database; retained at ${database.home}`)
+  } finally {
+    try {
+      await prisma.$disconnect()
+    } finally {
+      database.dispose({ preserveFiles: Boolean(globalThis.__grayscaleRunStore?.size) })
+    }
   }
-  await prisma.$disconnect()
-  database.dispose()
 })
 const user = 'skill-progress-test'
 const slot = (claim = 'first') => ({ caseId: 'dataset-case', roundIndex: 1, runIndex: 1, status: 'running', executionGeneration: 1, executionClaimId: claim, progressRevision: 1 })

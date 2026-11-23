@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -50,6 +51,7 @@ export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ id: string; draftNumber: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id: sessionId, draftNumber: draftNumberStr } = await params;
         const draftNumber = Number(draftNumberStr);
@@ -202,4 +204,6 @@ export async function POST(
         console.error('[skill-opt apply] failed:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write"]);
 }

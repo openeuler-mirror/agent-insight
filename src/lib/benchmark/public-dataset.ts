@@ -1,3 +1,5 @@
+import {benchmarkCoreRpc,usesCoreBenchmark} from './core-store'
+import {getDatasetRepositoryContext,findCoreDataset} from '@/lib/storage-core/datasets'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -41,7 +43,7 @@ export async function publicBenchmarkDatasetMeta(
   datasetIds: string[],
 ): Promise<Map<string, PublicBenchmarkDatasetMeta>> {
   if (!datasetIds.length) return new Map()
-  const rows = await prisma.benchmarkDataset.findMany({
+  const rows = usesCoreBenchmark()?(await benchmarkCoreRpc<Array<{agentEvalDatasetId:string;user:string;adapterKey:string;status:string;sourceJson:string;shared?:boolean}>>('dataset_list')).filter(row=>datasetIds.includes(row.agentEvalDatasetId)):await prisma.benchmarkDataset.findMany({
     where: { user: { in: benchmarkDatasetOwners(user) }, agentEvalDatasetId: { in: datasetIds } },
     select: { agentEvalDatasetId: true, user: true, adapterKey: true, status: true, sourceJson: true },
   })
@@ -51,6 +53,7 @@ export async function publicBenchmarkDatasetMeta(
     adapterKey: string
     status: string
     sourceJson: string
+    shared?:boolean
   }) => {
     let profileKey: string | undefined
     try {
@@ -73,7 +76,7 @@ export async function publicBenchmarkDatasetMeta(
     }
     return [row.agentEvalDatasetId, {
       readOnly: true as const,
-      shared: row.user === SYSTEM_BENCHMARK_DATASET_OWNER,
+      shared: row.shared ?? row.user === SYSTEM_BENCHMARK_DATASET_OWNER,
       benchmark: {
         adapterKey: row.adapterKey,
         evaluatorKey,
@@ -87,6 +90,7 @@ export async function publicBenchmarkDatasetMeta(
 }
 
 export async function isReadOnlyBenchmarkDataset(user: string, datasetId: string): Promise<boolean> {
+  if (getDatasetRepositoryContext()) return (await findCoreDataset(datasetId))?.datasetKind === 'benchmark'
   return Boolean(await prisma.benchmarkDataset.findFirst({
     where: { user: { in: benchmarkDatasetOwners(user) }, agentEvalDatasetId: datasetId },
     select: { id: true },

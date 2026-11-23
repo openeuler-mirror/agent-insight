@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -27,6 +28,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ name: string; version: string }> },
 ) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const body = await request.json();
     const { username } = await resolveUser(request, body.user);
@@ -57,4 +59,6 @@ export async function POST(
     console.error('[skill external verification POST] failed:', error);
     return NextResponse.json({ error: '登记外部验证结果失败' }, { status: 500 });
   }
+
+  },["write","execute"]);
 }

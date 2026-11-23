@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {freezeExperimentAssets} from '@/lib/storage-core/experiment-assets'
+import {benchmarkCoreContext,benchmarkCoreRpc,usesCoreBenchmark} from './core-store'
 import { freezeCustomEvaluators, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service'
 import { resolveAgentOptions } from '../../../packages/agent-runtime/index.cjs'
 import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
@@ -104,11 +107,21 @@ type BenchmarkDatasetCaseSnapshot = {
   ordinal: number
 }
 
-export async function createBenchmarkExperiment(input: CreateBenchmarkExperimentInput): Promise<{
+export async function createBenchmarkExperiment(input:CreateBenchmarkExperimentInput){return createBenchmarkExperimentInternal(input,false)}
+export async function createImportedCoreBenchmarkDraft(input:Omit<CreateBenchmarkExperimentInput,'clientId'|'runConfig'>&{model?:string}){
+  if(!usesCoreBenchmark())throw new BenchmarkProtocolError('CORE_STORAGE_REQUIRED','受控历史提交物导入需要新存储',503)
+  return createBenchmarkExperimentInternal({...input,clientId:'',runConfig:{platform:'imported',agent:'imported',model:input.model}},true)
+}
+async function createBenchmarkExperimentInternal(input: CreateBenchmarkExperimentInput,imported:boolean): Promise<{
   id: string
   status: string
   caseCount: number
 }> {
+  if(usesCoreBenchmark()){
+    const context=benchmarkCoreContext();if(context.actor.username!==input.user.trim())throw new BenchmarkProtocolError('BENCHMARK_ACTOR_MISMATCH','实验用户与当前身份不一致',403)
+    const prior=await benchmarkCoreRpc<{id:string;status:string;caseCount:number}|null>('lookup_operation',{kind:'create',operation_key:context.operationKey,operation_request:context.body})
+    if(prior)return prior
+  }
   const user = input.user.trim()
   const name = input.name.trim()
   const datasetId = input.datasetId.trim()
@@ -116,7 +129,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   const platform = input.runConfig.platform.trim()
   const agent = input.runConfig.agent.trim()
   let agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
-  if (!user || !name || !datasetId || !clientId || !platform || !agent) {
+  if (!user || !name || !datasetId || (!imported&&(!clientId || !platform || !agent))) {
     throw new BenchmarkProtocolError(
       'BENCHMARK_EXPERIMENT_INVALID',
       'name、datasetId、clientId、platform 和 agent 均为必填项',
@@ -126,7 +139,8 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   let executionConcurrency: number
   try { executionConcurrency = parseExecutionConcurrency(input.runConfig.executionConcurrency ?? input.runConfig.maxParallelAgentCases) }
   catch { throw new BenchmarkProtocolError('EXECUTION_CONCURRENCY_INVALID', '执行并发必须为正整数', 400) }
-  const dataset = await prisma.benchmarkDataset.findFirst({
+  if(usesCoreBenchmark()&&benchmarkCoreContext().actor.username!==user)throw new BenchmarkProtocolError('BENCHMARK_ACTOR_MISMATCH','实验用户与当前身份不一致',403)
+  const dataset = usesCoreBenchmark()?await benchmarkCoreRpc<NonNullable<Awaited<ReturnType<typeof prisma.benchmarkDataset.findFirst>>>&{cases:BenchmarkDatasetCaseSnapshot[];agentEvalDataset:{casesJson:string}}>('dataset_load',{dataset_id:datasetId}):await prisma.benchmarkDataset.findFirst({
     where: { id: datasetId, user: { in: benchmarkDatasetOwners(user) } },
     include: {
       cases: { orderBy: { ordinal: 'asc' } },
@@ -137,7 +151,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
   }
   const adapter = getBenchmarkAdapter(dataset.adapterKey)
-  if (adapter.manifest.supportsAgentExecution === false) {
+  if (!imported&&adapter.manifest.supportsAgentExecution === false) {
     throw new BenchmarkProtocolError('BENCHMARK_AGENT_EXECUTION_UNSUPPORTED', '该 Benchmark 不支持 Agent 执行', 409)
   }
   const catalogInputs = new Map<string, string>()
@@ -159,27 +173,28 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     dataset.cases as BenchmarkDatasetCaseSnapshot[],
     input.caseSelection,
   )
-  const timeoutSeconds = input.runConfig.agentTimeoutSeconds ?? adapter.manifest.defaultTimeoutSeconds
+  const timeoutSeconds = input.runConfig.agentTimeoutSeconds ?? (imported?adapter.manifest.evaluation.defaultTimeoutSeconds:adapter.manifest.defaultTimeoutSeconds)
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) {
     throw new BenchmarkProtocolError('AGENT_TIMEOUT_INVALID', 'Agent 超时时间必须在 1～86400 秒之间', 400)
   }
 
-  const client = await prisma.reliabilityClient.findFirst({ where: { clientId, user } })
-  if (!client || client.unboundAt) {
+  const client = imported?null:await prisma.reliabilityClient.findFirst({ where: { clientId, user } })
+  if (!imported&&(!client || client.unboundAt)) {
     throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
   }
-  const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
-  if (input.runConfig.executionProfileDigest !== undefined && input.runConfig.executionProfileDigest !== target.executionProfile?.definitionDigest) {
+  const target = imported?null:assertBenchmarkExecutionTarget(client!, adapter.manifest, { platform, agent, agentOptions })
+  if (input.runConfig.executionProfileDigest !== undefined && input.runConfig.executionProfileDigest !== target?.executionProfile?.definitionDigest) {
     throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请刷新后重新确认', 409)
   }
-  const resolved = resolveAgentOptions(target.parameterDefinitions, platform, agent, agentOptions)
+  const resolved = imported?{agentOptions:undefined,definition:undefined}:resolveAgentOptions(target!.parameterDefinitions, platform, agent, agentOptions)
   agentOptions = resolved.agentOptions
-  if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
+  if (!imported&&executionConcurrency > 1 && JSON.parse(client!.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
     throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
   }
 
   const runConfig = {
-    ...(target.executionProfile ? { executionProfile: target.executionProfile, executionArch: ['arm64', 'aarch64'].includes(client.arch || '') ? 'arm64' as const : 'amd64' as const } : {}),
+    ...(target?.executionProfile ? { executionProfile: target?.executionProfile, executionArch: ['arm64', 'aarch64'].includes(client!.arch || '') ? 'arm64' as const : 'amd64' as const } : {}),
+    ...(imported?{submissionSource:'imported' as const}:{}),
     platform,
     agent,
     ...(agentOptions ? { agentOptions, agentParameterDefinition: resolved.definition } : {}),
@@ -195,7 +210,7 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
     const publicPayload = parsePublicPayload(datasetCase.publicPayloadJson)
     const runId = newRunId()
     const experimentCaseId = newExperimentCaseId()
-    adapter.buildAgentTask({
+    if(!imported)adapter.buildAgentTask({
       publicPayload, runConfig,
       context: { runId, experimentId: 'preflight', caseId: experimentCaseId },
     })
@@ -215,6 +230,18 @@ export async function createBenchmarkExperiment(input: CreateBenchmarkExperiment
   } catch (error) {
     if (error instanceof EvaluatorRunConfigValidationError) throw new BenchmarkProtocolError('EVALUATOR_CONFIG_INVALID', error.message, 400)
     throw error
+  }
+
+  if(usesCoreBenchmark()){
+    const context=requireCoreExperimentContext();const id='bexp_'+(await import('node:crypto')).createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey])).digest('hex').slice(0,32)
+    if(input.agentEvalDatasetId&&input.agentEvalDatasetId!==dataset.agentEvalDatasetId)throw new BenchmarkProtocolError('BENCHMARK_DATASET_MISMATCH','公开数据集与Benchmark绑定不一致',409)
+    const frozen=await freezeExperimentAssets(context,{evaluatorIdsJson:JSON.stringify(evaluatorIds.filter(id=>!id.startsWith('benchmark:'))),configSnapshotJson:JSON.stringify({agentEvalDatasetId:dataset.agentEvalDatasetId})})
+    const assets=JSON.parse(String(frozen.configSnapshotJson));assets.coreAssets.evaluators[benchmarkEvaluatorId(dataset.adapterKey)]={origin:'benchmark',adapter:adapter.manifest,implementation_version:'benchmark-adapter/v1'}
+    return benchmarkCoreRpc<{id:string;status:string;caseCount:number}>('create',{
+      dataset_id:dataset.id,selection:input.caseSelection,run_config:{...runConfig,clientId,legacyOwner:context.actor.username},adapter:{...adapter.manifest,key:adapter.manifest.adapterKey,evaluatorId:benchmarkEvaluatorId(dataset.adapterKey)},
+      experiment:{id,user,name,type:'single',agentName:canonicalExperimentAgentName(platform,input.agentName?.trim()||agent),evaluatorIdsJson:JSON.stringify(evaluatorIds),evaluatorConfigsJson,status:'draft',scope:'benchmark',configSnapshotJson:JSON.stringify({...assets,...(imported?{submissionSource:'imported'}:{}),customEvaluatorSnapshots,datasetId:dataset.id,agentEvalDatasetId:input.agentEvalDatasetId||dataset.agentEvalDatasetId,datasetContentHash:dataset.contentHash,adapterKey:dataset.adapterKey,evaluatorKey:adapter.manifest.evaluation.evaluatorKey,clientId,evaluatorIds,traceSource:'generate',caseIds:preparedCases.map(row=>row.datasetCase.id),runConfig})},
+      operation_request:context.body,
+    })
   }
 
   const experiment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {

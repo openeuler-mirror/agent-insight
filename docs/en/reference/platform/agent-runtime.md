@@ -115,3 +115,5 @@ Platform built-in tasks all enter the execution layer through `runGeneralAgent`.
 - Any other value: the task fails with `AGENT_RUNTIME_UNAVAILABLE`; the engine is never silently switched.
 
 Once the Pi execution adapter ships, the entry dispatches by adapter internally and business modules stay unchanged.
+
+Runtime preferences are stored in transactional Core user settings. GET requires authenticated read access; PUT requires write access. The `user` field must match the authenticated identity and cannot replace credentials. No legacy SQLite application database is opened.

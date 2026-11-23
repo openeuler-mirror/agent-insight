@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -20,6 +21,7 @@ import { prismaRaw } from '@/lib/storage/prisma';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
     try {
         const { searchParams } = new URL(req.url);
         const user = searchParams.get('user');
@@ -43,9 +45,12 @@ export async function GET(req: NextRequest) {
         console.error('Failed to fetch sessions:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["read"]);
 }
 
 export async function POST(req: NextRequest) {
+  return withCoreControlRoute(req,async()=>{
     try {
         const body = await req.json();
         const { user, title, files, messages } = body;
@@ -76,4 +81,6 @@ export async function POST(req: NextRequest) {
         console.error('Failed to create session:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write"]);
 }

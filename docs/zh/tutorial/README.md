@@ -33,3 +33,5 @@ JiuwenSwarm 升级后，请更新观测扩展并重启 AgentServer，再检查�
 关联外部推理分析时，完成采集安装后再按[显式模型转发指南](../how-to/observability/inference-gateway.md)配置。
 
 管理员（未配置白名单时为 `admin`）可查看所有用户的 Trace，列表提供“用户”列和按用户筛选，仪表盘按全量 Trace 聚合；普通用户继续按本人数据展示。详见[Trace 查看范围](../how-to/observability/view-traces.md#列表页总览)。
+
+[启用隔离的 Storage Core Trace 链路](../how-to/platform/storage-core.md)：独立初始化、私有配置、密码登录及分页Trace。

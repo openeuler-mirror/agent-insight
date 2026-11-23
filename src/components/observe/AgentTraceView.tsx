@@ -16,6 +16,7 @@
 
 'use client';
 
+import { ScrollContinuation } from './ScrollContinuation';
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
@@ -36,7 +37,7 @@ import { useTheme } from '@/lib/client/theme-context';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
-import { apiFetch } from '@/lib/client/api';
+import { apiFetch, apiFetch as fetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import {
     resolveEventRenderCount,
@@ -610,6 +611,9 @@ const defaultCtx: TraceCtxValue = {
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
+    loadMoreSpans?: () => void;
+    loadingMoreSpans?: boolean;
+    moreSpansError?: string;
     traceRelations?: TraceRelations;
     parentAgent?: ParentAgentReference | null;
     interactions: RawInteraction[];
@@ -642,6 +646,7 @@ export interface AgentTraceViewProps {
 }
 
 export default function AgentTraceView({
+    loadMoreSpans, loadingMoreSpans, moreSpansError,
     interactions: sourceInteractions,
     framework,
     langfuseTraceNodes,
@@ -1372,6 +1377,7 @@ export default function AgentTraceView({
                             isLast={true}
                             prefixBits={[]}
                         />
+                        {loadMoreSpans && <ScrollContinuation network onMore={() => { spanViewportRef.current?.pauseFollowing(); loadMoreSpans(); }} busy={loadingMoreSpans} error={moreSpansError} count={sourceInteractions.length} />}
                     </TraceSpanViewport>
                 </div>
 
@@ -1828,7 +1834,8 @@ function UnifiedSpanTree({
                         depth === 0 ? [] : [...prefixBits, !isLast],
                     ))}
                     {hiddenEventCount > 0 && (
-                        <div className="flex items-center py-1 pl-2">
+                        <div data-trace-hidden-events className="flex items-center py-1 pl-2">
+                            <ScrollContinuation onMore={() => setEventRenderLimit(count => count + TRACE_EVENT_RENDER_BATCH)} count={renderedEventCount} />
                             <Button
                                 variant="ghost"
                                 size="sm"
@@ -1836,8 +1843,8 @@ function UnifiedSpanTree({
                                 onClick={() => setEventRenderLimit(count => count + TRACE_EVENT_RENDER_BATCH)}
                             >
                                 {locale === 'zh'
-                                    ? `继续加载更多调用（已显示 ${renderedEventCount}/${eventTree.length}）`
-                                    : `Show more calls (${renderedEventCount}/${eventTree.length})`}
+                                    ? '继续加载更多调用'
+                                    : 'Show more calls'}
                             </Button>
                         </div>
                     )}

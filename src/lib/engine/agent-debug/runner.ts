@@ -18,6 +18,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createDiagnosisObserver } from './progress-observer';
 import type { DiagnosisProgressWriter } from './progress-types';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { getTrustedCoreAgentContext } from '@/lib/engine/general-agent/trusted-context';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
 import { loadFileBasedSkillPrompt, mountFileBasedSkillResources } from '@/lib/engine/general-agent/skills-fs-loader';
 import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
 import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
@@ -70,6 +72,9 @@ export async function runAgentDebugDiagnosis(args: {
   progress?: DiagnosisProgressWriter;
   evaluationContext?: unknown;
 }): Promise<AgentDebugReportPayload> {
+  const trusted = getTrustedCoreAgentContext();
+  if (isStorageCoreEnabled() && !trusted) throw new Error('Trusted core report runtime required');
+  trusted?.cancelSignal?.throwIfAborted();
   const startedAt = Date.now();
   const executionId = String(args.execution.id || args.execution.taskId || '');
   const interactions = Array.isArray(args.interactions) ? args.interactions : [];
@@ -107,7 +112,7 @@ export async function runAgentDebugDiagnosis(args: {
   }
 
   const workspaceTag = `agent-debug-${createHash('sha256').update(executionId).digest('hex').slice(0, 12)}-${args.progress?.runId || randomUUID()}`;
-  const workspaceDir = ensureSessionWorkspace(args.user, workspaceTag);
+  const workspaceDir = trusted?.trustedWorkspaceDir || ensureSessionWorkspace(args.user, workspaceTag);
   fs.rmSync(path.join(workspaceDir, AGENT_DEBUG_FINAL_REPORT_REL_PATH), { force: true });
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
   const mounted = mountFileBasedSkillResources(AGENT_DEBUG_SKILL_NAME, workspaceDir);

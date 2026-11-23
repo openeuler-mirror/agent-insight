@@ -15,6 +15,8 @@
  */
 
 'use client';
+import { apiFetch as fetch } from '@/lib/client/api';
+import { downloadApiFile } from '@/lib/client/download';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -242,9 +244,7 @@ export default function InfraSourceDetailPage() {
     return () => { active = false; };
   }, [id, resolveRange, sessPage, tick]);
 
-  // 导出当前时间段的原始时序。走 <a download> 而不是 fetch+Blob：
-  // 6h 约 1 万行、24h 约 4.3 万行，让浏览器直接落盘，不必先塞进内存。
-  const runExport = useCallback((format: 'csv' | 'md') => {
+  const runExport = useCallback(async (format: 'csv' | 'md') => {
     if (!id) return;
     const r = resolveRange();
     if (!r) { setExportHint('请先填写自定义时间段的起始时间'); return; }
@@ -254,14 +254,13 @@ export default function InfraSourceDetailPage() {
     // 全选时不传 metrics，让 URL 短一些（服务端缺省即全选）
     if (pickedGroups.length < ALL_GROUPS.length) qs.set('metrics', pickedGroups.join(','));
     if (bucketMs > 0) qs.set('sample', String(bucketMs));
-    const a = document.createElement('a');
-    a.href = `/api/observe/infra/export?${qs}`;
-    a.download = ''; // 文件名以服务端 Content-Disposition 为准
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setExportHint(null);
-    reportClientUsage('infra', 'infra.export');
+    try {
+      await downloadApiFile(`/api/observe/infra/export?${qs}`, `infra.${format}`);
+      setExportHint(null);
+      reportClientUsage('infra', 'infra.export');
+    } catch (e) {
+      setExportHint(e instanceof Error ? e.message : String(e));
+    }
   }, [id, resolveRange, selectedModel, pickedGroups, bucketMs]);
 
   // 导出体积粗估：让人在点之前就知道会拿到多大的东西，而不是导完才发现粘不进去。

@@ -15,6 +15,10 @@
  */
 
 import { type ExecutionRecord, readRecords } from '@/lib/storage/data-service';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {readTraceEvidence} from '@/lib/storage-core/evidence';
+import {getPrimaryObservedAgentName} from '@/lib/engine/observability/agent-registration';
 import {
     getPrimaryExecutionAgentName,
     isEvaluatorAgentName,
@@ -104,18 +108,17 @@ export async function loadTrajectoryCandidateAgentMap(
     const out = new Map<string, string>();
     if (!safeUser || uniqueTaskIds.length === 0) return out;
 
-    const records = await readRecords(
-        safeUser,
-        { taskIds: uniqueTaskIds },
-        { attachEvaluations: false },
-    );
-    for (const record of records) {
-        const taskId = normalizeAutoWatchAgent(record.task_id);
-        if (!taskId || out.has(taskId)) continue;
-        const agent = resolveTrajectoryCandidateExecutionAgent(record);
-        if (agent) out.set(taskId, agent);
+    {
+        const context=requireCoreExperimentContext();if(safeUser!==context.actor.username)throw Object.assign(new Error('Trace actor mismatch'),{status:403});
+        for(const taskId of uniqueTaskIds){
+            try{
+                const {evidence}=await readTraceEvidence(context.request,{taskId},context.options);
+                const record={...evidence.execution,agentName:evidence.execution.agentName||getPrimaryObservedAgentName(evidence.session.interactions as Parameters<typeof getPrimaryObservedAgentName>[0])} as unknown as ExecutionRecord;
+                const agent=resolveTrajectoryCandidateExecutionAgent(record);if(agent)out.set(taskId,agent);
+            }catch(error){if(![403,404].includes((error as {status?:number}).status||0))throw error;}
+        }
+        return out;
     }
-    return out;
 }
 
 export async function resolveSingleTrajectoryCandidateAgent(

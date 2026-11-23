@@ -92,7 +92,7 @@ export function toRawTraceInteractions(input: any[]): RawInteraction[] {
     return out;
 }
 
-export function buildFaultPathSteps(input: any[], locale = 'zh'): FaultPathStep[] {
+export function buildFaultPathSteps(input: any[], locale = 'zh', options: { includeLlmHistory?: boolean } = {}): FaultPathStep[] {
     const interactions = toRawTraceInteractions(input);
     const steps: FaultPathStep[] = [];
     const push = (step: Omit<FaultPathStep, 'stepIndex'>) => {
@@ -155,35 +155,37 @@ export function buildFaultPathSteps(input: any[], locale = 'zh'): FaultPathStep[
                 if (event.kind === 'user') {
                     rawInput = event.summary || event.interaction?.content || '';
                 } else if (event.kind === 'llm') {
-                    // Mirror AgentTraceView.LLMEventBody: collect prior interactions from the
-                    // SAME agent node (respecting node boundaries) and format as labelled turns.
-                    const eventIdx = event.interactionIndex ?? -1;
-                    const priorNodeIndices = new Set(
-                        agentNode.interactionIndices.filter(i => i < eventIdx),
-                    );
-                    const parts: string[] = [];
+                    if (options.includeLlmHistory !== false) {
+                        // Mirror AgentTraceView.LLMEventBody: collect prior interactions from the
+                        // SAME agent node (respecting node boundaries) and format as labelled turns.
+                        const eventIdx = event.interactionIndex ?? -1;
+                        const priorNodeIndices = new Set(
+                            agentNode.interactionIndices.filter(i => i < eventIdx),
+                        );
+                        const parts: string[] = [];
 
-                    // System prompts attached to this node
-                    for (const sp of agentNode.systemPrompts || []) {
-                        if (sp.text?.trim()) parts.push(`[System]\n${truncateText(sp.text, 1500)}`);
-                    }
-
-                    // Prior user / assistant turns from the same node, in order
-                    for (const i of Array.from(priorNodeIndices).sort((a, b) => a - b)) {
-                        const it = interactions[i];
-                        if (!it || it.role === 'system') continue;
-                        const content = typeof it.content === 'string'
-                            ? it.content
-                            : stringifyPreview(it.content, 2000);
-                        if (!content.trim()) continue;
-                        if (it.role === 'user' || it.role === 'opencode') {
-                            parts.push(`[User]\n${truncateText(content, 2000)}`);
-                        } else if (it.role === 'assistant' || it.role === 'subagent') {
-                            parts.push(`[Assistant]\n${truncateText(content, 2000)}`);
+                        // System prompts attached to this node
+                        for (const sp of agentNode.systemPrompts || []) {
+                            if (sp.text?.trim()) parts.push(`[System]\n${truncateText(sp.text, 1500)}`);
                         }
-                    }
 
-                    rawInput = parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
+                        // Prior user / assistant turns from the same node, in order
+                        for (const i of Array.from(priorNodeIndices).sort((a, b) => a - b)) {
+                            const it = interactions[i];
+                            if (!it || it.role === 'system') continue;
+                            const content = typeof it.content === 'string'
+                                ? it.content
+                                : stringifyPreview(it.content, 2000);
+                            if (!content.trim()) continue;
+                            if (it.role === 'user' || it.role === 'opencode') {
+                                parts.push(`[User]\n${truncateText(content, 2000)}`);
+                            } else if (it.role === 'assistant' || it.role === 'subagent') {
+                                parts.push(`[Assistant]\n${truncateText(content, 2000)}`);
+                            }
+                        }
+
+                        rawInput = parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
+                    }
                     const toolCallSummary = formatLlmToolCallSummary(event.interaction?.tool_calls, locale);
                     rawOutput = [event.interaction?.content, toolCallSummary].filter(Boolean).join('\n') || event.summary || '';
                 } else if (event.kind === 'tool' || event.kind === 'skill' || event.kind === 'task') {

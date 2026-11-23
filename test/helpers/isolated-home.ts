@@ -30,7 +30,7 @@ export function assertTemporaryHome(home: string): void {
     'Installer tests must use a directory inside the system temporary directory')
 }
 
-const privateEnvironment = /^(?:AGENT_INSIGHT_|DATABASE_URL$|OTEL_|QWEN_TELEMETRY_|PI_CODING_AGENT_DIR$|CODEX_HOME$|XDG_)/
+const privateEnvironment = /^(?:AGENT_INSIGHT_|DATABASE_URL$|DB_|OTEL_|QWEN_TELEMETRY_|PI_CODING_AGENT_DIR$|CODEX_HOME$|XDG_)/
 const credentialEnvironment = /(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i
 
 export function isolatedHomeEnv(home: string, overrides: Readonly<Record<string, string | undefined>> = {}): NodeJS.ProcessEnv {
@@ -45,6 +45,7 @@ export function isolatedHomeEnv(home: string, overrides: Readonly<Record<string,
     AGENT_INSIGHT_USER_HOME: home,
     AGENT_INSIGHT_HOME: path.join(home, '.agent-insight'),
     DATABASE_URL: `file:${path.join(home, 'test.db')}`,
+    DB_HOST: '',
     XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_DATA_HOME: path.join(home, '.local', 'share'),
     XDG_CACHE_HOME: path.join(home, '.cache'),

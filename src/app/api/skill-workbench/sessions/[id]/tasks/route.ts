@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,6 +15,9 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -28,7 +32,9 @@ export const dynamic = 'force-dynamic';
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
+) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized,{ params }));
   try {
     const { id } = await params;
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
@@ -44,12 +50,16 @@ export async function GET(
     console.error('[skill-workbench tasks GET] failed:', error);
     return NextResponse.json({ error: 'Failed to load workbench tasks' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
+) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,{ params }));
   try {
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
@@ -80,4 +90,6 @@ export async function POST(
     console.error('[skill-workbench tasks POST] failed:', error);
     return NextResponse.json({ error: 'Failed to create workbench task' }, { status: 500 });
   }
+
+  },["write"]);
 }

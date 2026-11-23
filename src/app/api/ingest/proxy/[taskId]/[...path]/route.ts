@@ -15,6 +15,10 @@
  */
 
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {resolveCollectorRequest,collectorPrivate,collectorFailure} from '@/lib/storage-core/collector-entry';
+import {withCoreCollectorIdentity,getActiveCoreCollectorIdentity} from '@/lib/storage-core/collector-identity';
+import {patchProxySession} from '@/lib/ingest/proxy-store';
 import { db } from '@/lib/storage/prisma';
 import { addToSession, getSession } from '@/lib/ingest/proxy-store';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -48,7 +52,7 @@ async function proxyFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
-export async function POST(
+async function proxyRequest(
   request: Request,
   { params }: { params: Promise<{ taskId: string; path: string[] }> }
 ) {
@@ -70,8 +74,10 @@ export async function POST(
   const headers = new Headers(request.headers);
   headers.delete('host');
   headers.delete('content-length');
+  headers.delete('x-witty-api-key');
+  headers.delete('x-agent-insight-client-id');
   
-  const activeConfig = await getActiveConfig();
+  const activeConfig = await getActiveConfig(getActiveCoreCollectorIdentity()?.username);
   const apiKey = activeConfig?.apiKey;
 
   try {
@@ -82,7 +88,7 @@ export async function POST(
                 body.model = session.model;
             }
         } else if (typeof body === 'object' && body !== null && body.model) {
-            await db.updateSession(taskId, { model: body.model });
+            await patchProxySession(taskId, { model: body.model });
             console.log(`[Proxy] Captured model from request for task ${taskId}: ${body.model}`);
         }
     } catch (e) {
@@ -283,4 +289,9 @@ export async function POST(
      console.error("[Proxy-Path] ❌ Error:", error);
      return NextResponse.json({ error: 'Proxy Failed' }, { status: 500 });
   }
+}
+
+export async function POST(request:Request,context:{params:Promise<{taskId:string;path:string[]}>}){
+
+ try{const identity=await resolveCollectorRequest(request,'snapshot',{},'provider');return withCoreCollectorIdentity(identity,async()=>{const {taskId}=await context.params;await collectorPrivate(identity,'model_scope',{task_id:taskId});return proxyRequest(request,context);});}catch(error){return collectorFailure(error);}
 }

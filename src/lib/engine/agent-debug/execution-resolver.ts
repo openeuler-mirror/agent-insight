@@ -17,6 +17,8 @@
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { db } from '@/lib/storage/prisma';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { resolveCoreReportEvidence } from '@/lib/storage-core/reports';
 
 export interface AgentDebugExecutionRecord {
   id: string;
@@ -37,22 +39,19 @@ interface SessionRecord {
 }
 
 export async function resolveAgentDebugExecution(inputId: string): Promise<{ execution: AgentDebugExecutionRecord; interactions: unknown[] } | null> {
-  const byId = await db.findExecutionById(inputId).catch(() => null) as AgentDebugExecutionRecord | null;
-  let execution = byId;
-  if (!execution) {
-    const rows = await db.findExecutions({ taskId: inputId }, { timestamp: 'desc' }).catch(() => []) as AgentDebugExecutionRecord[];
-    execution = rows[0] || null;
+  {
+    let evidence;
+    try { evidence = await resolveCoreReportEvidence(inputId); }
+    catch (error) {
+      if (error instanceof Error && 'status' in error && error.status === 404) return null;
+      throw error;
+    }
+    const execution = evidence.execution as unknown as AgentDebugExecutionRecord;
+    let interactions = structuredClone(evidence.session.interactions);
+    if (execution.framework === 'claudecode') interactions = normalizeClaudeCodeInteractionsForStorage(interactions);
+    interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
+    return { execution, interactions };
   }
-  if (!execution?.id) return null;
-
-  const sessionKey = execution.taskId || inputId;
-  const session = await db.findSessionByTaskId(sessionKey).catch(() => null) as SessionRecord | null;
-  let interactions = parseInteractions(session?.interactions);
-  if (execution.framework === 'claudecode') {
-    interactions = normalizeClaudeCodeInteractionsForStorage(interactions as Parameters<typeof normalizeClaudeCodeInteractionsForStorage>[0]);
-  }
-  interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
-  return { execution, interactions };
 }
 
 function parseInteractions(value: SessionRecord['interactions']): unknown[] {

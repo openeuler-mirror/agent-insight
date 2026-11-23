@@ -137,6 +137,12 @@ export interface ProblemSummaryInput {
     skillIssueRows?: SkillIssueRowLite[];
     /** executionId → 诊断根因摘要（join AgentDebugReport，status=done）；缺省不做诊断增强。 */
     diagnosesByTrace?: Map<string, DiagnosisLite>;
+    structuredErrors?: StructuredTraceErrors[];
+}
+
+export interface StructuredTraceErrors {
+    executionId: string;
+    clusters: { key: string; node: string; errorCode: string; object: string; count: number; attribution: Attribution }[];
 }
 
 export interface ProblemSummaryResult {
@@ -180,6 +186,24 @@ export function clusterErrorSteps(
 
 /** 来源A：从原始交互重解析 → 结构化错误事件聚类。 */
 function clusterStructuredErrors(input: ProblemSummaryInput): { clusters: Cluster[]; errorTraces: Set<string>; eventCount: number } {
+    if (input.structuredErrors) {
+        const allowed = new Set(input.traces.map(t => t.executionId));
+        const clusters = new Map<string, Cluster>();
+        const errorTraces = new Set<string>();
+        let eventCount = 0;
+        for (const trace of input.structuredErrors) {
+            if (!allowed.has(trace.executionId)) continue;
+            for (const row of trace.clusters) {
+                const current = clusters.get(row.key) ?? {...row, count: 0, traces: new Set<string>()};
+                current.count += row.count;
+                current.traces.add(trace.executionId);
+                clusters.set(row.key, current);
+                errorTraces.add(trace.executionId);
+                eventCount += row.count;
+            }
+        }
+        return {clusters: [...clusters.values()], errorTraces, eventCount};
+    }
     const map = input.interactionsByTrace;
     if (!map) return { clusters: [], errorTraces: new Set(), eventCount: 0 };
 

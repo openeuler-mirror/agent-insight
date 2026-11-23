@@ -1,3 +1,4 @@
+import {getCoreDatasetContext,seedCoreBuiltinDataset,registerCoreBuiltinDataset} from '@/lib/storage-core/datasets'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -114,6 +115,17 @@ export async function ensureBuiltinReliabilityDataset(user: string): Promise<{
   const cases = buildCasesFromCatalog(faults, found?.cases || [])
   const description =
     `内置可靠性故障注入评测集。Case 由 FI 故障目录按子模式动态同步（当前 ${cases.length} 条），输入为后端 composeFaultPrompt 生成的注入提示词。`
+
+  if (getCoreDatasetContext()) {
+    const template = {
+      id: found?.id || '', user: u, name: BUILTIN_RELIABILITY_DATASET_NAME, description,
+      targetAgent: '', targetSkill: '', tags: ['内置', 'reliability', 'fault-injection'],
+      fields: defaultDatasetSchemaFields('reliability'), cases, datasetKind: 'reliability',
+      createdAt: found?.createdAt || nowIso, updatedAt: found?.updatedAt || nowIso,
+    } satisfies import('@/server/agent_datasets_storage').AgentDatasetRecord
+    const dataset = found ? registerCoreBuiltinDataset(template, found.cases) : await seedCoreBuiltinDataset(template)
+    return {created: !found, updated: false, id: dataset.id, caseCount: dataset.cases.length}
+  }
 
   if (!found) {
     const id = randomUUID()

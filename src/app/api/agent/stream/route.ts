@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -48,6 +49,7 @@ export const maxDuration = 600;
  *   - kind='question'   时 reply 必须是 any[]|null（null 表示拒绝回答）
  */
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   const body = await request.json().catch(() => ({}));
   const user = String(body.user || '').trim();
   const query = String(body.query || '').trim();
@@ -233,4 +235,6 @@ export async function POST(request: Request) {
       'X-Accel-Buffering': 'no',
     },
   });
+
+  },["write","execute"]);
 }

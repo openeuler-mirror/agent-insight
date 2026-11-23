@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {bootstrapCoreControlUser} from '@/lib/storage-core/control-auth';
+import {resolveLoginMode} from '@/lib/auth/login-mode';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -19,6 +22,7 @@ import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
+  if(isStorageCoreEnabled()&&resolveLoginMode()!=='organization')return NextResponse.json({error:'Not found'},{status:404});
   const orgUserInfoUrl = process.env.ORG_USER_INFO_URL;
   
   if (!orgUserInfoUrl) {
@@ -52,7 +56,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'No user ID returned from organization' }, { status: 400 });
     }
     
-    let user = await db.findUserByUsername(userId);
+    let user = (await bootstrapCoreControlUser(String(userId)));
     if (!user) {
       const apiKey = `sk-${crypto.randomBytes(16).toString('hex')}`;
       user = await db.createUser({ username: userId, apiKey });

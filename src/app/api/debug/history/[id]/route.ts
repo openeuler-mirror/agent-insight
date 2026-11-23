@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -21,6 +22,7 @@ export async function DELETE(
     req: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
+  return withCoreControlRoute(req,async()=>{
     const { id } = await params;
     const { searchParams } = new URL(req.url);
     const user = searchParams.get('user');
@@ -48,4 +50,6 @@ export async function DELETE(
         console.error('Failed to delete history from DB:', err);
         return NextResponse.json({ error: 'Failed to delete record' }, { status: 500 });
     }
+
+  },["write","delete"]);
 }

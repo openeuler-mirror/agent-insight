@@ -1,3 +1,6 @@
+import {createHash} from 'node:crypto';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireCoreExperimentContext,type CoreExperimentContext} from '@/lib/storage-core/experiments';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -25,6 +28,7 @@ interface ClientCaseInput {
   user: string;
   experimentId: string;
   experimentCaseId?: string;
+  caseIdentity?:string;
   datasetCaseId: string;
   datasetId: string;
   executionTarget: SkillExecutionTarget;
@@ -40,7 +44,7 @@ interface ClientCaseInput {
 }
 
 export async function executeSkillCaseOnClient(input: ClientCaseInput) {
-  return executeClientCase(input);
+  return executeCoreClientCase(input,requireCoreExperimentContext());
 }
 
 async function executeClientCase(input: ClientCaseInput) {
@@ -79,4 +83,26 @@ async function executeClientCase(input: ClientCaseInput) {
   if (!updated?.taskId) throw new TraceGenerationError('TRACE_ID_MISSING', '缺少本次执行 Trace');
   if (updated.executionId) await prisma.execution.update({ where: { id: updated.executionId }, data: { skill: input.skill?.name || null, skillVersion: input.skill?.version ?? null } });
   return { sessionId: updated.taskId, output: updated.actualOutput || '', experimentCaseId: row.id };
+}
+
+async function executeCoreClientCase(input:ClientCaseInput,context:CoreExperimentContext){
+  if(input.user!==context.actor.username)throw Object.assign(new Error('Workbench execution actor differs'),{status:403});
+  input.signal.throwIfAborted();await validateSkillExecutionTarget(input.user,input.executionTarget,false,input.executionConcurrency);
+  await assertExperimentActive(input.experimentId,`dataset:${input.datasetCaseId}`);input.signal.throwIfAborted();
+  type Row={id:string;caseValuesJson?:string|null;taskId?:string|null;executionId?:string|null;actualOutput?:string;traceAttempts?:Array<{failureCode?:string|null;errorMessage?:string|null}>};
+  const read=async()=>{const value=await context.rpc('read',{experiment_id:input.experimentId}) as {gold_redacted?:boolean;experiment:{cases:Row[]}};if(value.gold_redacted)throw Object.assign(new Error('Task-linked Experiment belongs to another actor'),{status:403});return value.experiment;};
+  const experiment=await read();const previous=input.experimentCaseId?experiment.cases.find(row=>row.id===input.experimentCaseId):null;
+  if(input.experimentCaseId&&!previous)throw new TraceGenerationError('case_missing','实验 Case 已不存在',404);
+  const identity=input.experimentCaseId||'workbench-case-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,context.operationKey,input.experimentId,input.datasetId,input.datasetCaseId,input.skillRun||input.caseIdentity||null])).digest('hex').slice(0,40);
+  const values=previous?.caseValuesJson?JSON.parse(previous.caseValuesJson):{};
+  const data={id:identity,...(!previous?{input:input.query,datasetInput:input.query,actualOutput:'',referenceOutput:input.referenceOutput??null}:{}),caseValuesJson:JSON.stringify(withExperimentDatasetCaseBinding(values,{datasetId:input.datasetId,caseId:input.datasetCaseId}))};
+  const payload={experiment_id:input.experimentId,case:data};
+  const saved=await context.rpc('case_upsert',{...payload,operation_key:context.operationKey+':workbench-case:'+identity,operation_request:payload}) as {case_id:string};
+  const caseId=saved.case_id;if(!caseId)throw Object.assign(new Error('Workbench Case receipt unavailable'),{status:503});
+  await input.onCaseCreated(caseId);
+  const result=await generateExperimentTraces({user:input.user,experimentId:input.experimentId,...input.executionTarget,timeoutSeconds:Math.round(input.timeoutMs/1000),cases:[{caseId,input:input.query}],skillExecution:{version:1,skill:input.skill},onAttemptCreated:input.onAttemptCreated,skillRun:input.skillRun,signal:input.signal},{forceNewTrace:true});
+  input.signal.throwIfAborted();const updated=(await read()).cases.find(row=>row.id===caseId);
+  if(!result.readyCaseIds.includes(caseId)){const attempt=updated?.traceAttempts?.[0];throw new TraceGenerationError(attempt?.failureCode||'CASE_RUN_FAILED',attempt?.errorMessage||'客户端执行失败');}
+  if(!updated?.taskId)throw new TraceGenerationError('TRACE_ID_MISSING','缺少本次执行 Trace');
+  return {sessionId:updated.taskId,output:updated.actualOutput||'',experimentCaseId:caseId};
 }

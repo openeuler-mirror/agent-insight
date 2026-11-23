@@ -22,6 +22,8 @@
  * 新客户端用自己的 clientId 作为 workerId 领取 FI run，
  * 因此 FaultInjectionRun.workerId 无需迁移。
  */
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {requireCoreControlContext} from '@/lib/storage-core/control-context'
 import { resolveUser } from '@/lib/auth/auth'
 import { authenticateDevice } from '@/lib/reliability/client-registry'
 
@@ -32,16 +34,5 @@ export type WorkerCaller = {
 }
 
 export async function resolveWorkerCaller(req: Request): Promise<WorkerCaller | null> {
-  const { username } = await resolveUser(req)
-  if (username) return { username, clientId: null }
-
-  if (req.headers.get('authorization')) {
-    try {
-      const device = await authenticateDevice(req)
-      return { username: device.user, clientId: device.clientId }
-    } catch {
-      return null
-    }
-  }
-  return null
+  {const context=requireCoreControlContext();return {username:context.actor.username,clientId:context.device?.clientId||null}}
 }

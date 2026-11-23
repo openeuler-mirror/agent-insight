@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -32,6 +33,7 @@ function ensureDir(dirPath: string) {
 }
 
 export async function POST(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const formData = await request.formData();
         const files = formData.getAll('files') as File[];
@@ -197,4 +199,6 @@ export async function POST(request: NextRequest) {
         console.error('Upload Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write"]);
 }

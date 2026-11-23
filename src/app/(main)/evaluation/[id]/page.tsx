@@ -16,6 +16,8 @@
 
 'use client';
 
+import {apiFetch} from '@/lib/client/api';
+
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
@@ -39,7 +41,7 @@ export default function EvaluationDetailPage() {
     useEffect(() => {
         if (!evaluationId) return;
         let cancelled = false;
-        fetch(`/api/evaluation/${encodeURIComponent(evaluationId)}`)
+        apiFetch(`/api/evaluation/${encodeURIComponent(evaluationId)}`)
             .then(async r => {
                 if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
                 return r.json();

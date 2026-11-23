@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {coreFiRpc,coreFiOwner,listCoreFiWorkers} from '@/lib/storage-core/fault-injection'
 import type { FaultInjectionWorker } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 import { refreshTaskProgress } from '@/lib/fault-injection/store'
@@ -31,57 +33,7 @@ export function workerOnlineMs(): number {
 
 /** Requeue or stop stale collecting leases. Call at heartbeat/claim entry. */
 export async function sweepStaleClaims(user: string | null) {
-  const cutoff = new Date(Date.now() - claimTimeoutMs())
-  const whereUser = user ? { user } : {}
-  const stale = await prisma.faultInjectionRun.findMany({
-    where: {
-      ...whereUser,
-      status: 'collecting',
-      OR: [{ claimedAt: { lt: cutoff } }, { claimedAt: null }],
-    },
-    take: 50,
-  })
-  const touchedTasks = new Set<string>()
-  let reclaimed = 0
-  for (const run of stale) {
-    if (run.workerId) {
-      const worker = await prisma.faultInjectionWorker.findUnique({
-        where: { workerId: run.workerId },
-      })
-      // claimedAt is a start time. Renew protection only for live work;
-      // a restarted client can heartbeat while its previous collectors are gone.
-      if (worker && worker.lastSeenAt >= new Date(Date.now() - workerOnlineMs())) {
-        let activeRunIds: unknown
-        try {
-          activeRunIds = JSON.parse(worker.inventoryJson || '{}').activeRunIds
-        } catch { /* Legacy workers do not report individual active runs. */ }
-        if (!Array.isArray(activeRunIds) || activeRunIds.includes(run.runId)) continue
-      }
-    }
-    const result = await prisma.faultInjectionRun.updateMany({
-      where: {
-        id: run.id,
-        status: 'collecting',
-        workerId: run.workerId,
-        claimedAt: run.claimedAt,
-      },
-      data: {
-        status: run.stopRequested ? 'stopped' : 'queued',
-        workerId: null,
-        claimedAt: null,
-        error: run.stopRequested ? run.error || 'stopped by user' : 'claim timeout; requeued',
-      },
-    })
-    // A completion or a fresh claim can win while the worker is checked.
-    if (result.count) {
-      reclaimed += result.count
-      if (run.fiTaskId) touchedTasks.add(run.fiTaskId)
-    }
-  }
-  for (const taskId of touchedTasks) {
-    await refreshTaskProgress(taskId).catch(() => undefined)
-  }
-  return reclaimed
+  {coreFiOwner(user);return (await coreFiRpc<{reclaimed:number}>('sweep',{claimTimeoutMs:claimTimeoutMs()})).reclaimed}
 }
 
 export type ClaimedRunPayload = {
@@ -96,6 +48,7 @@ export type ClaimedRunPayload = {
   workspaceLogical: string
   timeoutSeconds: number | null
   stopRequested: boolean
+  claimToken?: string
 }
 
 export function runCanBeClaimedByWorker(
@@ -116,78 +69,7 @@ export async function claimQueuedRuns(input: {
   workerId: string
   limit: number
 }): Promise<ClaimedRunPayload[]> {
-  const limit = Math.max(1, Math.min(input.limit, 8))
-  const claimed: ClaimedRunPayload[] = []
-
-  for (let i = 0; i < limit; i += 1) {
-    const candidates = await prisma.faultInjectionRun.findMany({
-      where: {
-        user: input.user,
-        status: 'queued',
-        stopRequested: false,
-      },
-      orderBy: { queuedAt: 'asc' },
-      take: 100,
-    })
-    const next = candidates.find((candidate: { requestJson: string | null }) =>
-      runCanBeClaimedByWorker(candidate.requestJson, input.workerId))
-    if (!next) break
-
-    const result = await prisma.faultInjectionRun.updateMany({
-      where: { id: next.id, status: 'queued', stopRequested: false },
-      data: {
-        status: 'collecting',
-        workerId: input.workerId,
-        claimedAt: new Date(),
-        error: null,
-      },
-    })
-    if (result.count !== 1) continue
-
-    const run = await prisma.faultInjectionRun.findUnique({ where: { id: next.id } })
-    if (!run) continue
-    const task = run.fiTaskId
-      ? await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
-      : null
-    const req = JSON.parse(run.requestJson || '{}') as {
-      prompt?: string
-      workspace?: string
-      model?: string | null
-      timeoutSeconds?: number | null
-    }
-    claimed.push({
-      runId: run.runId,
-      taskKey: task?.taskKey || null,
-      platform: run.platform,
-      agent: run.agent,
-      fault: run.fault,
-      submode: run.submode,
-      prompt: req.prompt || task?.prompt || '',
-      model: req.model ?? task?.model ?? null,
-      workspaceLogical: req.workspace || task?.workspace || '__default__',
-      timeoutSeconds:
-        typeof req.timeoutSeconds === 'number'
-          ? req.timeoutSeconds
-          : parseTimeoutFromTask(task?.requestJson),
-      stopRequested: run.stopRequested,
-    })
-    if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId).catch(() => undefined)
-  }
-
-  // Mark queued+stopRequested as stopped without claiming
-  const stoppedQueued = await prisma.faultInjectionRun.findMany({
-    where: { user: input.user, status: 'queued', stopRequested: true },
-    take: 20,
-  })
-  for (const run of stoppedQueued) {
-    await prisma.faultInjectionRun.update({
-      where: { id: run.id },
-      data: { status: 'stopped', error: 'stopped by user' },
-    })
-    if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId).catch(() => undefined)
-  }
-
-  return claimed
+  {coreFiOwner(input.user);return (await coreFiRpc<{runs:ClaimedRunPayload[]}>('claim',{workerId:input.workerId,limit:input.limit})).runs}
 }
 
 function parseTimeoutFromTask(requestJson?: string | null): number | null {
@@ -209,45 +91,7 @@ export async function upsertWorkerHeartbeat(input: {
   busySlots?: number
   partial?: boolean
 }) {
-  if (input.partial) {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const previous = await prisma.faultInjectionWorker.findUnique({ where: { workerId: input.workerId } })
-      if (!previous) {
-        await prisma.faultInjectionWorker.upsert({ where: { workerId: input.workerId },
-          create: { workerId: input.workerId, user: input.user, inventoryJson: '{}', lastSeenAt: new Date() }, update: {} })
-        continue
-      }
-      const changed = await prisma.faultInjectionWorker.updateMany({
-        where: { workerId: input.workerId, inventoryJson: previous.inventoryJson },
-        data: { user: input.user, hostname: input.hostname || undefined, version: input.version || undefined,
-          lastSeenAt: new Date(), busySlots: input.busySlots ?? 0,
-          inventoryJson: JSON.stringify(mergeWorkerInventory(previous.inventoryJson, input.inventory)) },
-      })
-      if (changed.count) return prisma.faultInjectionWorker.findUniqueOrThrow({ where: { workerId: input.workerId } })
-    }
-    throw new Error('Worker inventory is being updated; retry heartbeat')
-  }
-  const inventoryJson = JSON.stringify(input.inventory ?? {})
-  return prisma.faultInjectionWorker.upsert({
-    where: { workerId: input.workerId },
-    create: {
-      workerId: input.workerId,
-      user: input.user,
-      hostname: input.hostname || null,
-      version: input.version || null,
-      lastSeenAt: new Date(),
-      inventoryJson,
-      busySlots: input.busySlots ?? 0,
-    },
-    update: {
-      user: input.user,
-      hostname: input.hostname || null,
-      version: input.version || null,
-      lastSeenAt: new Date(),
-      inventoryJson,
-      busySlots: input.busySlots ?? 0,
-    },
-  })
+  {coreFiOwner(input.user);return (await coreFiRpc<{worker:FaultInjectionWorker}>('heartbeat',input)).worker}
 }
 
 export function mergeWorkerInventory(previous: string | null | undefined, patch: unknown): Record<string, unknown> & { platforms: Record<string, unknown> } {
@@ -268,25 +112,13 @@ export function mergeWorkerInventory(previous: string | null | undefined, patch:
 }
 
 export async function listStopCommandsForWorker(user: string, workerId: string) {
-  const runs = await prisma.faultInjectionRun.findMany({
-    where: {
-      user,
-      workerId,
-      status: 'collecting',
-      stopRequested: true,
-    },
-    select: { runId: true },
-  })
-  return runs.map((r: { runId: string }) => ({ type: 'stop' as const, runId: r.runId }))
+  {coreFiOwner(user);return (await coreFiRpc<{commands:Array<{type:'stop';runId:string}>}>('commands',{workerId})).commands}
 }
 
 export async function getLatestWorkerInventory(user: string | null, platform: string) {
   if (!user) return null
   const cutoff = new Date(Date.now() - workerOnlineMs())
-  const worker = await prisma.faultInjectionWorker.findFirst({
-    where: { user, lastSeenAt: { gte: cutoff } },
-    orderBy: { lastSeenAt: 'desc' },
-  })
+  const worker = ((coreFiOwner(user), (await listCoreFiWorkers(cutoff.getTime()))[0]))
   if (!worker) return null
   try {
     const inv = JSON.parse(worker.inventoryJson || '{}') as {
@@ -394,13 +226,9 @@ export async function listWorkerExecutionTargets(user: string | null): Promise<W
   const cutoff = new Date(Date.now() - workerOnlineMs())
   let workers: FaultInjectionWorker[]
   try {
-    workers = await prisma.faultInjectionWorker.findMany({
-      where: { user, lastSeenAt: { gte: cutoff } },
-      orderBy: { lastSeenAt: 'desc' },
-      take: 100,
-    })
-  } catch {
-    return []
+    workers = ((coreFiOwner(user),await listCoreFiWorkers(cutoff.getTime())))
+  } catch (error) {
+    throw error
   }
   const out: WorkerExecutionTarget[] = []
   for (const worker of workers) {
@@ -417,11 +245,7 @@ export async function listPlatformsFromWorkers(user: string | null): Promise<{
 }> {
   const cutoff = new Date(Date.now() - workerOnlineMs())
   const workers = user
-    ? await prisma.faultInjectionWorker.findMany({
-        where: { user, lastSeenAt: { gte: cutoff } },
-        orderBy: { lastSeenAt: 'desc' },
-        take: 5,
-      })
+    ? ((coreFiOwner(user),(await listCoreFiWorkers(cutoff.getTime())).slice(0,5)))
     : []
 
   const platforms = (['opencode', 'xiaoo'] as const).map((id) => {

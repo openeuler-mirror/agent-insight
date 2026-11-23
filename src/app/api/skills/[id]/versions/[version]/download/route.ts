@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -29,6 +30,7 @@ export async function GET(
     request: NextRequest,
     props: { params: Promise<{ id: string; version: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     const params = await props.params;
     const { id, version } = params;
     const versionNum = parseInt(version);
@@ -132,4 +134,6 @@ export async function GET(
         console.error('Download error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
+
+  },["read"]);
 }

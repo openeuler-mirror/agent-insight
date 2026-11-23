@@ -21,6 +21,9 @@ const fsp = require('node:fs/promises')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
+const callbackProtocolPath = path.resolve(__dirname, '../../../packages/benchmark-protocol/callback-capability.cjs')
+const { callbackCapabilityHeaders } = require(require('node:fs').existsSync(callbackProtocolPath)
+  ? callbackProtocolPath : path.resolve(__dirname, '../packages/benchmark-protocol/callback-capability.cjs'))
 const { spawn } = require('node:child_process')
 const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
 const { ExecutionBackendRegistry, LocalExecutionBackend } = require('./execution-backend.cjs')
@@ -76,6 +79,7 @@ function deviceCredentialHash(value) {
 }
 
 function dispatchDigest(request) {
+  callbackCapabilityHeaders(request)
   return sha256(canonicalJson({
     runId: request.runId,
     task: request.task,
@@ -701,10 +705,11 @@ class AgentInsightCallbackClient {
     this.timeoutMs = Math.max(1_000, Number(options.callbackTimeoutMs) || 30_000)
   }
 
-  headers(extra = {}) {
+  headers(extra = {}, request = {}) {
     return {
       authorization: `Bearer ${this.deviceCredential}`,
       'x-agent-insight-client-id': this.clientId,
+      ...callbackCapabilityHeaders(request),
       ...extra,
     }
   }
@@ -746,7 +751,7 @@ class AgentInsightCallbackClient {
   progress(request, stage, progress = {}) {
     return this.checkedFetch(`${this.runCallbackBaseUrl(request)}/progress`, {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json' }),
+      headers: this.headers({ 'content-type': 'application/json' }, request),
       body: JSON.stringify({ kind: 'execution', stage, progress, occurredAt: new Date().toISOString() }),
     })
   }
@@ -762,7 +767,7 @@ class AgentInsightCallbackClient {
     form.set('file', new Blob([artifact.bytes], { type: artifact.mediaType }), artifact.name)
     return this.checkedFetch(`${this.insightBaseUrl}/api/benchmark/v1/artifacts`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headers({}, request),
       body: form,
     })
   }
@@ -770,7 +775,7 @@ class AgentInsightCallbackClient {
   complete(request, body) {
     return this.checkedFetch(`${this.runCallbackBaseUrl(request)}/complete`, {
       method: 'POST',
-      headers: this.headers({ 'content-type': 'application/json' }),
+      headers: this.headers({ 'content-type': 'application/json' }, request),
       body: JSON.stringify(body),
     })
   }

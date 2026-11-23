@@ -1,3 +1,5 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {materializedControlSkillDirectory} from '@/lib/storage-core/control-files';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -38,10 +40,7 @@ export interface SkillVersionRowLite {
 }
 
 export function resolveVersionStorageRoot(skillId: string, version: number, assetPath: string | null): string {
-  if (assetPath) {
-    return resolveRuntimeAssetPath(assetPath);
-  }
-  return getSkillVersionStorageDir(skillId, version);
+  return materializedControlSkillDirectory(skillId,version);
 }
 
 export function loadSkillVersionSnapshot(args: {

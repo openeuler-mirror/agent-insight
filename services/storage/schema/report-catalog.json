@@ -1,0 +1,284 @@
+{
+  "version": 7,
+  "name": "diagnostic_reports",
+  "tables": [
+    {
+      "name": "diagnostic_report_runs",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_key",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "execution_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "interactions_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "generator",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "scope_fingerprint",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evidence_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "evidence_ref",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "lease_secret_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "running"
+        },
+        {
+          "name": "payload_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "payload_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "progress_hash",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "progress_ref",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_message",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "lease_until_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "report_id"
+      ],
+      "checks": [
+        "kind IN ('agent-debug','skills-analysis')",
+        "status IN ('running','done','failed','skipped')",
+        "length(report_id)>0",
+        "length(execution_id)>0",
+        "length(generator) BETWEEN 1 AND 300",
+        "request_key IS NULL OR length(request_key) BETWEEN 1 AND 512",
+        "length(interactions_hash)=64",
+        "length(evidence_hash)=64",
+        "length(lease_secret_hash)=64",
+        "length(scope_fingerprint)>0",
+        "length(evidence_ref)>0",
+        "(payload_hash IS NULL AND payload_ref IS NULL) OR (payload_hash IS NOT NULL AND payload_ref IS NOT NULL AND length(payload_hash)=64 AND length(payload_ref)>0)",
+        "(progress_hash IS NULL AND progress_ref IS NULL) OR (progress_hash IS NOT NULL AND progress_ref IS NOT NULL AND length(progress_hash)=64 AND length(progress_ref)>0)",
+        "status NOT IN ('done','skipped') OR payload_ref IS NOT NULL",
+        "error_message IS NULL OR length(error_message)<=2000",
+        "revision BETWEEN 1 AND 9223372036854775807",
+        "created_at_ms>=0",
+        "updated_at_ms>=created_at_ms",
+        "lease_until_ms IS NULL OR lease_until_ms>=created_at_ms",
+        "status<>'running' OR lease_until_ms IS NOT NULL"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        },
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        }
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "trace_id",
+          "kind",
+          "report_id"
+        ],
+        [
+          "workspace_id",
+          "actor_principal_id",
+          "kind",
+          "request_key"
+        ]
+      ],
+      "indexes": [
+        {
+          "name": "idx_diagnostic_report_runs_trace",
+          "columns": [
+            "workspace_id",
+            "trace_id",
+            "kind",
+            "created_at_ms"
+          ]
+        }
+      ],
+      "invariants": [
+        "all content hashes are lowercase hexadecimal",
+        "frozen run identity and evidence immutable",
+        "terminal run immutable",
+        "revision increments exactly once",
+        "updated_at_ms never decreases",
+        "run history cannot be deleted"
+      ]
+    },
+    {
+      "name": "diagnostic_report_heads",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "report_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id",
+        "kind"
+      ],
+      "checks": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id",
+            "kind",
+            "report_id"
+          ],
+          "table": "diagnostic_report_runs",
+          "target": [
+            "workspace_id",
+            "trace_id",
+            "kind",
+            "report_id"
+          ]
+        }
+      ],
+      "unique": [],
+      "indexes": []
+    }
+  ]
+}

@@ -1,3 +1,6 @@
+import {listCoreFiTasks} from '@/lib/storage-core/fault-injection'
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,7 +18,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
 import { prisma } from '@/lib/storage/prisma'
 import { createTaskWithRuns, refreshTaskProgress } from '@/lib/fault-injection/store'
 import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
@@ -23,23 +26,16 @@ import { listPlatformsFromWorkers } from '@/lib/fault-injection/worker-protocol'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   const { username } = await resolveUser(req)
   const status = new URL(req.url).searchParams.get('status')
-  const tasks = await prisma.faultInjectionTask.findMany({
-    where: {
-      ...(username ? { user: username } : {}),
-      ...(status ? { status } : {}),
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-  })
+  const tasks = (await listCoreFiTasks({status}))
   return NextResponse.json({
     tasks: tasks.map(serializeTask),
   })
 }
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   try {
     const { username } = await resolveUser(req)
     const effectiveUser = username || process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER || null
@@ -108,8 +104,7 @@ export async function POST(req: Request) {
       needsWorker: true,
     })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
 }
 
@@ -149,4 +144,12 @@ function serializeTask(task: {
     started_at: task.startedAt?.toISOString() || null,
     finished_at: task.finishedAt?.toISOString() || null,
   }
+}
+
+export async function GET(req: Request) {
+  return withCoreFiRequest(req,()=>handleGET(req))
+}
+
+export async function POST(req: Request) {
+  return withCoreFiRequest(req,()=>handlePOST(req))
 }

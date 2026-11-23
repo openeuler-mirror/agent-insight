@@ -1,3 +1,5 @@
+import {hasCoreCollectorTraceSource,queryCoreTraceSources,findCoreTraceExecutions} from '@/lib/storage-core/collector-read-source';
+import {semanticProjection as repository} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -80,6 +82,11 @@ class ProjectionLimitError extends Error {}
 export class CollaborationProjection {
     constructor(private service: CollaborationService) {}
     private async *groups(user: string) {
+        if(hasCoreCollectorTraceSource()){
+            const groups=await repository.collaboration.findMany({where:{user,events:{some:{sourceType:'reported'}}},orderBy:{collaborationId:'asc'},select:{collaborationId:true}});
+            for(const group of groups)yield group;
+            return;
+        }
         let cursor = '';
         while (true) {
             const groups = await this.service.store.sql.rows<{ collaborationId: string }>(
@@ -90,6 +97,11 @@ export class CollaborationProjection {
         }
     }
     private async groupMembers(user: string, collaborationId: string) {
+        if(hasCoreCollectorTraceSource()){
+            const events=await repository.collaborationEvent.findMany({where:{user,collaborationId}}),bindings=await repository.collaborationSessionBinding.findMany({where:{user,collaborationId}}),endpoints=[...new Set(events.flatMap(row=>[row.fromSessionId,row.toSessionId]).filter((id):id is string=>Boolean(id)))];
+            const executions=endpoints.length?await findCoreTraceExecutions(user,{agent_session_ids:endpoints,limit:2000}):[];
+            return [...bindings.map(binding=>({traceSessionId:binding.traceSessionId,goalPlusChild:events.some(event=>event.sourceType==='reported'&&event.fromSessionId==='main'&&event.toSessionId===binding.sessionId&&event.toSessionId.startsWith('worker:'))?1:0})),...executions.filter(row=>row.taskId).map(row=>({traceSessionId:row.taskId as string,goalPlusChild:0}))];
+        }
         return this.service.store.sql.rows<{ traceSessionId: string; goalPlusChild: number | bigint }>(`
             WITH endpoints AS (
                 SELECT "fromSessionId" AS "sessionId" FROM "CollaborationEvent" WHERE "user"=? AND "collaborationId"=?
@@ -151,7 +163,7 @@ export class CollaborationProjection {
                     for (const id of new Set(resolvedIds.values())) {
                         if (!sizes.has(id)) {
                             if (sizes.size >= 200) throw new ProjectionLimitError('Trace 投影超过 200 个 Session');
-                            const rows = await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number; id: string; agentName: string | null; subagentName: string | null; framework: string | null; latency?: number | null; tokens?: number | bigint | null }>(
+                            const rows:Array<any> = hasCoreCollectorTraceSource()?(await queryCoreTraceSources(user,{references:[id],limit:2})).flatMap(row=>row.session&&row.execution?[{...row.execution,bytes:Buffer.byteLength(row.session.interactions||''),embedded:row.session.langfuseTraceNodes??null}]:[]):await this.service.store.sql.rows<{ bytes: number; embedded: string | null; isSubagent: boolean | number; id: string; agentName: string | null; subagentName: string | null; framework: string | null; latency?: number | null; tokens?: number | bigint | null }>(
                                 'SELECT LENGTH(s."interactions") AS bytes, s."langfuseTraceNodes" AS embedded, e."isSubagent", e."id", e."agentName", e."subagentName", e."framework", e."latency", e."tokens" FROM "Session" s JOIN "Execution" e ON e."taskId"=s."taskId" AND e."user"=s."user" WHERE s."user"=? AND s."taskId"=? LIMIT 2', [user, id]);
                             sizes.set(id, Number(rows[0]?.bytes ?? 0));
                             ready.set(id, rows.length === 1 && Boolean(rows[0].bytes && rows[0].bytes > 2 && !rows[0].isSubagent && (!rows[0].embedded || rows[0].embedded === '[]')));

@@ -1,0 +1,364 @@
+{
+  "version": 15,
+  "name": "trace_analytics",
+  "tables": [
+    {
+      "name": "trace_analytics_publications",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "boundary",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "parser_version",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "projection_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "trace_id",
+        "boundary",
+        "parser_version"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "trace_id"
+          ],
+          "trace_locators",
+          [
+            "workspace_id",
+            "trace_id"
+          ]
+        ],
+        [
+          "created_by",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "created_at_ms",
+          "trace_id"
+        ]
+      ],
+      "checks": [
+        "length(boundary)=64 AND boundary ~ '^[0-9a-f]{64}$'",
+        "length(projection_hash)=64 AND projection_hash ~ '^[0-9a-f]{64}$'",
+        "length(snapshot_hash)=64 AND snapshot_hash ~ '^[0-9a-f]{64}$'",
+        "parser_version=1",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807"
+      ],
+      "immutable": true,
+      "identity": [
+        "workspace_id",
+        "trace_id",
+        "boundary",
+        "parser_version",
+        "projection_hash",
+        "snapshot_hash",
+        "created_by",
+        "created_at_ms"
+      ],
+      "revision_guard": false
+    },
+    {
+      "name": "ras_event_receipts",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "task_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "occurred_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "owner_principal_id",
+        "task_id",
+        "event_key"
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "owner_principal_id",
+          "event_id"
+        ]
+      ],
+      "foreign_keys": [
+        [
+          "workspace_id",
+          "workspaces",
+          [
+            "workspace_id"
+          ]
+        ],
+        [
+          "owner_principal_id",
+          "iam_principals",
+          [
+            "principal_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "owner_principal_id",
+          "task_id",
+          "occurred_at_ms",
+          "event_id"
+        ]
+      ],
+      "checks": [
+        "length(task_id) BETWEEN 1 AND 512",
+        "length(event_key) BETWEEN 1 AND 512",
+        "length(event_id) BETWEEN 1 AND 512",
+        "length(content_hash)=64 AND content_hash ~ '^[0-9a-f]{64}$'",
+        "revision>=1 AND revision<=9223372036854775807",
+        "occurred_at_ms>=0 AND occurred_at_ms<=9223372036854775807",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807"
+      ],
+      "immutable": false,
+      "identity": [
+        "workspace_id",
+        "owner_principal_id",
+        "task_id",
+        "event_key",
+        "event_id",
+        "created_at_ms"
+      ],
+      "revision_guard": true
+    },
+    {
+      "name": "experiment_trace_sources",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "case_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "incarnation",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "route_epoch",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "execution_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "plan_hash",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "run_id",
+        "case_id"
+      ],
+      "unique": [],
+      "foreign_keys": [
+        [
+          [
+            "workspace_id",
+            "run_id"
+          ],
+          "experiment_runs",
+          [
+            "workspace_id",
+            "run_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "case_id"
+          ],
+          "experiment_cases",
+          [
+            "workspace_id",
+            "case_id"
+          ]
+        ],
+        [
+          [
+            "workspace_id",
+            "trace_id"
+          ],
+          "trace_locators",
+          [
+            "workspace_id",
+            "trace_id"
+          ]
+        ]
+      ],
+      "indexes": [
+        [
+          "workspace_id",
+          "trace_id",
+          "run_id",
+          "case_id"
+        ]
+      ],
+      "checks": [
+        "length(execution_id) BETWEEN 1 AND 512",
+        "length(snapshot_hash)=64 AND snapshot_hash ~ '^[0-9a-f]{64}$'",
+        "length(plan_hash)=64 AND plan_hash ~ '^[0-9a-f]{64}$'",
+        "incarnation>=1 AND incarnation<=9223372036854775807",
+        "route_epoch>=1 AND route_epoch<=9223372036854775807",
+        "created_at_ms>=0 AND created_at_ms<=9223372036854775807"
+      ],
+      "immutable": true,
+      "identity": [
+        "workspace_id",
+        "run_id",
+        "case_id",
+        "trace_id",
+        "incarnation",
+        "route_epoch",
+        "execution_id",
+        "snapshot_hash",
+        "plan_hash",
+        "created_at_ms"
+      ],
+      "revision_guard": false
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -21,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const searchParams = request.nextUrl.searchParams;
     const name = searchParams.get('name');
@@ -62,4 +64,6 @@ export async function GET(request: NextRequest) {
     console.error('Find Skill By Name Error:', error);
     return NextResponse.json({ error: 'Failed to find skill' }, { status: 500 });
   }
+
+  },["read"]);
 }

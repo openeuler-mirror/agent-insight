@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+import { coreQualitySource } from '@/lib/storage-core/analytics-quality';
+import { withCoreControlRoute } from '@/lib/storage-core/control-route';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 import { NextResponse } from 'next/server';
-import { resolveUser } from '@/lib/auth/auth';
 import { buildQualityReport, resolveWindowRange } from '@/lib/engine/quality-monitoring';
 import type { WindowKind } from '@/lib/engine/quality-monitoring/types';
 
@@ -24,10 +28,14 @@ export const dynamic = 'force-dynamic';
 const WINDOWS: WindowKind[] = ['1d', '1w', '1m', 'custom'];
 
 export async function GET(req: Request) {
+    return withCoreControlRoute(req, () => report(req), ['read']);
+}
+
+async function report(req: Request) {
     try {
         const url = new URL(req.url);
-        // 身份由前端 ?user= 携带；不读则 username=null 会越权聚合全量数据。
-        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
+        const analytics = (await readCoreAnalytics(req));
+        const { username } = analytics;
 
         const agent = (url.searchParams.get('agent') || '').trim();
         if (!agent) return NextResponse.json({ error: 'agent is required' }, { status: 400 });
@@ -47,18 +55,20 @@ export async function GET(req: Request) {
             return NextResponse.json({ error: 'invalid range: from > to' }, { status: 400 });
         }
 
-        const report = await buildQualityReport({
+        const input = {
             user: username,
             agent,
             window,
             from,
             to,
             filters: skill ? { skill } : undefined,
-        });
+        };
+
+        const report = await buildQualityReport(input, undefined, await coreQualitySource(analytics, input));
+        await analytics.validate();
 
         return NextResponse.json(report);
     } catch (error) {
-        console.error('[Quality Report Error]', error);
-        return NextResponse.json({ error: 'Failed to build quality report' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

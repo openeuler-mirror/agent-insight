@@ -1,3 +1,4 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -56,6 +57,7 @@ export function createExperimentWatcher(options: {
   let scanning = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let nextExperiment = 0;
+  let coreWatcher:ReturnType<typeof import('@/lib/storage-core/experiment-background').createCoreExperimentBackground>|undefined;
 
   async function scanExperiment(
     experiment: WatchExperiment,
@@ -123,30 +125,7 @@ export function createExperimentWatcher(options: {
   }
 
   async function scan() {
-    if (scanning || active.size >= concurrency) return;
-    scanning = true;
-    try {
-      const experiments: WatchExperiment[] = await prisma.experiment.findMany({
-        where: { watchMode: true, watchEnabledAt: { not: null }, agentName: { not: '' } },
-        select: { id: true, user: true, agentName: true, watchEnabledAt: true },
-        orderBy: { id: 'asc' },
-      });
-      const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
-      const enabledIds = new Set(experiments.map(experiment => experiment.id));
-      for (const id of cursors.keys()) if (!enabledIds.has(id)) cursors.delete(id);
-      const start = nextExperiment % Math.max(1, experiments.length);
-      for (let i = 0; i < experiments.length && active.size < concurrency; i++) {
-        const index = (start + i) % experiments.length;
-        nextExperiment = index + 1;
-        try {
-          await scanExperiment(experiments[index], userOwnershipWhere);
-        } catch (error) {
-          console.warn(`[experiment-watch] scan failed exp=${experiments[index].id}:`, error);
-        }
-      }
-    } finally {
-      scanning = false;
-    }
+    {const {createCoreExperimentBackground}=await import('@/lib/storage-core/experiment-background');coreWatcher??=createCoreExperimentBackground({intervalMs,pageSize,concurrency});return coreWatcher.scan();}
   }
 
   function start() {
@@ -162,13 +141,11 @@ export function createExperimentWatcher(options: {
     timer = undefined;
   }
 
-  return { scan, start, stop, waitForIdle: () => Promise.all([...active]) };
+  return { scan, start, stop, waitForIdle: () => coreWatcher?coreWatcher.waitForIdle():Promise.all([...active]) };
 }
 
 const WATCHER_KEY = Symbol.for('agent-insight.experiment.watcher');
 
 export function startExperimentWatcher() {
-  const state = globalThis as unknown as Record<symbol, ReturnType<typeof createExperimentWatcher>>;
-  state[WATCHER_KEY] ??= createExperimentWatcher();
-  state[WATCHER_KEY].start();
+  {void import('@/lib/storage-core/experiment-background').then(({startCoreExperimentBackground})=>startCoreExperimentBackground()).catch(()=>console.warn('[storage-core-background] watch startup unavailable'));return;}
 }

@@ -1,0 +1,289 @@
+---
+title: "启用隔离的 Storage Core Trace 链路"
+description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace 验证。"
+---
+
+# 启用隔离的 Storage Core Trace 链路
+
+## 唯一存储运行方式
+
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 020（77 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+
+Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
+
+事务库保存权限、路由、控制状态、版本、回执与发布水位；Trace/Span/正文及各类分析事实由 ClickHouse 保存。字典规定的资产制品与可靠投递文件继续保留。旧数据库只作为显式离线迁移输入；正常启动不执行旧 Prisma db push，也不自动迁移或删除旧数据。构建期间生成 Prisma 历史 DTO 类型不连接业务数据库。
+
+控制记录的创建和更新返回事务库提交后的值（包括 `updatedAt`），条件更新与重复回执使用同一版本。已授权记录不满足筛选条件时返回空结果；越权读取仍拒绝。静态 Skill 评估和反馈只读取控制记录，动态评估、Trace 与派生问题通过对应 Core 分析接口读取，禁止跨回旧 Execution 表。设备认证沿用请求绑定的 Core 连接，并在响应后校验连接目标未改变。
+
+仪表盘和质量分析读取注册信息时使用同一已验证的 Core 事务上下文，报告的 Trace、轨迹评分和诊断数据只来自 Core 分析快照；缺少快照明确失败，不读取旧表。请求回调直接返回延迟查询时，身份范围持续到查询完成。Agent 删除成功后沿用原用量事件，拒绝或失败不计数。
+
+本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 500 条滚动追加及“加载中…”提示保持。
+
+
+下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
+
+## Docker 隔离联调
+
+仓库根目录的 `docker-compose.storage-core.yml` 将原 Next.js 页面、Python Storage Core 和 ClickHouse 放在独立的 Compose 项目中。三个数据卷分别保存 Web 制品、新事务库及 ClickHouse 数据；Web 默认只发布到本机 `127.0.0.1:3000`（可用 AGENT_INSIGHT_PORT 覆盖），Storage Core 只监听共享网络命名空间内的 `127.0.0.1:4319`。本流程用于新数据链路验证，不导入默认业务库或执行生产切换。
+
+在 Docker daemon 已启动的环境中，从仓库根目录运行：
+
+```bash
+export CLICKHOUSE_PASSWORD='为本次隔离环境设置的强密码'
+docker compose -f docker-compose.storage-core.yml up -d --build
+docker compose -f docker-compose.storage-core.yml ps
+docker compose -f docker-compose.storage-core.yml logs --tail=100 storage-core
+```
+
+首次启动会在新卷中显式初始化 SQLite 001–020 与 ClickHouse 001–004，并生成私有 controller key 和服务配置。再次启动只校验已有版本、表集合和配置；需要升级或更换密码时，先备份并按显式迁移流程处理，不会重建已有库。使用原 `/login` 创建隔离用户后，通过 `/api/ingest/otel/v1/traces` 上报测试 Trace，并检查原 `/trace` 页面或 `/api/observe/data` 及 ClickHouse 对应事实。旧采集兼容接口返回接收结果，batch 回执仅适用于直接调用 Storage Core `/v1/ingest/otlp` 的流程。保留同一个 `CLICKHOUSE_PASSWORD` 才能重启已有卷。停止服务使用 `docker compose -f docker-compose.storage-core.yml down`；不要加 `-v`，以保留验收数据。
+
+此 Compose 路径选择 SQLite 作为事务后端，仅证明该组合的隔离链路；PostgreSQL/openGauss、真实旧库迁移、生产容量与高可用仍需另行验证。容器内运行时初始化与原源码操作指南如下。
+
+**产品兼容状态（2026-11-15）**：原登录、导航和前端页面保持重构前版本；本批通过服务端兼容旧Trace接口接入新存储。诊断会话、自身Trace及Trace报告按参考中的独立协议接管；Dataset版本/Trace回流/批量生成已按本页流程接管；实验/评测结果与DiagnosisRun逐项接管，当前覆盖及剩余Workbench/Benchmark等消费者以实施状态为准。仅在隔离目标验证，不用于生产切换。
+
+正常业务请求仅访问 Core。配置缺失、权限不足和后端故障明确失败，不使用旧业务库或 JSON 文件兜底。
+
+## 生成超大模拟 Trace
+
+在已启动的本机 standalone 登录环境中运行以下脚本。它通过 Web 登录取得指定用户身份，再直接调用 Storage Core 的 OTLP 接口，每批等待 ClickHouse 回执为 `indexed`。此路径用于准备数据库测试数据，不覆盖 Web 采集兼容层的吞吐性能。
+
+```bash
+python3 scripts/simulate-large-trace.py \
+  --username 'your-test-user@example.com' \
+  --web-url http://127.0.0.1:3000 \
+  --core-url http://127.0.0.1:4319 \
+  --state-file /absolute/path/to/private/large-trace.json
+```
+
+默认创建一条 21,001 Span 的 Trace：1 个根节点、21,000 个 LLM 子节点，每条输出 1,024 个 ASCII 字符。输出及 Token 计数均为模拟值，不会调用真实模型。可用 `--spans`、`--batch-size`（默认 500）和 `--output-chars` 调整规模；每请求仍受 4 MiB / 4096 Span 限制。输出高度可压缩，不能据此推算真实模型数据的压缩率。
+
+后台错误聚类跳过逐个 LLM 节点的完整历史输入拼接，避免大 Trace 的历史文本被平方级重复复制；错误输出与分类保持，详情调用仍保留默认历史内容。
+
+状态文件保存 Trace ID、固定时间、逐批耗时和进度，不保存凭据。中断后用相同参数及状态文件重跑可续传，已完成批次不会重新创建；换一个状态文件才会生成新 Trace。结束时校验 Span 数与 owner，并打印原 `/trace?taskId=...` 页面链接。批次耗时包括 HTTP、事务提交、索引与轮询，不能当作纯 ClickHouse 查询延迟。测试数据保留供页面及数据库性能检查。 21,001 Span / 每条 1 KiB 输出的本机实测已通过核心索引与正文读回，但旧 `/api/observe/data` 对该 Trace 返回 413；页面入口 200 不代表列表和详情已支持此规模。
+
+## 1. 准备独立目标
+
+以下路径、端口、数据库名都是示例，须替换为本次专用目标。Python 需3.11+，ClickHouse需预先运行。事务后端可选SQLite、PG、openGauss；本流程用SQLite。原Prisma业务库不能直接传给core初始化/升级命令。
+
+```bash
+mkdir -m 700 -p /absolute/path/to/isolated-core
+python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-core/core.db
+python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
+```
+
+新库应用001–020，当前schema_version=20。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+
+```bash
+python3 -m services.storage migrate-sqlite \
+  --database /absolute/path/to/isolated-core/core.db \
+  --backup /absolute/path/to/isolated-core/new-before-upgrade.db
+```
+
+备份必须为新文件；不覆盖既有备份。关系库的`init-relational`/`migrate-relational`、私有DSN文件及外部备份证据见[参考](../../reference/platform/storage-core.md#显式初始化与版本迁移)。服务启动不会建表、创建CH数据库或隐式升级。
+
+## 2. 首次配置账号、CH 和私有配置文件
+
+在仓库根目录，用可信运维环境执行下例一次。目标CH数据库必须是不存在的新库；账号/空间名称为本地示例，密码交互输入，不进入命令行。账号恢复、邀请与多项目管理不在此流程内。
+
+```python
+import getpass
+import json
+import os
+import secrets
+from pathlib import Path
+from services.storage.control import SQLiteControlStore
+from services.storage.iam import IAMStore
+from services.storage.clickhouse import ClickHouseStore
+
+root = Path('/absolute/path/to/isolated-core')
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至020
+facts = ClickHouseStore('http://127.0.0.1:8123',
+    database='agent_insight_core_isolated', user='default',
+    password=getpass.getpass('ClickHouse password (empty if configured): '))
+facts.initialize_new_database()
+facts.initialize_analytics_schema()
+facts.initialize_infra_schema()
+facts.initialize_semantic_usage_schema()
+iam = IAMStore(control)
+iam.create_principal('operator', 'operator', 'Operator')
+password = getpass.getpass('New IAM password (15..1024 characters): ')
+iam.set_password('operator', password)
+control.create_workspace('default', 'Default workspace')
+iam.bind_workspace('default', principal_id='operator')
+session = iam.login('operator', password)
+try:
+    collector = iam.issue_api_credential(session, 'default', ['write'])
+finally:
+    iam.revoke_credential(session)
+
+def private_json(path, value):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as target:
+        json.dump(value, target, ensure_ascii=False)
+
+private_json(root / 'collector.json', {'token': collector})
+with os.fdopen(os.open(root / 'controller-key', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as stream:
+    stream.write(secrets.token_hex(32))
+private_json(root / 'trace-service.json', {
+    'control': {'backend': 'sqlite', 'database': str(root / 'core.db')},
+    'clickhouse': {'endpoint': facts.endpoint, 'database': facts.database,
+                  'user': facts.user, 'password': facts.password},
+    'cursor_secret_hex': secrets.token_hex(32),
+    'controller_key_file': str(root / 'controller-key'),
+    'default_workspace': 'default', 'port': 4319, 'worker_enabled': True,
+})
+```
+
+`trace-service.json`必须为私有普通文件（0600，不是symlink），保留cursor_secret_hex可保持同配置下的游标签名；不要把密码、collector.json或此文件提交仓库。SQLite正文/计划制品位于`core.db.artifacts/`，备份恢复须同时保留该目录。PG/openGauss的control配置改为`backend`、`dsn`、`schema`、`artifacts`四字段，完整DSN只放私有文件；需匹配目标认证的驱动，不能把macOS普通PG wheel当作openGauss原生认证驱动。
+
+## 3. 启动服务和 Next 桥接
+
+```bash
+python3 -m services.storage.trace_service --config /absolute/path/to/isolated-core/trace-service.json
+```
+
+服务只绑定127.0.0.1。`GET http://127.0.0.1:4319/v1/health`报告schema_version、worker_enabled和有限错误类型，不提供凭据或正文；ready表示事务schema及ClickHouse必需结构/读取权限检查通过，仍需实际上报验证写入与索引。worker_enabled=false可用于暂停物化的隔离恢复测试，不会把accepted当indexed。
+
+为 Next 设置独立 AGENT_INSIGHT_HOME 保存配置和制品，不需要 Prisma 壳库。通过项目 develop_start.sh 启动开发服务；已有业务数据请按离线迁移流程处理。
+
+```bash
+AGENT_INSIGHT_HOME=/absolute/path/to/isolated-web \
+AGENT_INSIGHT_PORT=4320 \
+AGENT_INSIGHT_BIND_HOST=127.0.0.1 \
+AGENT_INSIGHT_STORAGE_CORE_URL=http://127.0.0.1:4319 \
+AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE=/absolute/path/to/isolated-core/identity-mapping.json \
+AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE=/absolute/path/to/isolated-core/controller-key \
+bash scripts/develop_start.sh
+```
+
+`AGENT_INSIGHT_BIND_HOST=127.0.0.1`让本机开发服务只接受本机连接；不设置时启动脚本沿用原来的全网卡监听。其余变量均为服务端配置，变更后重启Next；旧`NEXT_PUBLIC_AGENT_INSIGHT_TRACE_STORAGE`仅作为服务端兼容别名，不再控制前端。loopback origin不能包含路径、查询或凭据。Next和存储进程需共享可达网络命名空间。
+
+浏览器继续使用原`/login`及现有Key。配置端必须先核验既有身份，再建立明确的旧Key→IAM主体/空间绑定；不按payload.user、同名账号或邮箱域自动推断。`AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`指定绝对路径的0600普通JSON文件，格式如下（全部为占位值）：
+
+```json
+{
+  "version": 1,
+  "core_origin": "http://127.0.0.1:4319",
+  "bindings": [{
+    "legacy_api_key_sha256": "REPLACE_WITH_SHA256_OF_VERIFIED_LEGACY_KEY",
+    "legacy_username": "existing-user",
+    "principal_id": "operator",
+    "workspace_id": "default",
+    "credential": "REPLACE_WITH_PRIVATE_WORKSPACE_READ_WRITE_DELETE_API_CREDENTIAL"
+  }]
+}
+```
+
+该credential由可信配置端通过`issue_api_credential(session,'default',['read','write','execute','delete'])`签发，不能使用前述write-only采集Key代替页面读取凭据。映射文件含明文代理凭据，只能保存在私有运行目录；服务端先验证旧Key，再校验代理凭据当前principal、workspace及权限，不能仅凭Key摘要跳过认证。此兼容配置是隔离验证手段，未来统一身份迁移仍须显式映射、轮换与撤权。
+
+## 4. 上报并区分接收与索引
+
+采集端使用固定workspace的`api_`凭据，不能用Web会话替代HTTP采集凭据。按已配置的采集器安全方式加载`collector.json`，将目标指向`/api/ingest/otel/v1/traces`，携带`Authorization: Bearer …`及可选`X-Workspace-Id`、`Idempotency-Key`。不要把token粘进URL或可记录的命令参数。
+
+入口支持OTLP JSON/protobuf及gzip，解码后的JSON最大4MiB、4096个**完成Span**，归一化展开总预算64MiB。后端loopback端口只收JSON。默认来源为`otlp`，不同service.name的同一原生Trace仍聚合；service.name仅显示。需要明确来源隔离时使用resource属性`agent_insight.source_namespace`。同源修订用Span属性`agent_insight.revision`，默认为1；同版本不同内容进入失败，不能改包内容重用receipt key。
+
+OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Storage-State`报告回执。accepted只代表私有原始制品fsync及控制事务提交。用同一采集凭据查询`GET /v1/batches/<batch_id>?workspace_id=default`，；write-only凭据只能查看本人回执。只有indexed代表所有sink完成；failed需检查回执错误，不按成功重传不同内容。
+
+## 5. 按页检查 Trace
+
+进入原`/trace`，列表、筛选、打标及详情继续使用旧DTO。原列表按页请求 Trace；打开详情先请求最多 500 条轻量 Span，在原列表滚动接近底部时再请求下一批，直到加载完。已加载结构追加展示，正文仍按点击加载；加载提示仅显示“加载中…”。普通OTLP结构不读正文，点击后才按固定interaction索引及payload_revision装载单Span正文，正文section每页最多4块。
+
+原Trace bundle导入/导出保持v1格式及执行树/旧ID，导入最多50MiB/500个execution。全树先校验，冲突ID及嵌套引用一并重映射；成功仅在全部batch indexed后返回。`Idempotency-Key`可用于同一次导入恢复，不能复用给不同内容。导出及完整会话响应上限128MiB。原Langfuse页面直接消费完整nodes，因此兼容读取需要其完整正文；该特例不能计入普通OTLP的懒加载证明。未覆盖的业务能力及失败边界见实施状态。
+
+当前观测事件流按最早事件强序处理；早期观测重试会阻挡该流的后续事件，Dataset/评测等领域使用各自类型的投递领取。每128 Span批量写正文，先chunks、后manifests，再Span及Trace摘要，重复写依赖相同版本收敛。这是可靠性基线，尚未完成1000在线采集端混合读写压测、分片日志或HA认证。当前浏览器验收状态以[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)为准。
+
+停止时对自己启动的服务使用Ctrl-C/SIGTERM，保留数据库、制品目录和私有配置；不要用全局进程清理命令影响其他worktree。
+
+## 全量测试的隔离前提
+
+存储专项与应用`npm run test`是不同门槛。应用全量须在专用HOME、AGENT_INSIGHT_HOME与SQLite目标运行，清除继承的 DB_* 和日常 Core 地址及凭据，使用测试自己的隔离 Core 配置；不得指向日常业务库。测试中新增/修复的数据库用例复用`createIsolatedDatabase`，仅历史样本建立临时 schema，并通过 test/helpers/historical-prisma.ts 访问；运行代码仍使用 Core，结束断开连接并恢复环境；隔离helper也清除继承的关系库配置，并固定空DB_HOST防止dotenv重新选择远端。
+
+完整环境包括可用的Node LTS、Python的PyYAML/pydantic2、PowerShell7，以及Trae采集器编译产物。先用已安装、验证过的运行时，在该次测试进程设置PATH、PYTHON、AGENT_INSIGHT_FI_PYTHON、AGENT_INSIGHT_RAS_PYTHON；不要通过全局改配置或安装未获授权的依赖消除错误。PowerShell解析也使用临时HOME，避免宿主缓存/配置影响。Trae编译可使用仓库已有esbuild执行原compile参数，构建JS不代表完成VSIX打包或IDE验收。
+
+准备旧Prisma路径的全量用例时，只对新建的隔离SQLite文件执行`prisma db push --skip-generate`；不能将此命令用于core.db。HTTP测试在失败路径也必须关闭连接，不能让清理SQL错误阻止server.close。缺依赖、缺schema和固定sleep抖动分别报告，不通过跳过或延长无限等待冒充业务验证通过。完整测试计数与平台跳过范围以实施状态为准。
+
+
+## 验证诊断链路
+
+先在隔离目标备份并显式升级至015；不要把演示配置指向旧Prisma数据库或默认业务库。已有原登录Key的私有映射凭据需要read/write用于追问、execute用于报告、delete用于原有删除操作，仍受Trace owner/组角色约束。仅write采集Key不能作为页面账号。
+
+1. 用原账号登录，打开一条已授权Trace，再进入原故障诊断页。GET历史即使为空也应有已授权Trace，存储异常不能显示成“没有会话”。
+2. 发起追问，观察原ready/text/tool/reasoning/done事件；在Trace列表查到`fault-diagnosis-agent`自身运行，按原上游session ID打开，核对工具输入/输出与失败状态。
+3. 刷新页面、重启隔离存储服务后确认完整消息仍在。继续对话保持同一上游；显式新对话保留历史。成员无法读取他人私人Trace，组管理员可读组内历史，但跨actor续用已有上游当前返回409，需新建自己的对话。
+4. 通过原AgentDebug/SkillsAnalysis入口运行报告并重新载入。强制重跑或删除期间，旧后台任务不得覆盖当前结果；停用账号或删除Trace后，不再返回正文。
+
+验收必须注明是否调用真实模型。隔离fixture Agent可以验证真实SQLite/PG/openGauss事务、ClickHouse、HTTP/SSE及页面历史恢复，但不代表真实LLM诊断质量；最新实际覆盖见实施状态。旧诊断会话/报告不会自动导入，原数据与备份保留。
+
+按原流程登录即可；诊断请求沿用同一个Key，退出和账号切换行为保持原样。
+
+
+## 验证数据集链路（008/009）
+
+新目标初始化到015；已有隔离core目标先停写，使用新的备份路径和CLI显式迁移至15，同时保留制品目录。迁移工具核对旧表内容，不能以Prisma db push替代，也不能直接指向原业务SQLite。
+
+在原登录和侧栏进入「评测数据集」：新建→单个添加→编辑样例→新增字段，刷新后检查原值。另从Trace回流样例并重复追加，确认去重；使用两个草稿制造陈旧提交，确认409且先前修改保留。页面没有新增版本控件，版本摘要通过参考页所列查询接口读取。
+
+先通过原OTLP入口上报，再在「基于Trace生成」选择有授权数据的Agent和时间窗，检查进度、发布样例、取消及删除回执。重启隔离Next/存储服务后，重新以原actor查看进度；活动旧租约须先到期，随后新epoch恢复。发布完成任务的取消返回冲突，删除仍需独立权限。未改实验/Benchmark消费者不应被视为本页验收的一部分。
+
+
+## 实验链路隔离验证（010–014）
+
+先停止目标写入，保留事务库备份与完整制品目录，显式迁移至015再启动；服务拒绝带pending migration启动。不要修改历史SQL绕过checksum。013→014只追加表，012→013修正空证据约束时保留全部历史行、索引及不可变触发器。
+
+私有身份映射之外配置`AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE`，由可信配置过程生成随机64位hex并以0600保存；Next与helper使用同一文件，不能复用登录Key。原页面无需新增配置或交互。按创建实验→运行→结果详情→人工0分→评论→重评验证，分别核验OLTP回执、CH published与旧表无影子写入。再验证来源撤权、旧fence晚回、取消清理未确认和精确网络重试。Workbench/Benchmark使用同一原入口，具体可验收分支见实施状态。
+
+
+## 旧数据迁移前的只读计划
+
+先对已保留的一致性隔离副本执行`plan-legacy --database /absolute/path/to/isolated-legacy.db --source-id stable-source`；显式owner映射、预算、状态与隐私契约见[存储参考](../../reference/platform/storage-core.md#只读语义计划不执行导入)。报告可安全诊断但不替代原始备份/导出；活动WAL不能只复制主文件。当前只支持SQLite源，不支持导出目录输入，所有计划仍blocked且不执行导入。现阶段不在生产停写、迁移、修改凭据或切换连接串。
+
+## 优化点回调与价格模型列表
+
+core模式下，原优化点GET和完成优化后的resolve PATCH携带当前登录Key。新派生问题通过typed解决注解处理，旧static/feedback问题仍在原控制域；混合请求预检后分别提交，两域失败可重试但不是跨库原子事务。未提供threadId时，公开关联仍为null，机器评测内容不变。相同显式操作键恢复core回执；普通新请求按新增解决计数，混合响应是core该操作计数加本次旧静态新写计数，不保证整次HTTP数字精确重放。
+
+价格GET的observed模型来自当前IAM授权Trace范围；组管理员只扩展至其授权组，不因旧部署管理员名看到其他空间。内置/自定义价格、货币、排序和界面保留；价格PUT配置控制域规则未在本批迁移。两个页面无需新登录或前端布局变更，退出/切换账号使用现有Key状态。Dashboard/Fleet/Task/Quality统计使用015/CH002统一授权摘要；其就绪、预算及容量限制见参考。OTLP logs/metrics/spool、Skill/Agent剩余动态消费者及旧库全量apply仍在依赖清单内，不能把本批统计接通视为全量切换。
+
+
+## 统计消费者的隔离验收（015 / CH002）
+
+已有 core 目标先停写、备份事务库及制品目录，显式迁移015；CH使用同一隔离数据库显式执行 `initialize_analytics_schema()`，历史001不改写。配置真实账号和私有控制器后，启动原 `bash scripts/develop_start.sh`。后台按已验证账号预热统计；首次打开仍未就绪时，原apiFetch会仅对明确的索引中标记自动重试，超过预算则返回实际错误，不能把503当作空库。
+
+按原页面检查 Dashboard、Fleet 趋势/排行/Agent/可靠性、Quality Agent列表/执行记录/报告以及Task统计。用另一普通账号与伪造user参数验证隔离，组管理员范围由真实IAM决定；检查原生Agent无注册行时的平台筛选、当前0分评测、未解决Issue与当前诊断、真实RAS anomaly/action_result。新RAS采集POST要求write API Key，可以write-only；读统计要求read。
+
+只在专用数据库验证，不指向默认业务库或生产库。第一版按原功能的HTTP、界面与全套测试验收；万级 Span 已采用 500 条滚动分页；增量水位及千级并发容量尚未完成验证。旧库96模型计划仍不apply。
+
+
+Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认列表统计、版本趋势和完整执行输出，包含空结果、0值和无Session历史执行。原静态配置与注册记录继续保留；仅调用统计来自授权新存储。旧登录名映射到不同IAM规范用户名时，也应只发现本人的Agent。此片不迁移Skill runs/logs、Agent删除或资产配置写操作，此阶段的历史验收不代表当前全领域回归通过；当前运行时已禁止旧控制数据库访问。
+
+
+## 019 控制数据接入后的验收边界
+
+隔离目标显式升级到019后，使用原登录和原页面。浏览器继续使用当前已有API key；请求封装为原控制API补实际凭据，不能仅靠body/query user访问。SDK、采集和设备继续使用各自已有凭据；新存储配置缺失或授权失败明确返回错误，不读取旧事务库兜底。原standalone登录、组织登录、IDaaS及设置掩码恢复规则分别保留，不增加登录UI。
+
+原Skill版本/文件、配置、客户端、Workbench/优化/生成会话及调试结果走新控制仓储。需要沿原流程集中验收列表→详情→文件→保存、安装→心跳→命令ACK→配置/部署回执、会话SSE→候选/复测/发布，以及Agent删除与Trace/诊断来源生命周期。4个TSX只接请求传输导入及runtime动态header；页面布局、文案、交互和原功能不改。本批快速专项/类型结果不等于这些完整验收已完成。
+
+保留旧库及文件，历史数据由显式迁移器按owner导入。HISTORY_FENCE_VERSION=1允许保留running/pending等原状态的惰性历史记录；活动任务、未消费安装token和旧设备凭据不会恢复执行权或鉴权能力。未知owner、缺附件和来源/目标冲突仍须报告并阻断，不能用删除状态或伪造终态掩盖。暂不切生产。
+
+
+### 原生用户不需要额外后台映射
+
+在原界面创建原生User并配置个人模型后，后台从新库持久User及其真实当前API凭据恢复，服务重启不要求手写identity文件。旧wi凭据迁移仍使用原私有映射文件；错误/歧义映射不会被猜测或静默替换。保持core controller私有文件配置正确，不能把key发到浏览器来代替该机制。
+
+上报端只需原write权限；后台自动分析另验同owner当前execute。只读、撤销/过期凭据或仅可查看别人Trace的管理员不能借恢复使用别人的模型。当前原界面不变，完整自动分析与重启验收使用隔离目标，不切生产。
+
+
+## 020 隔离验收与显式旧库导入
+
+当前隔离目标使用事务schema020和CH004。新库初始化与既有目标备份升级必须分别使用对应CLI；不要对原业务库执行Prisma db push。继续使用原登录和页面，原default项目归属不增加前端项目选择流程。
+
+先对一致的旧SQLite副本执行export-legacy，再使用独立的plan-legacy-import、apply-legacy-import及verify-legacy-import。每步明确指定导出目录、稳定source ID、owner绑定及隔离目标配置；apply/verify另外提供当前actor凭据和migration ID。原plan-legacy仍是严格只读清点工具，它自身没有apply，不与新语义导入命令混用。
+
+先解决计划中的owner、附件及来源/目标冲突；按原receipt重复apply恢复pending，等待实际CH indexed后再verify。不要把第一轮“接收成功但pending”当作迁移完成。完成后再次apply应只重放、无新增，核对源字节/内容未变、原历史状态可读且未产生执行命令。47条样本演练只覆盖对应样本，不替代客户真实全库计划；不切生产。
+
+### 超大 Trace 按需读取
+
+`/trace` 使用原表格、统计卡片、筛选项和页码控件。默认时间排序的普通列表在 ClickHouse 执行 LIMIT/OFFSET，仅对当前页补充元数据；复杂筛选仍使用既有兼容查询，返回当前页，统计独立加载。
+
+Core 详情首次读取 500 个 Span 结构，向下滚动到已加载内容末尾追加下一批 500 条。原 Span 树、工具栏和正文面板保持。请求期间仅显示“加载中…”，结束后隐藏；不显示已加载数量/总数。节点统计仍基于已加载部分。Span 以时间和稳定 ID 排序，游标绑定权限、Trace 与修订；修订变化返回 409，需要刷新。点击节点按 Span ID 读取正文。较小的旧格式 Trace 保留原兼容转换。
+
+已校验 21,001 Span 共 43 批无重复、无遗漏，并在 Chrome 原树中验证追加到 1,500 条。全局搜索、全量分析及复杂来源的超大 Trace 尚需进一步验收，不能将本次结果视为这些路径均通过。

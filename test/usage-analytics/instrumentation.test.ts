@@ -21,8 +21,20 @@ import test from 'node:test';
 
 import { USAGE_FEATURES, listEventKeys } from '@/lib/usage-analytics/catalog';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import {runWithCoreControlActor} from '@/lib/storage-core/control-context';
 import { UsageQueue, __setUsageQueueForTest } from '@/lib/usage-analytics/queue';
 import { InMemoryUsageStorage } from '@/lib/usage-analytics/storage';
+
+function recordVerifiedEvent(input: Parameters<typeof recordUsageEvent>[0]) {
+    const previous = process.env.AGENT_INSIGHT_STORAGE_CORE_URL;
+    process.env.AGENT_INSIGHT_STORAGE_CORE_URL = 'http://127.0.0.1:19000';
+    try {
+        return runWithCoreControlActor({token:'api_'+'A'.repeat(43),principal:'alice',workspace:'alice',username:'alice'}, {}, () => recordUsageEvent(input));
+    } finally {
+        if (previous === undefined) delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;
+        else process.env.AGENT_INSIGHT_STORAGE_CORE_URL = previous;
+    }
+}
 
 const SRC = path.join(process.cwd(), 'src');
 
@@ -104,7 +116,7 @@ test('AC-005 失败与取消不计数：collector 只在被调用时入队', () 
     assert.equal(q.depth, 0);
 
     // 成功分支调用一次就是一次
-    recordUsageEvent({ user: 'alice', featureKey: 'skill', eventKey: 'skill.download' });
+    recordVerifiedEvent({ user: 'alice', featureKey: 'skill', eventKey: 'skill.download' });
     assert.equal(q.depth, 1);
 
     delete process.env.AGENT_INSIGHT_USAGE_ENABLED;
@@ -119,7 +131,7 @@ test('AC-009 统计故障不改变业务结果：collector 在 storage 故障时
 
     st.failNext = true;
     // 业务调用点视角：函数同步返回 undefined，不抛错
-    assert.equal(recordUsageEvent({ user: 'alice', featureKey: 'skill', eventKey: 'skill.download' }), undefined);
+    assert.equal(recordVerifiedEvent({ user: 'alice', featureKey: 'skill', eventKey: 'skill.download' }), undefined);
     await assert.doesNotReject(() => q.flush());
 
     delete process.env.AGENT_INSIGHT_USAGE_ENABLED;

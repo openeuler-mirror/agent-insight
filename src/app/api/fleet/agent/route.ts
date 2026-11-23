@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 // 单个 Agent 的下钻统计端点（仪表盘图表点击某 Agent 时调用）。
 // 作用域 = 管理员全量 / 普通用户本人 + 时间窗；口径同 src/lib/fleet/agg.ts（self：只看 agentName=该 agent 的行）。
 import { NextResponse } from 'next/server';
@@ -33,16 +37,18 @@ export async function GET(req: Request) {
         const name = (url.searchParams.get('name') || '').trim();
         if (!name) return NextResponse.json({ error: '缺少 name 参数' }, { status: 400 });
 
-        const { username, user } = await resolveTraceReadScope(req);
+        const analytics = (await readCoreAnalytics(req));
+        const executionReader = analytics ?? prisma.execution;
+        const { username, user } = analytics ? {username: analytics.username, user: undefined} : await resolveTraceReadScope(req);
         if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
-        const userFilter = user ? { user } : {};
+        const userFilter = analytics ? {} : user ? { user } : {};
         const window = normalizeWindow(url.searchParams.get('window'));
         const plan = planOf(window);
         const now = new Date();
         const starts = bucketStarts(now, plan);
         const from = starts[0];
 
-        const rows = (await prisma.execution.findMany({
+        const rows = (await executionReader.findMany({
             where: { ...userFilter, agentName: name, timestamp: { gte: new Date(from) } },
             select: {
                 id: true, taskId: true, rootExecutionId: true, timestamp: true, latency: true,
@@ -132,13 +138,14 @@ export async function GET(req: Request) {
         const slowTraces = rows.filter((r) => (r.latency ?? 0) > 0)
             .sort((a, b) => (b.latency ?? 0) - (a.latency ?? 0)).slice(0, 8)
             .map((r) => ({
-                taskId: r.taskId || r.id,
+                taskId: analytics ? analytics.traceTaskId(r.id) : r.taskId || r.id,
                 query: (r.query || '').slice(0, 48),
                 latency: Math.round((r.latency ?? 0) * 100) / 100,
                 avgLlmMs: avgLlmMsOf(r.id),
                 ok: isSuccess(r),
             }));
 
+        if (analytics) await analytics.validate();
         return NextResponse.json({
             name, window, currency: 'USD', found: n > 0,
             stats: {
@@ -162,7 +169,6 @@ export async function GET(req: Request) {
             trend, topModels, toolMix, errTypes, slowTraces,
         });
     } catch (error) {
-        console.error('[Fleet Agent]', error);
-        return NextResponse.json({ error: 'Failed to load agent stats' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

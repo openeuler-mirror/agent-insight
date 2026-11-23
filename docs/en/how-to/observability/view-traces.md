@@ -18,3 +18,7 @@ Each file is imported independently — one file failing never interrupts the ot
 - Failed rows show a short reason; **View reason** expands the details. Recoverable failures (network or service temporarily unavailable) support per-item retry and batch retry of recoverable failures; permanent failures (validation errors, oversized files) offer no retry. Retrying never re-imports files that already succeeded.
 - **Stop remaining imports** immediately stops files that have not started; the file currently importing finishes normally. **Cancel** asks for confirmation; confirming closes the window immediately while started imports finish in the background and pending files never start. Already-imported data is kept and never rolled back by stop or cancel.
 - **View trace** on a succeeded row opens the trace detail in a new browser tab, using the real imported trace identifier (after ID remapping).
+
+## Trace timing and standalone tools
+
+Detail reads and history repair use the same active duration, excluding idle gaps between user turns. Structure, single-interaction and full-session reads retain that derived value rather than overwriting it with a historical wall-clock value. Standalone tools without explicit call-ID/parent evidence remain fully preserved and do not add an LLM call or acquire a guessed parent by timing.

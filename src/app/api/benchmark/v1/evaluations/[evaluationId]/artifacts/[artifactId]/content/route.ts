@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {withCoreExperiments,requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {coreBenchmarkArtifactResponse} from '@/lib/benchmark/core-public-callback'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -28,22 +31,7 @@ export async function GET(
 ) {
   try {
     const { evaluationId, artifactId } = await params
-    const url = new URL(req.url)
-    const { username } = await resolveUser(req, url.searchParams.get('user'))
-    if (!username) {
-      throw new BenchmarkProtocolError('USER_REQUIRED', '缺少用户身份', 401)
-    }
-    const artifact = await readBenchmarkEvaluationArtifact({ evaluationId, artifactId, user: username })
-    return new Response(new Blob([new Uint8Array(artifact.bytes)]), {
-      status: 200,
-      headers: {
-        'content-type': artifact.mediaType,
-        'content-length': String(artifact.bytes.byteLength),
-        'content-disposition': evidenceContentDisposition(artifact.name),
-        etag: `"${artifact.sha256}"`,
-        'cache-control': 'private, no-store',
-      },
-    })
+    return await withCoreExperiments(req,async()=>coreBenchmarkArtifactResponse(await readBenchmarkEvaluationArtifact({evaluationId,artifactId,user:requireCoreExperimentContext().actor.username})))
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/evaluations/artifacts/content')
   }

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -19,6 +20,7 @@ import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const body = await request.json();
         const { name, version, user } = body;
@@ -72,4 +74,6 @@ export async function POST(request: NextRequest) {
         console.error('Auto Push Error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+  },["write"]);
 }

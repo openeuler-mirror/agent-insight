@@ -106,3 +106,7 @@ export interface UsageAccessResponse {
     enabled: boolean;
     isAdmin: boolean;
 }
+
+export class UsagePersistError extends Error {
+    constructor(readonly persisted:number,readonly unpersisted:UsageEvent[]){super('Usage persistence remains pending');}
+}

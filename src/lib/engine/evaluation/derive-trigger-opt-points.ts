@@ -35,7 +35,8 @@ import matter from 'gray-matter';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { listTriggerEvalRuns, type TriggerRunResultItem } from '@/server/skill_trigger_eval_storage';
 
-const GENERATOR = 'trigger-evaluator@1.0';
+export const TRIGGER_OPT_GENERATOR = 'trigger-evaluator@1.0';
+const GENERATOR=TRIGGER_OPT_GENERATOR;
 
 export interface DeriveTriggerOptPointsArgs {
   user: string;
@@ -67,25 +68,7 @@ export async function deriveAndPersistTriggerOptPoints(
     skillName,
     skillVersion,
     triggerRunId,
-    skillVersionContent,
-    results,
-    passRate,
-    truePositiveRate,
-    falsePositiveRate,
-    runsPerQuery,
-    triggerThreshold,
   } = args;
-
-  // 解析 frontmatter 拿 description；parse 失败/缺字段时给空串兜底——prompt 模板对
-  // 空 description 已有 "(空)" 占位，agent 仍能产出合理结果（相当于"从零写"）。
-  let currentDescription = '';
-  try {
-    const parsed = matter(skillVersionContent || '');
-    const raw = (parsed.data as { description?: unknown })?.description;
-    if (typeof raw === 'string') currentDescription = raw.trim();
-  } catch {
-    // gray-matter 偶尔会因为奇怪的 YAML 抛错；兜底成空串即可
-  }
 
   const skillRow = await prismaRaw.skill.findFirst({
     where: { name: skillName, OR: [{ user }, { user: null }] },
@@ -109,21 +92,10 @@ export async function deriveAndPersistTriggerOptPoints(
   });
   const resolved = resolvedRes.count;
 
-  // 2) 分类失败
-  const missed = results.filter(r => r.shouldTrigger && !r.pass);
-  const falseTriggers = results.filter(r => !r.shouldTrigger && !r.pass);
-  const routeStolen = results.filter(r => r.shouldTrigger && !!r.competingSkill);
-
-  // 3) 全部 pass 且无路由竞争 → 不写新 issue（只保留 markResolve 的效果）
-  if (passRate >= 1.0 && routeStolen.length === 0) {
-    return { written: 0, resolved, skillIssueId: null };
-  }
-
-  // 3.5) 历史尝试：本 skill 其他版本评测过的 (description, passRate)。
-  //      对标 skill-creator improve_description.py 的 history——让优化者知道哪些
-  //      description 试过、效果如何，别重复绕回老路。这是 suggestedFix 每条各不相同的
-  //      关键来源之一（叠加本次失败清单）。
-  const history = await loadTriggerHistory(skillRow.id, skillName, user, skillVersion);
+  const initial=buildTriggerOptPoint(args);
+  if(!initial)return {written:0,resolved,skillIssueId:null};
+  const history=await loadTriggerHistory(skillRow.id,skillName,user,skillVersion);
+  const fields=buildTriggerOptPoint(args,history)!;
 
   // 4) 建 Evaluation 父行 + 1 条 SkillIssue 子行
   const evaluation = await prismaRaw.evaluation.create({
@@ -139,6 +111,27 @@ export async function deriveAndPersistTriggerOptPoints(
     },
   });
 
+  const issue = await prismaRaw.skillIssue.create({
+    data: {
+      evaluationId: evaluation.id,
+      skillId: skillRow.id,
+      version: skillVersion,
+      user,
+      ...fields,
+    },
+  });
+
+  return { written: 1, resolved, skillIssueId: issue.id };
+}
+
+export function buildTriggerOptPoint(args:DeriveTriggerOptPointsArgs,history:TriggerAttempt[]=[]){
+  const {skillName,skillVersionContent,results,passRate,truePositiveRate,falsePositiveRate,runsPerQuery,triggerThreshold}=args;
+  let currentDescription='';
+  try{const raw=matter(skillVersionContent||'').data?.description;if(typeof raw==='string')currentDescription=raw.trim();}catch{}
+  const missed=results.filter(r=>r.shouldTrigger&&!r.pass);
+  const falseTriggers=results.filter(r=>!r.shouldTrigger&&!r.pass);
+  const routeStolen=results.filter(r=>r.shouldTrigger&&!!r.competingSkill);
+  if(passRate>=1&&routeStolen.length===0)return null;
   const severity = pickSeverity(passRate, missed.length, falseTriggers.length);
   const passPct = Math.round(passRate * 100);
   const summary = buildSummary(passPct, missed.length, falseTriggers.length, routeStolen.length);
@@ -166,28 +159,7 @@ export async function deriveAndPersistTriggerOptPoints(
     triggerThreshold,
   });
 
-  const issue = await prismaRaw.skillIssue.create({
-    data: {
-      evaluationId: evaluation.id,
-      source: 'trigger',
-      skillId: skillRow.id,
-      version: skillVersion,
-      user,
-      // 同 (skillId, version) 下 trigger 类只有一条 active；用固定 key 让聚合自然合并。
-      // 加 skillName 是兜底——理论上 skillId 已经唯一了，但读 dedupKey 时人眼能识别更友好。
-      dedupKey: `trigger:${skillName}`,
-      severity,
-      summary,
-      evidence,
-      reasoning: null,
-      suggestedFix,
-      ruleId: null,
-      dimension: null,
-      category: '触发评测',
-    },
-  });
-
-  return { written: 1, resolved, skillIssueId: issue.id };
+  return {source:'trigger' as const,dedupKey:`trigger:${skillName}`,severity,summary,evidence,reasoning:null,suggestedFix,ruleId:null,dimension:null,category:'触发评测'};
 }
 
 // ---- 字段构造 ----
@@ -327,7 +299,7 @@ function buildPrompt(a: PromptArgs): string {
 
 // ---- 历史尝试 ----
 
-interface TriggerAttempt {
+export interface TriggerAttempt {
   version: number;
   description: string;
   passRate: number;

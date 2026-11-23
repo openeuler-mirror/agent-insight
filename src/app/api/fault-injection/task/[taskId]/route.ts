@@ -1,3 +1,6 @@
+import {findCoreFiTask} from '@/lib/storage-core/fault-injection'
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -16,12 +19,12 @@
 
 import { NextResponse } from 'next/server'
 import type { FaultInjectionRun } from '@prisma/client'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
 import { prisma } from '@/lib/storage/prisma'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(
+async function handleGET(
   req: Request,
   ctx: { params: Promise<{ taskId: string }> },
 ) {
@@ -30,12 +33,7 @@ export async function GET(
     const { taskId } = await ctx.params
     const decoded = decodeURIComponent(taskId)
 
-    const task = await prisma.faultInjectionTask.findFirst({
-      where: {
-        OR: [{ taskKey: decoded }, { id: decoded }],
-      },
-      include: { runs: { orderBy: { createdAt: 'asc' } } },
-    })
+    const task = (await findCoreFiTask(decoded,true))
 
     if (!task) {
       return NextResponse.json({ error: 'not found', taskId: decoded }, { status: 404 })
@@ -76,8 +74,12 @@ export async function GET(
       },
     })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[FI task detail]', message)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
+}
+
+export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ taskId: string }> },) {
+  return withCoreFiRequest(req,()=>handleGET(req,ctx))
 }

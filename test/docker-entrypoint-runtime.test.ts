@@ -56,9 +56,8 @@ function fixture(t: TestContext) {
     fs.symlinkSync(process.execPath, path.join(bin, 'node'));
     fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     fs.writeFileSync(path.join(bin, 'npx'), '#!/bin/sh\nprintf "generate\\n" >> "$FIXTURE_MARKERS"\n', { mode: 0o700 });
-    fs.writeFileSync(path.join(packageRoot, 'scripts/prepare-ras-sqlite-schema.js'),
-        'require("node:fs").appendFileSync(process.env.FIXTURE_MARKERS, "prepare\\n");\n');
-    fs.writeFileSync(path.join(packageRoot, 'scripts/db_push.sh'), '#!/bin/sh\nprintf "db-push\\n" >> "$FIXTURE_MARKERS"\n');
+    fs.writeFileSync(path.join(packageRoot, 'scripts/storage-core-preflight.cjs'),
+        'require("node:fs").appendFileSync(process.env.FIXTURE_MARKERS, "core-ready\\n");\n');
     fs.writeFileSync(path.join(packageRoot, '.next/standalone/server.js'), `
         const { runtimeOwner } = require(${JSON.stringify(path.resolve('src/lib/runtime-cleanup/ownership.ts'))});
         const owner = runtimeOwner(process.env.AGENT_INSIGHT_HOME);
@@ -108,7 +107,7 @@ test('real Docker entrypoint preserves the kernel-owned descriptor through shell
     assert.equal(running.pid, running.child.pid);
     assert.equal(running.owner.scope, setup.home);
     assert.match(running.owner.id, /^[a-f0-9-]{36}$/);
-    assert.equal(fs.readFileSync(setup.markerFile, 'utf8'), 'prepare\ndb-push\ngenerate\n');
+    assert.equal(fs.readFileSync(setup.markerFile, 'utf8'), 'core-ready\ngenerate\n');
     assert.equal(JSON.parse(fs.readFileSync(path.join(setup.home, '.runtime-owner.lock'), 'utf8')).id, running.owner.id);
     assert.match(fs.readFileSync(path.join(setup.home, '.env'), 'utf8'), /forged-by-env-file/);
 });

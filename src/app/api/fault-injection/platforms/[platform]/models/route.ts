@@ -1,3 +1,5 @@
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,7 +17,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { resolveUser } from '@/lib/auth/auth'
+import { resolveFiUser as resolveUser } from '@/lib/storage-core/fault-injection'
 import { getLatestWorkerInventory } from '@/lib/fault-injection/worker-protocol'
 import type { PlatformOption } from '@/lib/fault-injection/types'
 
@@ -32,7 +34,7 @@ function asOptions(rows: unknown[]): PlatformOption[] {
   return out
 }
 
-export async function GET(
+async function handleGET(
   req: Request,
   ctx: { params: Promise<{ platform: string }> },
 ) {
@@ -67,4 +69,10 @@ export async function GET(
     workerId: inv.workerId,
     lastSeenAt: inv.lastSeenAt.toISOString(),
   })
+}
+
+export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ platform: string }> },) {
+  return withCoreFiRequest(req,()=>handleGET(req,ctx))
 }

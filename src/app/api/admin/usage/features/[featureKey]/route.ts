@@ -1,3 +1,5 @@
+import {isUsageEnabled} from '@/lib/usage-analytics/config';
+import {semanticRoute} from '@/lib/storage-core/semantic-sources';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,7 +24,7 @@ import { getUsageFeatureDetail, isValidRange } from '@/lib/usage-analytics/queri
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request, { params }: { params: Promise<{ featureKey: string }> }) {
+async function handleGET(request: Request, { params }: { params: Promise<{ featureKey: string }> }) {
     const gate = await gateUsageAdmin(request);
     if (!gate.ok) {
         const status = gate.reason === 'unauthenticated' ? 401 : 403;
@@ -46,3 +48,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ feat
         return NextResponse.json({ error: 'query failed' }, { status: 500 });
     }
 }
+
+export async function GET(request:Request,context:{params:Promise<{featureKey:string}>}){return !isUsageEnabled()?handleGET(request,context):semanticRoute(request,()=>handleGET(request,context));}

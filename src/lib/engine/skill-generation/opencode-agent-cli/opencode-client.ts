@@ -75,6 +75,7 @@ export interface AgentInsightOptions {
 }
 
 export interface ModelConfig {
+  protocol?: import("@/lib/shared/model-connection").ModelProtocol;
   providerID: string;
   modelID: string;
   apiKey?: string;

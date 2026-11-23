@@ -23,6 +23,7 @@ import {
 } from './config';
 import { todayDateKey } from './date';
 import { getUsageStorage } from './storage';
+import {UsagePersistError} from './types';
 import type { UsageEvent, UsageStorage } from './types';
 
 const LOG_THROTTLE_MS = 60_000;
@@ -108,7 +109,8 @@ export class UsageQueue {
         } catch (err) {
             this.failures++;
             // 失败最多重入队一次；第二次失败或队列已满即丢弃。
-            for (const e of batch) {
+            if(err instanceof UsagePersistError)this.flushed+=err.persisted;
+            for (const e of err instanceof UsagePersistError?err.unpersisted:batch) {
                 if (this.retried.has(e)) {
                     this.dropped++;
                     continue;

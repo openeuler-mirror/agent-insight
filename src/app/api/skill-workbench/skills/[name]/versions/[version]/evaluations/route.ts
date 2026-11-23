@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,6 +15,9 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext} from '@/lib/storage-core/experiments';
+import {withCoreWorkbenchRoute} from '@/lib/storage-core/workbench';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { resolveUser } from '@/lib/auth/auth';
@@ -31,7 +35,9 @@ function parseVersion(raw: string) {
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ name: string; version: string }> },
-) {
+) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>GET(normalized,context));
   try {
     const { username } = await resolveUser(request, request.nextUrl.searchParams.get('user'));
     if (!username) return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
@@ -57,12 +63,16 @@ export async function GET(
     console.error('[skill-workbench evaluations GET] failed:', error);
     return NextResponse.json({ error: '加载静态评估失败' }, { status: 500 });
   }
+
+  },["read"]);
 }
 
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ name: string; version: string }> },
-) {
+) :Promise<Response> {
+  return withCoreControlRoute(request,async()=>{
+  if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreWorkbenchRoute(request,normalized=>POST(normalized,context));
   try {
     const body = await request.json();
     const { username } = await resolveUser(request, body.user);
@@ -91,4 +101,6 @@ export async function POST(
     console.error('[skill-workbench evaluations POST] failed:', error);
     return NextResponse.json({ error: '启动静态评估失败' }, { status: 500 });
   }
+
+  },["write"]);
 }

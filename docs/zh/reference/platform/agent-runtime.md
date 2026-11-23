@@ -117,3 +117,5 @@ changefreq: "monthly"
 - 为其他值：返回 `AGENT_RUNTIME_UNAVAILABLE`，不静默换引擎。
 
 Pi 执行适配器交付后，入口内部按适配器分派，业务模块无需改动。
+
+运行时偏好通过 Storage Core 的用户设置事务记录保存。GET 需要有效身份和读权限，PUT 需要写权限；`user` 仅用于身份一致性校验，不能替代登录凭据。不会创建或访问旧 SQLite 业务库。

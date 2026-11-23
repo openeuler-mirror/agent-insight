@@ -29,7 +29,9 @@ import { prisma } from '@/lib/storage/prisma'
 import type { ExtendedPrismaClient } from '@/lib/storage/prisma-client'
 import { getBenchmarkAdapter } from './adapter-registry'
 
-const benchmarkPrisma = prisma as ExtendedPrismaClient
+import {usesCoreBenchmark,withCoreBenchmarkReadView,benchmarkReadSource,readCoreBenchmarkArtifact} from './core-store'
+
+const benchmarkPrisma = () => benchmarkReadSource(prisma) as ExtendedPrismaClient
 
 const TERMINAL_CASE_STATUSES = new Set([
   'evaluated',
@@ -95,21 +97,26 @@ function primaryMetricFrom(value: string | null): NormalizedBenchmarkPrimaryMetr
   return metric
 }
 
-export async function getBenchmarkExperimentResult(input: {
+type BenchmarkResultInput = {
   experimentId: string
   user: string
   page: number
   pageSize: number
   status?: string
   verdict?: string
-}) {
+}
+export async function getBenchmarkExperimentResult(input:BenchmarkResultInput){
+  if(usesCoreBenchmark())return withCoreBenchmarkReadView(input.experimentId,()=>getBenchmarkExperimentResultFromView(input))
+  return getBenchmarkExperimentResultFromView(input)
+}
+async function getBenchmarkExperimentResultFromView(input:BenchmarkResultInput) {
   if (input.status && !CASE_STATUS_FILTERS.has(input.status)) {
     throw new BenchmarkProtocolError('CASE_STATUS_FILTER_INVALID', 'Case 状态筛选值不合法', 400)
   }
   if (input.verdict && !OUTCOME_FILTERS.has(input.verdict)) {
     throw new BenchmarkProtocolError('CASE_VERDICT_FILTER_INVALID', 'Case 判定筛选值不合法', 400)
   }
-  const experiment = await benchmarkPrisma.experiment.findFirst({
+  const experiment = await benchmarkPrisma().experiment.findFirst({
     where: { id: input.experimentId, user: input.user, scope: 'benchmark', deletedAt: null },
     select: {
       id: true,
@@ -123,7 +130,7 @@ export async function getBenchmarkExperimentResult(input: {
   const manifest = getBenchmarkAdapter(experiment.benchmarkBinding.adapterKey).manifest
   const evaluatorKey = manifest.evaluation.evaluatorKey
   const evaluatorId = `benchmark:${evaluatorKey}`
-  const runs = await benchmarkPrisma.benchmarkCaseRun.findMany({
+  const runs = await benchmarkPrisma().benchmarkCaseRun.findMany({
     where: { experimentId: input.experimentId, experimentCase: { deletedAt: null } },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: {
@@ -261,7 +268,7 @@ export async function getBenchmarkExperimentResult(input: {
     }
   })
 
-  const expectedTotal = await benchmarkPrisma.experimentCase.count({ where: { experimentId: input.experimentId, deletedAt: null } });
+  const expectedTotal = await benchmarkPrisma().experimentCase.count({ where: { experimentId: input.experimentId, deletedAt: null } });
   const terminalRows = rows.filter((row) => TERMINAL_CASE_STATUSES.has(row.runStatus))
   const outcomes = { pass: 0, warn: 0, fail: 0, unknown: 0 }
   for (const row of terminalRows) {
@@ -349,7 +356,8 @@ export async function readBenchmarkEvaluationArtifact(input: {
   artifactId: string
   user: string
 }) {
-  const artifact = await benchmarkPrisma.benchmarkEvaluationArtifact.findFirst({
+  if(usesCoreBenchmark())return readCoreBenchmarkArtifact(input)
+  const artifact = await benchmarkPrisma().benchmarkEvaluationArtifact.findFirst({
     where: {
       id: input.artifactId,
       evaluationId: input.evaluationId,
@@ -392,7 +400,8 @@ export async function readBenchmarkRunArtifact(input: {
   artifactId: string
   user: string
 }) {
-  const artifact = await benchmarkPrisma.benchmarkArtifact.findFirst({
+  if(usesCoreBenchmark())return readCoreBenchmarkArtifact(input)
+  const artifact = await benchmarkPrisma().benchmarkArtifact.findFirst({
     where: {
       id: input.artifactId,
       run: {

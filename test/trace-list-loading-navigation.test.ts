@@ -208,7 +208,7 @@ test('statistics refresh independently, avoid overlapping requests and ignore ob
         setStatsError: (value: boolean) => { error = value; },
         setStatsLoading: (value: boolean) => { loading = value; },
         TRACE_STATS_REFRESH_MS: 30_000,
-        document: { visibilityState: 'visible' },
+        document: { visibilityState: 'visible', addEventListener: () => {}, removeEventListener: () => {} },
         window: { setInterval: (callback: () => void) => { tick = callback; return 1; }, clearInterval: () => {} },
         apiFetch: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
     };

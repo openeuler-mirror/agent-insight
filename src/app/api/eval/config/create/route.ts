@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -375,6 +376,7 @@ async function processConfigAsync(
 }
 
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const contentType = request.headers.get('content-type') || '';
         
@@ -549,4 +551,6 @@ export async function POST(request: Request) {
         console.error('Config Create Error:', error);
         return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
     }
+
+  },["write"]);
 }

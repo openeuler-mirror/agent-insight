@@ -9,6 +9,8 @@ Check input, output, configuration, identity, and asynchronous behavior.
 
 ## Platform
 
+- [Storage core, IAM and safe migrations](./platform/storage-core.md)
+
 - [HTTP APIs and user identity](./platform/http-api.md)
 - [Runtime configuration](./platform/configuration.md)
 - [Agent runtime reference](./platform/agent-runtime.md)

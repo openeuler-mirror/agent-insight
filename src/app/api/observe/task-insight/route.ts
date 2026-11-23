@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+
+
 // Token 与任务分析：从 root trace 聚合 token/成本，按任务类型和长短时分类，并给出可延后长任务建议。
 // 只统计 root trace（isSubagent=false），避免子 agent 行重复计数；分类与判定口径见
 // src/lib/task-insight/ 与 design/observability/token-task-insight/。
@@ -85,14 +89,16 @@ export async function GET(req: Request) {
     try {
         const url = new URL(req.url);
         // 作用域与大盘一致：按当前用户过滤（客户端可传 ?user=）；解析不出用户则回退全量。
-        const { username } = await resolveUser(req, url.searchParams.get('user'));
-        const userFilter = username ? { user: username } : {};
+        const analytics = (await readCoreAnalytics(req));
+        const executionReader = analytics ?? prisma.execution;
+        const { username } = analytics ?? await resolveUser(req, url.searchParams.get('user'));
+        const userFilter = analytics ? {} : username ? { user: username } : {};
 
         const now = new Date();
         const range = normalizeRange(url.searchParams.get('range'));
         const from = rangeStart(range, now);
 
-        const rows = await prisma.execution.findMany({
+        const rows = await executionReader.findMany({
             where: {
                 ...userFilter,
                 isSubagent: false,
@@ -132,9 +138,9 @@ export async function GET(req: Request) {
             thresholds: parseThresholds(url),
         });
 
+        if (analytics) await analytics.validate();
         return NextResponse.json(summary);
     } catch (error) {
-        console.error('[Task Insight] Failed to aggregate task insight:', error);
-        return NextResponse.json({ error: 'Failed to aggregate task insight' }, { status: 500 });
+        return analyticsFailure(error);
     }
 }

@@ -384,6 +384,7 @@ export function benchmarkDispatchDigest(input: {
   task: AgentTaskEnvelope
   callbackBaseUrl: string
   timeoutSeconds: number
+  callbackHeaders?: { 'x-agent-insight-callback-token': string }
 }): `sha256:${string}` {
-  return fingerprintJson(input as unknown as JsonValue)
+  return fingerprintJson({runId:input.runId,task:input.task,callbackBaseUrl:input.callbackBaseUrl,timeoutSeconds:input.timeoutSeconds} as unknown as JsonValue)
 }

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -53,6 +54,7 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ clientId: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const url = new URL(req.url)
     const { username } = await resolveUser(req, url.searchParams.get('user'))
@@ -64,6 +66,8 @@ export async function GET(
   } catch (error) {
     return errorResponse(error)
   }
+
+  },["read"]);
 }
 
 /** IF-N11 PUT */
@@ -71,6 +75,7 @@ export async function PUT(
   req: Request,
   ctx: { params: Promise<{ clientId: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const url = new URL(req.url)
     const body = await req.json().catch(() => ({}))
@@ -101,6 +106,8 @@ export async function PUT(
   } catch (error) {
     return errorResponse(error)
   }
+
+  },["write"]);
 }
 
 /** IF-N11 DELETE */
@@ -108,6 +115,7 @@ export async function DELETE(
   req: Request,
   ctx: { params: Promise<{ clientId: string }> },
 ) {
+  return withCoreControlRoute(req,async()=>{
   try {
     const url = new URL(req.url)
     const { username } = await resolveUser(req, url.searchParams.get('user'))
@@ -139,4 +147,6 @@ export async function DELETE(
   } catch (error) {
     return errorResponse(error)
   }
+
+  },["write","delete"]);
 }

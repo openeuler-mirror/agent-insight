@@ -13,9 +13,13 @@ import { randomBytes } from 'node:crypto'
 import { computeSkillSnapshotHash } from '@/lib/skill-workbench/domain'
 import { resolveSkillVersionFiles } from '@/lib/skill-workbench/session-service'
 import { prismaRaw } from '@/lib/storage/prisma'
-import { createCommand, getCommand, markSent } from '@/lib/reliability/command-bus'
+import { createCommand, getCommand, markCommandDeliveryFailed, markSent } from '@/lib/reliability/command-bus'
 import { dispatchCommand } from '@/lib/reliability/control-dispatch'
 import { deriveStatus, ReliabilityError } from '@/lib/reliability/client-registry'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {readTraceEvidence} from '@/lib/storage-core/evidence'
+import {readCoreDiagnosis} from '@/lib/storage-core/diagnosis-consumer'
 
 export type DeploymentSource =
   | { type: 'optimization'; optimizationRecordId: string }
@@ -88,6 +92,45 @@ function direction(current: number | null, target: number): DeploymentPreview['d
   return 'reinstall'
 }
 
+function assertCoreDeploymentUser(user:string){if(isStorageCoreEnabled()&&requireCoreExperimentContext().actor.username!==user)throw new ReliabilityError('SOURCE_FORBIDDEN','部署主体不一致',403)}
+const coreDeploymentSources=new WeakMap<ResolvedDestination,{reference:string;snapshotHash:string;traceId:unknown;incarnation:unknown;routeEpoch:unknown}>()
+async function readCoreDeploymentSource(user:string,reference:string){
+  const context=requireCoreExperimentContext()
+  if(context.actor.username!==user)throw new ReliabilityError('SOURCE_FORBIDDEN','部署主体不一致',403)
+  try{
+    const {evidence}=await readTraceEvidence(context.request,{executionId:reference},context.options)
+    if(evidence.manifest.owner_principal_id!==context.actor.principal)throw new ReliabilityError('SOURCE_FORBIDDEN','只能向本人来源 Trace 的客户端下发',403)
+    return evidence
+  }catch(error){
+    if(error instanceof ReliabilityError)throw error
+    const status=Number((error as {status?:number})?.status)
+    throw new ReliabilityError('SOURCE_UNAVAILABLE','来源 Trace 不可用或无权访问',[400,401,403,404,409,413,422,503].includes(status)?status:503)
+  }
+}
+async function verifyCoreDeploymentSource(user:string,destination:ResolvedDestination){
+  const source=coreDeploymentSources.get(destination)
+  if(!source)return
+  const evidence=await readCoreDeploymentSource(user,source.reference)
+  if(evidence.snapshot_hash!==source.snapshotHash)throw new ReliabilityError('SOURCE_CHANGED','来源 Trace 已变化，请重新预检',409)
+}
+function coreSkillOrigins(execution:Record<string,unknown>,skillName:string){
+  const array=(value:unknown):unknown[]=>Array.isArray(value)?value:typeof value==='string'?parseArray(value):[]
+  const rows=array(execution.executionSkills).flatMap(value=>{
+    if(!value||typeof value!=='object'||Array.isArray(value))return []
+    const row=value as Record<string,unknown>;return row.skillName===skillName&&row.origin&&typeof row.origin==='object'?[row.origin]:[]
+  }).concat(array(execution.skillOrigins??execution.skill_origins).filter(value=>value&&typeof value==='object'&&(value as Record<string,unknown>).skillName===skillName))
+  const unique=new Map<string,Record<string,unknown>>()
+  for(const value of rows){
+    if(!value||typeof value!=='object'||Array.isArray(value))continue
+    const row=value as Record<string,unknown>
+    if(row.clientId!==execution.clientId||normalizePlatform(String(row.platform||''))!==normalizePlatform(String(execution.framework||''))||row.targetMode!=='execution_origin'||typeof row.originRef!=='string'||!/^origin_[a-f0-9]{24}$/.test(row.originRef))throw new ReliabilityError('SKILL_ORIGIN_UNAVAILABLE','来源 Skill 位置与客户端不一致',422)
+    unique.set(JSON.stringify([row.clientId,normalizePlatform(String(row.platform)),row.targetMode,row.originRef]),row)
+  }
+  if(unique.size!==1)throw new ReliabilityError('SKILL_ORIGIN_UNAVAILABLE','来源 Trace 缺少唯一的 Skill 实际执行位置',422)
+  const row=[...unique.values()][0]
+  return {clientId:String(row.clientId),platform:String(row.platform),originRef:String(row.originRef),displayPath:typeof row.displayPath==='string'?row.displayPath.slice(0,2048):null}
+}
+
 async function resolveVersion(user: string, skillName: string, source: DeploymentSource): Promise<ResolvedVersion> {
   const skill = await prismaRaw.skill.findFirst({ where: { name: skillName, user } })
   if (!skill) throw new ReliabilityError('SKILL_NOT_FOUND', 'Skill 不存在或不属于当前用户', 404)
@@ -110,9 +153,11 @@ async function resolveVersion(user: string, skillName: string, source: Deploymen
       && typeof (ref.executionId || ref.id) === 'string')
     sourceExecutionId = directExecution ? String(directExecution.executionId || directExecution.id) : null
     if (!sourceExecutionId && diagnosisId) {
-      sourceExecutionId = (await prismaRaw.diagnosisRun.findFirst({
-        where: { id: diagnosisId, user }, select: { executionId: true },
-      }))?.executionId || null
+      {
+        const context=requireCoreExperimentContext()
+        if(context.actor.username!==user)throw new ReliabilityError('SOURCE_FORBIDDEN','部署主体不一致',403)
+        sourceExecutionId=(await readCoreDiagnosis(diagnosisId)).execution_id||null
+      }
     }
   } else {
     version = Number(source.skillVersion)
@@ -147,10 +192,12 @@ async function resolveVersion(user: string, skillName: string, source: Deploymen
 }
 
 async function resolveDestination(user: string, skillName: string, sourceExecutionId: string): Promise<ResolvedDestination> {
-  const execution = await prismaRaw.execution.findFirst({
+  const evidence=(await readCoreDeploymentSource(user,sourceExecutionId))
+  const execution=evidence?{id:evidence.execution.id,clientId:typeof evidence.execution.clientId==='string'?evidence.execution.clientId:null,framework:evidence.execution.framework??null}:await prismaRaw.execution.findFirst({
     where: { id: sourceExecutionId, user },
     select: { id: true, clientId: true, framework: true },
   })
+  const remember=(destination:ResolvedDestination)=>{if(evidence){coreDeploymentSources.set(destination,{reference:sourceExecutionId,snapshotHash:evidence.snapshot_hash,traceId:evidence.manifest.trace_id,incarnation:evidence.manifest.incarnation,routeEpoch:evidence.manifest.route_epoch});destination.sourceExecutionId=sourceExecutionId}return destination}
   if (!execution) throw new ReliabilityError('SOURCE_EXECUTION_NOT_FOUND', '来源 Trace 不存在或不属于当前用户', 404)
   const platform = normalizePlatform(execution.framework)
   if (!platform) throw new ReliabilityError('PLATFORM_UNSUPPORTED', `框架 ${execution.framework || 'unknown'} 暂不支持 Skill 下发`, 422)
@@ -175,34 +222,34 @@ async function resolveDestination(user: string, skillName: string, sourceExecuti
       }
       clientId = candidates[0].clientId
     }
-    return {
+    return remember({
       sourceExecutionId: execution.id,
       clientId,
       platform,
       targetMode: 'framework_global',
       originRef: null,
       displayPath: '${JIUWENSWARM_DATA_DIR:-~/.jiuwenswarm}/agent/workspace/skills/' + skillName,
-    }
+    })
   }
 
   if (!execution.clientId) throw new ReliabilityError('SOURCE_CLIENT_UNKNOWN', '来源 Trace 未记录可下发的客户端身份', 422)
 
-  const skill = await prismaRaw.executionSkill.findFirst({
+  const skill = evidence?null:await prismaRaw.executionSkill.findFirst({
     where: { executionId: execution.id, skillName },
     include: { origin: true },
   })
-  const origin = skill?.origin
+  const origin = evidence?coreSkillOrigins(evidence.execution,skillName):skill?.origin
   if (!origin?.originRef || origin.clientId !== execution.clientId || normalizePlatform(origin.platform) !== platform) {
     throw new ReliabilityError('SKILL_ORIGIN_UNAVAILABLE', '来源 Trace 未记录该 Skill 的实际执行位置，已阻止改投全局目录', 422)
   }
-  return {
+  return remember({
     sourceExecutionId: execution.id,
     clientId: execution.clientId,
     platform,
     targetMode: 'execution_origin',
     originRef: origin.originRef,
     displayPath: origin.displayPath,
-  }
+  })
 }
 
 async function resolveClient(user: string, destination: ResolvedDestination) {
@@ -268,6 +315,7 @@ async function resolvePlan(input: {
   }
   const destination = await resolveDestination(input.user, input.skillName, sourceExecutionId)
   await resolveClient(input.user, destination)
+  await verifyCoreDeploymentSource(input.user,destination)
   const precheck = await dispatchAndWait({
     user: input.user,
     clientId: destination.clientId,
@@ -278,6 +326,7 @@ async function resolvePlan(input: {
       target: { mode: destination.targetMode, ...(destination.originRef ? { originRef: destination.originRef } : {}) },
     },
   })
+  await verifyCoreDeploymentSource(input.user,destination)
   const current = precheck.current && typeof precheck.current === 'object' ? precheck.current : {}
   return { version, destination, precheck, current }
 }
@@ -288,6 +337,7 @@ export async function previewSkillDeployment(input: {
   sourceExecutionId: string
   source: DeploymentSource
 }): Promise<DeploymentPreview> {
+  assertCoreDeploymentUser(input.user)
   const { version, destination, precheck, current } = await resolvePlan(input)
   return {
     deployable: true,
@@ -321,6 +371,7 @@ export async function createSkillDeployment(input: {
   confirmed: boolean
   idempotencyKey: string
 }) {
+  assertCoreDeploymentUser(input.user)
   if (!input.confirmed) throw new ReliabilityError('DEPLOYMENT_CONFIRMATION_REQUIRED', '下发前必须二次确认', 400)
   const idempotencyKey = String(input.idempotencyKey || '').trim()
   if (!idempotencyKey || idempotencyKey.length > 160) {
@@ -341,6 +392,7 @@ export async function createSkillDeployment(input: {
   }
 
   const { version, destination, current } = await resolvePlan(input)
+  await verifyCoreDeploymentSource(input.user,destination)
   const deploymentId = newId('deploy')
   const artifactRef = newId('skillart')
   const currentVersion = Number.isInteger(current.skillVersion) ? current.skillVersion : null
@@ -366,11 +418,13 @@ export async function createSkillDeployment(input: {
       direction: direction(currentVersion, version.version),
       status: 'CREATED',
       idempotencyKey,
-      events: { create: { phase: 'created', status: 'CREATED' } },
+      events: { create: { phase: 'created', status: 'CREATED',...(coreDeploymentSources.has(destination)?{detailJson:JSON.stringify({coreSource:coreDeploymentSources.get(destination)})}:{}) } },
     },
   })
 
+  let queuedCommandId:string|undefined
   try {
+    await verifyCoreDeploymentSource(input.user,destination)
     const frame = await createCommand({
       user: input.user,
       clientId: destination.clientId,
@@ -388,16 +442,19 @@ export async function createSkillDeployment(input: {
         target: { mode: destination.targetMode, ...(destination.originRef ? { originRef: destination.originRef } : {}) },
       },
     })
+    queuedCommandId=frame.commandId
     await prismaRaw.skillDeployment.update({
       where: { deploymentId },
       data: { commandId: frame.commandId, status: 'DISPATCHING' },
     })
+    await verifyCoreDeploymentSource(input.user,destination)
     const dispatched = await dispatchCommand(destination.clientId, frame)
     if (dispatched.delivered) await markSent(frame.commandId, 'wss')
     await prismaRaw.skillDeploymentEvent.create({
       data: { deploymentId, phase: 'dispatch', status: dispatched.delivered ? 'SENT' : 'QUEUED' },
     })
   } catch (error) {
+    if(isStorageCoreEnabled()&&queuedCommandId)await markCommandDeliveryFailed(queuedCommandId,'DEPLOYMENT_DISPATCH_FAILED','部署来源或派送状态不可用')
     await prismaRaw.skillDeployment.update({
       where: { deploymentId },
       data: {
@@ -413,6 +470,7 @@ export async function createSkillDeployment(input: {
 }
 
 export async function getSkillDeployment(user: string, skillName: string, deploymentId: string) {
+  assertCoreDeploymentUser(user)
   return prismaRaw.skillDeployment.findFirst({
     where: { user, skillName, deploymentId },
     include: { events: { orderBy: { createdAt: 'asc' } } },
@@ -424,6 +482,7 @@ export async function claimSkillArtifact(clientId: string, artifactRef: string) 
     where: { clientId, artifactRef },
   })
   if (!deployment) throw new ReliabilityError('SKILL_ARTIFACT_NOT_FOUND', 'Skill 制品不存在', 404)
+  if(['FAILED','CANCELLED'].includes(deployment.status))throw new ReliabilityError('SKILL_ARTIFACT_UNAVAILABLE','下发任务已停止，制品不可领取',409)
   if (deployment.artifactExpiresAt.getTime() <= Date.now()) {
     throw new ReliabilityError('SKILL_ARTIFACT_EXPIRED', 'Skill 制品领取引用已过期', 410)
   }

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {isCoreTriggerRoute,withCoreTriggerRoute,coreTriggerFailure,startCoreTriggerDraft} from '@/lib/storage-core/trigger';
 import { NextResponse } from 'next/server';
 import {
   createTriggerEvalSetVersion,
@@ -90,7 +92,8 @@ async function executeDraft(args: {
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ skillName: string }> },
-) {
+): Promise<Response> {
+  if(isStorageCoreEnabled()&&!isCoreTriggerRoute())return withCoreTriggerRoute(request,'draft',scoped=>POST(scoped,{params}));
   try {
     const { skillName } = await params;
     const body = await request.json().catch(() => ({}));
@@ -100,6 +103,7 @@ export async function POST(
     }
     const decodedSkillName = decodeURIComponent(skillName);
     const modelConfigId = body.modelConfigId ? String(body.modelConfigId).trim() : undefined;
+    if(isCoreTriggerRoute())return startCoreTriggerDraft(decodedSkillName,body);
 
     // 1. 防重入：同一 skill 已有一条新鲜的 drafting 占位就别再起一个。把它连同 409 回给前端——
     //    前端据此关掉「起草中」的二次点击、继续轮询同一条占位的进度即可。
@@ -138,6 +142,7 @@ export async function POST(
 
     return NextResponse.json({ success: true, set: placeholder });
   } catch (error) {
+    if(isCoreTriggerRoute())return coreTriggerFailure(error);
     console.error('skill-eval/trigger/draft POST error:', error);
     const msg = error instanceof Error ? error.message : 'failed to draft trigger eval set';
     return NextResponse.json({ error: msg }, { status: 500 });

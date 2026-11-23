@@ -1,0 +1,133 @@
+{
+  "version": 2,
+  "name": "trace_analytics",
+  "tables": [
+    {
+      "name": "obs_trace_analytics",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "trace_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "boundary",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "parser_version",
+          "type": "UInt16",
+          "default": null
+        },
+        {
+          "name": "projection_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "projection_json",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "trace_bucket",
+        "trace_id",
+        "boundary",
+        "parser_version",
+        "projection_hash"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(boundary)=64",
+        "length(projection_hash)=64",
+        "parser_version=1",
+        "length(projection_json)<=2097152",
+        "retry_version>0 AND retry_version<=9223372036854775807"
+      ],
+      "partition": "trace_bucket"
+    },
+    {
+      "name": "obs_ras_events",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "event_bucket",
+          "type": "Date",
+          "default": null
+        },
+        {
+          "name": "owner_principal_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "task_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "event_key",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "content_hash",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "event_json",
+          "type": "String",
+          "default": null
+        },
+        {
+          "name": "retry_version",
+          "type": "UInt64",
+          "default": "1"
+        }
+      ],
+      "key": [
+        "workspace_id",
+        "event_bucket",
+        "owner_principal_id",
+        "task_id",
+        "event_key",
+        "content_hash"
+      ],
+      "version": "retry_version",
+      "checks": [
+        "length(content_hash)=64",
+        "length(event_json)<=262144",
+        "retry_version>0 AND retry_version<=9223372036854775807"
+      ],
+      "partition": "event_bucket"
+    }
+  ]
+}

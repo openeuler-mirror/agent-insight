@@ -1,3 +1,6 @@
+import {findCoreFiRun,coreFiRpc} from '@/lib/storage-core/fault-injection'
+import {withCoreFiRequest} from '@/lib/storage-core/fault-injection'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -31,7 +34,7 @@ function hasFiCollectSignal(body: Record<string, unknown>): boolean {
   return false
 }
 
-export async function POST(
+async function handlePOST(
   req: Request,
   ctx: { params: Promise<{ runId: string }> },
 ) {
@@ -46,95 +49,33 @@ export async function POST(
     }
     const username = caller.username
     const { runId } = await ctx.params
-    const run = await prisma.faultInjectionRun.findFirst({
-      where: { runId, user: username },
-    })
+    const run = (await findCoreFiRun(runId))
     if (!run) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
     const body = await req.json()
-    const stopped =
-      body.stopped === true ||
-      run.stopRequested ||
-      String(body.error || '').includes('stopped')
-
-    if (run.status === 'stopped' && !body.allowPartial) {
-      return NextResponse.json({ error: 'run already stopped' }, { status: 409 })
+    {
+      const stopped=body.stopped===true||run.stopRequested||String(body.error||'').includes('stopped')
+      const lease={runId,workerId:caller.clientId||body.workerId,claimToken:body.claimToken}
+      if (stopped && (body.skipIngest || !hasFiCollectSignal(body))) {
+        const {run:updated}=await coreFiRpc<{run:{status:string}}>('collect',{...lease,data:{status:'stopped',error:body.error||'stopped by user',stopRequested:true}})
+        return NextResponse.json({ok:true,status:updated.status})
+      }
+      if (body.error && !hasFiCollectSignal(body)) {
+        const {run:updated}=await coreFiRpc<{run:{status:string}}>('collect',{...lease,data:{status:stopped?'stopped':'failed',error:String(body.error)}})
+        return NextResponse.json({ok:true,status:updated.status})
+      }
+      const rawTaskId=(typeof body.taskId==='string'&&body.taskId.trim())||(typeof body.sessionTaskId==='string'&&body.sessionTaskId.trim())||null
+      const payload={runId,taskId:rawTaskId,sessionAligned:body.sessionAligned!==false,framework:body.framework||run.platform,fault:body.fault||run.fault,injectionMethod:body.injectionMethod,faultActivated:body.faultActivated,faultActivatedAt:body.faultActivatedAt,interactions:Array.isArray(body.interactions)?body.interactions:[],markers:Array.isArray(body.markers)?body.markers:[]} as CollectPayload
+      const updated=await persistFiCollectIngress({...lease,user:username,payload,stopped})
+      return NextResponse.json({ok:true,status:updated.status,runId:updated.runId})
     }
-
-    if (stopped && (body.skipIngest || !hasFiCollectSignal(body))) {
-      await prisma.faultInjectionRun.update({
-        where: { id: run.id },
-        data: {
-          status: 'stopped',
-          error: body.error || 'stopped by user',
-          stopRequested: true,
-        },
-      })
-      if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId)
-      return NextResponse.json({ ok: true, status: 'stopped' })
-    }
-
-    const rawTaskId =
-      (typeof body.taskId === 'string' && body.taskId.trim()) ||
-      (typeof body.sessionTaskId === 'string' && body.sessionTaskId.trim()) ||
-      null
-    // Never fall back to runId as the RAS alignment key.
-    const sessionAligned =
-      body.sessionAligned === true ||
-      (body.sessionAligned !== false &&
-        typeof rawTaskId === 'string' &&
-        rawTaskId.length > 0 &&
-        rawTaskId !== runId &&
-        !/^ras-\d{8}T/.test(rawTaskId) &&
-        !/^(msg_|prt_)/.test(rawTaskId))
-
-    const payload = {
-      runId,
-      taskId: sessionAligned ? rawTaskId : null,
-      sessionAligned,
-      framework: body.framework || run.platform,
-      fault: body.fault || run.fault,
-      injectionMethod: body.injectionMethod,
-      faultActivated: body.faultActivated,
-      faultActivatedAt: body.faultActivatedAt,
-      interactions: Array.isArray(body.interactions) ? body.interactions : [],
-      markers: Array.isArray(body.markers) ? body.markers : [],
-    } as CollectPayload
-
-    if (stopped) {
-      // Partial ingest then force stopped (do not leave as completed green).
-      await persistFiCollectIngress({ runId, user: username, payload, stopped: true })
-      await prisma.faultInjectionRun.update({
-        where: { runId },
-        data: {
-          status: 'stopped',
-          error: body.error || 'stopped by user',
-          outcome: null,
-          stopRequested: true,
-        },
-      })
-      if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId)
-      return NextResponse.json({ ok: true, status: 'stopped' })
-    }
-
-    if (body.error && !hasFiCollectSignal(body)) {
-      await prisma.faultInjectionRun.update({
-        where: { runId },
-        data: { status: 'failed', error: String(body.error) },
-      })
-      if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId)
-      return NextResponse.json({ ok: true, status: 'failed' })
-    }
-
-    const updated = await persistFiCollectIngress({ runId, user: username, payload })
-    if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId)
-    return NextResponse.json({
-      ok: true,
-      status: updated.status,
-      runId: updated.runId,
-    })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    throw err
   }
+}
+
+export async function POST(
+  req: Request,
+  ctx: { params: Promise<{ runId: string }> },) {
+  return withCoreFiRequest(req,()=>handlePOST(req,ctx))
 }

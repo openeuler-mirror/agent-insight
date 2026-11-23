@@ -19,6 +19,8 @@ import crypto from 'node:crypto';
 import { migrateAgentDebugReport } from './report-migration';
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { findCoreReportRow } from '@/lib/storage-core/reports';
 import type {
   AgentDebugReportPayload,
   AgentDebugReportRow,
@@ -27,54 +29,15 @@ import type {
 } from './types';
 
 export async function ensureAgentDebugReportTable() {
-  await prismaRaw.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS "AgentDebugReport" (
-      "id" TEXT NOT NULL PRIMARY KEY,
-      "executionId" TEXT NOT NULL UNIQUE,
-      "user" TEXT,
-      "interactionsHash" TEXT NOT NULL,
-      "status" TEXT NOT NULL DEFAULT 'pending',
-      "errorMessage" TEXT,
-      "reportJson" TEXT,
-      "stepCount" INTEGER NOT NULL DEFAULT 0,
-      "issueCount" INTEGER NOT NULL DEFAULT 0,
-      "llmCallCount" INTEGER NOT NULL DEFAULT 0,
-      "durationMs" INTEGER,
-      "generator" TEXT NOT NULL DEFAULT 'agent-debug-diagnosis-skill@0.2',
-      "ranAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await prismaRaw.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AgentDebugReport_user_ranAt_idx" ON "AgentDebugReport" ("user", "ranAt")`);
-  await prismaRaw.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AgentDebugReport_status_idx" ON "AgentDebugReport" ("status")`);
+  throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
 }
 
 export async function ensureAgentDebugSkillsAnalysisTable() {
-  await prismaRaw.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS "AgentDebugSkillsAnalysis" (
-      "id" TEXT NOT NULL PRIMARY KEY,
-      "executionId" TEXT NOT NULL UNIQUE,
-      "user" TEXT,
-      "interactionsHash" TEXT NOT NULL,
-      "status" TEXT NOT NULL DEFAULT 'pending',
-      "errorMessage" TEXT,
-      "analysisJson" TEXT,
-      "keyActionCount" INTEGER NOT NULL DEFAULT 0,
-      "ranAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await prismaRaw.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AgentDebugSkillsAnalysis_user_ranAt_idx" ON "AgentDebugSkillsAnalysis" ("user", "ranAt")`);
-  await prismaRaw.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "AgentDebugSkillsAnalysis_status_idx" ON "AgentDebugSkillsAnalysis" ("status")`);
+  throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
 }
 
 export async function findAgentDebugReport(executionId: string): Promise<AgentDebugReportRow | null> {
-  await ensureAgentDebugReportTable();
-  const rows = await prismaRaw.$queryRawUnsafe<AgentDebugReportRow[]>(
-    `SELECT * FROM "AgentDebugReport" WHERE "executionId" = ? LIMIT 1`,
-    executionId,
-  );
-  return rows[0] || null;
+  return await findCoreReportRow(executionId, 'agent-debug') as unknown as AgentDebugReportRow | null;
 }
 
 export async function upsertRunningAgentDebugReport(args: {
@@ -135,34 +98,7 @@ export async function markAgentDebugReportDone(args: {
   report: AgentDebugReportPayload;
   interactionsHash?: string;
 }) {
-  const now = new Date().toISOString();
-  const report = stripEmbeddedSkillsAnalysis(args.report);
-  const values = [
-    JSON.stringify(report),
-    report.stats.stepCount,
-    report.stats.issueCount,
-    report.stats.llmCallCount,
-    report.stats.durationMs,
-    report.generator,
-    now,
-    args.executionId,
-  ];
-  if (args.interactionsHash) values.push(args.interactionsHash);
-  await prismaRaw.$executeRawUnsafe(
-    `UPDATE "AgentDebugReport"
-      SET "status" = 'done',
-          "errorMessage" = NULL,
-          "reportJson" = ?,
-          "stepCount" = ?,
-          "issueCount" = ?,
-          "llmCallCount" = ?,
-          "durationMs" = ?,
-          "generator" = ?,
-          "updatedAt" = ?
-      WHERE "executionId" = ?${args.interactionsHash ? ` AND "interactionsHash" = ? AND "status" = 'running'` : ''}`,
-    ...values,
-  );
-  return findAgentDebugReport(args.executionId);
+  throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
 }
 
 export async function markAgentDebugReportFailed(args: {
@@ -196,12 +132,7 @@ export async function deleteAgentDebugReport(executionId: string) {
 }
 
 export async function findAgentDebugSkillsAnalysis(executionId: string): Promise<AgentDebugSkillsAnalysisRow | null> {
-  await ensureAgentDebugSkillsAnalysisTable();
-  const rows = await prismaRaw.$queryRawUnsafe<AgentDebugSkillsAnalysisRow[]>(
-    `SELECT * FROM "AgentDebugSkillsAnalysis" WHERE "executionId" = ? LIMIT 1`,
-    executionId,
-  );
-  return rows[0] || null;
+  return await findCoreReportRow(executionId, 'skills-analysis') as unknown as AgentDebugSkillsAnalysisRow | null;
 }
 
 export async function upsertAgentDebugSkillsAnalysis(args: {
@@ -264,30 +195,7 @@ export async function updateRunningAgentDebugSkillsAnalysis(args: {
   interactionsHash: string;
   skillsAnalysis: AgentDebugSkillsAnalysis;
 }): Promise<AgentDebugSkillsAnalysisRow | null> {
-  await ensureAgentDebugSkillsAnalysisTable();
-  const now = new Date().toISOString();
-  const keyActionCount = Array.isArray(args.skillsAnalysis.keyActionResults)
-    ? args.skillsAnalysis.keyActionResults.length
-    : 0;
-  await prismaRaw.$executeRawUnsafe(
-    `UPDATE "AgentDebugSkillsAnalysis"
-      SET "user" = ?,
-          "status" = ?,
-          "errorMessage" = ?,
-          "analysisJson" = ?,
-          "keyActionCount" = ?,
-          "updatedAt" = ?
-      WHERE "executionId" = ? AND "interactionsHash" = ? AND "status" = 'running'`,
-    args.user ?? null,
-    args.skillsAnalysis.status,
-    args.skillsAnalysis.errorMessage ?? null,
-    JSON.stringify(args.skillsAnalysis),
-    keyActionCount,
-    now,
-    args.executionId,
-    args.interactionsHash,
-  );
-  return findAgentDebugSkillsAnalysis(args.executionId);
+  throw Object.assign(new Error('Core reports require fenced publication'), { status: 503 });
 }
 
 export async function deleteAgentDebugSkillsAnalysis(executionId: string) {

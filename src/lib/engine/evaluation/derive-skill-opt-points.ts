@@ -232,6 +232,33 @@ export async function deriveAndPersistOptPoints(args: DeriveOptPointsArgs): Prom
   return written;
 }
 
+export function deriveOptPointArtifacts(args: DeriveOptPointsArgs, frozen: {executionId: string | null; lineage: string; skills: Array<{id: string; name: string; activeVersion: number | null}>}) {
+  const evaluations: Array<Record<string, unknown>> = [];
+  const skillIssues: Array<Record<string, unknown>> = [];
+  const raw = parseJsonObject(args.trajectoryRow.rawAnalysisJson);
+  if (!args.skills.length || rawAnalysisDisablesSkillIssues(raw)) return {evaluations, skillIssues};
+  const issues = [
+    ...extractSkillSuggestionIssues(args.trajectoryRow),
+    ...extractDeviationIssues(args.trajectoryRow),
+    ...extractKeyPointIssues(args.trajectoryRow),
+    ...extractToolChoiceIssues(args.trajectoryRow),
+    ...extractResultIssues(args.trajectoryRow),
+  ];
+  const content = createHash('sha256').update(JSON.stringify(args.trajectoryRow)).digest('hex');
+  for (const skill of args.skills) {
+    const record = frozen.skills.find(item => item.name === skill.name);
+    if (!record) continue;
+    const seen = new Set<string>();
+    const batch = issues.filter(issue => {const key = `${issue.category}::${normalizeSummary(issue.summary)}::${issue.dedupSalt || ''}`;if (seen.has(key)) return false;seen.add(key);return true;});
+    if (!batch.length) continue;
+    const version = skill.version ?? record.activeVersion ?? 0;
+    const evaluationId = 'derived-' + createHash('sha256').update(JSON.stringify([frozen.lineage, content, record.id, version])).digest('hex');
+    evaluations.push({id: evaluationId, type: 'dynamic', skillId: record.id, version, user: args.user, executionId: frozen.executionId, generator: GENERATOR, runId: args.runId, status: 'ok'});
+    for (const issue of batch) skillIssues.push({id: 'issue-' + createHash('sha256').update(JSON.stringify([evaluationId, issue.category, normalizeSummary(issue.summary), issue.dedupSalt || ''])).digest('hex'), evaluationId, source: 'dynamic', skillId: record.id, version, user: args.user, dedupKey: dedupKeyFor(issue), severity: issue.severity, summary: issue.summary, evidence: issue.evidence || null, reasoning: issue.reasoning || null, suggestedFix: issue.improvementSuggestion || null, ruleId: null, dimension: null, category: issue.category});
+  }
+  return {evaluations, skillIssues};
+}
+
 interface DerivedIssue {
   severity: Severity;
   category: string;

@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -23,6 +24,7 @@ export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id } = await params;
         const body = await request.json();
@@ -49,4 +51,6 @@ export async function POST(
         console.error('Toggle Upload Error:', error);
         return NextResponse.json({ error: 'Failed to update skill status' }, { status: 500 });
     }
+
+  },["write"]);
 }

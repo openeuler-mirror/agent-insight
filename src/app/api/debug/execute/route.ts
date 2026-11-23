@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {coreControlCacheKey} from '@/lib/storage-core/control-repository';
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -62,6 +65,7 @@ async function persistJob(jobId: string, user: string, job: Omit<DebugJob, 'star
  * }
  */
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
   const body = await request.json().catch(() => ({}));
   const user = String(body.user || '').trim();
   const query = String(body.query || '').trim();
@@ -71,9 +75,10 @@ export async function POST(request: Request) {
 
   const jobId = makeJobId();
   const store = getJobStore();
+  const cacheKey=(coreControlCacheKey(jobId));
   const startedAt = Date.now();
 
-  store.set(jobId, { status: 'running', startedAt });
+  store.set(cacheKey, { status: 'running', startedAt });
 
   const mode = body.mode || 'batch';
   const isGrayscale = mode === 'grayscale';
@@ -158,16 +163,18 @@ export async function POST(request: Request) {
         tokenUsage: extractDebugJobTokenUsage(result.stats),
         sessionId: result.sessionId,
       };
-      store.set(jobId, completed);
+      store.set(cacheKey, completed);
       persistJob(jobId, user, { status: 'completed', output: completed.output, timeCost: completed.timeCost, tokenUsage: completed.tokenUsage, sessionId: completed.sessionId });
     })
     .catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err);
-      store.set(jobId, { status: 'failed', startedAt, error: errMsg });
+      store.set(cacheKey, { status: 'failed', startedAt, error: errMsg });
       persistJob(jobId, user, { status: 'failed', error: errMsg });
     });
 
   recordUsageEvent({ user, featureKey: 'skill-eval', eventKey: 'skill.eval.debug.run' });
 
   return NextResponse.json({ jobId });
+
+  },["write","execute"]);
 }

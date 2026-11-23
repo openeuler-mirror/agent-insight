@@ -19,16 +19,24 @@ import { loadCaseExecutionProgressInTransaction, readExecutionProgressSnapshot }
 import { readExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding'
 import type { SkillExecutionSnapshot, SkillRunProgress, SkillProgressRun } from './execution-progress'
 import type { AbCaseStates } from './ab-comparison'
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {workbenchControlReadSource} from '@/lib/storage-core/workbench'
+import {requireCoreExperimentContext} from '@/lib/storage-core/experiments'
+import {projectCoreWorkbenchTaskStates,type WorkbenchCoreSnapshot} from '@/lib/storage-core/workbench-results'
 
 const parse = (value: string | null | undefined) => { try { return JSON.parse(value || '{}') } catch { return {} } }
 
 export async function loadSkillExecutionProgress(experimentId: string, user: string): Promise<SkillExecutionSnapshot | null> {
-  return readExecutionProgressSnapshot(async (tx: Prisma.TransactionClient) => {
+  const read=async (tx: Prisma.TransactionClient) => {
     const experiment = await tx.experiment.findFirst({ where: { id: experimentId, user, scope: 'skill-workbench', deletedAt: null }, select: { configSnapshotJson: true, evaluatorIdsJson: true, preset: true, createdAt: true, status: true } })
     if (!experiment) return null
     const config = parse(experiment.configSnapshotJson)
     const task = config.grayscaleTaskId ? await tx.grayscaleTask.findFirst({ where: { id: String(config.grayscaleTaskId), user }, select: { id: true, caseStatesJson: true } }) : null
-    const states: AbCaseStates = parse(task?.caseStatesJson)
+    let states: AbCaseStates = parse(task?.caseStatesJson)
+    {
+      const current=await requireCoreExperimentContext().rpc('read',{experiment_id:experimentId}) as {experiment:WorkbenchCoreSnapshot};
+      states=projectCoreWorkbenchTaskStates(current.experiment,states);
+    }
     const rows = await tx.experimentCase.findMany({ where: { experimentId, deletedAt: null }, select: { id: true, caseValuesJson: true, createdAt: true } })
     const cancelled = await tx.experimentCancellation.findMany({ where: { experimentId }, select: { caseKey: true } })
     const removed = new Set(cancelled.map(item => item.caseKey))
@@ -94,5 +102,6 @@ export async function loadSkillExecutionProgress(experimentId: string, user: str
       }
     }
     return result
-  })
+  }
+  return (read(await workbenchControlReadSource(user,experimentId) as unknown as Prisma.TransactionClient))
 }

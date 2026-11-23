@@ -82,6 +82,15 @@ export async function withEvaluationAttempt<T>(
 }
 
 export function isRetryableEvaluationFailure(error: unknown): boolean {
+  const seen = new Set<object>();
+  let current = error;
+  while (current && typeof current === 'object') {
+    if (seen.has(current)) return false;
+    seen.add(current);
+    const failure = current as { coreTraceRecordingFailed?: boolean; code?: string; cause?: unknown };
+    if (failure.coreTraceRecordingFailed === true || failure.code === 'CORE_TRACE_RECORDING_FAILED') return false;
+    current = failure.cause;
+  }
   const item = error as { code?: string; status?: number; name?: string; message?: string } | null;
   if (['EXPERIMENT_CANCELLED', 'EVALUATION_CLEANUP_UNCONFIRMED'].includes(item?.code || '')) return false;
   if ([400, 401, 403, 404].includes(item?.status || 0)) return false;

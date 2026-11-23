@@ -24,6 +24,15 @@ import { activateIsolatedHome, assertTemporaryHome, isolatedHomeEnv } from './he
 test('test environment pins all storage paths and drops inherited credentials', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'test-home-guard-'))
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const databaseEnvironment = { DB_HOST: process.env.DB_HOST, DB_USER: process.env.DB_USER }
+  process.env.DB_HOST = 'synthetic-remote-db'
+  process.env.DB_USER = 'synthetic-db-user'
+  t.after(() => {
+    for (const [key, value] of Object.entries(databaseEnvironment)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
   const previous = process.env.TEST_PRIVATE_API_KEY
   process.env.TEST_PRIVATE_API_KEY = 'synthetic-inherited-key'
   t.after(() => {
@@ -37,6 +46,8 @@ test('test environment pins all storage paths and drops inherited credentials', 
   assert.equal(env.TEST_PRIVATE_API_KEY, undefined)
   assert.equal(env.AGENT_INSIGHT_API_KEY, 'test-only')
   assert.equal(env.AGENT_INSIGHT_DATA_DIR, undefined)
+  assert.equal(env.DB_HOST, '')
+  assert.equal(env.DB_USER, undefined)
 })
 
 test('installer test guard rejects real directories and symlinks escaping temporary storage', (t) => {
@@ -60,4 +71,28 @@ test('in-process test environment restores the original paths', (t) => {
     restore()
   }
   assert.deepEqual({ home: process.env.HOME, root: process.env.AGENT_INSIGHT_HOME, database: process.env.DATABASE_URL }, previous)
+})
+
+test('isolated schema setup does not leave a detached Prisma checkpoint writer',async()=>{
+  const childProcess=await import('node:child_process')
+  const original=childProcess.default.spawnSync
+  let disabled:string|undefined
+  childProcess.default.spawnSync=((...args:unknown[])=>{
+    const options=args[2] as {env?:NodeJS.ProcessEnv}
+    disabled=options.env?.CHECKPOINT_DISABLE
+    return {pid:0,output:[],stdout:'',stderr:'',status:0,signal:null}
+  }) as unknown as typeof original
+  try {
+    const {createIsolatedDatabase}=await import('./helpers/isolated-database')
+    const database=createIsolatedDatabase()
+    database.dispose()
+    assert.equal(disabled,'1')
+    const previous=process.env.DATABASE_URL
+    const retained=createIsolatedDatabase()
+    try {
+      retained.dispose({preserveFiles:true})
+      assert.equal(process.env.DATABASE_URL,previous)
+      assert.equal(fs.existsSync(retained.home),true)
+    }finally{fs.rmSync(retained.home,{recursive:true,force:true})}
+  }finally{childProcess.default.spawnSync=original}
 })

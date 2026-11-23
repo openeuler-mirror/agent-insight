@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,6 +16,8 @@
  */
 
 import { resolveUser } from '@/lib/auth/auth';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { getSkillStorageRoot } from '@/lib/env';
 import fs from 'fs';
@@ -26,13 +29,15 @@ import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   try {
     const searchParams = request.nextUrl.searchParams;
     const query = searchParams.get('query');
     const category = searchParams.get('category');
     const userParam = searchParams.get('user');
 
-    const { username: user } = await resolveUser(request, userParam);
+    const analytics = (await readCoreAnalytics(request));
+    const { username: user } = analytics ?? await resolveUser(request, userParam);
 
     const where: any = {};
 
@@ -86,7 +91,7 @@ export async function GET(request: NextRequest) {
 
     if (skillNames.length > 0) {
         try {
-            const execs = await prismaRaw.execution.findMany({
+            const execs = await (analytics ?? prismaRaw.execution).findMany({
                 where: { skill: { in: skillNames }, timestamp: { gte: since7d } },
                 select: { skill: true, agentName: true, isAnswerCorrect: true, failures: true },
             });
@@ -104,6 +109,7 @@ export async function GET(request: NextRequest) {
                 if (!failed) agg.success += 1;
             }
         } catch (e) {
+            if (analytics) throw e;
             console.warn('[Skills List] failed to aggregate executions:', (e as any)?.message);
         }
 
@@ -182,14 +188,17 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    if (analytics) await analytics.validate();
     return NextResponse.json(response);
   } catch (error) {
-    console.error('Fetch Skills Error:', error);
-    return NextResponse.json({ error: 'Failed to fetch skills' }, { status: 500 });
+    return analyticsFailure(error);
   }
+
+  },["read"]);
 }
 
 export async function DELETE(request: NextRequest) {
+  return withCoreControlRoute(request,async()=>{
   const searchParams = request.nextUrl.searchParams;
   const id = searchParams.get('id');
   const userParam = searchParams.get('user');
@@ -258,4 +267,6 @@ export async function DELETE(request: NextRequest) {
     console.error('Delete Skill Error:', e);
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
+
+  },["write","delete"]);
 }

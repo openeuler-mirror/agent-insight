@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {withCoreDatasetRoute,getCoreDatasetContext,coreDatasetFailure,setCoreDatasetOperationResult} from '@/lib/storage-core/datasets';
+
 import { traceIdentity, guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
 import { GenerationError, normalizeTraceCases, TRACE_FIELDS } from '@/lib/trace-datasets/contracts';
 import { randomUUID } from 'crypto';
@@ -47,6 +50,9 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  return (withCoreDatasetRoute(request, datasetGET));
+}
+async function datasetGET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const user = (searchParams.get('user') || '').trim();
@@ -80,12 +86,16 @@ export async function GET(request: Request) {
 
     return NextResponse.json(await decoratePublicBenchmarkDatasets(user, datasets));
   } catch (error) {
+    if (getCoreDatasetContext()) return coreDatasetFailure(error);
     console.error('agent-datasets GET error:', error);
     return NextResponse.json({ error: 'failed to load datasets' }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
+  return (withCoreDatasetRoute(request, datasetPOST));
+}
+async function datasetPOST(request: Request) {
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();
@@ -155,18 +165,23 @@ export async function POST(request: Request) {
       updatedAt: now,
     };
 
+    setCoreDatasetOperationResult({warnings});
     await createAgentDatasetRecord(dataset);
 
     recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.create' });
 
     return NextResponse.json({ success: true, dataset, warnings });
   } catch (error) {
+    if (getCoreDatasetContext()) return coreDatasetFailure(error);
     console.error('agent-datasets POST error:', error);
     return NextResponse.json({ error: 'failed to create dataset' }, { status: 500 });
   }
 }
 
 export async function PATCH(request: Request) {
+  return (withCoreDatasetRoute(request, datasetPATCH));
+}
+async function datasetPATCH(request: Request) {
   try {
     const body = await request.json();
     const user = String(body.user || '').trim();
@@ -263,6 +278,7 @@ export async function PATCH(request: Request) {
       updatedAt: new Date().toISOString(),
     };
 
+    setCoreDatasetOperationResult({warnings: preparedCasesResult.warnings});
     const ok = await updateAgentDatasetRecord(updated);
     if (!ok) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
@@ -272,6 +288,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ success: true, dataset: updated, warnings: preparedCasesResult.warnings });
   } catch (error) {
     if (error instanceof GenerationError) return generationErrorResponse(error);
+    if (getCoreDatasetContext()) return coreDatasetFailure(error);
     console.error('agent-datasets PATCH error:', error);
     return NextResponse.json({ error: 'failed to update dataset' }, { status: 500 });
   }

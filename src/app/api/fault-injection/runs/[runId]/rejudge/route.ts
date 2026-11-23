@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
 
@@ -21,7 +22,7 @@ export const dynamic = 'force-dynamic'
 
 /** Keep old clients explicit about retirement; this endpoint never invokes a model. */
 export async function POST(req: Request) {
-  await resolveUser(req)
+
   return NextResponse.json({
     code: 'FI_JUDGE_REMOVED',
     error: 'FI 独立评判已移除；请在实验中选择评估器进行评测。',

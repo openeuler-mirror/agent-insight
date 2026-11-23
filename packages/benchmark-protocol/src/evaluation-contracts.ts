@@ -94,6 +94,7 @@ export type BenchmarkEvaluationDispatchRequest = {
   platformBaseUrl: string
   callbackBaseUrl: string
   timeoutSeconds: number
+  callbackHeaders?: { 'x-agent-insight-callback-token': string }
 }
 
 export interface BenchmarkAdapter<
@@ -114,5 +115,5 @@ export function benchmarkEvaluationDispatchDigest(input: Omit<
   BenchmarkEvaluationDispatchRequest,
   'requestDigest'
 >): `sha256:${string}` {
-  return fingerprintJson(input as unknown as JsonValue)
+  return fingerprintJson({runId:input.runId,evaluationJob:input.evaluationJob,platformBaseUrl:input.platformBaseUrl,callbackBaseUrl:input.callbackBaseUrl,timeoutSeconds:input.timeoutSeconds} as unknown as JsonValue)
 }

@@ -1,3 +1,6 @@
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode'
+import {coreBenchmarkCallbackContext,coreBenchmarkCallbackJson} from '@/lib/benchmark/core-public-callback'
+import {completeCoreBenchmarkExecution} from '@/lib/benchmark/core-runtime'
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -36,17 +39,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ runId: 
       }
       throw error
     }
-    let completion: BenchmarkExecutionCompletion
-    try {
-      completion = await req.json() as BenchmarkExecutionCompletion
-    } catch {
-      throw new BenchmarkProtocolError('RUN_COMPLETION_JSON_INVALID', 'Run 终态不是合法 JSON', 400)
-    }
-    return NextResponse.json(await completeBenchmarkRun({
-      runId,
-      clientId: identity.clientId,
-      completion,
-    }))
+    {const context=coreBenchmarkCallbackContext(req,identity.clientId,identity.user);return NextResponse.json(await completeCoreBenchmarkExecution(context,runId,await coreBenchmarkCallbackJson(req)))}
   } catch (error) {
     return benchmarkErrorResponse(error, 'benchmark/runs/complete')
   }

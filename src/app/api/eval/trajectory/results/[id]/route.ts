@@ -15,7 +15,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { prismaRaw as prisma } from '@/lib/storage/prisma';
+import { prismaRaw as legacyPrisma } from '@/lib/storage/prisma';
+import {directTrajectorySource} from '@/lib/eval/direct-trajectory-source';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {getCoreExperimentContext,requireCoreExperimentContext,withCoreExperimentMutationRoute} from '@/lib/storage-core/experiments';
+const prisma=legacyPrisma;
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
 import { summarizeTrace } from '@/lib/engine/evaluation/trace-summarizer';
 import { normalizeTrajectoryRedundancyDetails } from '@/lib/engine/evaluation/trajectory-evaluator';
@@ -66,7 +70,7 @@ async function normalizeRawAnalysisForDisplay(
 ): Promise<Record<string, unknown> | null> {
     if (!rawAnalysis || !taskId) return rawAnalysis;
     try {
-        const session = await prisma.session.findUnique({ where: { taskId } });
+        const session = await (await directTrajectorySource(legacyPrisma)).session.findUnique({ where: { taskId } });
         const interactions = safeParse(session?.interactions, []);
         if (!Array.isArray(interactions) || interactions.length === 0) return rawAnalysis;
         const summary = summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 });
@@ -80,8 +84,10 @@ async function normalizeRawAnalysisForDisplay(
 export async function GET(
     request: Request,
     context: { params: Promise<{ id: string }> },
-) {
+):Promise<Response> {
+    if(isStorageCoreEnabled()&&!getCoreExperimentContext()?.compatibilityRoute)return withCoreExperimentMutationRoute(request,req=>GET(req,context));
     try {
+        const prisma=await directTrajectorySource(legacyPrisma);
         const { id } = await context.params;
         const { searchParams } = new URL(request.url);
         const user = (searchParams.get('user') || '').trim();

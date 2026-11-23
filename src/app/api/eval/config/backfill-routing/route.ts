@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -52,6 +53,7 @@ async function runWithConcurrency<T>(
 }
 
 export async function POST(request: Request) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const body = await request.json().catch(() => ({}));
         const actorUser = typeof body.user === 'string' && body.user.trim() ? body.user.trim() : null;
@@ -142,4 +144,6 @@ export async function POST(request: Request) {
         console.error('[ConfigBackfillRouting] Error:', error);
         return NextResponse.json({ error: error?.message || 'Failed to backfill routing signatures' }, { status: 500 });
     }
+
+  },["write"]);
 }

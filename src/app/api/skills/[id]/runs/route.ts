@@ -1,3 +1,4 @@
+import {withCoreControlRoute} from '@/lib/storage-core/control-route';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -22,6 +23,9 @@ import {
     type RoutingSkillBreakdown,
 } from '@/lib/storage/data-service';
 import { NextRequest, NextResponse } from 'next/server';
+import { isStorageCoreEnabled } from '@/lib/storage-core/mode';
+import { readCoreAnalytics, analyticsFailure } from '@/lib/storage-core/analytics';
+import { readCoreSkillRecords } from '@/lib/storage-core/skill-records';
 
 type RunStatus = 'success' | 'failed' | 'pending' | 'unknown';
 
@@ -63,6 +67,7 @@ export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
 ) {
+  return withCoreControlRoute(request,async()=>{
     try {
         const { id } = await params;
         const { searchParams } = new URL(request.url);
@@ -70,7 +75,8 @@ export async function GET(
         const limitParam = searchParams.get('limit');
         const offsetParam = searchParams.get('offset');
 
-        const { username } = await resolveUser(request);
+        const core = (await readCoreAnalytics(request));
+        const { username } = core ?? await resolveUser(request);
         const { allowed, skill } = await canAccessSkill(id, username);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
@@ -91,7 +97,7 @@ export async function GET(
         const limit = Math.max(1, Math.min(500, parseInt(limitParam || '50', 10) || 50));
         const offset = Math.max(0, parseInt(offsetParam || '0', 10) || 0);
 
-        const records = await readRecords(username || undefined);
+        const records = core ? (await readCoreSkillRecords(request, core)).records : await readRecords(username || undefined);
 
         const filtered = records.filter(r => {
             const inList = r.skills?.includes(skillName);
@@ -129,9 +135,11 @@ export async function GET(
             query: r.query || null,
         }));
 
+        if (core) await core.validate();
         return NextResponse.json({ total, items });
     } catch (error) {
-        console.error('Skill runs fetch error:', error);
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        return analyticsFailure(error);
     }
+
+  },["read"]);
 }

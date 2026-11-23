@@ -17,6 +17,10 @@
 import type { DatasetCase } from '@/server/agent_datasets_storage';
 import { readExperimentDatasetCaseBinding, withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { prismaRaw } from '@/lib/storage/prisma';
+import {createHash} from 'node:crypto';
+import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
+import {requireWorkbenchActor} from '@/lib/storage-core/workbench';
+import {activeCoreWorkbenchCancellations} from '@/lib/storage-core/workbench-results';
 
 export function triggerExperimentCaseData(experimentId: string, datasetId: string, cases: Pick<DatasetCase, 'id' | 'input' | 'values'>[]) {
   return cases.map((item) => ({
@@ -36,30 +40,22 @@ export function shouldStopTriggerBatch(failureCode: string | null | undefined): 
 }
 
 export async function ensureTriggerExperimentCases(user: string, experimentId: string, datasetId: string, cases: Pick<DatasetCase, 'id' | 'input' | 'values'>[]) {
-  return prismaRaw.$transaction(async (tx) => {
-    const experiment = await tx.experiment.findFirst({ where: { id: experimentId, user, deletedAt: null, status: { not: 'cancelled' } } });
-    const cancellations = await tx.experimentCancellation.findMany({ where: { experimentId }, select: { caseKey: true } });
-    if (!experiment || cancellations.some((item) => item.caseKey === '')) {
-      throw Object.assign(new Error('实验已取消'), { code: 'EXPERIMENT_CANCELLED' });
+  {
+    const context=requireWorkbenchActor(user);
+    const snapshot=await context.rpc('read',{experiment_id:experimentId}) as {gold_redacted?:boolean;experiment:{status:string;deletedAt?:string;coreActiveCancellationIds?:string[];cases:Array<{id:string;caseValuesJson:string;deletedAt?:string}>;cancellations:Array<{id?:string;caseKey:string}>}};
+    if(snapshot.gold_redacted)throw Object.assign(new Error('Task-linked Experiment belongs to another actor'),{status:403});
+    const experiment=snapshot.experiment;const excluded=new Set(activeCoreWorkbenchCancellations(experiment).map(row=>row.caseKey));
+    if(experiment.deletedAt||experiment.status==='cancelled'||excluded.has(''))throw Object.assign(new Error('实验已取消'),{code:'EXPERIMENT_CANCELLED',status:409});
+    const bindings=new Map<string,string>();
+    for(const row of experiment.cases){const binding=readExperimentDatasetCaseBinding(JSON.parse(row.caseValuesJson||'{}'));if(binding?.datasetId!==datasetId)continue;if(row.deletedAt||excluded.has(row.id))excluded.add('dataset:'+binding.caseId);else bindings.set(binding.caseId,row.id);}
+    const active=cases.filter(row=>!excluded.has('dataset:'+row.id));const missing=active.filter(row=>!bindings.has(row.id));
+    if(missing.length){
+      const records=triggerExperimentCaseData(experimentId,datasetId,missing).map((data,index)=>({...data,id:'trigger-case-'+createHash('sha256').update(JSON.stringify([context.actor.workspace,context.actor.principal,experimentId,datasetId,missing[index].id])).digest('hex').slice(0,40)}));
+      const payload={experiment_id:experimentId,cases:records,skip_deleted:true};const receipt=await context.rpc('case_upsert_many',{...payload,operation_key:context.operationKey+':trigger-cases',operation_request:payload}) as {case_ids:string[]};
+      const accepted=new Set(receipt.case_ids);records.forEach((row,index)=>{if(accepted.has(row.id))bindings.set(missing[index].id,row.id);});
     }
-    const rows = await tx.experimentCase.findMany({ where: { experimentId }, select: { id: true, caseValuesJson: true, deletedAt: true } });
-    const bindings = new Map<string, string>();
-    const excluded = new Set(cancellations.map((item) => item.caseKey));
-    for (const row of rows) {
-      const binding = readExperimentDatasetCaseBinding(JSON.parse(row.caseValuesJson || '{}'));
-      if (binding?.datasetId !== datasetId) continue;
-      if (row.deletedAt || excluded.has(row.id)) excluded.add(`dataset:${binding.caseId}`);
-      else bindings.set(binding.caseId, row.id);
-    }
-    const active = cases.filter((item) => !excluded.has(`dataset:${item.id}`));
-    const missing = active.filter((item) => !bindings.has(item.id));
-    for (const data of triggerExperimentCaseData(experimentId, datasetId, missing)) {
-      const row = await tx.experimentCase.create({ data, select: { id: true } });
-      const binding = readExperimentDatasetCaseBinding(JSON.parse(data.caseValuesJson))!;
-      bindings.set(binding.caseId, row.id);
-    }
-    return new Map(active.map((item) => [item.id, bindings.get(item.id)!]));
-  });
+    return new Map(active.filter(row=>bindings.has(row.id)).map(row=>[row.id,bindings.get(row.id)!]));
+  }
 }
 
 export interface TriggerExecutionObservation {

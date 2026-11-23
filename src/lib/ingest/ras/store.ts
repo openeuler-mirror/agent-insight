@@ -295,47 +295,17 @@ export function deriveTraceLifecycle(opts: {
   return { traceStatus: "success", traceStatusReason: "session-ended" }
 }
 
-export async function listReliabilityTraces(opts: {
-  user: string
-  limit?: number
-}): Promise<ReliabilityTraceItem[]> {
-  const limit = opts.limit ?? 200
-
-  const [executions, rasMetaRows] = await Promise.all([
-    prismaRaw.execution.findMany({
-      where: {
-        user: opts.user,
-        isSubagent: false,
-        taskId: { not: null },
-      },
-      orderBy: { timestamp: "desc" },
-      take: limit,
-      select: {
-        id: true,
-        taskId: true,
-        timestamp: true,
-        framework: true,
-        agentName: true,
-        clientId: true,
-        hostIp: true,
-        hostName: true,
-        observedIp: true,
-        query: true,
-      },
-    }),
-    prismaRaw.rasAnomalyEvent.findMany({
-      where: { user: opts.user },
-      orderBy: { ts: "desc" },
-      take: Math.max(limit * 10, 500),
-      select: {
-        taskId: true,
-        platform: true,
-        framework: true,
-        ts: true,
-      },
-    }),
-  ])
-
+export type ReliabilityTraceExecution = {
+  id: string; taskId: string | null; timestamp: Date; framework: string | null; agentName: string | null;
+  clientId: string | null; hostIp: string | null; hostName: string | null; observedIp: string | null; query: string | null;
+};
+export function projectReliabilityTraces(
+  executions: ReliabilityTraceExecution[],
+  rasMetaRows: {taskId: string; platform: string | null; framework: string | null; ts: Date}[],
+  sessions: {taskId: string; endTime: Date | null; label: string | null}[],
+  summaries: Record<string, RasTaskSummary>,
+  limit: number,
+): ReliabilityTraceItem[] {
   const platformByTaskId = new Map<string, string>()
   for (const row of rasMetaRows) {
     if (!platformByTaskId.has(row.taskId)) {
@@ -353,17 +323,6 @@ export async function listReliabilityTraces(opts: {
     execByTaskId.set(execution.taskId, execution)
   }
 
-  // List only tasks with an Execution — no ras-events-only fallback rows.
-  const taskIds = [...execByTaskId.keys()]
-  if (!taskIds.length) return []
-
-  const [sessions, summaries] = await Promise.all([
-    prismaRaw.session.findMany({
-      where: { taskId: { in: taskIds } },
-      select: { taskId: true, endTime: true, label: true },
-    }),
-    summarizeRasByTaskIds({ taskIds, user: opts.user }),
-  ])
   const sessionByTaskId = new Map(sessions.map(session => [session.taskId, session]))
 
   const items: ReliabilityTraceItem[] = []
@@ -410,6 +369,68 @@ export async function listReliabilityTraces(opts: {
   items.sort((a, b) => String(b.latestTs).localeCompare(String(a.latestTs)))
   return items.slice(0, limit)
 }
+
+export async function listReliabilityTraces(opts: {
+  user: string
+  limit?: number
+}): Promise<ReliabilityTraceItem[]> {
+  const limit = opts.limit ?? 200
+
+  const [executions, rasMetaRows] = await Promise.all([
+    prismaRaw.execution.findMany({
+      where: {
+        user: opts.user,
+        isSubagent: false,
+        taskId: { not: null },
+      },
+      orderBy: { timestamp: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        taskId: true,
+        timestamp: true,
+        framework: true,
+        agentName: true,
+        clientId: true,
+        hostIp: true,
+        hostName: true,
+        observedIp: true,
+        query: true,
+      },
+    }),
+    prismaRaw.rasAnomalyEvent.findMany({
+      where: { user: opts.user },
+      orderBy: { ts: "desc" },
+      take: Math.max(limit * 10, 500),
+      select: {
+        taskId: true,
+        platform: true,
+        framework: true,
+        ts: true,
+      },
+    }),
+  ])
+
+  const execByTaskId = new Map<string, (typeof executions)[number]>()
+  for (const execution of executions) {
+    if (!execution.taskId || execByTaskId.has(execution.taskId)) continue
+    execByTaskId.set(execution.taskId, execution)
+  }
+
+  // List only tasks with an Execution — no ras-events-only fallback rows.
+  const taskIds = [...execByTaskId.keys()]
+  if (!taskIds.length) return []
+
+  const [sessions, summaries] = await Promise.all([
+    prismaRaw.session.findMany({
+      where: { taskId: { in: taskIds } },
+      select: { taskId: true, endTime: true, label: true },
+    }),
+    summarizeRasByTaskIds({ taskIds, user: opts.user }),
+  ])
+  return projectReliabilityTraces(executions, rasMetaRows, sessions, summaries, limit)
+}
+
 
 export async function listAllTasksWithRasEvents(opts: {
   user?: string | null
