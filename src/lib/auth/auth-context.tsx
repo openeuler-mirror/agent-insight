@@ -139,14 +139,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           if (loginMode === 'organization') {
             response = await apiFetch('/api/auth/organization');
-          } else if (storedUser && (loginMode !== 'idaas_oauth' || storedApiKey)) {
+          } else if (storedUser && storedApiKey) {
             response = await apiFetch('/api/auth/apikey', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                ...(loginMode === 'idaas_oauth' && storedApiKey
-                  ? { 'x-witty-api-key': storedApiKey }
-                  : {}),
+                'x-witty-api-key': storedApiKey,
               },
               body: JSON.stringify({ username: storedUser }),
             });
@@ -179,9 +177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             throw new Error(data?.error || `Authentication refresh failed: ${response.status}`);
           }
 
-          const nextUser = loginMode === 'organization'
-            ? data?.displayName || data?.username
-            : data?.username || storedUser;
+          const nextUser = data?.username || storedUser;
           const nextDisplayName = data?.displayName || nextUser;
           const nextApiKey = data?.apiKey;
           if (!nextUser || !nextApiKey) throw new Error('Authentication refresh response is incomplete');

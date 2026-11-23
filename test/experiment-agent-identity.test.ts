@@ -24,6 +24,7 @@ const database = createIsolatedDatabase();
 import { GET as listExperimentAgents } from '@/app/api/experiments/agents/route';
 import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
 import { prisma } from '@/lib/storage/prisma';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const TEST_USER = `experiment-xiaoo-${RUN_ID}`;
@@ -32,6 +33,7 @@ const CLIENT_ID = `xiaoo-client-${RUN_ID}`;
 test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 test('xiaoo display identity keeps the native CLI agent id on executable targets', async (t) => {
+  await ensureTestApiUsers(TEST_USER);
   assert.equal(canonicalExperimentAgentName('xiaoo', 'defaultagent'), 'xiaoo');
   assert.equal(canonicalExperimentAgentName('opencode', 'build'), 'build');
 
@@ -71,7 +73,7 @@ test('xiaoo display identity keeps the native CLI agent id on executable targets
   });
 
   const response = await listExperimentAgents(
-    new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(TEST_USER)}`),
+    testRequest(`http://localhost/api/experiments/agents?user=${encodeURIComponent(TEST_USER)}`, TEST_USER),
   );
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -89,6 +91,7 @@ test('xiaoo display identity keeps the native CLI agent id on executable targets
 
 test('an online JiuwenSwarm target hides trace-only collector names from the new experiment selector', async (t) => {
   const user = `experiment-jiuwen-${RUN_ID}`;
+  await ensureTestApiUsers(user);
   const clientId = `jiuwen-client-${RUN_ID}`;
   await prisma.execution.createMany({ data: ['main_agent', 'jiuwenswarm', 'main_agent_react'].map((agentName, index) => ({
     taskId: `jiuwen-candidate-${RUN_ID}-${index}`, framework: 'jiuwenswarm', agentName, user,
@@ -107,7 +110,7 @@ test('an online JiuwenSwarm target hides trace-only collector names from the new
     await prisma.execution.deleteMany({ where: { user } });
   });
 
-  const response = await listExperimentAgents(new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(user)}`));
+  const response = await listExperimentAgents(testRequest(`http://localhost/api/experiments/agents?user=${encodeURIComponent(user)}`, user));
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.deepEqual(body.agents.filter((agent: { frameworks: string[] }) => agent.frameworks.includes('jiuwenswarm'))

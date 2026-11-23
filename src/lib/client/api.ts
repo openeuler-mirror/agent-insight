@@ -15,11 +15,25 @@
  */
 
 const URL_PREFIX = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+const API_PATH_PREFIX = '/api/';
+
+function isApiRequest(url: string): boolean {
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
+    const target = new URL(URL_PREFIX + url, base);
+    const apiRoot = new URL(`${URL_PREFIX}${API_PATH_PREFIX}`, base);
+    return target.origin === apiRoot.origin
+      && target.pathname.startsWith(apiRoot.pathname)
+      && !target.pathname.startsWith(`${apiRoot.pathname}auth/`);
+  } catch {
+    return false;
+  }
+}
 
 export async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
   const fullUrl = URL_PREFIX + url;
   const headers = new Headers(options?.headers);
-  if (typeof window !== 'undefined' && (url.startsWith('/api/observe/') || url.startsWith('/api/fleet/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key')) {
+  if (typeof window !== 'undefined' && isApiRequest(url) && !headers.has('x-witty-api-key')) {
     const key = localStorage.getItem('api_key');
     if (key) headers.set('x-witty-api-key', key);
   }

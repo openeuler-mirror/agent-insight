@@ -28,9 +28,8 @@ export async function GET(request: Request) {
 
     const { username } = await resolveUser(request as any);
 
-    // 如果提供了API key但找不到用户，返回空数组
-    if (username === null && (request.headers.get('x-witty-api-key') || searchParams.get('apiKey'))) {
-        return NextResponse.json([]);
+    if (!username) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     if (!skillName) {

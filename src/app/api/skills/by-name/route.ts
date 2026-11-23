@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveUser, skillVisibilityWhere } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -33,16 +33,9 @@ export async function GET(request: NextRequest) {
     const { username: user } = await resolveUser(request, userParam);
 
     const where: any = {
-      name: name
+      name,
+      ...skillVisibilityWhere(user),
     };
-
-    if (user) {
-      where.OR = [
-        { user: user },
-        { user: null },
-        { visibility: 'public' }
-      ];
-    }
 
     const skills = await db.findSkills(where);
     const skill = skills[0];

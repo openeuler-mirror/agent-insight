@@ -27,21 +27,22 @@ export async function resolveUser(
     request: NextRequest | Request,
     explicitUser?: string | null
 ): Promise<AuthResult> {
-    if (explicitUser) {
-        return { username: explicitUser, apiKey: null };
-    }
-
-    const headerApiKey = request.headers.get('x-witty-api-key');
+    const requestedUser = explicitUser?.trim() || null;
+    const headerApiKey = request.headers.get('x-witty-api-key')?.trim();
     if (headerApiKey) {
         const user = await lookupUserByApiKey(headerApiKey);
-        return { username: user, apiKey: headerApiKey };
+        return user && (!requestedUser || user === requestedUser)
+            ? { username: user, apiKey: headerApiKey }
+            : { username: null, apiKey: null };
     }
 
     const url = new URL(request.url);
-    const queryApiKey = url.searchParams.get('apiKey');
+    const queryApiKey = url.searchParams.get('apiKey')?.trim();
     if (queryApiKey) {
         const user = await lookupUserByApiKey(queryApiKey);
-        return { username: user, apiKey: queryApiKey };
+        return user && (!requestedUser || user === requestedUser)
+            ? { username: user, apiKey: queryApiKey }
+            : { username: null, apiKey: null };
     }
 
     return { username: null, apiKey: null };
@@ -71,17 +72,48 @@ export async function canAccessSkill(
         return { allowed: true, skill };
     }
 
-    if (!skill.user) {
-        return { allowed: true, skill };
-    }
-
     if (username && skill.user === username) {
         return { allowed: true, skill };
     }
 
-    if (!username) {
+    if (!skill.user) {
         return { allowed: true, skill };
     }
 
     return { allowed: false, skill };
+}
+
+export async function canManageSkill(
+    skillId: string,
+    username: string | null
+): Promise<{ allowed: boolean; skill: any }> {
+    const skill: any = await db.findSkillById(skillId);
+    const canManageSystemSkill = Boolean(
+        username
+        && !skill?.user
+        && isPlatformAdmin(username)
+    );
+    return {
+        allowed: Boolean(username && (skill?.user === username || canManageSystemSkill)),
+        skill,
+    };
+}
+
+export function isPlatformAdmin(username: string | null | undefined): boolean {
+    if (!username) return false;
+    const admins = (process.env.AGENT_INSIGHT_ADMIN_USERS || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(Boolean);
+    return (admins.length ? admins : ['admin']).includes(username);
+}
+
+export function skillVisibilityWhere(username: string | null) {
+    return {
+        OR: [
+            ...(username ? [{ user: username }] : []),
+            { user: null },
+            { visibility: 'public' },
+        ],
+    };
 }

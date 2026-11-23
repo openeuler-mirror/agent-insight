@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from './auth';
+import { isPlatformAdmin, resolveUser } from './auth';
 
 // 平台管理员判定（当前平台无角色体系，用部署级 env 白名单充当权限闸）。
 // AGENT_INSIGHT_ADMIN_USERS="admin,alice@x.com" —— 逗号分隔的用户名白名单。
@@ -26,14 +26,11 @@ export function getAdminUsers(): string[] {
 }
 
 export function isAdminUser(username: string | null | undefined): boolean {
-    if (!username) return false;
-    return getAdminUsers().includes(username);
+    return isPlatformAdmin(username);
 }
 
 export async function resolveTraceReadScope(request: Request) {
-    const { username: authenticatedUser, apiKey } = await resolveUser(request);
-    const requestedUser = new URL(request.url).searchParams.get('user') || null;
-    const username = authenticatedUser || (apiKey ? null : requestedUser);
-    const canViewAllTraces = !!authenticatedUser && isAdminUser(authenticatedUser);
+    const { username } = await resolveUser(request);
+    const canViewAllTraces = !!username && isAdminUser(username);
     return { username, user: canViewAllTraces ? undefined : username || undefined, canViewAllTraces };
 }

@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { ensureTestApiUsers, testApiKey, testRequest } from './helpers/api-auth'
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma']
 let fi: typeof import('@/lib/engine/experiment/fi-orchestrate')
@@ -20,6 +21,7 @@ test.before(async () => {
   process.env.DATABASE_URL = 'file:' + path.join(root, 'test.db')
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' })
   ;({ prisma } = await import('@/lib/storage/prisma'))
+  await ensureTestApiUsers(user)
   store = await import('@/lib/fault-injection/store')
   fi = await import('@/lib/engine/experiment/fi-orchestrate')
   ;({ GET: detail } = await import('@/app/api/experiments/[id]/route'))
@@ -66,7 +68,7 @@ test('FI traces require the requested business agent and a substantive response'
 test('internal reviewer sessions cannot bind a business Case or appear ready in the detail API', async () => {
   const data = await fixture('completed', 'ras-judge', [{ role: 'assistant', content: 'internal verdict' }])
   assert.equal(await fi.bindExperimentCaseToFiSession({ fiRunKey: data.run.runId, sessionTaskId: data.run.sessionTaskId! }), 0)
-  const response = await detail(new Request('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user), { params: Promise.resolve({ id: data.experiment.id }) })
+  const response = await detail(testRequest('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user, user), { params: Promise.resolve({ id: data.experiment.id }) })
   assert.equal(response.status, 200)
   const body = await response.json()
   assert.equal(body.traceProgress.ready, 0)
@@ -75,7 +77,7 @@ test('internal reviewer sessions cannot bind a business Case or appear ready in 
 test('queued and collecting FI Cases remain pending even when the experiment was partial', async () => {
   for (const status of ['queued', 'collecting']) {
     const data = await fixture(status)
-    const response = await detail(new Request('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user), { params: Promise.resolve({ id: data.experiment.id }) })
+    const response = await detail(testRequest('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user, user), { params: Promise.resolve({ id: data.experiment.id }) })
     assert.equal(response.status, 200)
     const body = await response.json()
     assert.equal(body.traceProgress.pending, 1)
@@ -138,7 +140,7 @@ test('terminal empty FI traces fail after uploader grace even while the parent r
     await prisma.experiment.update({ where: { id: data.experiment.id }, data: { status: 'running' } })
     await prisma.faultInjectionRun.update({ where: { id: data.run.id },
       data: { updatedAt: new Date(Date.now() - 240_000) } })
-    const response = await detail(new Request('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user),
+    const response = await detail(testRequest('http://localhost/api/experiments/' + data.experiment.id + '?user=' + user, user),
       { params: Promise.resolve({ id: data.experiment.id }) })
     const body = await response.json()
     assert.equal(body.traceProgress.failed, 1)
@@ -163,7 +165,7 @@ test('finished FI batches persist generation failures and settle as partial alon
   const { settleExperimentStatus } = await import('@/lib/engine/experiment/run-experiment')
   await settleExperimentStatus(good.experiment.id)
   assert.equal((await prisma.experiment.findUniqueOrThrow({ where: { id: good.experiment.id } })).status, 'partial')
-  const response = await detail(new Request('http://localhost/api/experiments/' + good.experiment.id + '?user=' + user),
+  const response = await detail(testRequest('http://localhost/api/experiments/' + good.experiment.id + '?user=' + user, user),
     { params: Promise.resolve({ id: good.experiment.id }) })
   const body = await response.json()
   assert.equal(body.status, 'partial')
@@ -216,8 +218,7 @@ test('a startup failure survives client collection, upload, and business Trace f
   const payload = readCollectResult(path.join(root, 'artifacts'), data.run.runId)
   assert.match(payload.error, /^plugin_start_failed:/)
   assert.doesNotMatch(payload.error, /sk-fi-test-secret-value/)
-  const apiKey = 'fi-startup-error-api-key'
-  await prisma.user.create({ data: { username: user, apiKey } })
+  const apiKey = testApiKey(user)
   const { POST } = await import('@/app/api/fault-injection/runs/[runId]/collect-result/route')
   const response = await POST(new Request('http://localhost/api/fault-injection/runs/' + data.run.runId + '/collect-result', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-witty-api-key': apiKey },
