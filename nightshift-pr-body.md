@@ -1,46 +1,32 @@
 ## 问题
 
-模型服务常在自己的 HTTP 响应头返回 `X-Request-Id`，推理平台按该值保存推理记录。现有链路只使用本地转发网关为每次尝试生成的 UUID，导致用户拿到服务侧真实 ID 后无法在 Trace 中定位对应 LLM 调用，也无法直接打开推理详情。
+跨机部署（客户端与服务端不同机）时，Claude Code 的 `api_response_body` 只能通过 `body_ref` 指向客户端本机磁盘，服务端读不到，只能走 `assistant_response` + `tool_result` 兜底路径。原实现里没有可见文本的纯工具调用轮被直接丢弃：
 
-本 PR 在不改变平台 Trace/Span 主键、不新增数据库表的前提下，采集模型服务响应头 ID，按实际调用尝试关联 Trace 与 LLM 节点，并在详情中展示、复制和跳转。
+- 该轮的 `tool_calls` 被一路攒到后面那条带最终回答的 assistant interaction 上，工具归属、`usage`、耗时全部错位；
+- 界面对同一条记录固定按「Response → Tool calls」渲染，历史混合记录看起来就是「回答在前、工具在后」；
+- Prompt 快照文本在 `content` 非空时直接返回，工具调用被吞掉。
 
-Closes #390
+Closes #426
 
 ## 修改
 
-- **网关**：读取上游响应头 `X-Request-Id`（大小写不敏感），保留服务端原值；收到响应头即写入 journal，覆盖流式、错误、超时和取消场景。网关本地调用 ID 仍作为 `X-Request-Id` 返回给 Agent，服务 ID 通过内部头 `x-agent-insight-upstream-request-id` 单独转发，并剥离上游伪造的 `x-agent-insight-*` 响应头。
-- **重复头**：使用 Node `headersDistinct` 区分重复头与值内逗号；同值重复折叠，冲突值按不可获取处理，不猜测。
-- **OpenCode 1.x/2.x**：V1 fetch 与 V2 原生 http hook 读取网关中继头；直连模式下仅在能证明 call ID 归属时读取 `x-request-id`。`upstream_request_id` 随 attempt 进入上传 payload。
-- **Qoder CN CLI**：网关 journal 的服务 ID 进入 OTLP 属性；已归属的写入 `agent_insight.inference.upstream_request_ids`，无法归属的保留在 Trace 级未分配调用。
-- **存储与类型**：交互 JSON 新增 `inference_upstream_request_ids`、attempt/unassigned 的 `upstream_request_id`；Qoder adapter 解析并过滤非字符串归属，不新增 Prisma 模型或迁移。
-- **关联规则**：服务 ID 只挂到已证明归属的 `call_id`，不跨 LLM 分配；多轮、重试、并发和子 Agent 调用按尝试独立保留。
-- **Trace 详情**：LLM 节点展示并复制唯一服务 ID；多个 ID 显示数量并引导到“推理分析”；无 ID 时明确显示“未提供”。
-- **推理分析**：每次尝试同时展示网关调用 ID 与服务 Request ID，新增按服务 ID 的 `/model-performance?GlobalTrackNO=<ID>` 链接（URL 编码），沿用 `AGENT_INSIGHT_INFERENCE_ANALYSIS_ORIGIN`；复制 JSON 包含 `upstream_request_ids`。
-- **文档**：更新中英文推理关联契约、接入指南和 Trace 查看说明；新增设计文档与设计索引。
+- **聚合器**：兜底路径中 `assistant_response` 文本为空时不再 `continue`，而是落一条 `content` 为空、按本轮 `api_request` 取 `usage`/`timeInfo` 的 assistant interaction。`tool_result` 先到（滞留在 pending）随后到（就近挂最后一条助手消息）都能落到自己那一轮，最终回答不再携带此前轮次的工具调用。始终没挂上任何工具调用的空壳在聚合结束前丢弃，不产生噪声条目。
+- **边界不变**：`content` 非空的文本轮、带可读 `api_response_body` 的同机路径、子 agent / async Task 的轮次归属与补传逻辑均保持原行为。
+- **Trace 详情 Output**：同一 interaction 同时有文本与工具调用时，按时间判断真实顺序（工具的 `timing.started_at` 早于本轮 `timeInfo.completed` 才视为先执行），先渲染 Tool calls 再渲染 Response；正常的「过渡语 + 工具」轮次仍是 Response 在前。
+- **Prompt 快照**：`interactionToPromptText` 不再在 `content` 非空时丢弃工具调用，同一轮的文本与工具调用都会出现，顺序沿用同一时间判断。
+- **单测**：aggregator 覆盖「纯工具轮（tool_result 先后两种到达顺序）」「文本 + 工具轮」「最终回答轮」；渲染层覆盖混合记录先工具后回答、正常轮次 Response 在前，以及 Prompt 快照文本与工具调用并存。
 
-## 支持边界
+## 影响
 
-| 路径 | 支持情况 |
-| --- | --- |
-| OpenCode 1.x/2.x → 本地网关 | 支持 |
-| Qoder CN CLI → 本地网关 | 支持 |
-| OpenCode 直连、未接管 Provider | 仅当响应头可见且归属可证明 |
-| Qoder Desktop / JetBrains | 不支持（无已验证响应头访问路径） |
-| OTLP/日志型采集器（Claude Code、Codex、Hermes、Langfuse 等） | 不支持（框架 telemetry 未暴露原始响应头） |
-| 平台内置评测/优化调用 | 不进入用户 Trace 存储 |
-
-缺失、冲突或响应头未到达时不生成链接、不用调用 ID/Trace ID 回填；已经收到响应头后的错误与取消仍保留真实 ID 和调用状态。
+- interactions 结构不变，只是条目划分变化：纯工具轮从「并入最终回答」变成独立一条。按 role 白名单取值的下游（评测、诊断、call-stats、Agent 调用树）读到的每一轮 `usage`/耗时反而更准确；以 `content` 非空为准取最终回答的路径（如 `final_result` 回退）不受空条目影响。
+- 已入库的历史混合记录不重采、不改归属，只靠渲染兜底按真实顺序显示。
 
 ## 验证
 
-- `node --import tsx --test test/inference-correlation.test.ts test/inference-analysis.test.ts test/inference-storage.test.ts`：77/77 通过，覆盖网关分离/缺失/错误与流式取消/重复冲突头、OpenCode 与 Qoder 归属、上传与 SQLite 投影、UI 展示和链接。
-- `node --check` 通过：`scripts/inference_gateway.mjs`、`scripts/opencode_uploader_client.js`、`scripts/qoder_trace_collector.mjs`。
-- 对修改的 TypeScript 文件执行定向 `tsc --noEmit`，无新增类型错误；全项目 typecheck 受当前环境 Next 类型文件不完整影响未完成。
-- 未启动 dev server，未做真实模型服务端到端浏览器验收；该验收需在具备网关与推理详情入口的环境执行。
-
-## 设计文档
-
-- [模型响应头 X-Request-Id 采集与推理详情关联](design/observability/issue-390-model-response-request-id.md)
-- [统一推理请求关联契约](docs/zh/reference/observability/inference-correlation.md)
+- `node --import tsx --test test/claude-otel-ingest.test.ts test/trace-output-order.test.ts`：16/16 通过。
+- `node --import tsx --test test/claude-context-e2e.test.ts test/claude-subagent-map-e2e.test.ts test/claude-trace-lifecycle.test.ts test/claude-context-supplement.test.ts test/otel-trace-aggregator.test.ts`：47/47 通过。
+- `node --import tsx --test test/trace-ui-correctness.test.ts test/trace-content-modal.test.ts test/agent-trace-view-duration.test.ts`：17/17 通过。
+- 全项目 `tsc --noEmit` 中与本次改动文件相关的错误为 0（其余报错为当前环境未生成的 Prisma Client 等既有问题）。
+- 未启动 dev server，未在浏览器中验证。
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

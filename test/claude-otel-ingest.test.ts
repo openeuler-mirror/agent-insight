@@ -385,6 +385,146 @@ test("Claude OTel: falls back to assistant_response when body_ref is unreachable
   assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.output, "README contents")
 })
 
+// 跨机兜底路径里,只发工具、没有可见文本的那一轮也发生了一次 LLM 调用。此前它被直接
+// 丢掉,该轮的 tool_calls 全被并到后面那条最终回答上 —— 工具归属、usage、耗时都错。
+// 现在它必须独立成条(content 为空),工具留在自己那一轮。
+function crossMachineToolOnlyEvents(sid: string, opts: { toolResultBeforeAssistantResponse: boolean }) {
+  const unreachable = path.join(os.tmpdir(), "claude-otel-absent-on-this-host", "turn.response.json")
+  const common = { "session.id": sid, "prompt.id": "prompt-t" }
+  const assistant = (sequence: number, response: string) => logRecord("assistant_response", {
+    ...common,
+    "event.sequence": sequence,
+    response,
+    query_source: "repl_main_thread",
+    model: "claude-sonnet-4-6",
+  })
+  const responseBody = (sequence: number) => logRecord("api_response_body", {
+    ...common,
+    "event.sequence": sequence,
+    model: "claude-sonnet-4-6",
+    body_ref: unreachable,
+  })
+  const toolResult = (sequence: number) => logRecord("tool_result", {
+    ...common,
+    "event.sequence": sequence,
+    tool_name: "Read",
+    tool_use_id: "toolu_turn1",
+    success: "true",
+    duration_ms: 40,
+    tool_input: JSON.stringify({ file_path: "README.md" }),
+    tool_result: "README contents",
+  })
+  return normalizeClaudeOtlpLogs({
+    resourceLogs: [{
+      scopeLogs: [{
+        logRecords: [
+          logRecord("user_prompt", { ...common, "event.sequence": 1, prompt: "看下当前项目状态" }),
+          logRecord("api_request", {
+            ...common,
+            "event.sequence": 2,
+            model: "claude-sonnet-4-6",
+            input_tokens: 74400,
+            output_tokens: 30,
+            duration_ms: 900,
+          }),
+          // 纯工具轮:assistant_response 正文为空
+          ...(opts.toolResultBeforeAssistantResponse
+            ? [toolResult(3), assistant(4, ""), responseBody(5)]
+            : [assistant(3, ""), responseBody(4), toolResult(5)]),
+          logRecord("api_request", {
+            ...common,
+            "event.sequence": 6,
+            model: "claude-sonnet-4-6",
+            input_tokens: 74364,
+            output_tokens: 88,
+            duration_ms: 700,
+          }),
+          assistant(7, "项目当前有若干未提交改动。"),
+          responseBody(8),
+        ],
+      }],
+    }],
+  }, { authenticatedUser: "alice" })
+}
+
+test("Claude OTel: pure tool-call turn becomes its own interaction when body_ref is unreachable", () => {
+  const sid = "session-crossmachine-toolon"
+  const record = aggregateClaudeOtelEvents(sid, crossMachineToolOnlyEvents(sid, { toolResultBeforeAssistantResponse: false }))
+  assert.ok(record)
+  assert.deepEqual((record.interactions ?? []).map((m: any) => m.role), ["user", "assistant", "assistant"])
+  // 纯工具轮:content 为空、带本轮工具调用
+  assert.equal(record.interactions?.[1]?.content, "")
+  assert.equal(record.interactions?.[1]?.tool_calls?.length, 1)
+  assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.id, "toolu_turn1")
+  // usage 属于该轮自己的 api_request
+  assert.equal(record.interactions?.[1]?.usage?.total, 74430)
+  // 最终回答不再背前一轮的工具,usage 是最后一次调用
+  assert.equal(record.interactions?.[2]?.content, "项目当前有若干未提交改动。")
+  assert.equal(record.interactions?.[2]?.tool_calls, undefined)
+  assert.equal(record.interactions?.[2]?.usage?.total, 74452)
+  assert.equal(record.final_result, "项目当前有若干未提交改动。")
+})
+
+test("Claude OTel: tool_result arriving before the pure tool-call turn still lands on that turn", () => {
+  const sid = "session-crossmachine-toolon-early"
+  const record = aggregateClaudeOtelEvents(sid, crossMachineToolOnlyEvents(sid, { toolResultBeforeAssistantResponse: true }))
+  assert.ok(record)
+  assert.equal(record.interactions?.[1]?.content, "")
+  assert.equal(record.interactions?.[1]?.tool_calls?.length, 1)
+  assert.equal(record.interactions?.[2]?.tool_calls, undefined)
+  assert.equal(record.final_result, "项目当前有若干未提交改动。")
+})
+
+test("Claude OTel: text + tool turn keeps its own tool calls", () => {
+  const sid = "session-crossmachine-texttool"
+  const unreachable = path.join(os.tmpdir(), "claude-otel-absent-on-this-host", "texttool.response.json")
+  const common = { "session.id": sid, "prompt.id": "prompt-tt" }
+  const events = normalizeClaudeOtlpLogs({
+    resourceLogs: [{
+      scopeLogs: [{
+        logRecords: [
+          logRecord("user_prompt", { ...common, "event.sequence": 1, prompt: "看下当前项目状态" }),
+          logRecord("api_request", { ...common, "event.sequence": 2, model: "claude-sonnet-4-6", input_tokens: 10, output_tokens: 5, duration_ms: 500 }),
+          logRecord("assistant_response", {
+            ...common,
+            "event.sequence": 3,
+            response: "我先看一下 git 状态。",
+            query_source: "repl_main_thread",
+            model: "claude-sonnet-4-6",
+          }),
+          logRecord("api_response_body", { ...common, "event.sequence": 4, model: "claude-sonnet-4-6", body_ref: unreachable }),
+          logRecord("tool_result", {
+            ...common,
+            "event.sequence": 5,
+            tool_name: "Bash",
+            tool_use_id: "toolu_tt",
+            success: "true",
+            duration_ms: 30,
+            tool_input: JSON.stringify({ command: "git status" }),
+            tool_result: "clean",
+          }),
+          logRecord("api_request", { ...common, "event.sequence": 6, model: "claude-sonnet-4-6", input_tokens: 20, output_tokens: 6, duration_ms: 400 }),
+          logRecord("assistant_response", {
+            ...common,
+            "event.sequence": 7,
+            response: "工作区是干净的。",
+            query_source: "repl_main_thread",
+            model: "claude-sonnet-4-6",
+          }),
+          logRecord("api_response_body", { ...common, "event.sequence": 8, model: "claude-sonnet-4-6", body_ref: unreachable }),
+        ],
+      }],
+    }],
+  }, { authenticatedUser: "alice" })
+  const record = aggregateClaudeOtelEvents(sid, events)
+  assert.ok(record)
+  assert.deepEqual((record.interactions ?? []).map((m: any) => m.role), ["user", "assistant", "assistant"])
+  assert.equal(record.interactions?.[1]?.content, "我先看一下 git 状态。")
+  assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.id, "toolu_tt")
+  assert.equal(record.interactions?.[2]?.tool_calls, undefined)
+  assert.equal(record.final_result, "工作区是干净的。")
+})
+
 test("Claude OTel: maps Agent tool calls into trace subagent relationships", () => {
   const parentBody = JSON.stringify({
     id: "msg_parent",
