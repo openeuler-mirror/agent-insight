@@ -19,6 +19,48 @@ import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 
+const agentsSource = fs.readFileSync(new URL('../src/app/(main)/agents/page.tsx', import.meta.url), 'utf8');
+const agentsAst = ts.createSourceFile('agents.tsx', agentsSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const traceButtons: ts.JsxElement[] = [];
+function findTraceButton(node: ts.Node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(agentsAst) === 'Btn'
+        && node.children.some(child => ts.isJsxExpression(child) && child.expression && ts.isCallExpression(child.expression)
+            && child.expression.expression.getText(agentsAst) === 't'
+            && child.expression.arguments[0]?.getText(agentsAst) === "'nav.agentTrace'")) {
+        traceButtons.push(node);
+    }
+    ts.forEachChild(node, findTraceButton);
+}
+findTraceButton(agentsAst);
+assert.equal(traceButtons.length, 1, 'the Agent card has one Trace action');
+const traceClick = traceButtons[0].openingElement.attributes.properties.find(
+    (attribute): attribute is ts.JsxAttribute => ts.isJsxAttribute(attribute) && attribute.name.getText(agentsAst) === 'onClick',
+);
+assert.ok(traceClick?.initializer && ts.isJsxExpression(traceClick.initializer) && traceClick.initializer.expression);
+const traceClickJs = ts.transpileModule(`const click = ${traceClick.initializer.expression.getText(agentsAst)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText;
+
+for (const [layer, expectedScope] of [['main', 'root'], ['subagent', 'subagent']] as const) {
+    for (const name of ['shared-agent', 'worker & 分析/?#']) {
+        test(`Agent card Trace action selects ${expectedScope} scope for ${layer} ${name}`, () => {
+            const urls: string[] = [];
+            let stopped = 0;
+            const click = new Function('agent', 'router', `${traceClickJs}; return click;`)(
+                { name, layer }, { push: (url: string) => urls.push(url) },
+            );
+            click({ stopPropagation: () => stopped++ });
+            assert.equal(stopped, 1);
+            assert.equal(urls.length, 1);
+            const url = new URL(urls[0], 'http://localhost');
+            assert.equal(url.pathname, '/trace');
+            assert.equal(url.searchParams.get('agent'), name);
+            assert.equal(url.searchParams.get('scope'), expectedScope);
+            assert.deepEqual([...url.searchParams.keys()].sort(), ['agent', 'scope']);
+        });
+    }
+}
+
 const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let callback: ts.Node | undefined;
