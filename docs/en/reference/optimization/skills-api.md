@@ -1,6 +1,8 @@
 ---
 title: "Skill management HTTP APIs"
 description: "Existing asset discovery, version and file, upload, publishing, and synchronization interfaces."
+keywords: ["Agent Insight", "Skill management", "HTTP API", "version management", "Skill synchronization"]
+changefreq: monthly
 ---
 
 This page covers 25 existing HTTP methods for Skill asset management. For UI operations, see [Skills management, Chinese](../../../zh/how-to/optimization/skills/manage.md). Generation and optimization sessions, optimization points, static evaluation, Benchmark generation, flow parsing, and workbench experiments are outside this page's detailed scope. See the [Skill workbench, Chinese](../../../zh/explanation/optimization/skills/workbench-overview.md) and [Skill evaluation and experiments, Chinese](../../../zh/explanation/evaluation/skills/overview.md). This is not a complete contract for every Skill route.
