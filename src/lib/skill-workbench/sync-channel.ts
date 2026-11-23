@@ -31,10 +31,12 @@ export function optimizationRecordsSyncKey(records: ReadonlyArray<{
   id: string;
   status: string;
   publishedVersion?: number | null;
+  verificationStatus?: string | null;
+  activeVersion?: number | null;
   updatedAt?: string | Date;
 }>) {
   return records
-    .map((record) => [record.id, record.status, record.publishedVersion ?? '', String(record.updatedAt ?? '')].join(':'))
+    .map((record) => [record.id, record.status, record.publishedVersion ?? '', record.verificationStatus ?? '', record.activeVersion ?? '', String(record.updatedAt ?? '')].join(':'))
     .sort()
     .join('|');
 }

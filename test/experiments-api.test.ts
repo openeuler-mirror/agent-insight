@@ -14,22 +14,39 @@
  * limitations under the License.
  */
 
-// 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在仓库 data/witty_insight.db）。
-// 显式钉住 DATABASE_URL：loadAgentInsightEnv 不覆盖已存在的 env，避免测试写到 ~/.agent-insight。
-import path from 'node:path';
-process.env.DATABASE_URL = process.env.AGENT_INSIGHT_TEST_DATABASE_URL || `file:${path.resolve(__dirname, '../data/witty_insight.db')}`;
-
+// 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在临时隔离数据库）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
 
 import { GET as listExperiments, POST as createExperiment } from '@/app/api/experiments/route';
 import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { prisma } from '@/lib/storage/prisma';
 import { createWorkbenchExperiment } from '@/lib/skill-workbench/experiment-service';
+import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
+import { normalizeCase } from '@/server/agent_datasets_storage';
 import { POST as createSkillExperiment } from '@/app/api/skill-workbench/skills/[name]/experiments/route';
 import { NextRequest } from 'next/server';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
+
+test.before(async () => {
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: 'dataset-1', user: TEST_USER, name: '冒烟数据集',
+      casesJson: JSON.stringify([{ id: 'dataset-case-1', input: 'dataset input', expectedOutput: 'dataset ref' }]),
+    },
+  });
+});
+
+test.after(async () => {
+  await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
+  await prisma.$disconnect();
+  database.dispose();
+});
 
 function postReq(body: unknown): Request {
   return new Request('http://localhost/api/experiments', {
@@ -38,6 +55,82 @@ function postReq(body: unknown): Request {
     body: JSON.stringify(body),
   });
 }
+
+test('Jiuwen experiment list and details keep the frozen Agent label after catalog deletion and configuration reuse', async (t) => {
+  const user = `${TEST_USER}-jiuwen-label`;
+  const agentName = `jiuwen-ee-${'a'.repeat(32)}`;
+  const agentLabel = 'Example Agent · workspace · group · jiuwenswarm';
+  const clientId = `${user}-client`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+    await prisma.reliabilityClient.deleteMany({ where: { user } });
+  });
+  await prisma.reliabilityClient.create({ data: {
+    clientId, user, name: 'Jiuwen fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(),
+    capabilitiesJson: JSON.stringify({
+      actions: ['RUN_EXPERIMENT_CASE'],
+      platforms: [{ id: 'jiuwenswarm', agents: [agentName], actions: ['RUN_EXPERIMENT_CASE'],
+        runExperimentCase: { version: 2, returnsTraceId: true, ready: true },
+        agentCatalog: [{ id: agentName, label: 'Example Agent · workspace · group', models: ['fixture-model'], ready: true }],
+      }],
+    }),
+  } });
+  const executionTarget = { workerId: clientId, platform: 'jiuwenswarm', agent: agentName };
+  const response = await createExperiment(postReq({
+    user, name: 'Jiuwen label snapshot', agentName, traceSource: 'generate', executionTarget,
+    configSnapshot: { traceSource: 'generate', agentName, agentLabel },
+    evaluatorIds: ['preset-agent-trace-quality'], cases: [{ input: 'fixture', actualOutput: '' }],
+  }));
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const { id } = await response.json();
+  const stored = await prisma.experiment.findUniqueOrThrow({ where: { id } });
+  const snapshot = JSON.parse(stored.configSnapshotJson || '{}');
+  assert.equal(stored.agentName, agentName);
+  assert.equal(snapshot.agentLabel, agentLabel);
+  assert.equal(snapshot.executionTarget.agent, agentName);
+
+  await prisma.reliabilityClient.delete({ where: { clientId } });
+  const copied = await createExperiment(postReq({ user, createMode: 'same-config', sourceExperimentId: id }));
+  assert.equal(copied.status, 201, JSON.stringify(await copied.clone().json()));
+  const cloneId = String((await copied.json()).id);
+  const clone = await prisma.experiment.findUniqueOrThrow({ where: { id: cloneId } });
+  assert.equal(clone.agentName, agentName);
+  assert.equal(JSON.parse(clone.configSnapshotJson || '{}').agentLabel, agentLabel);
+  assert.equal(JSON.parse(clone.configSnapshotJson || '{}').executionTarget.agent, agentName);
+  await prisma.experiment.updateMany({ where: { user }, data: { status: 'running' } });
+  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  assert.equal(listed.status, 200);
+  const { items } = await listed.json();
+  assert.equal(items.length, 2);
+  for (const item of items) {
+    assert.equal(item.agentName, agentName);
+    assert.equal(item.agentLabel, agentLabel);
+    const response = await getExperiment(new Request(`http://localhost/api/experiments/${item.id}?user=${user}`), { params: Promise.resolve({ id: item.id }) });
+    assert.equal(response.status, 200);
+    const detail = await response.json();
+    assert.equal(detail.agentName, agentName);
+    assert.equal(detail.configSnapshot.agentLabel, item.agentLabel);
+    assert.equal(detail.reusableConfig.agentName, agentName);
+    assert.equal(detail.reusableConfig.executionTarget.agent, agentName);
+  }
+});
+
+test('experiment list preserves Agent identities when label snapshots are missing or invalid', async (t) => {
+  const user = `${TEST_USER}-legacy-label`;
+  t.after(() => prisma.experiment.deleteMany({ where: { user } }));
+  const snapshots = [null, '{}', '{', 'null', '[]', '{"agentLabel":42}', '{"agentLabel":"  "}'];
+  for (const [index, configSnapshotJson] of snapshots.entries()) {
+    await prisma.experiment.create({ data: {
+      user, name: `Legacy ${index}`, agentName: `legacy-agent-${index}`, status: 'running', configSnapshotJson,
+    } });
+  }
+  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  assert.equal(listed.status, 200);
+  const { items } = await listed.json();
+  assert.equal(items.length, snapshots.length);
+  assert.deepEqual(items.map((item: { agentName: string }) => item.agentName).sort(), snapshots.map((_, index) => `legacy-agent-${index}`).sort());
+  assert.ok(items.every((item: { agentLabel?: string }) => item.agentLabel === undefined));
+});
 
 test('experiments API stores execution policy and exposes it for reuse; invalid overrides return 400', async (t) => {
   const user = `${TEST_USER}-execution-config`;
@@ -139,6 +232,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   assert.deepEqual(JSON.parse(storedCase?.caseValuesJson || '{}').__agentInsightDatasetCase, {
     datasetId: 'dataset-1',
     caseId: 'dataset-case-1',
+    contentHash: datasetCaseContentHash(normalizeCase({ input: 'dataset input', expectedOutput: 'dataset ref' })),
   });
   assert.deepEqual(detail.results, []);
 });

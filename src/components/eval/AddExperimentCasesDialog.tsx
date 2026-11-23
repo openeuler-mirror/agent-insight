@@ -90,6 +90,7 @@ export function AddExperimentCasesDialog({
   onAdded,
   experimentId,
   agentName,
+  agentLabel,
   user,
   needsReference,
   needsDatasetInput,
@@ -99,6 +100,7 @@ export function AddExperimentCasesDialog({
   onAdded: (msg: string) => void;
   experimentId: string;
   agentName: string;
+  agentLabel?: string;
   user: string;
   /** 实验里是否含依赖预期输出的评估器——决定要不要提示补标注 */
   needsReference: boolean;
@@ -214,7 +216,7 @@ export function AddExperimentCasesDialog({
         }}>
           <span style={{ fontSize: 14, fontWeight: 600 }}>新增 Case</span>
           <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-            Agent「{agentName || '—'}」的 trace · 共 {total} 条
+            Agent「{agentLabel || agentName || '—'}」的 trace · 共 {total} 条
           </span>
           <span style={{ flex: 1 }} />
           <button onClick={onClose} style={{

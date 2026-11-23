@@ -670,6 +670,8 @@ export default function PlaygroundPage() {
             const data = await res.json();
             if (data.session) {
                 const newSession = { ...data.session, files: {} };
+                stopActiveStream();
+                currentSessionIdRef.current = newSession.id;
                 setSessions(prev => [newSession, ...prev]);
                 setCurrentSessionId(newSession.id);
                 setMessages(hydrateMessages(newSession.messages));
@@ -690,6 +692,8 @@ export default function PlaygroundPage() {
             const data = await res.json();
             if (data.session) {
                 const s = data.session;
+                stopActiveStream();
+                currentSessionIdRef.current = s.id;
                 setCurrentSessionId(s.id);
                 // Hydrate stored `blocks` JSON back into structured Block[] so
                 // thinking / tool / download UI reappears on reload. Falls back
@@ -748,7 +752,18 @@ export default function PlaygroundPage() {
 
     const chatEndRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
+    // 流式回调是异步闭包，读不到最新的 currentSessionId state；用 ref 做
+    // “这条流的输出还属于当前会话吗”的守卫（见 handleSendMessage 的 streamThreadId）。
+    const currentSessionIdRef = useRef<string | null>(currentSessionId);
+    useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+    // 切换 / 新建 / 清空会话前必须掐断进行中的 SSE：patchLast 按末位消息写入、
+    // vfs_patch 全量替换 files，旧流不中断会把上一个会话的输出灌进新会话。
+    const stopActiveStream = () => {
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+    };
 
     const handleSendMessage = async () => {
         if (isLoading || !user || !currentSessionId) return;
@@ -768,10 +783,16 @@ export default function PlaygroundPage() {
         setIsLoading(true);
         setMessages(prev => [...prev, { role: 'agent', content: '', blocks: [], isStreaming: true }]);
 
+        // 本条流归属的会话 + 对应的 controller：切会话 / 清空后（ref 已改写或流已
+        // 顶替）丢弃它的写入，避免旧会话的流式输出灌进新会话。
+        const streamThreadId = currentSessionId;
+        const controller = new AbortController();
+
         // Mutate the streaming agent message; helper hides immutable-copy boilerplate
         // so each event handler can stay focused on its own state shape.
         const patchLast = (mutator: (msg: Message) => void) => {
             setMessages(prev => {
+                if (currentSessionIdRef.current !== streamThreadId) return prev;
                 const next = [...prev];
                 const last = { ...next[next.length - 1] };
                 last.blocks = last.blocks ? [...last.blocks] : [];
@@ -782,7 +803,6 @@ export default function PlaygroundPage() {
         };
 
         try {
-            const controller = new AbortController();
             abortControllerRef.current = controller;
             const response = await fetch('/api/skill-generator/chat', {
                 method: 'POST',
@@ -868,7 +888,8 @@ export default function PlaygroundPage() {
                     });
                 } else if (data.mode === 'vfs_patch') {
                     const incoming = data.payload?.files;
-                    if (incoming) {
+                    // vfs_patch 是全量替换，旧会话迟到的 patch 会直接覆盖新会话的文件树。
+                    if (incoming && currentSessionIdRef.current === streamThreadId) {
                         setFiles(incoming);
                         // 只有真的有文件时才展开 IDE 面板。空 vfs_patch（agent 跑完但没写任何文件）
                         // 弹出空白编辑器只会让用户困惑——保持折叠，让对话气泡里的 thinking/tool
@@ -910,13 +931,20 @@ export default function PlaygroundPage() {
             }
         }
         } catch (error: any) {
-            if (error.name !== 'AbortError') {
+            if (error.name !== 'AbortError' && currentSessionIdRef.current === streamThreadId) {
                 setMessages(prev => { const next = [...prev]; next[next.length - 1].content = `错误: ${error.message}`; return next; });
             }
         } finally {
-            abortControllerRef.current = null;
+            if (abortControllerRef.current === controller) abortControllerRef.current = null;
             setIsLoading(false);
-            setMessages(prev => { const next = [...prev]; if (next.length > 0) next[next.length - 1].isStreaming = false; return next; });
+            // 手动停止时也要落这个 flag（气泡停止转圈）；但会话已切走则丢弃，
+            // 不碰新会话的末位消息。
+            setMessages(prev => {
+                if (currentSessionIdRef.current !== streamThreadId) return prev;
+                const next = [...prev];
+                if (next.length > 0) next[next.length - 1].isStreaming = false;
+                return next;
+            });
             // Refresh sessions list to show updated title/date
             fetch(`/api/skill-generator/sessions?user=${encodeURIComponent(user)}`)
                 .then(res => res.json())
@@ -1612,6 +1640,7 @@ export default function PlaygroundPage() {
                                         aria-label={clearBtnTitle}
                                         onClick={() => {
                                             if (confirm(locale === 'zh' ? '确定清空当前对话？历史会话不会被删除。' : 'Clear current conversation? Past sessions stay intact.')) {
+                                                stopActiveStream();
                                                 setMessages([{ role: 'agent', content: locale === 'zh' ? '已清空。' : 'Cleared.' }]);
                                                 setFiles({});
                                                 setShowIDE(false);

@@ -26,8 +26,7 @@
               {
                 "group": "平台公共",
                 "pages": [
-                  "zh/tutorial/platform/01-quick-start",
-                  "zh/tutorial/platform/02-example-walkthrough"
+                  "zh/tutorial/platform/01-quick-start"
                 ]
               },
               {
@@ -68,6 +67,7 @@
                   "zh/how-to/platform/qa",
                   "zh/how-to/platform/release-docker-image",
                   "zh/how-to/platform/settings/access-control",
+                  "zh/how-to/platform/settings/agent-runtimes",
                   "zh/how-to/platform/settings/model-registry",
                   "zh/how-to/platform/settings/usage-analytics",
                   "zh/how-to/platform/settings/web-search",
@@ -153,7 +153,6 @@
                   "zh/reference/platform/configuration",
                   "zh/reference/platform/api-and-contracts",
                   "zh/reference/platform/design-system",
-                  "zh/reference/platform/example-cost",
                   "zh/reference/platform/file-map"
                 ]
               },

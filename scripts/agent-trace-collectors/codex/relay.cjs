@@ -24,6 +24,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { CodexTraceCore } = require("./codex-trace-core.cjs");
+const { createDesktopRolloutReader } = require("./rollout-reader.cjs");
 const {
   DurableTraceUploader,
   DurableTraceWriter,
@@ -58,6 +59,10 @@ function loadCollectorConfig(configPath = process.env.AGENT_INSIGHT_CODEX_CONFIG
     relayPort: Number(parsed.relayPort) || 43191,
     uploadIntervalMs: Number(parsed.uploadIntervalMs) || 5 * 60 * 1000,
     homeDir: parsed.homeDir || os.homedir(),
+    desktopRolloutIngress: parsed.desktopRolloutIngress === true,
+    desktopRolloutScanIntervalMs: Number(parsed.desktopRolloutScanIntervalMs) || 10_000,
+    desktopSessionsDir: parsed.desktopSessionsDir,
+    desktopRolloutBackfillAfterMs: Number(parsed.desktopRolloutBackfillAfterMs) || 0,
     configPath: resolved,
   };
 }
@@ -183,6 +188,7 @@ async function createRelay(options = {}) {
   let server;
   let rawPending = Promise.resolve();
   let statePersistPending = Promise.resolve();
+  let desktopScanTimer;
   const stateWriter = options.stateWriter || atomicWriteJson;
 
   try {
@@ -203,6 +209,22 @@ async function createRelay(options = {}) {
     uploader.flushOnce().catch(() => {});
   };
 
+  const desktopReader = options.desktopReader || createDesktopRolloutReader({
+    enabled: options.desktopRolloutIngress ?? config.desktopRolloutIngress,
+    homeDir: config.homeDir,
+    sessionsDir: options.desktopSessionsDir || config.desktopSessionsDir,
+    stateDir,
+    backfillAfterMs: options.desktopRolloutBackfillAfterMs || config.desktopRolloutBackfillAfterMs || undefined,
+    onEvents: async (events) => {
+      for (const event of events) await core.processLifecycleEvent(event);
+      await writer.flush();
+      await persistState();
+      if (events.some((event) => ["execution_completed", "execution_interrupted"].includes(event.eventType))) {
+        flushSoon();
+      }
+    },
+  });
+
   const handler = async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     try {
@@ -213,6 +235,16 @@ async function createRelay(options = {}) {
 
       if (request.method === "GET" && url.pathname === "/status") {
         writeJson(response, 200, core.status());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/desktop/status") {
+        writeJson(response, 200, {
+          enabled: desktopReader.enabled,
+          sessionsDir: desktopReader.sessionsDir,
+          checkpointPath: desktopReader.checkpointPath,
+          unknownRecords: desktopReader.state.unknownRecords,
+        });
         return;
       }
 
@@ -266,9 +298,30 @@ async function createRelay(options = {}) {
         return;
       }
 
+      if (url.pathname === "/lifecycle-event") {
+        const result = await core.processLifecycleEvent(body);
+        await writer.flush();
+        await persistState();
+        writeJson(response, 200, {
+          duplicate: Boolean(result.duplicate),
+          pending: Boolean(result.pending),
+        });
+        return;
+      }
+
       if (url.pathname === "/lease") {
         core.updateLease(body.clientId, body.action);
         writeJson(response, 200, core.status());
+        return;
+      }
+
+      if (url.pathname === "/desktop/scan") {
+        if (!desktopReader.enabled) {
+          writeJson(response, 409, { error: "Desktop rollout reader is disabled" });
+          return;
+        }
+        const result = await desktopReader.scan();
+        writeJson(response, 200, result);
         return;
       }
 
@@ -297,6 +350,7 @@ async function createRelay(options = {}) {
     stateDir,
     uploader,
     writer,
+    desktopReader,
     async start() {
       await fsp.mkdir(stateDir, { recursive: true, mode: 0o700 });
       lock = await acquireProcessLock(lockPath);
@@ -304,6 +358,13 @@ async function createRelay(options = {}) {
       await replayRawOtel(stateDir, core);
       await writer.flush();
       await persistState();
+      if (desktopReader.enabled) {
+        await desktopReader.scan();
+        desktopScanTimer = setInterval(() => {
+          desktopReader.scan().catch(() => undefined);
+        }, config.desktopRolloutScanIntervalMs);
+        desktopScanTimer.unref?.();
+      }
       server = http.createServer((request, response) => {
         handler(request, response).catch((error) => {
           if (!response.headersSent) writeJson(response, 500, { error: error.message });
@@ -332,6 +393,8 @@ async function createRelay(options = {}) {
     },
     async stop({ flush = false } = {}) {
       uploader.stop();
+      if (desktopScanTimer) clearInterval(desktopScanTimer);
+      desktopScanTimer = undefined;
       await writer.flush();
       if (flush) {
         await Promise.race([

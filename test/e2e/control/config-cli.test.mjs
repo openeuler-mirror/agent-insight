@@ -9,3 +9,16 @@ test('local suite total deadline interrupts multiple real-mode fixture children 
 test('duplicate run IDs preserve the original report and private files',async t=>{
  const root=fixture(t),dir=path.join(root,'exclude/core-e2e/custom/duplicate');fs.mkdirSync(path.join(dir,'private'),{recursive:true});fs.writeFileSync(path.join(dir,'private/model.key'),'original');fs.writeFileSync(path.join(dir,'report.json'),'original-report');assert.equal(await run(root,['--run-id','duplicate'],{FIXTURE_MODEL_KEY:'new-credential'}),1);assert.equal(fs.readFileSync(path.join(dir,'private/model.key'),'utf8'),'original');assert.equal(fs.readFileSync(path.join(dir,'report.json'),'utf8'),'original-report');
 });
+test('suite forwards the temporary SQLite UT skip only when explicitly configured',async t=>{
+ for(const flag of [undefined,'1']){
+  const root=fixture(t),configFile=path.join(root,'test/e2e/config.json'),config=JSON.parse(fs.readFileSync(configFile));
+  Object.assign(config.defaults.timeouts,{utMs:3000,utFileMs:2000,runMs:10000});fs.writeFileSync(configFile,JSON.stringify(config));
+  const bin=path.join(root,'fixture-bin');fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin,'npm'),'#!/bin/sh\nexec node --test fixture-ut.test.mjs\n',{mode:0o700});
+  fs.writeFileSync(path.join(root,'fixture-ut.test.mjs'),`import test from 'node:test';import assert from 'node:assert/strict';test('UT child receives the exact configured skip flag',()=>assert.equal(process.env.E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT,${JSON.stringify(flag)??'undefined'}));`);
+  fs.writeFileSync(path.join(root,'test/e2e/run-case.mjs'),"import fs from 'node:fs';import path from 'node:path';import {requiredStagesFor} from './shared/core.mjs';const id=process.argv[process.argv.indexOf('--case')+1],runId=process.argv[process.argv.indexOf('--run-id')+1],root=path.join('exclude/core-e2e/custom',runId);fs.mkdirSync(root,{recursive:true});const at=new Date().toISOString();fs.writeFileSync(path.join(root,'report.json'),JSON.stringify({startedAt:at,endedAt:at,scenarios:[{id:'CORE-E2E-'+id,status:'PASS',stages:requiredStagesFor(id).map(id=>({id,status:'PASS'}))}]}));");
+  const code=await run(root,['--mode','mock','--ut','--case','002','--run-id','ut-env'],{PATH:bin+path.delimiter+process.env.PATH,...(flag===undefined?{}:{E2E_SKIP_TRACE_DATASET_CONCURRENCY_UT:flag})});
+  const report=JSON.parse(fs.readFileSync(path.join(root,'exclude/core-e2e/custom/ut-env/report.json')));
+  assert.equal(code,0,JSON.stringify(report.npmTest)+'\n'+fs.readFileSync(path.join(root,'exclude/core-e2e/custom/ut-env/private/npm-test.log'),'utf8'));assert.equal(report.npmTest.status,'PASS');assert.equal(report.npmTest.observedSummary.pass,1);
+ }
+});

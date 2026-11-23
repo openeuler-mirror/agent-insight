@@ -65,7 +65,8 @@ test('detail refresh updates timeout metadata independently of the pending sessi
     const metadata = { task_id: 'trace-timeout', trace_status: 'timed_out' };
     const updates: unknown[] = [];
     const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
-        taskId: 'trace-timeout', apiKey: 'test-key', sessionRef: { current: {} },
+        // PR #446 的 fetchSession 携带已认证 user 边界（session URL 拼接 user），mock 作用域需提供。
+        taskId: 'trace-timeout', apiKey: 'test-key', user: 'test-user', sessionRef: { current: {} },
         sessionRequestRef: { current: 0 },
         setLoading() {}, setSession() {}, setSecondsSinceRefresh() {},
         onExecutionRefresh: (value: unknown) => updates.push(value),
@@ -149,7 +150,8 @@ test('late session and parent metadata responses cannot replace a newly selected
     const updates: unknown[] = [];
     const sessionRequestRef = { current: 0 };
     const refresh = evaluate<(silent: boolean) => void>(callback.getText(ast), {
-        taskId: 'old-worker', apiKey: 'test-key', sessionRef: { current: {} }, sessionRequestRef,
+        // 同上：fetchSession 的 user 边界需要 mock 作用域提供。
+        taskId: 'old-worker', apiKey: 'test-key', user: 'test-user', sessionRef: { current: {} }, sessionRequestRef,
         setLoading: (value: unknown) => updates.push(value), setSession: (value: unknown) => updates.push(value),
         setSecondsSinceRefresh: (value: unknown) => updates.push(value), setAutoRefresh: (value: unknown) => updates.push(value),
         onExecutionRefresh: (value: unknown) => updates.push(value),

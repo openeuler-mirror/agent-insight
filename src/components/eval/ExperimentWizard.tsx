@@ -123,6 +123,7 @@ interface AgentTargetOption {
 
 interface AgentOption {
   name: string;
+  label?: string;
   traces: number;
   frameworks: string[];
   executable: boolean;
@@ -786,6 +787,10 @@ export function ExperimentWizard({
     () => agents.find((agent) => agent.name === agentName) || null,
     [agentName, agents],
   );
+  const agentLabel = selectedAgent?.frameworks.includes('jiuwenswarm') && selectedAgent.label?.trim()
+    ? `${selectedAgent.label.trim()} · ${selectedAgent.frameworks.join(' / ')}`
+    : undefined;
+  const displayAgentName = agentLabel || agentName;
   const targetOptions = useMemo(
     () => (selectedAgent?.targets || []).filter((target) => {
       if (skillContext && skillExecutionCapabilityIssue(target, skillPreset === 'trigger')) return false;
@@ -1966,6 +1971,7 @@ export function ExperimentWizard({
               evaluatorIds: Array.from(selectedEvaluators),
               traceSource: traceMode,
               agentName,
+              ...(agentLabel ? { agentLabel } : {}),
               watchMode: expType === 'single' && traceMode === 'existing' ? watchMode : false,
               type: expType,
               groups: expType === 'llm'
@@ -2234,7 +2240,7 @@ export function ExperimentWizard({
                     <option value="">请选择 Agent…</option>
                     {agents.map((agent) => (
                       <option key={agent.name} value={agent.name}>
-                        {agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
+                        {agent.label || agent.name} · {agent.frameworks.join(' / ') || '未知框架'}
                         {agent.traces ? ` · ${agent.traces} 条 Trace` : ''}
                         {agent.targets.length ? ` · 可执行 ${agent.targets.length} 台` : ''}
                       </option>
@@ -2527,7 +2533,7 @@ export function ExperimentWizard({
               <div style={{ ...CARD_NOTE, marginBottom: 12 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)', marginBottom: 6 }}>LLM 对比 · 自动配对</div>
                 <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
-                  系统将按 Agent「{agentName || '—'}」的 Trace 自动配对 A 组（{groupAValue || '—'}）与 B 组（{groupBValue || '—'}）：
+                  系统将按 Agent「{displayAgentName || '—'}」的 Trace 自动配对 A 组（{groupAValue || '—'}）与 B 组（{groupBValue || '—'}）：
                   按任务输入精确匹配，三条件判定可比性（输入相同 + 各组模型取值匹配 + Agent/Skill 版本一致）。
                   <span style={{ color: 'var(--foreground-muted)' }}>可比配对自动纳入实验；不可比/未配对单列展示，不进入统计分母。</span>
                 </div>
@@ -3025,13 +3031,13 @@ export function ExperimentWizard({
               <input type="checkbox" checked={watchMode} onChange={(e) => setWatchMode(e.target.checked)} />
               <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--foreground)' }}>监听模式</span>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.5 }}>
-                自动评测「{agentName || '该 Agent'}」在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准。下方已有 Trace 可选，可 0 条起步。
+                自动评测「{displayAgentName || '该 Agent'}」在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准。下方已有 Trace 可选，可 0 条起步。
                 <span style={{ color: 'var(--foreground-muted)' }}>（监听 trace 无逐条预期输出或数据集输入，第 ④ 步带相关依赖的评估器不可选）</span>
               </span>
             </label>
             <div style={PANEL_H}>
               <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>Agent：</span>
-              <span style={{ ...CHIP_MUT, color: 'var(--foreground)', fontWeight: 700 }}>{agentName}</span>
+              <span style={{ ...CHIP_MUT, color: 'var(--foreground)', fontWeight: 700 }}>{displayAgentName}</span>
               <span style={{ flex: 1 }} />
               {total > traces.length && (
                 <button
@@ -3653,7 +3659,7 @@ export function ExperimentWizard({
               }}>
                 {[
                   ['实验', name || '未命名'],
-                  ['Agent', agentName || '—'],
+                  ['Agent', displayAgentName || '—'],
                   ['数据集', selectedDataset?.name || '未选择'],
                   ['Trace 来源', expType === 'llm'
                     ? `自动配对 · A=${groupAValue || '—'} / B=${groupBValue || '—'}`
@@ -3666,7 +3672,7 @@ export function ExperimentWizard({
                     `${selectedTarget?.host || '—'} · ${selectedTarget?.platform || '—'} / ${genModel || '平台默认'}`,
                   ]] : []),
                   ...(executionConcurrencyRequired ? [['执行并发', `${executionConcurrency} 个 Case`]] : []),
-                  ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · 工具断网 · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB`]] : []),
+                  ...(isBenchmarkDataset && selectedTarget?.executionProfile ? [['执行环境', `${selectedTarget.executionProfile.key} · ${selectedTarget.executionProfile.sourceRevision.slice(0, 12)} · ${selectedTarget.executionProfile.network === 'deny' ? '工具断网' : selectedTarget.executionProfile.network === 'allow' ? '允许联网' : '客户端默认网络'}${selectedTarget.executionProfile.resources ? ` · ${selectedTarget.executionProfile.resources.cpu} CPU / ${selectedTarget.executionProfile.resources.memoryMiB} MiB` : ''}`]] : []),
                   ...(runtimeState.active && runtimeParameterEditorVisible ? [[`${runtimeState.definition?.displayName} 运行参数`, summarizeOptions(runtimeState.definition, runtimeState.agentOptions)]] : []),
                   ...(agentTimeoutRequired ? [[
                     'Agent 单次执行上限',

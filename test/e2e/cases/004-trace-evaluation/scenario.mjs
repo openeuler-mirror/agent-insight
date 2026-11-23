@@ -13,6 +13,9 @@ import { verifyOptimizationReopen, reopenTraceExperiment } from './trace-only-re
 import { businessTraceAudit, assertFactComparison, assertNativeSkillBinding, assertSkillVerification, assertTraceOnlyRequest, assertTraceOnlyResult, assertFourFieldSummary, assertLoadedSkill, decodeTraceInput, assertDatasetFreeVerification, interactionProof } from './trace-only-evidence.mjs';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
+// 内置可靠性评测集由 /api/agent-datasets 首次访问时懒创建（名字见 src/lib/agent-dataset-builtin.ts），
+// 与 Trace 评测/优化流程是否新建数据集无关，比较"数据集无变化"时排除。
+const BUILTIN_RELIABILITY_DATASET_NAME = '可靠性故障注入评测集（内置）';
 export async function scenario004(ctx) {
   const { root, project, runId, baseUrl, stage } = ctx;
   ctx.caseId = '004';
@@ -33,7 +36,7 @@ export async function scenario004(ctx) {
   const name = `e2e-messages-trace-${runId}`, marker = `E2E-${runId}-004`;
   const database = path.join(root, 'app/data/witty_insight.db');
   const read = fn => { const db = new DatabaseSync(database, { readOnly: true });try { return fn(db); } finally { db.close(); } };
-  const datasets = () => read(db => db.prepare('SELECT id, user, name, targetSkill, casesJson, referenceCasesJson, caseCount FROM AgentEvalDataset WHERE user=? ORDER BY id').all(ctx.account.username));
+  const datasets = () => read(db => db.prepare('SELECT id, user, name, targetSkill, casesJson, referenceCasesJson, caseCount FROM AgentEvalDataset WHERE user=? AND name<>? ORDER BY id').all(ctx.account.username, BUILTIN_RELIABILITY_DATASET_NAME));
   const traceAudit=()=>read(db=>businessTraceAudit(db.prepare('SELECT taskId, query, agentName FROM Execution WHERE user=? ORDER BY taskId').all(ctx.account.username),prompt));
   const businessIds=()=>traceAudit().businessTraceIds;
   const installFiles = snapshot => {
@@ -102,7 +105,7 @@ export async function scenario004(ctx) {
       const response = await fetch(baseUrl + '/api/skills/upload', { method: 'POST', headers: { 'x-witty-api-key': ctx.account.apiKey }, body: form });const data = await response.json();assert.ok(response.ok, data.error);skill = data.skill;version = data.version.version;
       assert.equal(skill.name, name);assert.equal(skill.user, username);assert.equal(skill.visibility, 'private');
       const clientRoot = path.join(root,'ordinary');env = runtimeEnv(clientRoot, path.join(clientRoot, 'bin'));env.OPENCODE_DISABLE_MODELS_FETCH = 'true';env.AGENT_INSIGHT_HOST = baseUrl;env.AGENT_INSIGHT_API_KEY = ctx.account.apiKey;
-      workspace = path.join(clientRoot, 'workspace');skillDir = path.join(workspace, '.opencode/skills', name);logFile = path.join(workspace, 'fixtures/messages');fs.mkdirSync(path.dirname(logFile),{recursive:true});fs.copyFileSync(path.join(project,'public/example/messages'),logFile);
+      workspace = path.join(clientRoot, 'workspace');skillDir = path.join(workspace, '.opencode/skills', name);logFile = path.join(workspace, 'fixtures/messages');fs.mkdirSync(path.dirname(logFile),{recursive:true});fs.copyFileSync(path.join(project,'test/e2e/fixtures/messages'),logFile);
       const hashes = assertSnapshot(files,files);datasetSnapshot = datasets();assert.ok(!datasetSnapshot.some(d => d.targetSkill === name));
       writePrivate(path.join(root,'private/baseline-files.json'),files);
       prompt = `${marker}：使用 ${name} 分析 ${logFile}。请先通过原生 skill 工具加载 ${name}，遵守其步骤。请统计 root 账户认证失败的次数，找出次数最多的来源及其次数，并给出日志证据。只分析提供的离线日志，不连接远程主机，不读取当前机器的 /var/log，不修改文件。`;

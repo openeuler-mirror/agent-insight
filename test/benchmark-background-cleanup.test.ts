@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { setImmediate } from 'node:timers/promises'

@@ -17,12 +17,12 @@
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
+  createTriggerEvalSetVersion,
   findLatestTriggerEvalSet,
   findTriggerEvalSetById,
   listTriggerEvalSetVersions,
   replaceTriggerEvalItemsById,
   deleteTriggerEvalSet,
-  ensureTriggerEvalSet,
   normalizeItems,
   type TriggerItem,
 } from '@/server/skill_trigger_eval_storage';
@@ -76,9 +76,12 @@ export async function GET(
 /**
  * POST /api/skill-eval/trigger/<skillName>
  *
- * 编辑器保存调这个——**只能在 latest 版本上原地改**。body: { user, versionId?, description?, items }
- * - 不传 versionId：作用于 latest（兼容旧前端）；如果没有任何版本会建一个 v1（manual）。
- * - 传 versionId：必须等于 latest 的 id，否则 409。
+ * 编辑器保存调这个——**只能在最新 ready 版本上原地改**。body: { user, versionId?, description?, items }
+ * - drafting/failed 占位行不是保存目标：没有任何 ready 版本时新建一个 manual ready 版本。
+ *   AI 起草失败会留下 failed 占位顶在 latest 位，旧「等于 latest」判断会让前端
+ *   正在编辑的 ready 版本恒 409，手工编辑永远存不进去。
+ * - 传 versionId：必须等于最新 ready 的 id，否则 409；无 ready 时忽略它直接新建。
+ * - 不传 versionId：作用于最新 ready（兼容旧前端）。
  *
  * 想新建版本：走 /draft 或 /upload；不走这里。
  */
@@ -97,21 +100,28 @@ export async function POST(
     const items: TriggerItem[] = normalizeItems(body.items);
     const targetVersionId = body.versionId ? String(body.versionId).trim() : null;
 
-    // 兜底建 v1 + 拿到 latest
-    const latest = await ensureTriggerEvalSet({
-      user,
-      skillName: decodedSkillName,
-      description: body.description !== undefined ? String(body.description || '') : undefined,
-    });
+    // 保存目标固定为最新 ready 版本：drafting/failed 占位行不是可编辑目标。
+    const versions = await listTriggerEvalSetVersions(user, decodedSkillName);
+    const latestReady = versions.find(v => v.status === 'ready') ?? null;
 
-    if (targetVersionId && targetVersionId !== latest.id) {
+    if (latestReady && targetVersionId && targetVersionId !== latestReady.id) {
       return NextResponse.json(
-        { error: 'only the latest version can be edited; switch to latest or create a new version' },
+        { error: 'only the latest ready version can be edited; switch to latest or create a new version' },
         { status: 409 },
       );
     }
 
-    const updated = await replaceTriggerEvalItemsById(latest.id, items);
+    // 没有任何 ready 版本（只有占位或完全为空）→ 新建 manual ready 版本, 绝不写占位行：
+    // 占位行会被下一次 AI 起草的 deletePlaceholderDraftingSets 整行删除, 写进去会静默丢手工数据。
+    const updated = latestReady
+      ? await replaceTriggerEvalItemsById(latestReady.id, items)
+      : await createTriggerEvalSetVersion({
+          user,
+          skillName: decodedSkillName,
+          items,
+          versionSource: 'manual',
+          description: body.description !== undefined ? String(body.description || '') : undefined,
+        });
     if (!updated) {
       return NextResponse.json({ error: 'failed to update items' }, { status: 500 });
     }

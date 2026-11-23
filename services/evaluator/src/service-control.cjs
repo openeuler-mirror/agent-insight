@@ -26,6 +26,15 @@ async function readJson(file) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error }
 }
 
+class ServiceControlError extends Error {
+  constructor(code) {
+    super('评测服务或任务已主动停止')
+    this.code = code
+    this.status = 409
+    this.retryable = false
+  }
+}
+
 class ServiceControl {
   constructor(dataDir) { this.directory = path.join(dataDir, 'control') }
   stopped() { return readJson(path.join(this.directory, 'stopped.json')) }
@@ -45,7 +54,7 @@ class ServiceControl {
   }
   async assertRunning(runId) {
     const stop = await this.stopped() || (runId && await this.cancelled(runId))
-    if (stop) throw Object.assign(new Error('评测服务或任务已主动停止'), { code: stop.reason, status: 409, retryable: false })
+    if (stop) throw new ServiceControlError(stop.reason)
   }
 }
 
@@ -58,4 +67,4 @@ async function recordManagedImage(dataDir, record) {
   await atomicWriteJson(ownershipFile(dataDir, record.reference), { ...record, updatedAt: new Date().toISOString() })
 }
 
-module.exports = { ServiceControl, readJson, recordManagedImage, ownershipFile }
+module.exports = { ServiceControl, ServiceControlError, readJson, recordManagedImage, ownershipFile }

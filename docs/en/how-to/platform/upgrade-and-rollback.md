@@ -47,6 +47,14 @@ Before restoring external writes, verify:
 
 A successful installation, reachable port, or health response alone does not prove data or workflow compatibility.
 
+After upgrading to a release with OpenCode data isolation, restart the platform and run both AgentDebug and Skill optimization once. The platform initializes a private OpenCode database and creates new sessions for new runs. The user's CLI continues to use its existing database.
+
+## Built-in example data cleanup
+
+Older releases injected example Agents, Skills, datasets, and Traces when a user first logged in. Current releases no longer inject them and, on each startup, delete leftover records from existing databases using the fixed identifiers written at injection time (Agent name and description, dataset name, Skill name and description, and the `builtin_msg_` taskId prefix). All conditions are exact matches, so user-created data is unaffected, and repeated startups do not delete anything further. A `builtin demo cleanup` line in the startup log reports records removed by that run.
+
+Cleanup only covers database records. Client-local files such as `~/.agent-insight/example/messages` are not removed and can be deleted manually.
+
 ## Rollback
 
 1. Stop the new version and related writers. Preserve upgraded data separately, noting which Traces and experiments were created after the upgrade.
@@ -62,6 +70,8 @@ Compatibility across arbitrary versions is not guaranteed. Retain logs, versions
 
 ### SQLite upgrade for evaluation diagnosis
 
+Startup runs `prisma db push` to add the `DiagnosisRun` table and `SkillOptPlanItem.sourceRefsJson` column to existing and new SQLite databases. The column defaults to `[]` for historical records. Use the optional offline migration below when you need to verify historical data table by table.
+
 Rehearse on an isolated copy of the deployed database. Quiesce writers and background jobs. Back up external Skill files and report assets alongside the database. Run `python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight.db` for preflight, then add `--apply --backup /backup/diagnosis-before.db` with a new backup path. The script uses SQLite's backup API, validates integrity and foreign keys, and compares every pre-existing column and row before committing. Save the JSON verification report.
 
-Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. Startup requires migration on existing databases. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.
+Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.

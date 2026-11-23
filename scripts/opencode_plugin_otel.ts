@@ -19,6 +19,7 @@ import path from "node:path"
 import os from "node:os"
 import crypto from "node:crypto"
 import { spawn } from "node:child_process"
+import { pathToFileURL } from "node:url"
 import { once } from "node:events"
 import { finished } from "node:stream/promises"
 
@@ -412,11 +413,189 @@ export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
   }
 }
 
-export default async function WittySkillInsightOtelPlugin() {
-  return createOpenCodeCollector()
+const UPSTREAM_REQUEST_HEADER = "x-agent-insight-upstream-request-id"
+
+function boundedRequestId(value: unknown): string | undefined {
+  const id = typeof value === "string" ? value.trim() : ""
+  return id && id.length <= 512 && !/[\u0000-\u001f\u007f]/.test(id) ? id : undefined
 }
 
-async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => void, close?: () => Promise<void> }) {
+/**
+ * The gateway relays the model service's own response header separately from
+ * its local call ID. Direct (non-gateway) requests have no local alias, so
+ * their `x-request-id` is the service header.
+ */
+function upstreamRequestIdFromHeaders(headers: any): string | undefined {
+  try {
+    const relayed = boundedRequestId(headers?.get?.(UPSTREAM_REQUEST_HEADER))
+    if (relayed) return relayed
+    if (headers?.get?.("x-agent-insight-call-id") != null) return undefined
+    return boundedRequestId(headers?.get?.("x-request-id"))
+  } catch { return undefined }
+}
+
+export function createInferenceCorrelation(context: any, record: (event: any) => void, transport: any = globalThis, options: any = {}) {
+  const emit = (sessionID: string, kind: string, payload: any) => {
+    try { record({ t: nowIso(), kind, sessionID, payload }) } catch {}
+  }
+  const blockedRequest = (url: string) => !options.allowsRequest || options.allowsRequest(url)
+  const observeFetch = () => {
+    const key = Symbol.for("agent-insight.opencode.inference-fetch.v1")
+    try {
+      if (transport[key]) { transport[key].scopes.add(options); return transport[key] }
+      if (typeof transport.fetch !== "function") return undefined
+      const state = { scopes: new Set<any>([options]), blockers: new Set<(url: string) => boolean>(), requests: new Map<string, { sessionID: string, messageID: string, emit: typeof emit, allowsRequest: (url: string) => boolean }>() }
+      const wrapped = new Proxy(transport.fetch, {
+        apply(target, receiver, args) {
+          if (state.blockers.size) {
+            try {
+              const [request, init] = args
+              const method = String(init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase()
+              const pathname = new URL(request instanceof Request ? request.url : String(request)).pathname
+              if (([...state.blockers].some(blocks => blocks(request instanceof Request ? request.url : String(request)))) && method === "POST" && /\/(?:chat\/completions|responses|messages)\/?$/.test(pathname)) {
+                return Promise.reject(new Error("Agent Insight OpenCode inference proxy: model requests are blocked after configuration failed. Check the inference proxy configuration or reinstall it, then retry."))
+              }
+            } catch {}
+          }
+          let attempt: { headers: Headers, binding: any, payload: any } | undefined
+          try {
+            const [request, init] = args
+            const headers = new Headers(init?.headers ?? (request instanceof Request ? request.headers : undefined))
+            const requestId = headers.get("x-agent-insight-request-id")
+            const binding = requestId ? state.requests.get(requestId) : undefined
+            if (binding && binding.allowsRequest(request instanceof Request ? request.url : String(request)) && headers.get("x-agent-insight-session-id") === binding.sessionID
+              && headers.get("x-agent-insight-message-id") === binding.messageID) {
+              const attemptId = crypto.randomUUID()
+              headers.set("x-agent-insight-attempt-id", attemptId)
+              attempt = { headers, binding, payload: {
+                messageID: binding.messageID, request_id: requestId, attempt_id: attemptId, started_at: nowIso(),
+              } }
+            }
+          } catch {}
+          const invoke = (callArgs: any[]) => {
+            const url = callArgs[0] instanceof Request ? callArgs[0].url : String(callArgs[0])
+            const scopes = [...state.scopes].filter(scope => scope.prepareRequest && scope.allowsRequest?.(url))
+            if (!scopes.length) return Reflect.apply(target, receiver, callArgs)
+            return Promise.all(scopes.map(scope => scope.prepareRequest(url))).then(() => Reflect.apply(target, receiver, callArgs))
+          }
+          if (!attempt) return invoke(args)
+          const { headers, binding, payload } = attempt
+          binding.emit(binding.sessionID, "llm.attempt", payload)
+          return (async () => {
+            try {
+              const response = await invoke([args[0], { ...args[1], headers }]) as Response
+              const callId = response.headers.get("x-request-id") ?? response.headers.get("x-agent-insight-call-id")
+              const upstreamRequestId = upstreamRequestIdFromHeaders(response.headers)
+              binding.emit(binding.sessionID, "llm.attempt", { ...payload, status_code: response.status,
+                ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || "") ? { call_id: callId } : {}),
+                ...(upstreamRequestId ? { upstream_request_id: upstreamRequestId, upstream_request_id_source: "model-response-header" } : {}),
+              })
+              return response
+            } catch (error) {
+              binding.emit(binding.sessionID, "llm.attempt", { ...payload, error_type: error instanceof Error ? error.name : "Error" })
+              throw error
+            }
+          })()
+        },
+      })
+      // Leave provider options intact: OpenCode loads auth and provider fetches after config hooks.
+      transport.fetch = wrapped
+      Object.defineProperty(transport, key, { value: state })
+      return state
+    } catch { return undefined }
+  }
+  return {
+    headers: async (input: any, output: any) => {
+      const sessionID = input?.sessionID
+      if ((options.allowsInput && !options.allowsInput(input)) || !sessionID) return
+      output.headers ??= {}
+      output.headers["x-agent-insight-session-id"] = sessionID
+      if (!input?.message?.id || !context?.client?.session?.messages) return
+      try {
+        const result = await context.client.session.messages({
+          path: { id: sessionID }, query: { limit: 20 }, signal: AbortSignal.timeout(1000),
+        })
+        const candidates = (Array.isArray(result?.data) ? result.data : []).map((row: any) => row.info).filter((info: any) =>
+          info?.role === "assistant" && info.sessionID === sessionID && info.parentID === input.message.id
+          && info.agent === input.agent && info.providerID === input.model?.providerID
+          && info.modelID === (input.model?.id ?? input.model?.modelID) && !info.time?.completed)
+        if (candidates.length !== 1 || !candidates[0].id) {
+          emit(sessionID, "llm.correlation.unbound", { reason: "no-unique-assistant" })
+          return
+        }
+        const messageID = candidates[0].id
+        // Processor retries reuse the assistant message; transport attempts get their own ID.
+        const requestId = `oc_${sha256Hex(JSON.stringify([sessionID, messageID])).slice(0, 32)}`
+        output.headers ??= {}
+        output.headers["x-agent-insight-session-id"] = sessionID
+        output.headers["x-agent-insight-message-id"] = messageID
+        output.headers["x-agent-insight-request-id"] = requestId
+        const observer = observeFetch()
+        if (observer) {
+          observer.requests.delete(requestId)
+          observer.requests.set(requestId, { sessionID, messageID, emit, allowsRequest: blockedRequest })
+          if (observer.requests.size > 4096) observer.requests.delete(observer.requests.keys().next().value)
+        }
+        emit(sessionID, "llm.request", { messageID, request_id: requestId })
+      } catch {
+        emit(sessionID, "llm.correlation.unbound", { reason: "message-lookup-failed" })
+      }
+    },
+    configure: observeFetch,
+    setBlocked: (blocked: boolean) => {
+      const observer = observeFetch()
+      if (observer) { if (blocked) observer.blockers.add(blockedRequest); else observer.blockers.delete(blockedRequest) }
+    },
+  }
+}
+
+export default async function WittySkillInsightOtelPlugin(context: any = {}) {
+  return createOpenCodeCollector(context)
+}
+
+/**
+ * CLI (`opencode run`) may exit before the deferred `message.updated` /
+ * `message.part.updated` sync events reach the plugin, while streaming
+ * `message.part.delta` events arrive synchronously. After a session goes idle
+ * the collector asks the in-process OpenCode server for the final messages so
+ * usage and the complete assistant text are not lost.
+ */
+function hasUsageTokens(tokens: any): boolean {
+  if (!tokens || typeof tokens !== "object") return false
+  return [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+    .some((value) => Number(value) > 0)
+}
+
+export function extractFinalUsageRecords(messages: any[] | null | undefined): Array<{ info: any; parts: any[] }> {
+  const out: Array<{ info: any; parts: any[] }> = []
+  for (const item of Array.isArray(messages) ? messages : []) {
+    const info = item?.info ?? item
+    if (!info || typeof info !== "object" || info.role !== "assistant" || !info.id) continue
+    if (!hasUsageTokens(info.tokens)) continue
+    const picked: any = { id: info.id, sessionID: info.sessionID, role: "assistant", tokens: info.tokens }
+    if (info.time) picked.time = info.time
+    if (info.cost !== undefined) picked.cost = info.cost
+    for (const key of ["modelID", "providerID", "agent", "mode", "finish", "variant", "parentID"]) {
+      if (info[key] !== undefined) picked[key] = info[key]
+    }
+    if (info.summary === true) picked.summary = true
+    const parts = (Array.isArray(item?.parts) ? item.parts : [])
+      .filter((part: any) => part && typeof part.id === "string" && part.id
+        && typeof part.text === "string" && part.text
+        && (part.type === "text" || part.type === "reasoning"))
+      .map((part: any) => ({
+        id: part.id,
+        messageID: part.messageID || info.id,
+        sessionID: part.sessionID || info.sessionID,
+        type: part.type,
+        text: part.text,
+      }))
+    out.push({ info: picked, parts })
+  }
+  return out
+}
+
+async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (record: any) => void, close?: () => Promise<void> }) {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
   if (!enabled) return {}
@@ -428,6 +607,14 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
   const outFile = buildOutFile(spoolDir)
   // v1 may exit without awaiting event hooks; persist before yielding or scheduling upload.
   const writer = createWriter(outFile, !lifecycle)
+  const managedProviders = new Set<string>()
+  const managedEndpoints = new Set<string>()
+  let prepareManagedRequest: ((url: string) => Promise<unknown>) | undefined
+  const inference = createInferenceCorrelation(context, writer.enqueue, globalThis, {
+    prepareRequest: (url: string) => prepareManagedRequest?.(url),
+    allowsInput: (input: any) => managedProviders.has(input.model?.providerID),
+    allowsRequest: (url: string) => [...managedEndpoints].some(base => url.startsWith(base + '/')),
+  })
   if (lifecycle) lifecycle.emit = writer.enqueue
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
@@ -535,6 +722,81 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
     }
   }
 
+  // OpenCode ≥ 0.15 plugin API exposes an in-process SDK client. `opencode run`
+  // exits right after the final step, before SyncEvent publishes the last
+  // message.updated/message.part.updated, so deltas are the only stream we see.
+  // Pulling the session's final messages here is what recovers usage (and the
+  // complete text) after the CLI session ends.
+  const pluginClient = context?.client
+  const pluginDirectory = typeof context?.directory === "string" ? context.directory : undefined
+  const finalUsageFingerprints = new Map<string, string>()
+
+  const hydrateFinalUsage = async (sessionID: string, timeoutMs = 1500): Promise<number> => {
+    if (!pluginClient || typeof pluginClient?.session?.messages !== "function" || !sessionID) return 0
+    let timer: any
+    try {
+      const request: any = { path: { id: sessionID } }
+      if (pluginDirectory) request.query = { directory: pluginDirectory }
+      const response: any = await Promise.race([
+        pluginClient.session.messages(request),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("usage-hydrate timeout")), timeoutMs)
+          try { timer.unref?.() } catch {}
+        }),
+      ])
+      const messages = response?.data ?? response
+      let emitted = 0
+      for (const record of extractFinalUsageRecords(messages)) {
+        const fingerprint = sha256Hex(JSON.stringify([
+          record.info.tokens,
+          record.parts.map((part: any) => `${part.id}:${part.text.length}`),
+        ]))
+        if (finalUsageFingerprints.get(record.info.id) === fingerprint) continue
+        finalUsageFingerprints.set(record.info.id, fingerprint)
+        writer.enqueue({
+          t: nowIso(),
+          kind: "event",
+          sessionID,
+          trace_id: sessionID,
+          payload: { type: "message.updated", event: { properties: { info: record.info } } },
+        })
+        for (const part of record.parts) {
+          writer.enqueue({
+            t: nowIso(),
+            kind: "event",
+            sessionID,
+            trace_id: sessionID,
+            payload: { type: "message.part.updated", event: { properties: { part } } },
+          })
+        }
+        emitted++
+      }
+      appendLogLine(
+        pluginLogPath,
+        `usage.hydrate sessionID=${sessionID} emitted=${emitted}${emitted ? "" : " (no new usage)"}`,
+      )
+      return emitted
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `usage.hydrate.error sessionID=${sessionID} error=${error instanceof Error ? error.message : String(error)}`,
+      )
+      return 0
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  // Best-effort: the first upload still goes out immediately with the streamed
+  // deltas; if hydration recovers usage we force one more upload for this session.
+  const scheduleFinalUsage = (sessionID: string, reason: string): void => {
+    if (!pluginClient || !sessionID) return
+    void hydrateFinalUsage(sessionID).then((emitted) => {
+      if (!emitted) return
+      void writer.flush().then(() => kickUploader(sessionID, true, `usage:${reason}`)).catch(() => {})
+    }).catch(() => {})
+  }
+
   const markSessionComplete = async (sessionID: string, completedAt: string): Promise<void> => {
     if (!sessionID || !apiKey || !env.AGENT_INSIGHT_HOST) {
       appendLogLine(
@@ -597,6 +859,14 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
     const endedAt = nowIso()
     const sessions = Array.from(activeSessionIds)
     appendLogLine(pluginLogPath, `plugin.shutdown.start sessionCount=${sessions.length} endedAt=${endedAt}`)
+    // Last chance to recover final usage before the spool is closed; bounded so
+    // a dead in-process server cannot hang process exit.
+    try {
+      if (pluginClient && sessions.length > 0) {
+        await Promise.all(sessions.map((sessionID) => hydrateFinalUsage(sessionID, 800)))
+        await writer.flush()
+      }
+    } catch {}
     try {
       for (const sessionID of sessions) {
         fs.appendFileSync(outFile, JSON.stringify({
@@ -655,11 +925,43 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
 
   return {
     config: async (cfg: any) => {
+      const insightDir = getExistingInsightDir()
+      const proxyRuntime = path.join(insightDir, "inference-runtime", "inference_proxy.mjs")
+      try {
+        let installation: { enabled?: boolean, explicitEnabled?: boolean, agents?: string[] } | undefined
+        try {
+          installation = JSON.parse(fs.readFileSync(path.join(insightDir, "inference-proxy", "installation.json"), "utf8"))
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+        }
+        if ((installation?.explicitEnabled ?? installation?.enabled) && installation?.agents?.includes("opencode")) {
+          managedProviders.clear()
+          managedEndpoints.clear()
+          for (const [id, provider] of Object.entries(cfg.provider || {}) as [string, any][]) {
+            const url = provider.options?.baseURL
+            // Only explicitly enrolled loopback routes may be intercepted.
+            if (typeof url === 'string' && /^http:\/\/127\.0\.0\.1:\d+\/managed\//.test(url)) {
+              managedProviders.add(id)
+              managedEndpoints.add(url.replace(/\/+$/, ''))
+            }
+          }
+          if (managedEndpoints.size) inference.setBlocked(true)
+          const { prepareOpenCodeConfig, prepareOpenCodeRequest } = await import(pathToFileURL(proxyRuntime).href)
+          const options = { insightDir, cwd: context.directory || process.cwd() }
+          await prepareOpenCodeConfig(cfg, options)
+          prepareManagedRequest = (url: string) => prepareOpenCodeRequest(url, options)
+        }
+        if (managedEndpoints.size) inference.setBlocked(false)
+      } catch {
+        if (managedEndpoints.size) inference.setBlocked(true)
+        throw new Error("Agent Insight OpenCode inference proxy configuration failed; model requests are blocked. Check the inference proxy configuration or reinstall it, then retry.")
+      }
       try {
         const redacted = redactJson(cfg || {})
         writer.enqueue({ t: nowIso(), kind: "event", payload: { type: "config.redacted", config: truncateJson(redacted, 2000) } })
       } catch {}
     },
+    "chat.headers": inference.headers,
     "experimental.chat.system.transform": async (input: any, output: any) => {
       try {
         recordSession(input?.sessionID)
@@ -752,6 +1054,9 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
             if (lifecycle) await writer.flush()
             else void writer.flush()
             kickUploader(sid, true, `event:${type}`)
+            // CLI 模式退出前不会等 SyncEvent 的异步发布，这里主动补齐最终
+            // usage；拿到后强制再传一次（首次上传已经保证回答文本不丢）。
+            scheduleFinalUsage(sid, type)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
             // 只在有事件流入时才评估，会话真正空闲下来不会白跑。
@@ -782,7 +1087,9 @@ async function createOpenCodeCollector(lifecycle?: { emit?: (record: any) => voi
   }
 }
 
-export function createOpenCodeV2Adapter(context: any, record: (value: any) => void, forward: (event: any) => Promise<void>) {
+export function createOpenCodeV2Adapter(context: any, record: (value: any) => void, forward: (event: any) => Promise<void>, options: any = {}) {
+  const pendingRequests = new Map<string, any[]>()
+  const requests = new Map<string, any>()
   const messages = new Map<string, any>()
   const tools = new Map<string, any>()
   const streamedParts = new Set<string>()
@@ -849,8 +1156,14 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
     } catch (error) { emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) }
     finally { clearTimeout(timer) }
   }
+  const publish = (request: any, attempt: any) => {
+    if (!request.messageID) return
+    const requestId = `oc_${sha256Hex(JSON.stringify([request.sessionID, request.messageID])).slice(0, 32)}`
+    emit(request.sessionID, 'llm.request', { messageID: request.messageID, request_id: requestId })
+    emit(request.sessionID, 'llm.attempt', { ...attempt, messageID: request.messageID, request_id: requestId, transport_request_id: request.requestId })
+  }
   return {
-    close: () => { disposed = true; pendingSnapshots.clear() },
+    close: () => { disposed = true; pendingSnapshots.clear(); pendingRequests.clear(); requests.clear() },
     event: async (input: any) => {
       if (disposed) return
       const d = input?.data, sid = d?.sessionID, mid = d?.assistantMessageID, type = input?.type
@@ -860,11 +1173,22 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
       if (type === 'session.created') {
         await event('session.created', sid, { info: { ...d, id: sid, time: { created: input.created } } })
       } else if (type === 'session.step.started') {
+        // Native V2 publishes this event after the model-request hook, once per runner attempt.
+        const queue = pendingRequests.get(sid) || []
+        pendingRequests.delete(sid)
+        const request = queue.length === 1 ? queue[0] : undefined
+        if (request && request.attempts.size && request.agent === d.agent && request.model.providerID === d.model.providerID && request.model.id === d.model.id) {
+          request.messageID = mid
+          for (const attempt of request.attempts.values()) publish(request, attempt)
+        } else if (queue.length) {
+          emit(sid, 'llm.correlation.unbound', { reason: 'native-step-sequence-mismatch' })
+        }
         const previous = messages.get(mid)
         await message(sid, { id: mid, role: 'assistant', agent: d.agent, modelID: d.model?.id, providerID: d.model?.providerID, time: { created: previous?.time?.created ?? d.started } })
       } else if (type === 'session.step.ended' || type === 'session.step.failed') {
         const previous = messages.get(mid)
         if (previous) await message(sid, { ...previous, finish: d.finish || 'error', error: d.error, tokens: d.tokens, cost: d.cost, time: { ...previous.time, completed: input.created } })
+        for (const [id, request] of requests) if (request.sessionID === sid && request.messageID === mid) requests.delete(id)
       } else if (/^session\.(text|reasoning)\.(delta|ended)$/.test(type)) {
         const kind = type.split('.')[1], id = `${mid}:${kind}:${d.ordinal}`
         if (type.endsWith('.delta')) {
@@ -894,6 +1218,8 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
             if (!disposed) await event('session.idle', sid, {})
           }).catch(() => {}).finally(() => lateTerminalUploads.delete(sid))
         }
+        pendingRequests.delete(sid)
+        for (const [id, request] of requests) if (request.sessionID === sid) requests.delete(id)
         for (const [key, value] of messages) if (value.sessionID === sid) messages.delete(key)
         for (const key of tools.keys()) if (key.startsWith(sid + ':')) tools.delete(key)
         for (const key of streamedParts) if (key.startsWith(sid + ':')) streamedParts.delete(key)
@@ -907,23 +1233,72 @@ export function createOpenCodeV2Adapter(context: any, record: (value: any) => vo
       record({ t: nowIso(), kind: 'system.prompt', sessionID: input.sessionID, providerID: input.model?.providerID,
         modelID: input.model?.id, trace_id: input.sessionID, payload: { system, length: joined.length, sha256: sha256Hex(joined) } })
     },
+    modelRequest: async (input: any) => {
+      input.headers ??= {}
+      const request = { sessionID: input.sessionID, agent: input.agent, model: input.model, kind: input.kind, requestId: `oc_v2_${crypto.randomUUID()}`, attempts: new Map() }
+      requests.set(request.requestId, request)
+      input.headers['x-agent-insight-request-id'] = request.requestId
+      if (input.kind === 'primary') {
+        if (!pendingRequests.has(input.sessionID)) pendingRequests.set(input.sessionID, [])
+        pendingRequests.get(input.sessionID)!.push(request)
+      }
+    },
+    request: async (input: any) => {
+      const sid = input.sessionID
+      const request = requests.get(input.request.headers.get('x-agent-insight-request-id'))
+      if (!request || request.sessionID !== sid || request.kind !== input.kind || request.agent !== input.agent || request.model.providerID !== input.model.providerID || request.model.id !== input.model.id) {
+        throw new Error('Agent Insight OpenCode V2 request identity unavailable; model request blocked')
+      }
+      void startSnapshot(sid)
+      const attemptId = crypto.randomUUID()
+      const headers = new Headers(input.request.headers)
+      for (const key of [...headers.keys()]) if (key.startsWith('x-agent-insight-')) headers.delete(key)
+      headers.set('x-agent-insight-session-id', sid)
+      headers.set('x-agent-insight-request-id', request.requestId)
+      headers.set('x-agent-insight-attempt-id', attemptId)
+      const address = options.prepareRequest ? await options.prepareRequest(input.request.url) : input.request.url
+      input.request = new Request(address, new Request(input.request, { headers }))
+      const attempt = { attempt_id: attemptId, started_at: nowIso() }
+      request.attempts.set(attemptId, attempt)
+      publish(request, attempt)
+    },
+    response: async (input: any) => {
+      const headers = input.request.headers
+      const request = requests.get(headers.get('x-agent-insight-request-id'))
+      if (!request || request.sessionID !== input.sessionID) return
+      const attempt = request.attempts.get(headers.get('x-agent-insight-attempt-id'))
+      if (!attempt) return
+      const callId = input.response.headers.get('x-request-id') ?? input.response.headers.get('x-agent-insight-call-id')
+      const upstreamRequestId = upstreamRequestIdFromHeaders(input.response.headers)
+      Object.assign(attempt, { status_code: input.response.status,
+        ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || '') ? { call_id: callId } : {}),
+        ...(upstreamRequestId ? { upstream_request_id: upstreamRequestId, upstream_request_id_source: 'model-response-header' } : {}) })
+      publish(request, attempt)
+    },
   }
 }
 
 export async function setupOpenCodeV2(context: any) {
   const lifecycle: { emit?: (record: any) => void, close?: () => Promise<void> } = {}
-  const hooks = await createOpenCodeCollector(lifecycle)
+  const hooks = await createOpenCodeCollector({ directory: context.location.directory }, lifecycle)
   if (!lifecycle.emit || !hooks.event) return
-  const adapter = createOpenCodeV2Adapter(context, lifecycle.emit, event => hooks.event!({ event }))
+  const insightDir = getExistingInsightDir()
+  const managedProviders = new Set<string>()
+  let proxyApi: any
+  const options = { insightDir, cwd: context.location.directory, env: loadSkillInsightEnv() }
+  const adapter = createOpenCodeV2Adapter(context, lifecycle.emit, event => hooks.event!({ event }), {
+    prepareRequest: (address: string) => proxyApi.prepareOpenCodeRequest(address, options),
+  })
   const abort = new AbortController()
+  let streamError: unknown
   const report = (error: unknown) => appendLogLine(path.join(getPreferredInsightDir(), 'logs/opencode_plugin.log'), `v2.collector.error ${String(error)}`)
   const events = (async () => {
     try {
       for await (const event of context.event.subscribe({ signal: abort.signal })) {
-        try { await adapter.event(event) } catch (error) { report(error) }
+        try { await adapter.event(event) } catch (error) { streamError = error; report(error) }
       }
-      if (!abort.signal.aborted) report(new Error('Event stream ended'))
-    } catch (error) { if (!abort.signal.aborted) report(error) }
+      if (!abort.signal.aborted) { streamError = new Error('Event stream ended'); report(streamError) }
+    } catch (error) { if (!abort.signal.aborted) { streamError = error; report(error) } }
   })()
   let closed = false
   const close = async () => {
@@ -938,6 +1313,32 @@ export async function setupOpenCodeV2(context: any) {
     for (const kind of ['context', 'compaction', 'generate', 'title']) {
       await context.session.hook(kind, async (input: any) => {
         try { await adapter.context(input) } catch (error) { report(error) }
+      })
+    }
+    let installation: any
+    try { installation = JSON.parse(fs.readFileSync(path.join(insightDir, 'inference-proxy/installation.json'), 'utf8')) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') report(error) }
+    if ((installation?.explicitEnabled ?? installation?.enabled) && installation?.agents?.includes('opencode')) {
+      proxyApi = await import(pathToFileURL(path.join(insightDir, 'inference-runtime/inference_proxy.mjs')).href)
+      await context.provider.transform(async (editor: any) => {
+        managedProviders.clear()
+        for (const item of editor.list()) {
+          if (!proxyApi.isManagedOpenCodeEndpoint(item.provider.settings?.baseURL, options)) continue
+          managedProviders.add(item.provider.id)
+          editor.update(item.provider.id, (provider: any) => { provider.settings = { ...provider.settings, transport: 'http' } })
+        }
+      })
+      await context.session.hook('model.request', async (input: any) => {
+        // Native transforms may precede config-defined provider registration.
+        if (managedProviders.has(input.model?.providerID) || proxyApi.isManagedOpenCodeEndpoint(input.baseURL, options)) await adapter.modelRequest(input)
+      })
+      await context.session.hook('http.request', async (input: any) => {
+        if (!proxyApi.isManagedOpenCodeEndpoint(input.request.url, options)) return
+        if (streamError) throw new Error('Agent Insight OpenCode V2 event stream unavailable; managed model request blocked')
+        await adapter.request(input)
+      })
+      await context.session.hook('http.response', async (input: any) => {
+        if (proxyApi.isManagedOpenCodeEndpoint(input.request.url, options)) await adapter.response(input)
       })
     }
   } catch (error) { await close(); throw error }

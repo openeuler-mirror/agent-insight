@@ -643,11 +643,11 @@ def configured_default_model(config: dict[str, Any] | None) -> str | None:
 
 
 def auth_provider_ids(auth_file: Path | None = None) -> set[str]:
-    path = auth_file or (Path.home() / ".local" / "share" / "opencode" / "auth.json")
-    if not path.is_file():
-        return set()
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    path = auth_file or data_home / "opencode" / "auth.json"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        content = os.environ.get("OPENCODE_AUTH_CONTENT") if auth_file is None else None
+        payload = json.loads(content or path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return set()
     if not isinstance(payload, dict):
@@ -667,49 +667,6 @@ def env_provider_ids(environ: dict[str, str] | None = None) -> set[str]:
         if isinstance(value, str) and value.strip():
             found.add(provider_id)
     return found
-
-
-def parse_providers_list_output(text: str) -> set[str]:
-    """Best-effort parse of ``opencode providers list`` for credentialed ids."""
-    found: set[str] = set()
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = re.search(r"\b([a-z0-9][a-z0-9_-]{1,40})\b", line.lower())
-        if match is None:
-            continue
-        token = match.group(1)
-        if token in {"api", "credentials", "environment", "variables", "list"}:
-            continue
-        if re.fullmatch(r"[a-z][a-z0-9_-]+", token):
-            found.add(token)
-    return found
-
-
-def credentialed_provider_ids(
-    *,
-    auth_providers: set[str] | None = None,
-    providers_list_output: str | None = None,
-    environ: dict[str, str] | None = None,
-    executable: str | None = None,
-) -> set[str]:
-    providers: set[str] = set()
-    if auth_providers is not None:
-        providers |= {p.strip() for p in auth_providers if p and p.strip()}
-    else:
-        providers |= auth_provider_ids()
-    providers |= env_provider_ids(environ)
-    if providers_list_output is not None:
-        providers |= parse_providers_list_output(providers_list_output)
-    elif providers_list_output is None and executable is not None:
-        stdout, _error = _run_opencode_cli(
-            ["providers", "list"],
-            executable=executable,
-        )
-        if stdout:
-            providers |= parse_providers_list_output(stdout)
-    return providers
 
 
 def list_opencode_agents(
@@ -793,28 +750,87 @@ def list_opencode_agents(
     }
 
 
+def _read_v2_model_data(
+    operation: str, executable: str | None, *, timeout: float,
+) -> Any:
+    output, error = _run_opencode_cli(
+        ["api", "--standalone", operation], executable=executable, timeout=timeout,
+    )
+    if error is not None or output is None:
+        raise ValueError("OpenCode model API failed")
+    payload = json.loads(output)
+    if not isinstance(payload, dict) or "data" not in payload:
+        raise ValueError("Invalid OpenCode model API response")
+    return payload["data"]
+
+
+def _v2_model_entry(row: Any) -> dict[str, Any] | None:
+    if not isinstance(row, dict) or not isinstance(row.get("enabled"), bool):
+        raise ValueError("Invalid OpenCode model entry")
+    provider, model_id = row.get("providerID"), row.get("id")
+    if not isinstance(provider, str) or not provider or not isinstance(model_id, str) or not model_id:
+        raise ValueError("Invalid OpenCode model ID")
+    if not row["enabled"]:
+        return None
+    name = row.get("name")
+    return {
+        "id": f"{provider}/{model_id}",
+        "providerID": provider,
+        "modelID": model_id,
+        "name": name if isinstance(name, str) and name.strip() else model_id,
+        "default": False,
+    }
+
+
+def _list_v2_models(executable: str | None) -> dict[str, Any]:
+    result: dict[str, Any] = {"platform": "opencode", "default": None, "models": []}
+    try:
+        data = _read_v2_model_data("model.list", executable, timeout=20)
+        if not isinstance(data, list):
+            raise ValueError("Invalid OpenCode model list")
+        models = merge_model_entries([entry for row in data if (entry := _v2_model_entry(row)) is not None])
+    except ValueError:
+        return {**result, "note": "无法读取 OpenCode v2 原生模型目录，请用客户端运行账号检查 opencode api --standalone model.list。"}
+    result["models"] = models
+    if not models:
+        return {**result, "note": "OpenCode v2 原生模型目录没有已启用的模型，请检查 Provider 认证和模型配置。"}
+
+    try:
+        data = _read_v2_model_data("model.default", executable, timeout=10)
+        default = _v2_model_entry(data) if data is not None else None
+    except ValueError:
+        return {**result, "note": "无法读取 OpenCode v2 原生默认模型，仍可选择已启用的模型。"}
+    if default and any(entry["id"] == default["id"] for entry in models):
+        result["default"] = default["id"]
+        mark_default_model(models, default["id"])
+    return result
+
+
 def list_opencode_models(
     *,
     executable: str | None = None,
     cli_output: str | None = None,
     config: dict[str, Any] | None = None,
     auth_providers: set[str] | None = None,
-    providers_list_output: str | None = None,
     environ: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    if cli_output is None:
+        try:
+            version, _ = _run_opencode_cli(["--version"], executable=executable, timeout=5)
+        except UnicodeError:
+            version = None
+        match = re.search(r"(?:^|\s)v?([12])\.\d+\.\d+", version or "")
+        if not match:
+            return {"platform": "opencode", "default": None, "models": [],
+                    "note": "无法确认 OpenCode 版本，请用客户端运行账号检查 opencode --version。"}
+        if match.group(1) == "2":
+            return _list_v2_models(executable)
+
     note: str | None = None
     default_id = configured_default_model(config)
 
-    credentialed = credentialed_provider_ids(
-        auth_providers=auth_providers,
-        providers_list_output=providers_list_output,
-        environ=environ,
-        executable=(
-            executable
-            if providers_list_output is None and cli_output is None
-            else None
-        ),
-    )
+    auth_ids = auth_provider_ids() if auth_providers is None else auth_providers
+    credentialed = {provider.strip() for provider in auth_ids if provider.strip()} | env_provider_ids(environ)
 
     # Config models only when provider is usable (inline apiKey or credentialed).
     config_models = models_from_config_providers(

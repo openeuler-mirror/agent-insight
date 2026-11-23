@@ -22,7 +22,7 @@
 // 口径见 src/lib/fleet/agg.ts / 《视图数据计算口径说明》；硬错误口径，软错误(judge)未叠加。
 // 缺埋点的面板（per-tool 延迟、TTFT、箱线、self-time、协作网络）以占位卡诚实标注。
 
-import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
 import {
     ResponsiveContainer, ComposedChart, BarChart, LineChart,
     Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend,
@@ -467,7 +467,7 @@ function ReliabilityTab({
             <section style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <div>
                     <div style={{ fontSize: 14, fontWeight: 800, color: "var(--foreground)" }}>可靠性</div>
-                    <div style={{ fontSize: 11, color: "var(--foreground-muted)", marginTop: 3 }}>数据源：链路跟踪中的 RAS anomaly / action_result 事件；无异常（含 unknown）按无故障计。</div>
+                    <div style={{ fontSize: 11, color: "var(--foreground-muted)", marginTop: 3 }}>数据源：链路追踪中的 RAS anomaly / action_result 事件；无异常（含 unknown）按无故障计。</div>
                 </div>
                 <span style={{ flex: 1 }} />
                 <ReliabilitySelect label="平台" value={platform} options={data.filters.platforms} onChange={onPlatformChange} />

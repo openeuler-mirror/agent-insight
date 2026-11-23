@@ -25,7 +25,7 @@ import { SkillWorkspaceTabs } from '@/components/skills/SkillWorkspaceTabs';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { waitForExperimentTasksTerminal } from '@/lib/client/experiment-eval-polling';
-import { isInternalSystemAgentTrace, shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
+import { shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
 import {
     buildFallbackDiagnosis,
     type DiagnosisDimensionKey,
@@ -46,7 +46,6 @@ import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import {
     EvaluationContent,
     SectionShell,
-    FindingsGrouped,
     STATIC_EVAL_STANDARDS,
     computeStaticScore,
     type EvaluationDetail,
@@ -54,7 +53,6 @@ import {
     type FindingGroup,
 } from '@/components/evaluation';
 import { toast } from 'sonner';
-import { Info } from 'lucide-react';
 import { Term } from '@/components/text/Term';
 import './debug.css';
 import './skill-analysis.css';
@@ -3789,7 +3787,7 @@ function TraceDeviationPanel({
     //     使列表与上方"已评测 X/Y"、③ 总评分(都绑定该任务)一致；且每行都在任务里 → 都有评估 Trace。
     //     之前 recovery 拉的是全量结果(所有任务, limit 200)并按历史状态展示，导致列表显示几十条历史
     //     "已评测"(其它任务、无评估ID)，与 4/6 这种任务内统计对不上。
-    //   - 未关联任务时：不展示历史 trace 评测记录，避免新账号内置 demo trace 被误当成当前任务执行。
+    //   - 未关联任务时：不展示历史 trace 评测记录，避免历史 trace 被误当成当前任务执行。
     const displayedTraces = scoredTraces.filter(s => {
         if (deletedTaskIds.has(s.id)) return false;
         if (!traceEvaluationBatchId) return false;

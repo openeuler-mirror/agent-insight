@@ -16,6 +16,10 @@ agent-core 内建的 OTLP exporter 上。
 `init_observability(ObservabilityConfig(exporter="otlp_http", endpoint=..., service_name="jiuwenswarm"))`，
 把 OTLP exporter + callback handler 挂到 `Runner.callback_framework`。
 
+新版 SDK 还通过 `openjiuwen.harness.observability.acquire_observability` 启用单 Agent 的
+root span；只初始化 exporter 不会让新版单 Agent 产生 Trace。扩展按 API 能力检测，
+没有该接口的旧 SDK 保留原初始化路径，无需额外修改 `agent_observability.enabled`。
+
 > 为什么是 `register_extensions` 而不是 `initialize`：jiuwenswarm 的 loader 只调用
 > 模块级 `register_extensions`，从不调 `BaseExtension.initialize`。
 
@@ -59,6 +63,15 @@ agent-core 内建的 OTLP exporter 上。
 需要 `opentelemetry-exporter-otlp-proto-http`——jiuwenswarm 的 pyproject 已声明，
 通常无需额外安装。`extension.yaml` 的 `dependencies` 故意留空，避免 loader 在产品
 进程里同步 pip-install。
+
+## 新旧 Span 契约
+
+服务端同时识别旧版 `llm.call` / `tool.*` 和新版 `chat <model>` / `execute_tool <name>`。
+新版读取结构化 `gen_ai.input.messages`、`gen_ai.output.messages`、`gen_ai.tool.call.*` 及
+`gen_ai.usage.input_tokens` / `output_tokens`，保留工具参数、结果、失败状态和每次调用的用量。
+独立 reasoning / context event Span 不重复计为模型调用或 Token。工具与模型调用通过明确父链
+或相同 tool-call ID 关联；缺少关联证据时保留独立工具事件。新版单 Agent 的 task-iteration
+边界不会被当作团队标记，带 `openjiuwen.trace.complete=true` 的 root span 作为明确完成信号。
 
 ## 鉴权细节
 

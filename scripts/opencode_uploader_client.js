@@ -16,11 +16,14 @@
 
 import http from "node:http"
 import https from "node:https"
-import { randomUUID } from "node:crypto"
+import { randomUUID, createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
-import { URL } from "node:url"
+import { URL, fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
+
+const require = createRequire(import.meta.url)
 
 function getPreferredInsightDir() {
   if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
@@ -503,6 +506,7 @@ function readJsonl(file) {
     const text = fs.readFileSync(file, "utf8")
     const lines = text.split("\n")
     let pluginPid = null
+    let pluginCwd = null
     for (const line of lines) {
       if (!line || !line.trim()) continue
       const obj = safeJsonParse(line)
@@ -510,9 +514,11 @@ function readJsonl(file) {
       if (obj.kind === "plugin.start") {
         const pid = Number(obj?.payload?.pid)
         if (Number.isFinite(pid) && pid > 0) pluginPid = pid
+        if (typeof obj?.payload?.cwd === "string" && obj.payload.cwd.trim()) pluginCwd = path.resolve(obj.payload.cwd)
       }
       obj.__sourceFile = file
       if (pluginPid) obj.__pluginPid = pluginPid
+      if (pluginCwd) obj.__pluginCwd = pluginCwd
       records.push(obj)
     }
   } catch {}
@@ -671,9 +677,12 @@ function buildState(records) {
   const seenDeltaEventIds = new Set()
   const userTextByMsg = new Map()
   const sysPrompts = new Map()
+  const inferenceByMessage = new Map()
+  const inferenceErrors = new Map()
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
   const sessionFiles = new Map()
+  const sessionWorkspaces = new Map()
   const sessionIdleAt = new Map()
   // 每个 session 落到 spool 的原始记录条数。只增不减，是"这个会话还在干活"的唯一
   // 可靠信号——工具死循环时消息条数/终稿文本/时间戳全都不变，只有它会涨。
@@ -690,6 +699,7 @@ function buildState(records) {
       if (!sessionFiles.has(sid)) sessionFiles.set(sid, new Set())
       sessionFiles.get(sid).add(r.__sourceFile)
     }
+    if (typeof r.__pluginCwd === "string" && r.__pluginCwd) sessionWorkspaces.set(sid, r.__pluginCwd)
     const pid = Number(r?.__pluginPid)
     if (!Number.isFinite(pid) || pid <= 0) return
     if (!sessionPids.has(sid)) sessionPids.set(sid, new Set())
@@ -713,6 +723,30 @@ function buildState(records) {
     const kind = r?.kind
     const recordSid = typeof r?.sessionID === "string" ? r.sessionID : ""
     if (recordSid) sessionRecordCounts.set(recordSid, (sessionRecordCounts.get(recordSid) || 0) + 1)
+    if (kind === "llm.request" || kind === "llm.attempt") {
+      const payload = r.payload || {}
+      if (!recordSid || !payload.messageID || !payload.request_id) continue
+      const key = JSON.stringify([recordSid, payload.messageID])
+      const current = inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
+      current.requestIds.add(payload.request_id)
+      if (kind === "llm.attempt" && payload.attempt_id) {
+        const previous = current.attempts.get(payload.attempt_id) || {}
+        current.attempts.set(payload.attempt_id, {
+          ...previous,
+          attempt_id: payload.attempt_id,
+          request_id: payload.request_id,
+          ...(payload.transport_request_id ? { transport_request_id: payload.transport_request_id } : {}),
+          ...(payload.started_at ? { started_at: payload.started_at } : {}),
+          ...(payload.status_code ? { status_code: payload.status_code } : {}),
+          ...(payload.error_type ? { error_type: payload.error_type } : {}),
+          ...(payload.call_id ? { call_id: payload.call_id } : {}),
+          ...(payload.upstream_request_id ? { upstream_request_id: payload.upstream_request_id,
+            upstream_request_id_source: payload.upstream_request_id_source || 'model-response-header' } : {}),
+        })
+      }
+      inferenceByMessage.set(key, current)
+      continue
+    }
     if (kind === "plugin.shutdown") {
       const sid = r.sessionID
       if (sid) {
@@ -760,6 +794,16 @@ function buildState(records) {
     const t = r?.payload?.type
     const ev = r?.payload?.event
     if (!t || !ev) continue
+
+    if (t === "session.error") {
+      const sid = ev.properties?.sessionID || recordSid
+      const error = ev.properties?.error
+      const headers = error?.data?.responseHeaders || {}
+      const responseHeaders = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]))
+      const id = responseHeaders.get('x-request-id') ?? responseHeaders.get('x-agent-insight-call-id')
+      if (sid && /^[a-f0-9-]{36}$/.test(id || '')) inferenceErrors.set(JSON.stringify([sid, id]), error.data.message || 'Model request failed')
+      continue
+    }
 
     const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
     if (t === "session.idle" || (t === "session.status" && statusType === "idle")) {
@@ -833,22 +877,127 @@ function buildState(records) {
       const props = ev?.properties || {}
       const mid = props.messageID
       const sid = props.sessionID || r.sessionID
-      const pid = props.partID
+      // `partID` is optional on the wire. Keep a per-message bucket when it is
+      // absent so a CLI stream is still reconstructable.
+      const pid = typeof props.partID === "string" && props.partID ? props.partID : ""
       const field = typeof props.field === "string" && props.field ? props.field : "text"
       const delta = typeof props.delta === "string" ? props.delta : ""
-      if (!sid || !mid || !pid || !delta) continue
+      if (!sid || !mid || !delta) continue
       const eventId = typeof ev?.id === "string" ? ev.id : ""
       if (eventId && seenDeltaEventIds.has(eventId)) continue
       if (eventId) seenDeltaEventIds.add(eventId)
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
-      const key = `${mid}:${pid}:${field}`
+      const bucketId = pid || `delta-${field}`
+      const key = `${mid}:${bucketId}:${field}`
       partDeltas.set(key, `${partDeltas.get(key) || ""}${delta}`)
+
+      // CLI mode (`opencode run`) can exit before the deferred
+      // `message.updated` / `message.part.updated` sync events are published,
+      // while `message.part.delta` is emitted synchronously. Without these
+      // synthetic shells the streamed answer (and its message) would be
+      // dropped entirely by buildMessagesForSession(). A later real
+      // part.updated/message.updated with the same ids merges/overrides them.
+      if (!msgInfo.has(mid)) {
+        msgInfo.set(mid, {
+          id: mid,
+          sessionID: sid,
+          role: "assistant",
+          time: { created: toMsTimestamp(r?.t) ?? Date.now() },
+        })
+      }
+      if (!msgParts.has(mid)) msgParts.set(mid, [])
+      const parts = msgParts.get(mid)
+      if (!parts.some((part) => part?.id === bucketId)) {
+        parts.push({
+          id: bucketId,
+          messageID: mid,
+          sessionID: sid,
+          // The delta protocol does not carry the part type (reasoning deltas
+          // also use field="text"); default to text and let a real snapshot
+          // correct it.
+          type: "text",
+          text: "",
+        })
+      }
       continue
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionFiles, sessionIdleAt, sessionRecordCounts }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+}
+
+function extractInvokedSkillsForOrigin(interactions) {
+  const seen = new Set()
+  const out = []
+  const visit = (message) => {
+    for (const call of message?.tool_calls || message?.toolCalls || []) {
+      const tool = String(call?.function?.name ?? call?.name ?? "").toLowerCase()
+      if (tool !== "skill" && tool !== "load_skill") continue
+      const raw = call?.function?.arguments ?? call?.arguments ?? {}
+      let args = raw
+      try { if (typeof raw === "string") args = JSON.parse(raw) } catch { continue }
+      const value = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill ?? args?.id
+      const name = String(value || "").trim().replace(/^["']+|["']+$/g, "")
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || seen.has(name)) continue
+      seen.add(name)
+      const rawVersion = args?.version
+      const version = rawVersion == null ? null : Number(rawVersion)
+      out.push({ name, version: Number.isInteger(version) ? version : null })
+    }
+  }
+  for (const interaction of interactions || []) {
+    visit(interaction)
+    visit(interaction?.responseMessage)
+    for (const message of interaction?.requestMessages || []) visit(message)
+  }
+  return out
+}
+
+function skillDeploymentRuntime() {
+  const insightRoot = getPreferredInsightDir()
+  const candidates = [
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "skill-deployment-runtime.cjs"),
+    path.join(insightRoot, "client", "runtime", "skill-deployment-runtime.cjs"),
+  ]
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate)) return require(candidate) } catch {}
+  }
+  return null
+}
+
+function registerOpenCodeSkillOrigins(state, rootSid, interactions) {
+  const runtime = skillDeploymentRuntime()
+  const workspace = state.sessionWorkspaces.get(rootSid)
+    || collectSessionSubtree(state, rootSid).map(sid => state.sessionWorkspaces.get(sid)).find(Boolean)
+  if (!runtime || !workspace) return []
+  const frameworkRoot = path.join(path.resolve(workspace), ".opencode")
+  const origins = []
+  for (const skill of extractInvokedSkillsForOrigin(interactions)) {
+    const targetDir = path.join(frameworkRoot, "skills", skill.name)
+    if (!fs.existsSync(path.join(targetDir, "SKILL.md"))) continue
+    try {
+      const files = runtime.collectDirectoryFiles(targetDir)
+      const origin = runtime.registerSkillOrigin(path.join(getPreferredInsightDir(), "client"), {
+        platform: "opencode",
+        skillName: skill.name,
+        frameworkRoot,
+        targetDir,
+        observedSkillVersion: skill.version,
+        observedContentHash: runtime.snapshotHash(files),
+      })
+      origins.push({
+        skillName: skill.name,
+        skillVersion: skill.version,
+        platform: "opencode",
+        targetMode: "execution_origin",
+        originRef: origin.originRef,
+        displayPath: origin.displayPath,
+        observedContentHash: origin.observedContentHash,
+      })
+    } catch {}
+  }
+  return origins
 }
 
 // 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
@@ -920,6 +1069,7 @@ function isRoundCompleted({ finalResult, idleMs, lastTs }) {
 function isSignatureUnchanged(prevSig, nextSig) {
   if (!prevSig) return false
   if (prevSig === nextSig) return true
+  if (String(prevSig).includes('|inference=') || String(nextSig).includes('|inference=')) return false
   const prev = String(prevSig).split("|")
   if (prev.length >= 8) return false
   const next = String(nextSig).split("|")
@@ -953,6 +1103,71 @@ function collectTextPartContent(parts, mid, partText, partDeltas) {
   return buf.join("")
 }
 
+// Deltas without `partID` are accumulated in a synthetic `delta-<field>` part.
+// When OpenCode later flushes the real part snapshot, it carries the same text
+// already completed; keeping both would duplicate the answer in the transcript.
+function isSyntheticDeltaPart(part) {
+  return typeof part?.id === "string" && part.id.startsWith("delta-")
+}
+
+// Compare the streamed bucket with real `text` snapshots by content instead of
+// assuming a snapshot always supersedes it: a partially published snapshot (or
+// a reasoning-only snapshot, which cannot carry the answer) must not truncate
+// the streamed answer.
+function preferRealParts(parts, mid, partText, partDeltas) {
+  const list = parts || []
+  const syntheticParts = list.filter(isSyntheticDeltaPart)
+  if (!syntheticParts.length) return list
+  const realTextParts = list.filter((part) => !isSyntheticDeltaPart(part)
+    && (part?.type || "").toLowerCase() === "text")
+  if (!realTextParts.length) return list
+
+  const dropped = new Set()
+  for (const synthetic of syntheticParts) {
+    const streamed = resolvePartField(synthetic, mid, partText, partDeltas)
+    if (!streamed) { dropped.add(synthetic); continue }
+    for (const real of realTextParts) {
+      const snapshot = resolvePartField(real, mid, partText, partDeltas)
+      if (!snapshot) continue
+      // Snapshot already completed (or contains) the stream: the bucket is a
+      // duplicate. Stream longer than the snapshot: the snapshot is stale, so
+      // drop it and keep the complete stream.
+      if (snapshot.includes(streamed)) dropped.add(synthetic)
+      else if (streamed.includes(snapshot)) dropped.add(real)
+    }
+  }
+  return dropped.size ? list.filter((part) => !dropped.has(part)) : list
+}
+
+// 上游是否真的给了 usage。全 0 的 token 对象（TUI 之外的部分版本、以及 CLI
+// 退出时丢失 message.updated 后由占位逻辑补出来的空对象）不能当成"用量为 0"，
+// 否则界面会把"未提供"显示成有效的 0。
+function hasReportedTokenUsage(tokens) {
+  if (!tokens || typeof tokens !== "object") return false
+  const values = [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+  return values.some((value) => Number(value) > 0)
+}
+
+// CLI 模式可能丢掉带 tokens 的 message.updated，但 step-finish part 里带着同一份
+// usage。把它作为 message 级 usage 的兜底来源。
+function usageFromStepFinishParts(parts) {
+  let found = false
+  const sum = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "step-finish") continue
+    const t = p?.tokens
+    if (!t || typeof t !== "object") continue
+    found = true
+    sum.input += Number(t.input || 0) || 0
+    sum.output += Number(t.output || 0) || 0
+    sum.reasoning += Number(t.reasoning || 0) || 0
+    sum.cache.read += Number(t.cache?.read || 0) || 0
+    sum.cache.write += Number(t.cache?.write || 0) || 0
+  }
+  if (!found || !hasReportedTokenUsage(sum)) return undefined
+  return sum
+}
+
 function buildMessagesForSession(state, sid) {
   const { msgInfo, msgParts, partText, partDeltas, userTextByMsg } = state
   const messages = []
@@ -962,6 +1177,7 @@ function buildMessagesForSession(state, sid) {
     const role = info?.role
     const created = info?.time?.created
     const completed = info?.time?.completed
+    const rawParts = preferRealParts(msgParts.get(mid) || [], mid, partText, partDeltas)
 
     let content = ""
     if (role === "user") {
@@ -969,15 +1185,14 @@ function buildMessagesForSession(state, sid) {
       // part may contain the expanded routing prompt instead of what the user
       // typed. Its message id comes from output.message.id on current OpenCode.
       content = userTextByMsg.get(mid) || ""
-      if (!content) content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
+      if (!content) content = collectTextPartContent(rawParts, mid, partText, partDeltas)
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
+      content = collectTextPartContent(rawParts, mid, partText, partDeltas)
     }
 
     const tool_calls = []
-    const parts = msgParts.get(mid) || []
-    for (const p of parts) {
+    for (const p of rawParts) {
       if ((p?.type || "").toLowerCase() !== "tool") continue
       const callID = p?.callID || p?.callId || p?.id
       const tool = p?.tool
@@ -994,7 +1209,9 @@ function buildMessagesForSession(state, sid) {
       })
     }
 
-    const tokens = info?.tokens
+    const tokens = hasReportedTokenUsage(info?.tokens)
+      ? info.tokens
+      : usageFromStepFinishParts(rawParts)
     const u = tokens
       ? {
           input: tokens.input,
@@ -1010,7 +1227,6 @@ function buildMessagesForSession(state, sid) {
     // and so compaction-trigger user messages (which carry only a "compaction"
     // part with no text) are not silently dropped. messageID/sessionID on each
     // part are redundant with the enclosing message — strip them.
-    const rawParts = msgParts.get(mid) || []
     const partsOut = rawParts.length
       ? rawParts.map((p) => {
           const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
@@ -1054,11 +1270,89 @@ function buildMessagesForSession(state, sid) {
       ...(info?.error ? { status: 'error', error_summary: typeof info.error === 'string' ? info.error : info.error.message || info.error.data?.message || 'Model request failed' } : {}),
       variant: info?.variant,
     }
+    const inference = state.inferenceByMessage?.get(JSON.stringify([sid, mid]))
+    if (role === "assistant" && inference?.requestIds.size === 1) {
+      m.trace_kind = "llm"
+      m.inference_request_id = [...inference.requestIds][0]
+      m.inference_session_id = sid
+      m.inference_attempts = [...inference.attempts.values()]
+      const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
+      if (callIds.length) m.inference_call_ids = callIds
+      const upstreamIds = [...new Map(m.inference_attempts
+        .filter(attempt => attempt.call_id && attempt.upstream_request_id)
+        .map(attempt => [`${attempt.call_id}\u0000${attempt.upstream_request_id}`, {
+          call_id: attempt.call_id,
+          request_id: attempt.upstream_request_id,
+          source: attempt.upstream_request_id_source || 'model-response-header',
+        }])).values()]
+      if (upstreamIds.length) m.inference_upstream_request_ids = upstreamIds
+      if (!m.error_summary && !m.content && !m.toolCalls?.length) {
+        const errors = callIds.map(id => state.inferenceErrors?.get(JSON.stringify([sid, id]))).filter(Boolean)
+        if (errors.length === 1) { m.status = 'error'; m.error_summary = errors[0] }
+      }
+    }
     messages.push(m)
   }
 
   messages.sort((a, b) => (toMsTimestamp(a.timeInfo?.created) || 0) - (toMsTimestamp(b.timeInfo?.created) || 0))
   return messages
+}
+
+function inferenceGatewayDirectory(insightDir, apiKey) {
+  const account = createHash('sha256').update(apiKey || 'anonymous').digest('hex').slice(0, 16)
+  return path.join(insightDir, 'inference-gateway', account, 'opencode')
+}
+
+function applyInferenceGatewayRecords(state, insightDir, apiKey) {
+  const root = inferenceGatewayDirectory(insightDir, apiKey)
+  state.inferenceUnassigned = new Map()
+  const transportProofs = new Map()
+  for (const [key, inference] of state.inferenceByMessage) {
+    const [sid, mid] = JSON.parse(key)
+    const info = state.msgInfo.get(mid)
+    const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, mid])).digest('hex').slice(0, 32)
+    if (info?.role !== 'assistant' || info.sessionID !== sid || inference.requestIds.size !== 1 || !inference.requestIds.has(expected)) continue
+    for (const attempt of inference.attempts.values()) {
+      if (!attempt.transport_request_id || !attempt.attempt_id || attempt.request_id !== expected) continue
+      const proofKey = JSON.stringify([sid, attempt.transport_request_id, attempt.attempt_id])
+      const owners = transportProofs.get(proofKey) || new Set()
+      owners.add(mid)
+      transportProofs.set(proofKey, owners)
+    }
+  }
+  for (const sid of state.sessions.keys()) {
+    const dir = path.join(root, createHash('sha256').update(sid).digest('hex'))
+    let files
+    try { files = fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort() } catch { continue }
+    for (const file of files) {
+      let call
+      try { call = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) } catch { continue }
+      if (call.agent !== 'opencode' || call.session_id !== sid || !/^[a-f0-9-]{36}$/.test(call.call_id || '')) continue
+      const owners = !call.message_id && transportProofs.get(JSON.stringify([sid, call.request_id, call.attempt_id]))
+      const lateMessageId = owners?.size === 1 ? [...owners][0] : undefined
+      const messageId = call.message_id || lateMessageId
+      const info = state.msgInfo.get(messageId)
+      const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, messageId])).digest('hex').slice(0, 32)
+      if (info?.role === 'assistant' && info.sessionID === sid && (call.request_id === expected || lateMessageId) && call.attempt_id) {
+        const key = JSON.stringify([sid, messageId])
+        const current = state.inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
+        current.requestIds.add(expected)
+        const previous = current.attempts.get(call.attempt_id)
+        const attemptKey = previous?.call_id && previous.call_id !== call.call_id ? `${call.attempt_id}:${call.call_id}` : call.attempt_id
+        current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: expected,
+          ...(lateMessageId ? { transport_request_id: call.request_id } : {}),
+          attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
+          status_code: call.status_code, error_type: call.error_type, state: call.state,
+          ...(call.upstream_request_id ? { upstream_request_id: call.upstream_request_id,
+            upstream_request_id_source: 'model-response-header' } : {}) })
+        state.inferenceByMessage.set(key, current)
+      } else {
+        const unassigned = state.inferenceUnassigned.get(sid) || []
+        unassigned.push({ call_id: call.call_id, state: call.state, status_code: call.status_code, reason: 'missing_message_anchor' })
+        state.inferenceUnassigned.set(sid, unassigned)
+      }
+    }
+  }
 }
 
 function mergeGraph(state, rootSid) {
@@ -1070,6 +1364,9 @@ function mergeGraph(state, rootSid) {
     const sid = stack.pop()
     if (!sid || seen.has(sid)) continue
     seen.add(sid)
+    const unassigned = state.inferenceUnassigned?.get(sid)
+    if (unassigned?.length) merged.push({ role: 'system', content: '', inference_session_id: sid,
+      inference_unassigned_calls: unassigned, ...(sid !== rootSid ? { subagent_session_id: sid } : {}) })
 
     // Build per-session system prompt entries (one entry per distinct sha256).
     // Each becomes a synthetic role="system" message at the head of the session's
@@ -1129,6 +1426,9 @@ function deriveFields(interactions) {
   let toolCallCount = 0
   let toolCallErrorCount = 0
   let maxSingleCallTokens = 0
+  // 至少有一条 completion 消息带真实 usage 时才认为上游提供了用量。否则 token
+  // 字段留空（undefined），让服务端/界面区分「未提供」和「确实为 0」。
+  let usageReported = false
 
   for (const m of interactions || []) {
     if (!m) continue
@@ -1143,6 +1443,9 @@ function deriveFields(interactions) {
     llmCallCount++
     const u = m.usage
     if (u) {
+      // 与 server 端 deriveOpencodeExecutionFields / buildAgentCallTree 保持同一判定：
+      // 全 0 的 usage 对象视为「未上报」，不能因此把 tokens 标成有效的 0。
+      if (hasReportedTokenUsage(u)) usageReported = true
       const input = Number(u.input || 0) || 0
       const rawOutput = Number(u.output || 0) || 0
       const cacheRead = Number(u.cache?.read || 0) || 0
@@ -1178,17 +1481,18 @@ function deriveFields(interactions) {
   return {
     model: model || undefined,
     final_result: finalResult || undefined,
-    tokens: Math.round(totalTokens),
+    usageReported,
+    tokens: usageReported ? Math.round(totalTokens) : undefined,
     latency: totalLatencyMs / 1000,
-    input_tokens: Math.round(totalInputTokens),
-    output_tokens: Math.round(totalOutputTokens),
+    input_tokens: usageReported ? Math.round(totalInputTokens) : undefined,
+    output_tokens: usageReported ? Math.round(totalOutputTokens) : undefined,
     tool_call_count: toolCallCount,
     tool_call_error_count: toolCallErrorCount,
     llm_call_count: llmCallCount,
-    cache_read_input_tokens: Math.round(totalCacheReadInputTokens),
-    cache_creation_input_tokens: Math.round(totalCacheCreationInputTokens),
-    max_single_call_tokens: Math.round(maxSingleCallTokens),
-    reasoning_tokens: Math.round(totalReasoningTokens),
+    cache_read_input_tokens: usageReported ? Math.round(totalCacheReadInputTokens) : undefined,
+    cache_creation_input_tokens: usageReported ? Math.round(totalCacheCreationInputTokens) : undefined,
+    max_single_call_tokens: usageReported ? Math.round(maxSingleCallTokens) : undefined,
+    reasoning_tokens: usageReported ? Math.round(totalReasoningTokens) : undefined,
   }
 }
 
@@ -1330,20 +1634,23 @@ async function main() {
     }
     ckpt.__pendingSessions = pendingSessions
     const pendingFiles = new Set(Object.values(pendingSessions).flat())
+    let gatewayRevision = ''
+    try { gatewayRevision = fs.readFileSync(path.join(inferenceGatewayDirectory(getPreferredInsightDir(), apiKey), 'updated'), 'utf8') } catch {}
+    const gatewayChanged = Boolean(gatewayRevision && gatewayRevision !== ckpt.__inferenceGatewayRevision)
     const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
     const lastScanMtime = scopedFile
       ? Number(fileScanMtimes[scopedFile] || 0)
       : Number(ckpt.__lastScanMtime || 0)
     // 进程退出不会改变 spool mtime，未完成上报的会话必须重新检查。
-    if (!pendingFiles.size && !forceSessions.size && newestMtime > 0 && newestMtime <= lastScanMtime
+    if (!gatewayChanged && !pendingFiles.size && !forceSessions.size && newestMtime > 0 && newestMtime <= lastScanMtime
       && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
       saveCheckpoint(checkpointFile, ckpt)
       appendUploaderLog(`main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`)
       return
     }
-    const candidateFiles = selectJsonlFiles(spoolDir, spoolFile)
+    const candidateFiles = selectJsonlFiles(spoolDir, gatewayChanged ? '' : spoolFile)
     const candidates = !spoolFile && !forceSessions.size ? [...new Set([...candidateFiles, ...pendingFiles])] : candidateFiles
-    const files = selectJsonlFilesForUpload(candidates, { forceSessions, lastScanMtime, pendingFiles })
+    const files = gatewayChanged ? candidateFiles : selectJsonlFilesForUpload(candidates, { forceSessions, lastScanMtime, pendingFiles })
     const scannedMtimes = new Map(files.map(file => {
       try { return [file, fs.statSync(file).mtimeMs] } catch { return [file, 0] }
     }))
@@ -1366,6 +1673,7 @@ async function main() {
     appendUploaderLog(`main.records total=${allRecords.length}`)
 
     const state = buildState(allRecords)
+    applyInferenceGatewayRecords(state, getPreferredInsightDir(), apiKey)
 
     const roots = []
     for (const sid of state.sessions.keys()) {
@@ -1374,7 +1682,7 @@ async function main() {
     appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
 
     for (const rootSid of roots) {
-      if (forceSessions.size && !forceSessions.has(rootSid)) continue
+      if (!gatewayChanged && forceSessions.size && !forceSessions.has(rootSid)) continue
       if (deletedSessionIds.has(rootSid)) {
         appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
         continue
@@ -1386,6 +1694,7 @@ async function main() {
       }
       const query = interactions.find((m) => m.role === "user" && m.content)?.content || `OpenCode Session ${rootSid}`
       const derived = deriveFields(interactions)
+      const skillOrigins = registerOpenCodeSkillOrigins(state, rootSid, interactions)
 
       // System prompts are now unshifted inside mergeGraph() per session
       // (root + sub-agents), so no extra unshift needed here. Keep `sys` for
@@ -1413,6 +1722,7 @@ async function main() {
         task_id: rootSid,
         query,
         framework: "opencode",
+        ...(skillOrigins.length ? { skill_origins: skillOrigins } : {}),
         ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
         host: {
           hostname: os.hostname() || clientIdentity?.hostname || undefined,
@@ -1440,7 +1750,7 @@ async function main() {
       }
 
       const lastAssistant = String(payload.final_result || "")
-      const sig = buildSignature({
+      let sig = buildSignature({
         interactionCount: interactions.length,
         finalResultLength: lastAssistant.length,
         lastTs,
@@ -1454,6 +1764,10 @@ async function main() {
         // trace_completed_at，服务端会再跑一整轮 LLM 分析。
         completed: Boolean(payload.trace_completed_at) || Boolean(payload.opencode_cli_completed),
       })
+      const inferenceSnapshot = interactions.filter(m => m.inference_call_ids?.length || m.inference_unassigned_calls?.length)
+        .map(m => ({ session: m.inference_session_id, message: m.messageID, calls: m.inference_call_ids,
+          attempts: m.inference_attempts, unassigned: m.inference_unassigned_calls }))
+      if (inferenceSnapshot.length) sig += '|inference=' + createHash('sha256').update(stableStringify(inferenceSnapshot)).digest('hex')
       appendUploaderLog(
         `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
         `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
@@ -1511,6 +1825,7 @@ async function main() {
       for (const [file, mtime] of scannedMtimes) fileScanMtimes[path.resolve(file)] = mtime
       ckpt.__fileScanMtimes = fileScanMtimes
       if (!scopedFile) ckpt.__lastScanMtime = newestMtime
+      if (gatewayRevision) ckpt.__inferenceGatewayRevision = gatewayRevision
       saveCheckpoint(checkpointFile, ckpt)
       appendUploaderLog("main.checkpointUpdated lastScanMtime=" + newestMtime)
     }
@@ -1520,6 +1835,7 @@ async function main() {
 }
 
 export {
+  applyInferenceGatewayRecords,
   buildMessagesForSession,
   buildSignature,
   buildState,

@@ -658,7 +658,7 @@ function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: 
                 setFinalResult(fr);
             })
             .catch(() => {});
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then((d: SessionData) => setSession(d))
             .catch(err => setSession({ error: err instanceof Error ? err.message : String(err), interactions: [] }))
@@ -670,7 +670,7 @@ function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: 
                 if (d.messages?.length) setMessages(d.messages.map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content })));
             })
             .catch(() => {});
-    }, [taskId]);
+    }, [taskId, user]);
 
     useEffect(() => {
         chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight });
@@ -1989,24 +1989,6 @@ function FaultFilterPill({ label, count, active }: { label: string; count?: numb
     );
 }
 
-function MiniMetric({ label, value, tone = 'normal' }: { label: string; value: string; tone?: 'normal' | 'danger' }) {
-    return (
-        <div style={{ padding: '8px 9px', borderRadius: 8, background: tone === 'danger' ? 'var(--error-subtle)' : 'var(--background-secondary)', border: `1px solid ${tone === 'danger' ? 'var(--error-subtle-border)' : 'var(--border)'}` }}>
-            <div style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{label}</div>
-            <div style={{ marginTop: 2, fontSize: 13, fontWeight: 700, color: tone === 'danger' ? 'var(--error)' : 'var(--foreground)' }}>{value}</div>
-        </div>
-    );
-}
-
-function InlineFact({ label, value }: { label: string; value: string }) {
-    return (
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '7px 8px', background: 'var(--background-secondary)' }}>
-            <div style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{label}</div>
-            <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{value}</div>
-        </div>
-    );
-}
-
 function Avatar({ role }: { role: 'assistant' | 'user' }) {
     const isUser = role === 'user';
     return (
@@ -2197,22 +2179,6 @@ function pageNumbers(current: number, total: number): (number | '...')[] {
 function truncateText(input: string, max: number): string {
     const s = String(input || '').trim();
     return s.length > max ? `${s.slice(0, max)}...` : s;
-}
-
-function stringifyShort(value: unknown): string {
-    if (value == null) return '';
-    if (typeof value === 'string') return value.slice(0, 500);
-    try {
-        return JSON.stringify(value).slice(0, 500);
-    } catch {
-        return String(value).slice(0, 500);
-    }
-}
-
-function safeTime(value?: string): string {
-    if (!value) return '-';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '-' : date.toLocaleTimeString();
 }
 
 function bubbleStyle(role: 'assistant' | 'user') {

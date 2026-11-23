@@ -59,7 +59,7 @@ async function main() {
         try {
             interactions = JSON.parse(session.interactions as unknown as string);
             if (!Array.isArray(interactions)) continue;
-        } catch (e) {
+        } catch {
             console.warn(`[Backfill] Skip ${exec.taskId}: interactions JSON parse failed`);
             continue;
         }

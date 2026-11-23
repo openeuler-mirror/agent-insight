@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { transaction } from './transaction';
+import { retryTransient, transaction } from './transaction';
 import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -27,7 +27,10 @@ import { hash } from '@/lib/trace-datasets/sampling';
 import { PRODUCTION_POLICY as POLICY } from '@/lib/trace-datasets/sampling/production';
 import { sourceScope } from './catalog';
 
-type Slot = { worker: Worker; incarnationId: string; ready: boolean; stopping: boolean; jobId?: string; epoch?: number; heartbeat: number };
+const LEASE_MS = 30000;
+const HEARTBEAT_TIMEOUT = 30000;
+const SHUTDOWN_TIMEOUT = 15000;
+type Slot = { worker: Worker; incarnationId: string; ready: boolean; stopping: boolean; gone: boolean; jobId?: string; epoch?: number; heartbeat: number; leaseUntil: number; exited: Promise<boolean> };
 export class TraceDatasetManager {
   private slots: Slot[] = [];
   private timer?: NodeJS.Timeout;
@@ -83,12 +86,14 @@ export class TraceDatasetManager {
     if (this.closed) return;
     const incarnationId = randomUUID();
     const worker = new Worker(this.workerFile, { workerData: { databaseUrl: this.databaseUrl, incarnationId } });
-    const slot: Slot = { worker, incarnationId, ready: false, stopping: false, heartbeat: Date.now() };
+    const exited = new Promise<boolean>(resolve => worker.once('exit', () => resolve(true)));
+    const slot: Slot = { worker, incarnationId, ready: false, stopping: false, gone: false, heartbeat: Date.now(), leaseUntil: 0, exited };
     this.slots[index] = slot;
     worker.unref();
     worker.on('message', message => {
       if (this.slots[index] !== slot || message.incarnationId !== slot.incarnationId) return;
       if (message.type === 'ready') { slot.ready = true; void this.tick().catch(() => {}); return; }
+      if (message.type === 'closed') { slot.gone = true; return; }
       if (message.jobId !== slot.jobId || message.epoch !== slot.epoch) return;
       slot.heartbeat = Date.now();
       if (message.type === 'summary') {
@@ -108,7 +113,7 @@ export class TraceDatasetManager {
     worker.on('exit', () => {
       if (this.slots[index] !== slot) return;
       const jobId = slot.jobId, epoch = slot.epoch;
-      slot.stopping = true;
+      slot.stopping = true; slot.gone = true;
       void (async () => {
         try { if (jobId) await this.recover(jobId, epoch!); }
         finally { if (!this.closed) this.spawnSlot(index); }
@@ -145,29 +150,46 @@ export class TraceDatasetManager {
     this.pruneSummaries();
     this.ticking = true;
     try {
-      const expired = await this.client.traceDatasetGenerationJob.findMany({ where: { status: 'running', leaseUntil: { lt: new Date() } }, select: { id: true, leaseEpoch: true } });
+      const expired = await retryTransient(() => this.client.traceDatasetGenerationJob.findMany({ where: { status: 'running', leaseUntil: { lt: new Date() } }, select: { id: true, leaseEpoch: true } }));
       for (const job of expired) if (!this.slots.some(s => s.jobId === job.id && !s.stopping)) await this.recover(job.id, job.leaseEpoch);
-      const pending = await this.client.traceDatasetGenerationJob.findMany({ where: { OR: [{ status: { in: ['deleting', 'succeeded'] } }, { cleanupPending: true }] } });
+      const pending = await retryTransient(() => this.client.traceDatasetGenerationJob.findMany({ where: { OR: [{ status: { in: ['deleting', 'succeeded'] } }, { cleanupPending: true }] } }));
       for (const job of pending) if (!this.slots.some(s => s.jobId === job.id)) await this.cleanup(job.id);
       for (const slot of this.slots) {
         if (this.closed) break;
-        if (!slot.ready || slot.stopping) continue;
+        if (!slot.ready || slot.stopping || slot.gone) continue;
         if (slot.jobId) {
-          if (Date.now() - slot.heartbeat > 30000) { slot.stopping = true; await slot.worker.terminate(); continue; }
-          await this.client.traceDatasetGenerationJob.updateMany({ where: { id: slot.jobId, leaseEpoch: slot.epoch, status: 'running' }, data: { leaseUntil: new Date(Date.now() + 30000) } });
+          if (Date.now() - slot.heartbeat > HEARTBEAT_TIMEOUT) { void this.stopSlot(slot).catch(() => {}); continue; }
+          // Renewing once per second triples the write load on a client shared with every worker;
+          // the lease only needs refreshing well before it expires.
+          if (Date.now() >= slot.leaseUntil - LEASE_MS / 2) {
+            const renewed = await retryTransient(() => this.client.traceDatasetGenerationJob.updateMany({ where: { id: slot.jobId, leaseEpoch: slot.epoch, status: 'running' }, data: { leaseUntil: new Date(Date.now() + LEASE_MS) } }));
+            if (renewed.count) slot.leaseUntil = Date.now() + LEASE_MS;
+          }
           continue;
         }
-        const job = await this.client.traceDatasetGenerationJob.findFirst({ where: { status: 'queued', OR: [{ nextEligibleAt: null }, { nextEligibleAt: { lte: new Date() } }] }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+        const job = await retryTransient(() => this.client.traceDatasetGenerationJob.findFirst({ where: { status: 'queued', OR: [{ nextEligibleAt: null }, { nextEligibleAt: { lte: new Date() } }] }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] }));
         if (!job) break;
-        slot.jobId = job.id; slot.epoch = job.leaseEpoch + 1; slot.heartbeat = Date.now();
-        const claim = await this.client.traceDatasetGenerationJob.updateMany({ where: { id: job.id, status: 'queued', leaseEpoch: job.leaseEpoch }, data: { status: 'running', leaseEpoch: slot.epoch, leaseOwner: `${this.instanceId}/${this.slots.indexOf(slot)}/${slot.incarnationId}`, leaseUntil: new Date(Date.now() + 30000) } });
-        if (!claim.count) { slot.jobId = undefined; slot.epoch = undefined; continue; }
+        const epoch = job.leaseEpoch + 1;
+        const claim = await retryTransient(() => this.client.traceDatasetGenerationJob.updateMany({ where: { id: job.id, status: 'queued', leaseEpoch: job.leaseEpoch }, data: { status: 'running', leaseEpoch: epoch, leaseOwner: `${this.instanceId}/${this.slots.indexOf(slot)}/${slot.incarnationId}`, leaseUntil: new Date(Date.now() + LEASE_MS) } }));
+        if (!claim.count) continue;
+        slot.jobId = job.id; slot.epoch = epoch; slot.heartbeat = Date.now(); slot.leaseUntil = Date.now() + LEASE_MS;
         const viewer = this.summaries.get(job.id);
-        if (viewer) { viewer.epoch = slot.epoch; viewer.value = null; }
-        slot.worker.postMessage({ jobId: job.id, epoch: slot.epoch, incarnationId: slot.incarnationId, dir: this.dir(job.owner, job.id) });
+        if (viewer) { viewer.epoch = epoch; viewer.value = null; }
+        slot.worker.postMessage({ jobId: job.id, epoch, incarnationId: slot.incarnationId, dir: this.dir(job.owner, job.id) });
       }
       await this.expireReceipts();
     } finally { this.ticking = false; }
+  }
+  // Killing a busy worker mid-query leaks native SQLite handles and can abort inside the Prisma engine.
+  private async stopSlot(slot: Slot) {
+    slot.stopping = true;
+    if (!slot.gone) {
+      try { slot.worker.postMessage({ type: 'shutdown', incarnationId: slot.incarnationId }); } catch { /* already exited */ }
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const drained = await Promise.race([slot.exited, new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), SHUTDOWN_TIMEOUT); })]);
+    if (timer) clearTimeout(timer);
+    if (!drained) await slot.worker.terminate();
   }
   private async now(tx: Prisma.TransactionClient) {
     const key = { ownerKey: '__system__', kind: 'clock', operationKey: 'clock-high-water' };
@@ -293,7 +315,7 @@ export class TraceDatasetManager {
       slot.worker.postMessage({ type: 'cancel', jobId: job.id, epoch: slot.epoch, incarnationId: slot.incarnationId });
       const deadline = Date.now() + 5000;
       while (slot.jobId === job.id && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
-      if (slot.jobId === job.id) { slot.stopping = true; await slot.worker.terminate(); }
+      if (slot.jobId === job.id) await this.stopSlot(slot);
     }
     await this.cleanup(job.id);
     return { deletionId: job.deletionId!, status: 'deleting' as const };
@@ -341,10 +363,7 @@ export class TraceDatasetManager {
   }
   async close() {
     this.closed = true; if (this.timer) clearInterval(this.timer);
-    for (const s of this.slots) if (s.jobId) s.worker.postMessage({ type: 'cancel', jobId: s.jobId, epoch: s.epoch, incarnationId: s.incarnationId });
-    const deadline = Date.now() + 5000;
-    while (this.slots.some(s => s.jobId) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
-    await Promise.all(this.slots.map(s => s.worker.terminate()));
+    await Promise.all(this.slots.filter(Boolean).map(slot => this.stopSlot(slot)));
     this.summaries.clear();
     const lockPath = path.join(this.root, 'manager.lock');
     const lock = await fs.readFile(lockPath, 'utf8').then(JSON.parse).catch(() => null);

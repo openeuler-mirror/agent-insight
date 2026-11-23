@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { OpenAI } from 'openai';
-import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { getActiveConfig } from '@/lib/storage/server-config';
 
 export interface RoutingSemanticSignature {
@@ -93,12 +94,8 @@ export async function deriveRoutingSignature(query: string, user?: string | null
             throw new Error('No active model configuration for routing signature extraction');
         }
 
-        const { customFetch } = getProxyConfig();
         const client = new OpenAI({
-            apiKey: settings.apiKey || 'no-api-key-required',
-            baseURL: settings.baseUrl || 'https://api.deepseek.com',
-            defaultHeaders: settings.headers,
-            fetch: customFetch,
+            ...getModelClientConfig({ ...settings, baseUrl: settings.baseUrl || 'https://api.deepseek.com' }),
         });
 
         const prompt = `

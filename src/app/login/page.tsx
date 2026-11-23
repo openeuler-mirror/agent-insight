@@ -33,7 +33,7 @@ export default function LoginPage() {
   } = useAuth();
   const router = useRouter();
   const { isDark } = useTheme();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
 
   useEffect(() => {
     if (loginMode !== 'organization' || !organizationLoginRedirectUrl) return;
@@ -245,8 +245,8 @@ export default function LoginPage() {
             <input
               className="login-input"
               id="username"
-              type="email"
-              placeholder="请输入邮箱地址，例如 name@example.com"
+              type="text"
+              placeholder={locale === 'zh' ? '请输入邮箱或 admin' : 'Enter your email or admin'}
               value={username}
               onChange={(e) => { setUsername(e.target.value); setError(''); }}
               style={error ? { borderColor: colors.error } : {}}

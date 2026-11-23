@@ -62,6 +62,7 @@ type CapturedEvent = {
     serverName: string
     toolName: string
   }
+  status?: string
   attributes?: Record<string, unknown>
 }
 
@@ -248,6 +249,55 @@ test("Codex collector detects automatic Skill from a public SKILL.md read", asyn
   assert.equal(skill?.skill?.version, "3.2.1")
   assert.equal(skill?.skill?.triggerMode, "automatic")
   assert.equal(tool?.parentSpanId, skill?.spanId)
+})
+
+test("Codex collector writes skill output when the skill runs as a tool (Bug 52)", async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-skill-out-"))
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }))
+  const skillPath = path.join(dir, "skills", "research", "SKILL.md")
+  await fsp.mkdir(path.dirname(skillPath), { recursive: true })
+  await fsp.writeFile(skillPath, "---\nname: research\nversion: 1.0.0\n---\n\n# Research\n", "utf8")
+
+  const { core, writer } = createCore()
+  await core.processHook(hook("SessionStart"))
+  await core.processHook(hook("UserPromptSubmit", { prompt: "调研一下这个问题" }))
+  await core.processHook(hook("PreToolUse", {
+    tool_name: "skill",
+    tool_use_id: "call-skill-52",
+    tool_input: { path: skillPath, name: "research", arguments: "the topic" },
+  }))
+  // 技能执行期间嵌套的普通工具：它的输出不属于技能本身。
+  await core.processHook(hook("PreToolUse", {
+    tool_name: "Bash",
+    tool_use_id: "call-bash-52",
+    tool_input: { command: "pwd" },
+  }))
+  await core.processHook(hook("PostToolUse", {
+    tool_name: "Bash",
+    tool_use_id: "call-bash-52",
+    tool_response: "C:\\temp",
+  }))
+  // skill 宿主工具完成，携带真正的技能输出。
+  await core.processHook(hook("PostToolUse", {
+    tool_name: "skill",
+    tool_use_id: "call-skill-52",
+    tool_response: "RESEARCH_REPORT_BUG52",
+  }))
+
+  const skills = writer.events.filter((event) => event.kind === "skill")
+  assert.equal(skills.length, 2, "start + completion snapshots for the skill span")
+  const latest = new Map<string, CapturedEvent>()
+  for (const event of writer.events) latest.set(event.spanId, event)
+  const finalSkill = latest.get(skills[0].spanId)
+  assert.equal(finalSkill?.output, "RESEARCH_REPORT_BUG52")
+  assert.equal(finalSkill?.status, "ok")
+  // 嵌套 Bash 的输出不得被冒充为技能输出。
+  assert.equal(finalSkill?.endTimeMs, skills[1].endTimeMs)
+  // 宿主工具的结果已并入 skill 完成快照，不再单独发一个 tool.skill（避免 UI 重复显示）。
+  assert.equal(
+    writer.events.some((event) => event.kind === "tool" && event.name === "tool.skill"),
+    false,
+  )
 })
 
 test("Codex collector preserves three-level SubAgent ancestry", async () => {

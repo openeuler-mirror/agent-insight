@@ -18,7 +18,7 @@
 /**
  * Agent Insight 常驻客户端服务。
  *
- * 由 systemd / launchd 托管，独立于 OpenCode 等 Agent 平台启停。
+ * 由 systemd / launchd 托管或作为独立后台进程运行，独立于 Agent 平台启停。
  * 职责：
  *   - 主动建立出站 WSS 控制连接（断线退避重连；失败降级 HTTPS 长轮询）
  *   - 能力发现（IP / OS / 平台 / 模型 / 组件版本）并上报
@@ -38,6 +38,7 @@ const { StringDecoder } = require('node:string_decoder')
 const { connectWebSocket } = require('./ws-client.cjs')
 const { getAgentInsightHome } = require('./agent-insight-home.cjs')
 const { prepareSkillExperimentWorkspace } = require('./skill-experiment-workspace.cjs')
+const skillDeploymentRuntime = require('./skill-deployment-runtime.cjs')
 const { inspectOpencodeRuntime } = require('./opencode-runtime.cjs')
 const { checkOpenCodeModelConfigAsync } = require('./opencode-connection-config.cjs')
 const { prepareOpencodeEventChannel, createOpencodeEventReader } = require('./opencode-experiment-events.cjs')
@@ -57,11 +58,30 @@ const WHITELIST = new Set([
   'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
   'PREPARE_EXECUTION_ENVIRONMENT',
+  'PRECHECK_SKILL_DEPLOYMENT',
+  'DEPLOY_SKILL_ARTIFACT',
 ])
 
 // 配置类 action 禁止携带下载地址/路径/完整配置；运行类禁止携带自由执行字段。
 const CONFIG_FORBIDDEN = ['url', 'config', 'path', 'downloadUrl', 'file']
 const RUN_FORBIDDEN = ['command', 'shell', 'args', 'cwd', 'executable', 'script']
+
+function findForbiddenPayloadKey(value, forbidden, depth = 0) {
+  if (depth > 8 || value == null || typeof value !== 'object') return null
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findForbiddenPayloadKey(item, forbidden, depth + 1)
+      if (found) return found
+    }
+    return null
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (forbidden.some(item => item.toLowerCase() === key.toLowerCase())) return key
+    const found = findForbiddenPayloadKey(child, forbidden, depth + 1)
+    if (found) return found
+  }
+  return null
+}
 
 const AGENT_VERSION = '1.0.0'
 const HEARTBEAT_MS = 30_000
@@ -165,7 +185,7 @@ function controlUrls(cfg) {
 
 // ---------------------------------------------------------------- http
 
-async function api(cfg, method, apiPath, body, extraHeaders = {}) {
+async function api(cfg, method, apiPath, body, extraHeaders = {}, options = {}) {
   const res = await fetch(`${cfg.insightBaseUrl}${apiPath}`, {
     method,
     headers: {
@@ -175,6 +195,7 @@ async function api(cfg, method, apiPath, body, extraHeaders = {}) {
       ...extraHeaders,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: options.signal,
   })
   if (res.status === 204) return null
   const text = await res.text()
@@ -293,6 +314,7 @@ function xiaooCollectorInstalled() {
 }
 
 function probeExperimentRuntime(platform, executable = which(runtimeAdapters[platform]?.executableName || platform)) {
+  if (platform === 'jiuwenswarm') return require('./jiuwen-experiment-runtime.cjs').probe()
   return runtimeAdapters[platform]?.probe(executable) || {
     canResolveTraceId: false,
     ready: false,
@@ -733,8 +755,7 @@ function runFiInventory(python, cwd, pythonArgs, probeEnv) {
  */
 function probeFaultInjection(cfg) {
   const python = resolvePython(cfg)
-  const cwd = resolveFiCwd(cfg, python)
-  if (!cwd) {
+  if (!resolveFiCwd(cfg, python)) {
     return {
       ready: false,
       note: python
@@ -743,6 +764,9 @@ function probeFaultInjection(cfg) {
       platforms: {},
     }
   }
+  const nativeHome = process.env.AGENT_INSIGHT_USER_HOME || os.homedir()
+  let cwd = path.resolve(cfg.workspaceBase || nativeHome)
+  while (!fs.existsSync(cwd) && path.dirname(cwd) !== cwd) cwd = path.dirname(cwd)
   const pythonArgs = [
     '-I',
     '-m',
@@ -813,6 +837,7 @@ function probeFaultInjectionIsolated(cfg) {
       fiCwd: cfg.fiCwd,
       fiPython: cfg.fiPython,
       maxParallelFi: cfg.maxParallelFi,
+      workspaceBase: cfg.workspaceBase,
     }))
   })
 }
@@ -863,6 +888,11 @@ function buildCapabilities(cfg, opts) {
     }
     return runtimeByPlatform.get(id)
   }
+  const jiuwenDataRoot = process.env.JIUWENSWARM_DATA_DIR
+    ? path.resolve(process.env.JIUWENSWARM_DATA_DIR)
+    : path.join(os.homedir(), '.jiuwenswarm')
+  const jiuwenDeploymentReady = Boolean(process.env.JIUWENSWARM_DATA_DIR)
+    || fs.existsSync(path.join(jiuwenDataRoot, 'agent', 'workspace'))
   let platforms = Object.entries(fi.platforms || {}).map(([id, info]) => {
     const runtime = runtimeFor(id)
     return {
@@ -878,6 +908,14 @@ function buildCapabilities(cfg, opts) {
           : !normalizeModelIds(info?.agents).length ? sanitizeAgentDiagnostic(info?.note) || `${id} Agent 列表为空，请检查探测结果` : undefined,
         ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 5 } : {}),
         ...(id === 'opencode' && runtime.major === 2 && runtime.ready ? { multiTurn: true, sessionContinuation: true, conversationVersion: 1 } : {}),
+      },
+      skillDeployment: {
+        protocolVersion: 1,
+        ready: ['opencode', 'pi-agent', 'xiaoo'].includes(id)
+          || (['jiuwenswarm', 'openjiuwen'].includes(id) && jiuwenDeploymentReady),
+        modes: ['jiuwenswarm', 'openjiuwen'].includes(id) ? ['framework_global'] : ['execution_origin'],
+        backup: 'retained',
+        ...(['jiuwenswarm', 'openjiuwen'].includes(id) ? { reload: 'restart_required' } : {}),
       },
       actions: [...WHITELIST],
     }
@@ -895,6 +933,12 @@ function buildCapabilities(cfg, opts) {
             ready: id !== 'opencode' && runtime.ready,
             ...(id === 'opencode' ? { unavailableReason: runtime.reason || '尚未取得权威 Agent 列表，请检查客户端探测结果' } : {}),
             ...(id === 'opencode' && [1, 2].includes(runtime.major) && runtime.ready ? { skillSnapshotVersion: 5 } : {}) },
+          skillDeployment: {
+            protocolVersion: 1,
+            ready: true,
+            modes: ['execution_origin'],
+            backup: 'retained',
+          },
           actions: [...WHITELIST],
         })
       }
@@ -902,6 +946,35 @@ function buildCapabilities(cfg, opts) {
   }
   if (which('pi')) {
     platforms = mergePiRuntimeCapability(platforms, runtimeFor('pi-agent'))
+  }
+  const piPlatform = platforms.find(platform => platform.id === 'pi-agent')
+  if (piPlatform) piPlatform.skillDeployment = {
+    protocolVersion: 1, ready: true, modes: ['execution_origin'], backup: 'retained',
+  }
+  if (jiuwenDeploymentReady && !platforms.some(platform => ['jiuwenswarm', 'openjiuwen'].includes(platform.id))) {
+    platforms.push({
+      id: 'jiuwenswarm', models: [], agents: [], actions: [...WHITELIST],
+      skillDeployment: {
+        protocolVersion: 1,
+        ready: true,
+        modes: ['framework_global'],
+        backup: 'retained',
+        reload: 'restart_required',
+      },
+    })
+  }
+  const jiuwenRuntime = runtimeFor('jiuwenswarm')
+  if (jiuwenRuntime.ready || jiuwenRuntime.enterprise) {
+    const existing = platforms.find(platform => platform.id === 'jiuwenswarm')
+    const capability = {
+      ...(jiuwenRuntime.enterprise ? { version: 'enterprise-ws-v1', agentCatalog: jiuwenRuntime.agentCatalog || [], runBenchmarkCase: { version: 1, returnsTraceId: false } } : {}),
+      agents: jiuwenRuntime.enterprise ? jiuwenRuntime.agents || [] : ['main_agent'], models: jiuwenRuntime.models || [],
+      runExperimentCase: { version: 2, returnsTraceId: true, ready: jiuwenRuntime.ready,
+        ...(!jiuwenRuntime.ready ? { unavailableReason: jiuwenRuntime.reason } : {}) },
+      actions: jiuwenRuntime.enterprise ? ['RUN_EXPERIMENT_CASE'] : [...WHITELIST],
+    }
+    if (existing) Object.assign(existing, capability)
+    else platforms.push({ id: 'jiuwenswarm', ...capability })
   }
   const mcts = mctsRuntime()
   const mctsConfigured = Boolean(String(cfg.mctsRepoDir || '').trim())
@@ -944,23 +1017,22 @@ function buildCapabilities(cfg, opts) {
   for (const platform of platforms) {
     platform.parameterDefinitions = definitions.filter(definition => definition.targets.some(target => target.platform === platform.id))
   }
-  const execution = executionRuntime().executionCapabilities()
+  const execution = executionRuntime().executionCapabilities({ runtimeProbe: runtimeFor, nativePlatforms: platforms })
   components['execution-backend/v1'] = { ready: true }
   for (const capability of execution.profiles) {
     for (const target of capability.profile.targets) {
       let platform = platforms.find(item => item.id === target.platform)
+      const trace = capability.targetCapabilities?.[target.platform]?.returnsTraceId === true
       if (!platform) {
-        const runtime = execution.config.profiles[capability.profile.key]?.runtimes[target.platform]
-        const binary = runtime?.kind === 'pi' ? 'pi' : target.platform
-        if (!which(binary) && !runtime?.workerExecutable) continue
         platform = { id: target.platform, agents: target.agents, models: capability.profile.models, actions: ['RUN_BENCHMARK_CASE'] }
         platforms.push(platform)
       }
-      platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
+      if (trace) platform.runBenchmarkCase = { version: 1, returnsTraceId: true }
     }
   }
   return {
     executionProfiles: execution.profiles,
+    executionBindings: execution.config.bindings,
     platforms,
     actions: [...WHITELIST],
     components,
@@ -976,9 +1048,9 @@ function benchmarkAgentPlatformsFromCapabilities(capabilities) {
   const components = capabilities?.components || {}
   return [...new Set((capabilities?.platforms || [])
     .filter((platform) => {
-      const execution = capabilities.executionProfiles?.find(item => item.profile.targets.some(target => target.platform === platform.id))
-      const readiness = execution?.targetReadiness?.[platform.id] || execution
-      if (readiness?.ready && platform.runBenchmarkCase?.returnsTraceId === true) return true
+      const executionReady = capabilities.executionProfiles?.some(item => item.profile.targets.some(target => target.platform === platform.id)
+        && (item.targetReadiness?.[platform.id] || item).ready)
+      if (executionReady && platform.runBenchmarkCase?.returnsTraceId === true) return true
       const component = components[`agent-runtime/${platform.id}/v1`]
       const ready = component === true
         || (component && typeof component === 'object' && component.ready !== false)
@@ -1341,13 +1413,45 @@ async function executeAction(cfg, frame, sendStatus) {
   const forbidden = ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE', 'PREPARE_EXECUTION_ENVIRONMENT'].includes(action)
     ? RUN_FORBIDDEN
     : CONFIG_FORBIDDEN
-  for (const key of Object.keys(payload)) {
-    if (forbidden.includes(key)) {
+  const forbiddenKey = findForbiddenPayloadKey(payload, forbidden)
+  if (forbiddenKey) {
+    await sendStatus('FAILED', {
+      error: { code: 'PAYLOAD_FORBIDDEN', message: `payload 不允许字段 ${forbiddenKey}` },
+    })
+    return
+  }
+
+  if (action === 'PRECHECK_SKILL_DEPLOYMENT') {
+    try {
+      const result = skillDeploymentRuntime.precheckDeployment(CLIENT_HOME, payload)
+      await sendStatus('SUCCEEDED', { result: { state: 'READY', phase: 'preflight', ...result } })
+    } catch (err) {
       await sendStatus('FAILED', {
-        error: { code: 'PAYLOAD_FORBIDDEN', message: `payload 不允许字段 ${key}` },
+        result: { state: 'BLOCKED', phase: 'preflight' },
+        error: { code: err.code || 'DEPLOYMENT_PRECHECK_FAILED', message: err.message },
       })
-      return
     }
+    return
+  }
+
+  if (action === 'DEPLOY_SKILL_ARTIFACT') {
+    await sendStatus('RUNNING', { result: { state: 'DOWNLOADING', phase: 'downloading' } })
+    try {
+      const result = await skillDeploymentRuntime.executeDeployment(cfg, payload, CLIENT_HOME)
+      await sendStatus('SUCCEEDED', {
+        result: {
+          ...result,
+          phase: 'verifying',
+          restartRequired: payload.platform === 'jiuwenswarm',
+        },
+      })
+    } catch (err) {
+      await sendStatus('FAILED', {
+        result: { state: 'FAILED', phase: 'applying', restored: err.restored === true },
+        error: { code: err.code || 'SKILL_DEPLOYMENT_FAILED', message: err.message },
+      })
+    }
+    return
   }
 
   if (action === 'PREPARE_EXECUTION_ENVIRONMENT') {
@@ -1685,6 +1789,10 @@ async function runExperimentCase(cfg, payload, onTraceId = async () => {}) {
   payload = safePayload
   if (conversation && (payload.platform !== 'opencode' || payload.skillExecution?.version === 2)) {
     throw createAgentRunError('MULTI_TURN_UNSUPPORTED', '当前执行端或评测模式不支持多轮对话')
+  }
+  if (payload.platform === 'jiuwenswarm') {
+    if (payload.skillExecution) throw createAgentRunError('AGENT_RUNTIME_UNAVAILABLE', 'JiuwenSwarm 暂不支持 Skill 版本隔离实验')
+    return require('./jiuwen-experiment-runtime.cjs').run(payload)
   }
   const executable = which(runtimeAdapters[String(payload.platform)]?.executableName || String(payload.platform))
   if (conversation && inspectOpencodeRuntime(executable).major !== 2) throw createAgentRunError('MULTI_TURN_UNSUPPORTED', '多轮执行需要支持会话续接的 OpenCode v2')
@@ -2429,6 +2537,7 @@ async function reportCapabilities(cfg, capabilities = buildCapabilities(cfg)) {
     actions: capabilities.actions,
     components: capabilities.components,
     executionProfiles: capabilities.executionProfiles,
+    executionBindings: capabilities.executionBindings,
     faultInjection: capabilities.faultInjection,
   })
   log(
@@ -2490,7 +2599,8 @@ async function refreshCapabilityReports(cfg, { force = false } = {}) {
   if (!force && fingerprint === lastCapabilityFingerprint) return false
   if (capabilityRefreshInFlight) return capabilityRefreshInFlight
   capabilityRefreshInFlight = (async () => {
-    const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog()])
+    const [fi] = await Promise.all([probeFaultInjectionIsolated(cfg), refreshPiModelCatalog(),
+      require('./jiuwen-enterprise-ws.cjs').enterpriseWs.refresh().catch(error => logErr('enterprise discovery failed', error.message))])
     cacheSuccessfulProbe(fi)
     const capabilities = buildCapabilities(cfg)
     syncBenchmarkExecutorCapabilities(benchmarkExecutor, capabilities)
@@ -2615,8 +2725,8 @@ async function flushSpool(cfg) {
         entry.body,
       )
     } catch (err) {
-      // 410/404 表示指令已过期或不存在，丢弃即可，不必无限重试。
-      if (err.status !== 404 && err.status !== 410) remaining.push(entry)
+      // Rejected or expired receipts cannot become valid by replaying them.
+      if (![404, 409, 410].includes(err.status)) remaining.push(entry)
     }
   }
   writeSpool(remaining)
@@ -2735,6 +2845,7 @@ async function main() {
   initialCapabilityRefresh.then(() => fiLoop(cfg))
   controlLoop(cfg)
   pollLoop(cfg)
+  if (process.send) process.send({ type: 'agent-insight-client-ready' })
 }
 
 async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = true } = {}) {
@@ -2746,9 +2857,12 @@ async function sendCommandStatus(cfg, commandId, status, extra = {}, { spool = t
     ...extra,
   }
   try {
-    await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body)
+    const response = await api(cfg, 'POST', `/api/reliability/client/v1/commands/${encodeURIComponent(commandId)}/status`, body, {}, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (status === 'RECEIVED' && response?.ok !== true) throw new Error('command receipt acceptance was not confirmed')
   } catch (err) {
-    if (spool && err.status !== 404 && err.status !== 410) spoolReceipt({ commandId, body })
+    if (spool && ![404, 409, 410].includes(err.status)) spoolReceipt({ commandId, body })
     throw err
   }
 }
@@ -2768,7 +2882,7 @@ async function handleCommand(cfg, frame, sendVia) {
 
   const sendStatus = async (status, extra) => {
     try {
-      if (frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
+      if (status === 'RECEIVED' || frame.action === 'PREPARE_EXECUTION_ENVIRONMENT' && ['SUCCEEDED', 'FAILED'].includes(status)) await sendCommandStatus(cfg, frame.commandId, status, extra, { spool: false })
       else await sendVia(frame.commandId, status, extra)
       return true
     } catch (err) {
@@ -2779,7 +2893,11 @@ async function handleCommand(cfg, frame, sendVia) {
 
   // 先 ACK：服务端据此把指令从 SENT 推进到 RECEIVED。
   try {
-    await sendStatus('RECEIVED', {})
+    // WSS writes cannot confirm receipt acceptance; obtain it before starting work.
+    if (!await sendStatus('RECEIVED', {})) {
+      handledCommands.delete(frame.commandId)
+      return
+    }
     await executeAction(cfg, frame, sendStatus)
   } finally { executingCommands.delete(frame.commandId) }
 }
@@ -2877,6 +2995,7 @@ async function controlLoop(cfg) {
  * 因此这里的节奏只由 TTL 决定，与重连快慢无关。
  */
 async function pollLoop(cfg) {
+  let lastFailure = ''
   for (;;) {
     if (wssConnected) {
       // WSS 已接管，不必重复取指令，短睡后再看。
@@ -2885,15 +3004,27 @@ async function pollLoop(cfg) {
     }
     try {
       await pollOnce(cfg)
-    } catch {
+      lastFailure = ''
+    } catch (error) {
+      const code = String(error?.code || error?.cause?.code || error?.name || 'UNKNOWN').replace(/[^A-Za-z0-9_]/g, '').slice(0, 80)
+      if (code !== lastFailure) logErr(`command polling failed (${code}); retrying`)
+      lastFailure = code
       // 服务端不可达时别空转打满 CPU，稍等再试。
       await new Promise((r) => setTimeout(r, POLL_RETRY_MS))
     }
   }
 }
 
+function pollWaitSeconds(env = process.env) {
+  const value = Number(env.AGENT_INSIGHT_RAS_POLL_WAIT_SEC)
+  return Number.isInteger(value) && value >= 1 && value <= 30 ? value : 5
+}
+
 async function pollOnce(cfg) {
-  const frame = await api(cfg, 'GET', '/api/reliability/client/v1/commands/next?waitSeconds=25')
+  const waitSeconds = pollWaitSeconds()
+  const frame = await api(cfg, 'GET', `/api/reliability/client/v1/commands/next?waitSeconds=${waitSeconds}`, undefined, {}, {
+    signal: AbortSignal.timeout((waitSeconds + 10) * 1000),
+  })
   if (!frame) return
   const handling = handleCommand(cfg, frame, (commandId, status, extra) =>
     sendCommandStatus(cfg, commandId, status, extra),
@@ -2986,6 +3117,8 @@ process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 
 module.exports = {
+  pollOnce,
+  pollWaitSeconds,
   clearEnvironmentProbeCache,
   loadConfig,
   executeAction,
@@ -3023,6 +3156,7 @@ module.exports = {
   inspectXiaooRunEvent,
   createPiEventInspector,
   probeExperimentRuntime,
+  refreshJiuwenRuntime: () => require('./jiuwen-enterprise-ws.cjs').enterpriseWs.refresh(),
   refreshPiModelCatalog,
   PI_MODEL_PROBE_TIMEOUT_MS,
   sanitizeAgentDiagnostic,

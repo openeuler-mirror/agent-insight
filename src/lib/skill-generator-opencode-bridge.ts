@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
+import { mapServerModelConfig } from '@/lib/engine/general-agent/server-model-config';
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
-import { inferProviderFromBaseUrl } from '@/lib/engine/general-agent/server-model-config';
 import {
   loadFileBasedSkillPrompt,
   fileBasedSkillExists,
   mountFileBasedSkillResources,
 } from '@/lib/engine/general-agent/skills-fs-loader';
-import { normalizeProviderID } from '@/lib/engine/general-agent/server-model-config';
 import {
   ensureSessionWorkspace,
   ensureUserWorkspace,
@@ -342,6 +342,9 @@ async function streamSkillGeneratorOpencodeImpl(
     : null
   );
 
+  // 关闭空闲看门狗，只保留 15 分钟整体截止。桥接层不得自建 AbortController 并把它塞进
+  // chatOptions.signal——执行引擎会把它当成用户取消（EXECUTION_CANCELLED），SDK 收尾或
+  // 长静默就会被误报成失败。终止只允许来自 AGENT_TIMEOUT（明确超时）或模型错误。
   const chatOptions = { idleTimeoutMs: 0, streamTimeoutMs: 15 * 60 * 1000 };
 
   let agentText = '';
@@ -531,7 +534,7 @@ async function streamSkillGeneratorOpencodeImpl(
           answer: reply == null ? undefined : (Array.isArray(reply) ? reply.join('\n') : String(reply)),
         });
         return reply ?? null;
-      } catch (err) {
+      } catch {
         // 超时 / 取消 → 通知前端，agent 那边 reject
         send('question_answered', {
           id,
@@ -728,18 +731,8 @@ async function resolveModelOverride(
     console.warn('[skill-generator-bridge] resolveModelOverride: config not found, falling back to default model');
     return null;
   }
-  if (!cfg.apiKey) {
-    console.warn('[skill-generator-bridge] resolveModelOverride: config found but apiKey missing, falling back to default model');
-    return null;
-  }
-  const explicitProvider = (cfg as { provider?: string }).provider;
-  const providerID = normalizeProviderID(explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl));
-  const result = {
-    providerID,
-    modelID: cfg.model || 'deepseek-chat',
-    apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl,
-  };
+  const result = mapServerModelConfig(cfg);
+  if (!result) return null;
   console.log('[skill-generator-bridge] resolveModelOverride: resolved to', { providerID: result.providerID, modelID: result.modelID, baseURL: result.baseURL });
   return result;
 }

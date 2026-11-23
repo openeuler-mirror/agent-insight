@@ -30,7 +30,7 @@ export async function scenario003(ctx) {
       const response = await created;assert.equal(response.status(), 201);return (await response.json()).session;
     };
     await stage('upload', '上传会话的 13 个真实文件与原包仅重命名后的快照一致，刷新仍保留', async () => {
-      const bundle = JSON.parse(fs.readFileSync(path.join(project, 'src/server/builtin-example/skill-bundle.json')));
+      const bundle = JSON.parse(fs.readFileSync(path.join(project, 'test/e2e/cases/003-skill-lifecycle/fixtures/skill-bundle.json')));
       const files = Object.fromEntries(bundle.files.map(file => [file, (file === 'SKILL.md' ? bundle.content : bundle.assets[file]).replaceAll(bundle.name, uploadedName)]));
       const folder = path.join(root, 'upload', uploadedName);
       for (const [file, content] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(folder, file)), { recursive: true });fs.writeFileSync(path.join(folder, file), content); }

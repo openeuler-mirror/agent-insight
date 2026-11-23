@@ -26,7 +26,6 @@ export const dynamic = 'force-dynamic';
 
 /** In-memory job store. Lives in globalThis so it survives hot-reload in dev. */
 declare global {
-  // eslint-disable-next-line no-var
   var __debugJobStore: Map<string, DebugJob> | undefined;
 }
 

@@ -15,6 +15,8 @@ changefreq: "monthly"
 | `GET /api/experiments/:id` | 返回实验详情，包含 Case、评估结果和阶段信息；返回字段会按实验类别变化，不应复用列表 item 类型解析所有详情 |
 | `GET /api/experiments/cancellations` | 返回当前用户最多 100 条 `pending` 取消记录：`{ cancellations }`，不是全部历史取消列表 |
 
+列表 item 的 `agentName` 保留原有 Agent 标识语义，新增可选展示字段 `agentLabel`，读取自 `configSnapshotJson.agentLabel`。通用实验向导创建 JiuwenSwarm 实验时通过 `configSnapshot.agentLabel` 保存完整名称与平台，供列表和详情展示；详情页面读取详情接口已有的 `configSnapshot.agentLabel`，详情和复用配置中的 `agentName` 仍为 Agent 标识。该名称不用于调度或 Trace 匹配，同配置实验保留该快照。缺少、为空或类型无效的名称快照不返回列表字段 `agentLabel`，列表和详情回退显示 `agentName`；查询不依赖当前客户端 Agent 目录。
+
 调用时携带当前账号 Key，避免仅用可覆盖身份的 `user` 参数。缺少身份的普通列表可能扩大查询范围，不能据此确认 Key 有效；写操作和详情归属检查按各自分支处理。
 
 实验详情中的执行进度通过只读事务获取一致性快照。单次事务最长 30 秒，两次尝试共享 35 秒等待预算；仅 `P1008/P2028/P2034` 最多重新读取一次，重读会记录错误码及耗时。读取仅选择必要字段，持续失败仍返回错误，不重跑 Agent 或评估任务，也不改写实验记录。

@@ -15,6 +15,8 @@ This reference covers common ordinary-experiment calls and asynchronous behavior
 | `GET /api/experiments/:id` | Experiment details, Cases, results, and phase information; fields vary by experiment type, so a list-item type cannot describe every detail response |
 | `GET /api/experiments/cancellations` | Up to 100 current-user `pending` cancellation records as `{ cancellations }`, not the complete cancellation history |
 
+List items retain the existing Agent identity in `agentName` and may include an optional display field, `agentLabel`, read from `configSnapshotJson.agentLabel`. The ordinary experiment wizard stores the full JiuwenSwarm display name and platform in `configSnapshot.agentLabel` for list and detail presentation. The detail page reads the existing `configSnapshot.agentLabel` field from the detail response; `agentName` in detail responses and reusable configurations remains the Agent identity. This label is not used for dispatch or Trace matching. Same-configuration experiments retain the snapshot. Missing, blank, or invalid label snapshots omit the list field `agentLabel`; both views fall back to `agentName`. Queries do not require the current client Agent catalog.
+
 Send the current account Key instead of relying on the overriding `user` selector. An ordinary list with no identity can have a broader scope, so its success is not proof of credential validation. Writes and detail branches apply their own ownership handling.
 
 Execution progress in experiment details is read through a consistent transaction snapshot using only required fields. A transaction is limited to 30 seconds, with a shared 35-second wait budget across at most two attempts. Only `P1008/P2028/P2034` trigger one retry, logged with its code and elapsed time. Persistent failures still return errors; retries do not rerun Agents or evaluators or rewrite experiment records. When a background refresh succeeds, the UI exits the full-page loading state and displays the result.
@@ -87,6 +89,11 @@ Common statuses include `400` for invalid parameters or missing identity, `404` 
 Sources: [experiment routes](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/route.ts), [start](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/run/route.ts), and [details/control](https://gitcode.com/openeuler/agent-insight/blob/master/src/app/api/experiments/%5Bid%5D/route.ts).
 
 [中文权威版本](../../../zh/reference/evaluation/experiments-api.md)
+
+
+## Viewing Benchmark evidence
+
+Benchmark Case details expose the original evaluation files for preview and download. Relative folders and Unicode filenames are retained in the platform; individual downloads use the original basename and do not preserve a directory tree. Source labels distinguish integration-declared official files/API returns, runtime output, platform diagnostics and undeclared historical sources. Labels alone do not prove scoring correctness. Text previews show the stored original content; Markdown files (identified by `text/markdown`, `.md` or `.markdown`) default to a formatted preview with a source toggle, without enabling raw HTML. Downloads always return the original bytes; summaries and scores do not replace attachments. Collection failures must remain explicit rather than being hidden behind a successful score.
 
 ### Diagnosis runs and optimization inputs
 

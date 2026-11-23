@@ -31,15 +31,15 @@ test('startup db_push upgrades an existing SQLite database additively and is rep
     await mkdir(path.join(root, 'scripts'));
     await symlink(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
     await writeFile(path.join(root, 'scripts/db_push.sh'), await readFile('scripts/db_push.sh'));
-    await mkdir(path.join(root, 'scripts/migrations'));
-    await writeFile(path.join(root, 'scripts/migrations/check-diagnosis-schema.cjs'), await readFile('scripts/migrations/check-diagnosis-schema.cjs'));
     await mkdir(path.join(root, 'scripts/trace-datasets'));
     await writeFile(path.join(root, 'scripts/trace-datasets/remove-legacy-summary.cjs'), await readFile('scripts/trace-datasets/remove-legacy-summary.cjs'));
     const schema = (await readFile('prisma/schema.prisma', 'utf8')).replace(/generator client\s*\{[^}]*\}/, '');
-    const schemaWithoutCollaboration = schema
+    const legacySchemaBase = schema
         .replace(/^model Collaboration(?:Event|SessionBinding|EndpointResolution)?\s*\{[\s\S]*?^\}\s*$/gm, '')
-        .replace(/^\s*collaborationEndpointResolutions\s+CollaborationEndpointResolution\[\]\s*$/m, '');
-    const oldSchema = `${schemaWithoutCollaboration}
+        .replace(/^\s*collaborationEndpointResolutions\s+CollaborationEndpointResolution\[\]\s*$/m, '')
+        .replace(/^model DiagnosisRun\s*\{[\s\S]*?^\}\s*$/m, '')
+        .replace(/^ *sourceRefsJson\s+String.*$/m, '');
+    const oldSchema = `${legacySchemaBase}
 model Collaboration {
   id String @id
   user String
@@ -89,6 +89,10 @@ model CollaborationSessionBinding {
         await client.$executeRawUnsafe('INSERT INTO "Collaboration" ("id","user","collaborationId","createdAt") VALUES (?,?,?,?)', 'entry', 'migration-user', 'preserve-collaboration', new Date().toISOString());
         await client.$executeRawUnsafe('INSERT INTO "CollaborationEvent" ("id","user","collaborationId","eventId","bodyJson","bodyHash","receivedAt") VALUES (?,?,?,?,?,?,?)', 'event', 'migration-user', 'preserve-collaboration', 'event-1', '{"collaborationId":"preserve-collaboration","description":"keep","eventId":"event-1","fromSessionId":"A","toSessionId":"B"}', 'legacy-hash', new Date().toISOString());
         await client.$executeRawUnsafe('INSERT INTO "CollaborationSessionBinding" ("id","user","collaborationId","sessionId","traceSessionId","eventClock","createdAt") VALUES (?,?,?,?,?,?,?)', 'binding', 'migration-user', 'preserve-collaboration', 'A', 'preserve-session', 'source_session', new Date().toISOString());
+        await client.skillOptSession.create({ data: { id: 'historical-optimization', skillName: 'migration-skill', baseVersion: 1 } });
+        await client.skillOptPlan.create({ data: { id: 'historical-plan', sessionId: 'historical-optimization', skillId: 'migration-skill', baseVersion: 1 } });
+        await client.$executeRaw`INSERT INTO "SkillOptPlanItem" ("id", "planId", "rank", "route", "title", "rationale")
+            VALUES ('historical-item', 'historical-plan', 1, 'core', 'Preserve this title', 'Preserve this rationale')`;
         const before = await client.session.findUnique({ where: { taskId: 'preserve-session' } });
         await writeFile(schemaPath, schema);
         await sync();
@@ -96,6 +100,11 @@ model CollaborationSessionBinding {
         assert.deepEqual(tables.map(t => t.name).sort(), ['Collaboration', 'CollaborationEndpointResolution', 'CollaborationEvent', 'CollaborationSessionBinding']);
         await sync();
         assert.deepEqual(await client.session.findUnique({ where: { taskId: 'preserve-session' } }), before);
+        assert.equal(await client.diagnosisRun.count(), 0);
+        assert.deepEqual(await client.skillOptPlanItem.findUnique({
+            where: { id: 'historical-item' },
+            select: { title: true, rationale: true, sourceRefsJson: true },
+        }), { title: 'Preserve this title', rationale: 'Preserve this rationale', sourceRefsJson: '[]' });
         assert.equal((await client.execution.findUnique({ where: { id: 'preserve-execution' } }))?.parentExecutionId, 'preserve-parent');
         const entries = await client.$queryRawUnsafe<Array<{ id: string }>>('SELECT "id" FROM "Collaboration"');
         assert.equal(entries.length, 1);

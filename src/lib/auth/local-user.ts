@@ -16,7 +16,6 @@
 
 import crypto from 'node:crypto';
 import { db } from '@/lib/storage/prisma';
-import { seedBuiltinExampleForUser } from '@/server/builtin-example/seed';
 
 function isDuplicateUsernameError(error: any): boolean {
   return error?.code === 'P2002'
@@ -53,7 +52,6 @@ export async function syncLocalUserExternalAccount(
 export async function findOrCreateLocalUser(username: string, rawExternalAccount?: string) {
   const externalAccount = String(rawExternalAccount || '').trim();
   let user = await db.findUserByUsername(username);
-  let isNewUser = false;
 
   if (!user) {
     const apiKey = 'wi_' + crypto.randomBytes(24).toString('hex');
@@ -63,7 +61,6 @@ export async function findOrCreateLocalUser(username: string, rawExternalAccount
         apiKey,
         ...(externalAccount ? { externalAccount } : {}),
       });
-      isNewUser = true;
     } catch (error: any) {
       if (!isDuplicateUsernameError(error)) throw error;
       user = await db.findUserByUsername(username);
@@ -73,7 +70,6 @@ export async function findOrCreateLocalUser(username: string, rawExternalAccount
 
   if (!user) throw new Error('Failed to retrieve or create user');
   user = await syncLocalUserExternalAccount(user, externalAccount);
-  if (isNewUser) await seedBuiltinExampleForUser(user.username);
 
   return user;
 }

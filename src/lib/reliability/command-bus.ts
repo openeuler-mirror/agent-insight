@@ -36,6 +36,8 @@ export const WHITELISTED_ACTIONS = [
   'CANCEL_EXPERIMENT_RUN',
   'REFRESH_CAPABILITIES',
   'PREPARE_EXECUTION_ENVIRONMENT',
+  'PRECHECK_SKILL_DEPLOYMENT',
+  'DEPLOY_SKILL_ARTIFACT',
 ] as const
 
 export type CommandAction = (typeof WHITELISTED_ACTIONS)[number]
@@ -54,12 +56,55 @@ export type CommandStatus =
 const CONFIG_FORBIDDEN_KEYS = ['url', 'config', 'path', 'downloadUrl', 'file']
 /** 运行类 action 绝不能携带自由执行字段。 */
 const RUN_FORBIDDEN_KEYS = ['command', 'shell', 'args', 'cwd', 'executable', 'script']
+const DEPLOYMENT_FORBIDDEN_KEYS = [...CONFIG_FORBIDDEN_KEYS, ...RUN_FORBIDDEN_KEYS]
+
+function assertNoForbiddenNestedKeys(value: unknown, forbidden: readonly string[], prefix = 'payload'): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoForbiddenNestedKeys(item, forbidden, `${prefix}[${index}]`))
+    return
+  }
+  if (!value || typeof value !== 'object') return
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (forbidden.some((item) => item.toLowerCase() === key.toLowerCase())) {
+      throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', `${prefix} 不允许字段 ${key}`, 400)
+    }
+    assertNoForbiddenNestedKeys(nested, forbidden, `${prefix}.${key}`)
+  }
+}
+
+function assertSkillDeploymentPayload(action: CommandAction, payload: Record<string, unknown>): void {
+  assertNoForbiddenNestedKeys(payload, DEPLOYMENT_FORBIDDEN_KEYS)
+  const target = payload.target && typeof payload.target === 'object'
+    ? payload.target as Record<string, unknown> : {}
+  const mode = String(target.mode || '')
+  if (!['execution_origin', 'framework_global'].includes(mode)) {
+    throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发目标模式不合法', 400)
+  }
+  if (mode === 'execution_origin' && !/^origin_[a-f0-9]{24}$/.test(String(target.originRef || ''))) {
+    throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发缺少合法 originRef', 400)
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(String(payload.skillName || ''))) {
+    throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发名称不合法', 400)
+  }
+  if (action === 'DEPLOY_SKILL_ARTIFACT') {
+    if (!/^deploy_[A-Za-z0-9_]+$/.test(String(payload.deploymentId || ''))
+      || !/^skillart_[A-Za-z0-9_]+$/.test(String(payload.artifactRef || ''))
+      || !Number.isInteger(payload.skillVersion)
+      || !/^[a-f0-9]{16}$/.test(String(payload.contentHash || ''))) {
+      throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发制品身份不合法', 400)
+    }
+  }
+}
 
 export function isWhitelistedAction(value: unknown): value is CommandAction {
   return typeof value === 'string' && (WHITELISTED_ACTIONS as readonly string[]).includes(value)
 }
 
 export function assertPayloadSafe(action: CommandAction, payload: Record<string, unknown>): void {
+  if (action === 'PRECHECK_SKILL_DEPLOYMENT' || action === 'DEPLOY_SKILL_ARTIFACT') {
+    assertSkillDeploymentPayload(action, payload)
+    return
+  }
   if (action === ENVIRONMENT_ACTION) {
     const context = validateContext(payload.context)
     if (Object.keys(payload).some(key => !['context', 'contextDigest'].includes(key)) || contextDigest(context) !== payload.contextDigest) {
@@ -207,7 +252,7 @@ export async function applyCommandStatus(input: {
   occurredAt?: string
   result?: Record<string, unknown>
   error?: { code?: string; message?: string }
-}): Promise<{ action: CommandAction; payload: Record<string, unknown> }> {
+}): Promise<{ action: CommandAction; payload: Record<string, unknown>; applied: boolean }> {
   const snapshot = await prisma.reliabilityCommand.findUnique({ where: { commandId: input.commandId } })
   const result = snapshot?.action === 'RUN_EXPERIMENT_CASE'
     ? await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -236,13 +281,16 @@ async function applyCommandStatusRow(
       data: { status: 'EXPIRED', errorCode: 'COMMAND_EXPIRED', completedAt: new Date() },
     })
     if (expired.count) return { expired: true, action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
-    return { action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
+    if (input.status === 'RECEIVED') throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令已结束，不接受开始执行确认', 409)
+    return { action: command.action as CommandAction, payload: safeParse(command.payloadJson), applied: false }
   }
   // 幂等：已到终态的指令不再被回执改写。
   if (TERMINAL.includes(command.status as CommandStatus)) {
+    if (input.status === 'RECEIVED') throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令已结束，不接受开始执行确认', 409)
     return {
       action: command.action as CommandAction,
       payload: safeParse(command.payloadJson),
+      applied: false,
     }
   }
 
@@ -282,13 +330,17 @@ async function applyCommandStatusRow(
 
   const allowed = input.status === 'RECEIVED' ? ['CREATED', 'SENT', 'RECEIVED']
     : ['CREATED', 'SENT', 'RECEIVED', 'RUNNING']
-  await tx.reliabilityCommand.updateMany({
+  const updated = await tx.reliabilityCommand.updateMany({
     where: { commandId: input.commandId, status: { in: allowed } },
     data,
   })
+  if (input.status === 'RECEIVED' && !updated.count) {
+    throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令状态已变化，不接受开始执行确认', 409)
+  }
   return {
     action: command.action as CommandAction,
     payload: safeParse(command.payloadJson),
+    applied: updated.count > 0,
   }
 }
 
@@ -302,7 +354,8 @@ function safeParse(json: string | null | undefined): Record<string, unknown> {
 }
 
 /** 长轮询取下一条待投递指令（IF-N07）。 */
-export async function claimNextCommand(clientId: string): Promise<CommandFrame | null> {
+export async function claimNextCommand(clientId: string, options: { signal?: AbortSignal } = {}): Promise<CommandFrame | null> {
+  if (options.signal?.aborted) return null
   const command = await prisma.reliabilityCommand.findFirst({
     where: {
       clientId,
@@ -311,8 +364,12 @@ export async function claimNextCommand(clientId: string): Promise<CommandFrame |
     },
     orderBy: { createdAt: 'asc' },
   })
-  if (!command) return null
-  await markSent(command.commandId, 'poll')
+  if (!command || options.signal?.aborted) return null
+  const claimed = await prisma.reliabilityCommand.updateMany({
+    where: { commandId: command.commandId, clientId, status: 'CREATED', expiresAt: { gt: new Date() } },
+    data: { status: 'SENT', sentAt: new Date(), channel: 'poll' },
+  })
+  if (!claimed.count || options.signal?.aborted) return null
   return {
     type: 'COMMAND',
     commandId: command.commandId,
@@ -324,5 +381,12 @@ export async function claimNextCommand(clientId: string): Promise<CommandFrame |
 }
 
 export async function getCommand(commandId: string) {
+  const command = await prisma.reliabilityCommand.findUnique({ where: { commandId } })
+  const cutoff = new Date(Date.now() - ackTimeoutMs())
+  if (command?.status !== 'SENT' || !command.sentAt || command.sentAt >= cutoff) return command
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId, status: 'SENT', sentAt: { lt: cutoff }, receivedAt: null },
+    data: { status: 'DELIVERY_FAILED', errorCode: 'ACK_TIMEOUT', errorMessage: '指令已发送但未在 ACK 窗口内收到 RECEIVED', completedAt: new Date() },
+  })
   return prisma.reliabilityCommand.findUnique({ where: { commandId } })
 }

@@ -242,6 +242,8 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
   const interactions: AnyObj[] = [];
   const rootAttrs = root.attributes || {};
   const product = (firstText(rootAttrs['qoder.product'], root.serviceName?.replace(/^qoder-(?:cn-)?/, ''), 'cli') || 'cli').toLowerCase();
+  // GUI message IDs have not been verified against inference service response IDs.
+  const inferenceIdentityVerified = !['desktop', 'jetbrains'].includes(product);
   const sessionMode = firstText(rootAttrs['qoder.session.mode']);
   const productAgent = product.includes('work')
     ? 'Qoder Work'
@@ -307,7 +309,20 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     const synthetic = attrs['qoder.llm.synthetic'] === true || attrs['qoder.llm.synthetic'] === 'true'
       || interaction.model === '<synthetic>';
     const messageId = firstText(attrs['qoder.llm.message_id']);
-    if (messageId && !synthetic) interaction.messageID = messageId;
+    if (messageId && !synthetic) {
+      interaction.messageID = messageId;
+      if (inferenceIdentityVerified) interaction.inference_response_id = messageId;
+    }
+    if (synthetic || !inferenceIdentityVerified) interaction.inference_response_unavailable = true;
+    if (inferenceIdentityVerified) interaction.inference_session_id = firstText(attrs['qoder.session.id'], rootAttrs['qoder.session.id']);
+    const callIds = parseJson(attrs['agent_insight.inference.call_ids']);
+    if (inferenceIdentityVerified && !synthetic && Array.isArray(callIds)) interaction.inference_call_ids = callIds.filter(id => typeof id === 'string');
+    const upstreamIds = parseJson(attrs['agent_insight.inference.upstream_request_ids']);
+    if (inferenceIdentityVerified && !synthetic && Array.isArray(upstreamIds)) {
+      interaction.inference_upstream_request_ids = upstreamIds.filter((entry: any) => (
+        entry && typeof entry.call_id === 'string' && typeof entry.request_id === 'string'
+      ));
+    }
     const input = firstText(attrs['input.value']);
     if (input) interaction.requestMessages = [{ role: 'user', content: input }];
     if (subagentSessionId) {
@@ -423,7 +438,18 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     // spool-isolation key and must never replace the real Agent Insight user.
     user: root.user || 'anonymous',
     authenticated_ingest: ordered.some((event) => event.authenticatedUser === true),
-    interactions,
+    interactions: (() => {
+      const unassigned = parseJson(rootAttrs['agent_insight.inference.unassigned_calls']);
+      if (inferenceIdentityVerified && Array.isArray(unassigned) && unassigned.length) interactions.push({
+        role: 'system', content: '', inference_session_id: sessionId, inference_unassigned_calls: unassigned.filter((call: any) => (
+          call && typeof call.call_id === 'string'
+        )).map((call: any) => {
+          const { upstream_request_id: upstream, ...rest } = call;
+          return typeof upstream === 'string' ? { ...rest, upstream_request_id: upstream } : rest;
+        }),
+      });
+      return interactions;
+    })(),
     qoder_quest: questEvents.length ? {
       mode: firstText(rootAttrs['qoder.session.mode'], questEvents[0]?.attributes?.['qoder.quest.mode']),
       goals: questEvents.filter((event) => event.attributes?.['qoder.quest.kind'] === 'goal').map((event) => ({
