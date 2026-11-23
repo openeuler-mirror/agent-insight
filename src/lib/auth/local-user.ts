@@ -28,6 +28,18 @@ interface ExternalAccountStore {
   updateUserExternalAccount(username: string, externalAccount: string): Promise<any>;
 }
 
+interface LocalUserStore extends ExternalAccountStore {
+  findUserByUsername(username: string): Promise<any>;
+  createUser(data: { username: string; apiKey: string; externalAccount?: string }): Promise<any>;
+}
+
+export class LocalUserAuthenticationError extends Error {
+  constructor() {
+    super('Existing local user requires the matching API key');
+    this.name = 'LocalUserAuthenticationError';
+  }
+}
+
 export async function syncLocalUserExternalAccount(
   user: any,
   rawExternalAccount?: string,
@@ -71,5 +83,31 @@ export async function findOrCreateLocalUser(username: string, rawExternalAccount
   if (!user) throw new Error('Failed to retrieve or create user');
   user = await syncLocalUserExternalAccount(user, externalAccount);
 
+  return user;
+}
+
+export async function authenticateOrRegisterLocalUser(
+  username: string,
+  apiKey: string | null,
+  store: LocalUserStore = db,
+) {
+  let user = await store.findUserByUsername(username);
+
+  if (user) {
+    if (!apiKey || user.apiKey !== apiKey) throw new LocalUserAuthenticationError();
+    return user;
+  }
+
+  if (apiKey) throw new LocalUserAuthenticationError();
+
+  const nextApiKey = 'wi_' + crypto.randomBytes(24).toString('hex');
+  try {
+    return await store.createUser({ username, apiKey: nextApiKey });
+  } catch (error: any) {
+    if (!isDuplicateUsernameError(error)) throw error;
+  }
+
+  user = await store.findUserByUsername(username);
+  if (!user || !apiKey || user.apiKey !== apiKey) throw new LocalUserAuthenticationError();
   return user;
 }

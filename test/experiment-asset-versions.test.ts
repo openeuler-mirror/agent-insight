@@ -184,9 +184,9 @@ test('answer overrides cannot reference inaccessible import datasets or change t
 
 test('version refs require a real Key actor and cannot impersonate body.user', async () => {
   const missing = await api.POST(request(body({ assetVersions: refs() }), null));
-  assert.equal(missing.status, 401);
+  assert.equal(missing.status, 400);
   const mismatch = await api.POST(request(body({ assetVersions: refs(), user: 'other-versions' })));
-  assert.equal(mismatch.status, 403);
+  assert.equal(mismatch.status, 400);
   const foreign = await api.POST(request(body({ assetVersions: refs(), user: 'other-versions' }), 'wi_fixture_other_versions'));
   assert.equal(foreign.status, 404);
 });
@@ -227,14 +227,17 @@ test('same-config clone retains original versions, evaluator definitions and cas
   assert.equal(clone.cases[0].caseValuesJson, original.cases[0].caseValuesJson);
   assert.equal(clone.cases[0].referenceOutput, 'ALPHA');
   const noKey = await api.POST(request({ user, createMode: 'same-config', sourceExperimentId: id }, null));
-  assert.equal(noKey.status, 401);
+  assert.equal(noKey.status, 400);
 });
 
-test('legacy no-ref requests still work, while caller-supplied resolved snapshots cannot forge versions', async () => {
-  const legacy = await api.POST(request(body({ configSnapshot: { traceSource: 'existing' } }), null));
+test('authenticated legacy no-ref requests still work, while caller-supplied resolved snapshots cannot forge versions', async () => {
+  assert.equal((await api.POST(request(body({ configSnapshot: { traceSource: 'existing' } }), null))).status, 400);
+  const legacy = await api.POST(request(body({ configSnapshot: { traceSource: 'existing' } })));
   assert.equal(legacy.status, 200);
   const legacySaved = await prisma.experiment.findUnique({ where: { id: (await legacy.json()).id } });
-  assert.equal(JSON.parse(legacySaved.configSnapshotJson).assetVersions, undefined);
+  const legacyFrozen = JSON.parse(legacySaved.configSnapshotJson).assetVersions;
+  assert.equal(legacyFrozen?.dataset, undefined);
+  assert.equal(legacyFrozen?.evaluators[evaluatorId].businessId, evaluatorId);
   const forged = await api.POST(request(body({ configSnapshot: { assetVersions: { schemaVersion: 1, dataset: { versionId: 'forged', definition: { cases: [] } } } } })));
   assert.equal(forged.status, 200);
   const frozen = JSON.parse((await prisma.experiment.findUnique({ where: { id: (await forged.json()).id } })).configSnapshotJson);
@@ -285,13 +288,14 @@ test('versioned create rejects foreign traces and mismatched execution/session I
 test('versioned run requires the real actor before the already-running shortcut; legacy runs remain compatible', async () => {
   const versioned = await prisma.experiment.create({ data: { user, name: 'Versioned running', status: 'running', configSnapshotJson: JSON.stringify({ assetVersions: { schemaVersion: 1, agent: { versionId: agentV1.id } } }) } });
   const runRequest = (token: string | null) => new Request(`http://localhost/api/experiments/${versioned.id}/run?user=${encodeURIComponent(user)}`, { method: 'POST', headers: token ? { 'x-witty-api-key': token } : {} });
-  assert.equal((await runApi.POST(runRequest(null), { params: Promise.resolve({ id: versioned.id }) })).status, 401);
-  assert.equal((await runApi.POST(runRequest('wi_fixture_other_versions'), { params: Promise.resolve({ id: versioned.id }) })).status, 403);
+  assert.equal((await runApi.POST(runRequest(null), { params: Promise.resolve({ id: versioned.id }) })).status, 400);
+  assert.equal((await runApi.POST(runRequest('wi_fixture_other_versions'), { params: Promise.resolve({ id: versioned.id }) })).status, 400);
   const authorized = await runApi.POST(runRequest(key), { params: Promise.resolve({ id: versioned.id }) });
   assert.equal(authorized.status, 200);
   assert.equal((await authorized.json()).alreadyRunning, true);
   const legacy = await prisma.experiment.create({ data: { user, name: 'Legacy running', status: 'running' } });
-  assert.equal((await runApi.POST(new Request(`http://localhost/api/experiments/${legacy.id}/run?user=${encodeURIComponent(user)}`, { method: 'POST' }), { params: Promise.resolve({ id: legacy.id }) })).status, 200);
+  assert.equal((await runApi.POST(new Request(`http://localhost/api/experiments/${legacy.id}/run?user=${encodeURIComponent(user)}`, { method: 'POST' }), { params: Promise.resolve({ id: legacy.id }) })).status, 400);
+  assert.equal((await runApi.POST(new Request(`http://localhost/api/experiments/${legacy.id}/run?user=${encodeURIComponent(user)}`, { method: 'POST', headers: { 'x-witty-api-key': key } }), { params: Promise.resolve({ id: legacy.id }) })).status, 200);
 });
 
 test('Case and evaluator retries authenticate versioned experiments while retaining legacy behavior', async () => {
@@ -306,14 +310,12 @@ test('Case and evaluator retries authenticate versioned experiments while retain
     const resultParams = { params: Promise.resolve({ id: exp.id, resultId: result.id }) };
     const retryRequest = (suffix: string, token: string | null) => new Request(`http://localhost/api/experiments/${exp.id}/${suffix}?user=${encodeURIComponent(user)}`, { method: 'POST', headers: token ? { 'x-witty-api-key': token } : {} });
     const before = (await prisma.experimentEvalResult.findUnique({ where: { id: result.id } })).updatedAt;
-    if (versioned) {
-      for (const [token, status] of [[null, 401], ['wi_fixture_other_versions', 403]] as const) {
-        assert.equal((await caseRetryApi.POST(retryRequest(`cases/${caseId}/retry`, token), caseParams)).status, status);
-        assert.equal((await resultRetryApi.POST(retryRequest(`results/${result.id}/retry`, token), resultParams)).status, status);
-      }
-      assert.deepEqual((await prisma.experimentEvalResult.findUnique({ where: { id: result.id } })).updatedAt, before);
+    for (const token of [null, 'wi_fixture_other_versions']) {
+      assert.equal((await caseRetryApi.POST(retryRequest(`cases/${caseId}/retry`, token), caseParams)).status, 400);
+      assert.equal((await resultRetryApi.POST(retryRequest(`results/${result.id}/retry`, token), resultParams)).status, 400);
     }
-    const token = versioned ? key : null;
+    assert.deepEqual((await prisma.experimentEvalResult.findUnique({ where: { id: result.id } })).updatedAt, before);
+    const token = key;
     assert.equal((await caseRetryApi.POST(retryRequest(`cases/${caseId}/retry`, token), caseParams)).status, 409);
     assert.equal((await resultRetryApi.POST(retryRequest(`results/${result.id}/retry`, token), resultParams)).status, 200);
   }

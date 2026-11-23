@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createIsolatedDatabase } from './helpers/isolated-database';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const database=createIsolatedDatabase();
 const {prisma}=require('../src/lib/storage/prisma');
@@ -80,7 +81,9 @@ test('只有完整上报OpenCode多轮能力的目标可以下发，旧客户端
   assert.equal(parseCapabilities(JSON.stringify(capability(true))).platforms[0].runExperimentCase.multiTurn,true);
   assert.equal((await listClientTraceGenerationTargets(request.user))[0].supportsMultiTurn,true);
   const {GET}=await import('@/app/api/experiments/agents/route');
-  const response=await GET(new Request('http://fixture/api/experiments/agents?user='+request.user));
+  await ensureTestApiUsers(request.user);
+  const response=await GET(testRequest('http://fixture/api/experiments/agents?user='+request.user,request.user));
+  assert.equal(response.status,200);
   const discovered=await response.json();
   assert.equal(discovered.agents.find((a:any)=>a.name==='build').targets[0].supportsMultiTurn,true);
   await assert.doesNotReject(()=>trace.assertTraceGenerationTarget({...request,multiTurn:true}));

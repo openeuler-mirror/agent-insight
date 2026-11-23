@@ -44,6 +44,7 @@ import {
   decoratePublicBenchmarkDatasets,
   isReadOnlyBenchmarkDataset,
 } from '@/lib/benchmark/public-dataset';
+import { resolveUser } from '@/lib/auth/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,6 +54,10 @@ export async function GET(request: Request) {
     const user = (searchParams.get('user') || '').trim();
     if (!user) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     const includeTrace = (await traceIdentity(request, false)) === user;
@@ -92,6 +97,10 @@ export async function POST(request: Request) {
     const user = String(body.user || '').trim();
     if (!user) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     const name = String(body.name || '').trim();
@@ -176,6 +185,10 @@ export async function PATCH(request: Request) {
     const id = String(body.id || '').trim();
     if (!user || !id) {
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     const trace = await guardTraceDataset(request, id, user, true);

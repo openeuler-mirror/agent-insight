@@ -127,11 +127,13 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
+    if (!username) {
+      return NextResponse.json({ error: 'user is required' }, { status: 401 });
+    }
     const skillName = String(q.get('skillName') || '').trim();
-    const userFilter = username ? { user: username } : {};
     const listFilter = {
       deletedAt: null,
-      ...userFilter,
+      user: username,
       ...(skillName ? { skillName } : {}),
       scope: { notIn: ['skill-workbench', 'skill-case-analysis', 'grayscale-ab'] },
       status: { not: 'draft' },

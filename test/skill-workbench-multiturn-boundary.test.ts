@@ -23,7 +23,7 @@ const user='skill-boundary@example.test',skillName='boundary-skill',datasetId='b
 const executionTarget={workerId:'boundary-worker',host:'fixture-host',platform:'opencode',agent:'build',model:'fixture/model'};
 const single={id:'single',input:'single question',expectedOutput:'answer',turns:[{input:'single question',expectedOutput:'answer'}]};
 const multi={id:'multi',input:'first',expectedOutput:'final',turns:[{input:'first'},{input:'second',expectedOutput:'final'}]};
-function request(body:unknown){return new NextRequest('http://localhost/api/skill-workbench/skills/boundary-skill/experiments',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});}
+function request(body:unknown){return new NextRequest('http://localhost/api/skill-workbench/skills/boundary-skill/experiments',{method:'POST',headers:{'content-type':'application/json','x-witty-api-key':'wi_skill_boundary_fixture'},body:JSON.stringify(body)});}
 test.before(async()=>{
  prisma=(await import('@/lib/storage/prisma')).prismaRaw;service=await import('@/lib/skill-workbench/experiment-service');route=await import('@/app/api/skill-workbench/skills/[name]/experiments/route');
  require.cache[generalAgentPath]={id:generalAgentPath,filename:generalAgentPath,loaded:true,exports:{runGeneralAgent:()=>assert.fail('多轮边界检查不得运行Agent')}} as any;

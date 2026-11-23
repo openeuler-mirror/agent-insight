@@ -60,6 +60,9 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
+    if (!username) {
+      return NextResponse.json({ error: 'user is required' }, { status: 401 });
+    }
     const agent = (url.searchParams.get('agent') || '').trim();
     const model = (url.searchParams.get('model') || '').trim();
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);

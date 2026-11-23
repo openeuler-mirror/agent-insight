@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { getActiveConfig } from '@/lib/storage/server-config';
@@ -42,7 +42,7 @@ export async function POST(
 
     const { username } = await resolveUser(request, body.user);
 
-    const { allowed, skill } = await canAccessSkill(id, username);
+    const { allowed, skill } = await canManageSkill(id, username);
     if (!skill) {
       return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
     }

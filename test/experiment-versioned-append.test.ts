@@ -82,8 +82,8 @@ test('frozen append accepts only source-version Case IDs and rejects the entire 
 
 test('versioned append requires the actual actor and completed root Trace matching Agent/platform and identity', async () => {
   const exp = await makeExperiment(), valid = await makeTrace('same input');
-  assert.equal((await append(exp.id, [{ ...valid, datasetCaseId: 'single' }], { token: null })).status, 401);
-  assert.equal((await append(exp.id, [{ ...valid, datasetCaseId: 'single' }], { token: 'wi_fixture_append_other' })).status, 403);
+  assert.equal((await append(exp.id, [{ ...valid, datasetCaseId: 'single' }], { token: null })).status, 400);
+  assert.equal((await append(exp.id, [{ ...valid, datasetCaseId: 'single' }], { token: 'wi_fixture_append_other' })).status, 400);
   for (const option of [{ user: 'append-other' }, { agent: 'other-agent' }, { platform: 'pi-agent' }, { complete: false }, { subagent: true }]) {
     const invalid = await makeTrace('same input', option);
     const response = await append(exp.id, [{ ...invalid, datasetCaseId: 'single' }]);
@@ -180,7 +180,7 @@ test('appended source Trace is ready in a generated parent, executes frozen rule
   assert.equal(response.status, 200); assert.equal((await response.json()).evaluating, true);
   await waitUntil(async () => { const current = await rows(exp.id); return current.length === 1 && current[0].results[0]?.status === 'done'; });
   const [saved] = await rows(exp.id); assert.equal(saved.results[0].score, 100);
-  const detailResponse = await detail.GET(new Request(`http://localhost/api/experiments/${exp.id}?user=${encodeURIComponent(user)}`), { params: Promise.resolve({ id: exp.id }) });
+  const detailResponse = await detail.GET(new Request(`http://localhost/api/experiments/${exp.id}?user=${encodeURIComponent(user)}`, { headers: { 'x-witty-api-key': key } }), { params: Promise.resolve({ id: exp.id }) });
   assert.equal(detailResponse.status, 200);
   const value = await detailResponse.json(); assert.equal(value.cases[0].traceStatus, 'ready');
   assert.ok(value.cases[0].executionProgress.stage >= 3);
@@ -194,15 +194,16 @@ test('existing parents keep existing-Trace display and frozen snapshots remain u
   const exp = await makeExperiment(), trace = await makeTrace('same input');
   await prisma.agentEvalDataset.delete({ where: { id: datasetId } });
   assert.equal((await append(exp.id, [{ ...trace, datasetCaseId: 'single' }])).status, 200);
-  const response = await detail.GET(new Request(`http://localhost/api/experiments/${exp.id}?user=${encodeURIComponent(user)}`), { params: Promise.resolve({ id: exp.id }) });
+  const response = await detail.GET(new Request(`http://localhost/api/experiments/${exp.id}?user=${encodeURIComponent(user)}`, { headers: { 'x-witty-api-key': key } }), { params: Promise.resolve({ id: exp.id }) });
   const value = await response.json(); assert.equal(value.cases[0].traceStatus, null); assert.equal(value.traceProgress, null);
 });
 
-test('legacy append remains available without a version ref, while agent-only frozen refs require authentication', async () => {
+test('legacy and agent-only frozen appends require authentication without changing their version contracts', async () => {
   const legacy = await makeExperiment({ legacy: true });
-  assert.equal((await append(legacy.id, [{ input: 'legacy manual', actualOutput: 'legacy answer' }], { token: null })).status, 200);
+  assert.equal((await append(legacy.id, [{ input: 'legacy manual', actualOutput: 'legacy answer' }], { token: null })).status, 400);
+  assert.equal((await append(legacy.id, [{ input: 'legacy manual', actualOutput: 'legacy answer' }])).status, 200);
   const agentOnly = await makeExperiment({ agentOnly: true });
-  assert.equal((await append(agentOnly.id, [{ input: 'manual', actualOutput: 'answer' }], { token: null })).status, 401);
+  assert.equal((await append(agentOnly.id, [{ input: 'manual', actualOutput: 'answer' }], { token: null })).status, 400);
   assert.equal((await append(agentOnly.id, [{ input: 'manual', actualOutput: 'answer' }])).status, 200);
 });
 

@@ -3456,6 +3456,10 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         ));
         if (hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
+        } else if (targetRecord.framework === 'claudecode' && targetRecord.executionStatus === 'in_progress') {
+            // 多轮会话:trace = 整个 session,上一轮的 Stop 已把 endTime 置过。用户接着开下一轮后,
+            // 聚合器发现最后活动晚于上一次结束信号、本轮还没结束,这里把执行状态翻回"执行中"。
+            await db.updateSession(targetRecord.task_id, { endTime: null });
         }
         if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true && !hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });

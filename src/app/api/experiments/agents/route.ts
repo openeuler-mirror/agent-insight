@@ -32,7 +32,10 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
-    const userFilter = username ? { user: username } : {};
+    if (!username) {
+      return NextResponse.json({ error: 'user is required' }, { status: 401 });
+    }
+    const userFilter = { user: username };
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
     const [grouped, faultInjectionTargets, genericTraceAvailability, benchmarkTargets] = await Promise.all([
@@ -50,14 +53,12 @@ export async function GET(req: Request) {
       }),
       listWorkerExecutionTargets(username),
       listClientTraceGenerationAvailability(username),
-      username
-        ? Promise.all(listBenchmarkAdapters().map(async (manifest) => (
+      Promise.all(listBenchmarkAdapters().map(async (manifest) => (
             (await listBenchmarkExecutionTargets(username, manifest)).map((target) => ({
               ...target,
               adapterKey: manifest.adapterKey,
             }))
-          ))).then((groups) => groups.flat())
-        : Promise.resolve([]),
+          ))).then((groups) => groups.flat()),
     ]);
 
     type CandidateTarget = (typeof faultInjectionTargets)[number] & {

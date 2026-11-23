@@ -15,7 +15,7 @@
  */
 
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -34,7 +34,7 @@ export async function POST(
 
         const { username } = await resolveUser(request, explicitUser);
 
-        const { allowed, skill } = await canAccessSkill(id, username);
+        const { allowed, skill } = await canManageSkill(id, username);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
         }

@@ -23,8 +23,10 @@ const database = createIsolatedDatabase();
 
 import { POST as appendExperimentCases } from '@/app/api/experiments/[id]/cases/route';
 import { prisma } from '@/lib/storage/prisma';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const TEST_USER = `experiment-quantity-${Date.now()}`;
+test.before(async () => { await ensureTestApiUsers(TEST_USER); });
 
 async function createExperiment(): Promise<string> {
   const experiment = await prisma.experiment.create({
@@ -47,7 +49,7 @@ function appendRequest(experimentId: string, count: number): Promise<Response> {
     actualOutput: `输出 ${index + 1}`,
   }));
   return appendExperimentCases(
-    new Request(`http://localhost/api/experiments/${experimentId}/cases`, {
+    testRequest(`http://localhost/api/experiments/${experimentId}/cases`, TEST_USER, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user: TEST_USER, cases, autoRun: false }),
