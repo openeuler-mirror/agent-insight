@@ -1,8 +1,23 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from architecture.genome import SkillGenome
+from architecture.scoring import Diagnosis
 from engine.crystallizer import ExperienceCrystallizer, ReportParser
 from engine.evaluation_adapter import EvaluationAdapter
 from engine.mutator import DiagnosticMutator
@@ -206,3 +221,81 @@ class SkillOptimizer:
             traceback.print_exc()
             # Fallback to static result so we don't lose everything
             return genome_after_static, static_diagnoses
+        
+    def optimize_trace(
+        self,
+        skill_path: Path,
+        trajectories: Path,
+        project_path: Optional[Path] = None,
+    ):
+        """
+        [Trace-Driven Run]
+        Analyze execution trajectories and distill lessons into skill improvements.
+        Returns: (optimized_genome, diagnoses)
+        """
+        from engine.trace2skill import Trace2SkillConfig, run_trace2skill
+
+        logger.info(">>> Starting Trace-Driven Optimization...")
+
+        trajectories_path = Path(trajectories)
+        if not trajectories_path.exists():
+            logger.error(f"Trajectories directory not found: {trajectories_path}")
+            return None, []
+
+        skill_path = Path(skill_path)
+        if not skill_path.exists():
+            logger.error(f"Skill path not found: {skill_path}")
+            return None, []
+
+        try:
+            genome = SkillGenome.from_directory(skill_path.parent)
+        except Exception as e:
+            logger.warning(f"Could not load from directory, falling back to file content: {e}")
+            with open(skill_path, "r", encoding="utf-8") as f:
+                genome = SkillGenome.from_markdown(f.read())
+
+        output_dir = Path(project_path) if project_path else None
+
+        config = Trace2SkillConfig(
+            trajectory_dir=trajectories_path,
+            skill_path=skill_path,
+            output_dir=output_dir,
+            enable_success_analyst=True,
+            enable_error_analyst=True,
+        )
+
+        result = run_trace2skill(llm_client=self.mutator.model_client, config=config)
+
+        logger.info(
+            f">>> Trace2Skill completed: {result.error_patches_count} error patches, "
+            f"{result.success_patches_count} success patches"
+        )
+
+        if not result.evolved_skill_content:
+            logger.warning("No evolved skill content returned")
+            return genome, []
+
+        evolved_genome = SkillGenome.from_markdown(result.evolved_skill_content)
+
+        try:
+            evolved_genome.files = genome.files.copy()
+            evolved_genome.file_meta = genome.file_meta.copy()
+        except Exception as e:
+            logger.warning(f"Could not preserve auxiliary files: {e}")
+
+        diagnoses = []
+        if result.merge_result and result.merge_result.final_patch:
+            for patch in result.merge_result.final_patch.edits:
+                diagnoses.append(
+                    Diagnosis(
+                        dimension="Trace",
+                        issue_type="trajectory_based",
+                        severity="info",
+                        description=patch.reasoning or "Trajectory-driven improvement",
+                        evidence=f"Patch: {patch.operation}",
+                        suggested_fix=patch.content if patch.content else "",
+                    )
+                )
+
+        return evolved_genome, diagnoses
+        

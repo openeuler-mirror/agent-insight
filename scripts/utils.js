@@ -1,47 +1,75 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 const { execSync, spawn } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 const http = require('http')
 const os = require('os')
+const { getAgentInsightHome } = require('./agent-insight-home.cjs')
+
+function getPreferredHomeDataRoot() {
+  return path.join(os.homedir(), '.agent-insight')
+}
+
+function getLegacyHomeDataRoot() {
+  return path.join(os.homedir(), '.skill-insight')
+}
+
+function getExistingHomeDataRoot() {
+  const preferred = getPreferredHomeDataRoot()
+  const legacy = getLegacyHomeDataRoot()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
 
 function getDataRoot() {
-  if (process.env.SKILL_INSIGHT_DATA_DIR) {
-    return process.env.SKILL_INSIGHT_DATA_DIR
-  }
-  if (__dirname.includes('node_modules')) {
-    return path.join(os.homedir(), '.skill-insight')
-  }
-  return path.resolve(__dirname, '..')
+  return getAgentInsightHome()
 }
 
 function migrateDataIfNeeded() {
-  const newDataRoot = path.join(os.homedir(), '.skill-insight')
+  const newDataRoot = getPreferredHomeDataRoot()
   const newDbPath = path.join(newDataRoot, 'data', 'witty_insight.db')
+  const legacyDbPath = path.join(getLegacyHomeDataRoot(), 'data', 'witty_insight.db')
   const oldDbPath = path.resolve(__dirname, '../data/witty_insight.db')
 
   const newExists = fs.existsSync(newDbPath)
+  const legacyExists = fs.existsSync(legacyDbPath)
   const oldExists = fs.existsSync(oldDbPath)
 
-  if (newExists && oldExists) {
+  if (newExists && (oldExists || legacyExists)) {
     console.log('Database already exists at new location, skipping migration')
     return
   }
 
-  if (newExists && !oldExists) {
+  if (newExists && !oldExists && !legacyExists) {
     console.log('Using existing database at ' + newDbPath)
     return
   }
 
-  if (!newExists && oldExists) {
-    console.log('Migrating database to new location...')
+  if (!newExists && (oldExists || legacyExists)) {
+    console.log('Migrating database to agent-insight directory...')
     const newDataPath = path.join(newDataRoot, 'data')
     if (!fs.existsSync(newDataPath)) {
       fs.mkdirSync(newDataPath, { recursive: true })
     }
-    fs.copyFileSync(oldDbPath, newDbPath)
+    fs.copyFileSync(legacyExists ? legacyDbPath : oldDbPath, newDbPath)
     console.log('✓ Database migrated to ' + newDbPath)
 
-    try { fs.renameSync(oldDbPath, oldDbPath + '.bak') } catch (e) {}
     return
   }
 
@@ -74,7 +102,7 @@ function findPidOnPort(port) {
         try {
           const pid = execSync(`lsof -t -i:${port} -sTCP:LISTEN`, { encoding: 'utf8' })
           if (pid.trim()) return pid.trim()
-        } catch (e) {}
+        } catch {}
       }
 
       if (fs.existsSync('/bin/ss') || fs.existsSync('/usr/bin/ss')) {
@@ -82,7 +110,7 @@ function findPidOnPort(port) {
           const output = execSync(`ss -lptn "sport = :${port}"`, { encoding: 'utf8' })
           const match = output.match(/pid=(\d+)/)
           if (match) return match[1]
-        } catch (e) {}
+        } catch {}
       }
 
       if (fs.existsSync('/bin/netstat') || fs.existsSync('/usr/bin/netstat')) {
@@ -90,15 +118,15 @@ function findPidOnPort(port) {
           const output = execSync(`netstat -nlp 2>/dev/null | grep ":${port} "`, { encoding: 'utf8' })
           const match = output.match(/(\d+)\//)
           if (match) return match[1]
-        } catch (e) {}
+        } catch {}
       }
 
       try {
         const output = execSync(`fuser ${port}/tcp 2>/dev/null`, { encoding: 'utf8' })
         if (output.trim()) return output.trim()
-      } catch (e) {}
+      } catch {}
     }
-  } catch (e) {}
+  } catch {}
 
   return null
 }
@@ -150,17 +178,18 @@ function killProcess(pid) {
 }
 
 function getPort(options) {
-  if (options.port) return options.port
-  if (process.env.PORT) return parseInt(process.env.PORT)
-
-  const envPath = path.join(process.cwd(), '.env')
-  if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf8')
-    const match = envContent.match(/^PORT=(\d+)$/m)
-    if (match) return parseInt(match[1])
+  const envPath = path.join(getDataRoot(), '.env')
+  const fileEnv = fs.existsSync(envPath) ? require('dotenv').parse(fs.readFileSync(envPath)) : {}
+  if (process.env.PORT || fileEnv.PORT) {
+    throw new Error('PORT 已移除，请改用 AGENT_INSIGHT_PORT 并移除旧 PORT 配置')
   }
-
-  return 3000
+  const configured = process.env.AGENT_INSIGHT_PORT !== undefined
+    ? process.env.AGENT_INSIGHT_PORT : fileEnv.AGENT_INSIGHT_PORT
+  const value = String(options?.port ?? (configured || 3000))
+  if (!/^\d{1,5}$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error('AGENT_INSIGHT_PORT / --port 必须是 1 到 65535 的整数')
+  }
+  return Number(value)
 }
 
 function ensureEnvFile(packageRoot) {
@@ -169,9 +198,18 @@ function ensureEnvFile(packageRoot) {
   const envExamplePath = path.join(path.resolve(__dirname, '..'), '.env.example')
 
   if (!fs.existsSync(envPath) && fs.existsSync(envExamplePath)) {
-    console.log('No .env found. Initializing from .env.example...')
+    console.log('No ~/.agent-insight/.env found. Initializing from .env.example...')
     fs.mkdirSync(path.dirname(envPath), { recursive: true })
-    fs.copyFileSync(envExamplePath, envPath)
+    // 生成时在文件头注明：这是当前生效的配置，由模板自动生成，改这里而不是改 .env.example
+    const header = [
+      `# >>> 本文件由 scripts/utils.js 于 ${new Date().toLocaleString('sv-SE')} 从 .env.example 自动生成 <<<`,
+      '# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。',
+      '# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。',
+      '# 注意：启动会同步 AGENT_INSIGHT_HOST；AGENT_INSIGHT_API_KEY 仅在缺失时初始化，安装指导注册的用户 Key 会保留。',
+      '#',
+      '',
+    ].join('\n')
+    fs.writeFileSync(envPath, header + fs.readFileSync(envExamplePath, 'utf8'), { mode: 0o600 })
     console.log('✓ .env file created at ' + envPath)
   }
 }
@@ -221,6 +259,9 @@ function findAvailablePort(startPort = 3000, maxAttempts = 100) {
 }
 
 module.exports = {
+  getPreferredHomeDataRoot,
+  getLegacyHomeDataRoot,
+  getExistingHomeDataRoot,
   findPidOnPort,
   killProcess,
   getPort,

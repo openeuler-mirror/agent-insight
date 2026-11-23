@@ -1,0 +1,35 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+- id: session-telemetry-otel
+  name: '@deepseek-ai/dsh-session-telemetry-otel'
+  config:
+    mode: FULL
+    shutdownTimeoutMillis: 3000
+    exporter:
+      url: !!js "`${String(process.env.AGENT_INSIGHT_BASE_URL || '').replace(/[/]+$/, '')}/api/ingest/otel/v1/logs`"
+      headers:
+        x-witty-api-key: !!js process.env.AGENT_INSIGHT_API_KEY
+      compression: gzip
+      timeoutMillis: 3000
+    processor:
+      scheduledDelayMillis: 1000
+      maxQueueSize: 2048
+      maxExportBatchSize: 512
+      exportTimeoutMillis: 2500
+- insert:
+    - id: agent-insight-deepseek-harness-observability
+      name: agent-insight-deepseek-harness-observability
+      config:
+        maxStringChars: !!js Number(process.env.AGENT_INSIGHT_DSH_MAX_STRING_CHARS || 32768)

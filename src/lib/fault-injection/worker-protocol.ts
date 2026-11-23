@@ -1,0 +1,474 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { FaultInjectionWorker } from '@prisma/client'
+import { prisma } from '@/lib/storage/prisma'
+import { refreshTaskProgress } from '@/lib/fault-injection/store'
+import { pickDisplayClientIp } from '@/lib/reliability/client-ip'
+
+export function claimTimeoutMs(): number {
+  const sec = Number(process.env.AGENT_INSIGHT_FI_CLAIM_TIMEOUT_SEC || 300)
+  return Math.max(60, Number.isFinite(sec) ? sec : 300) * 1000
+}
+
+export function workerOnlineMs(): number {
+  // Consider offline after 3x default poll or claim timeout, whichever smaller bound
+  return Math.min(claimTimeoutMs(), 60_000)
+}
+
+/** Requeue or stop stale collecting leases. Call at heartbeat/claim entry. */
+export async function sweepStaleClaims(user: string | null) {
+  const cutoff = new Date(Date.now() - claimTimeoutMs())
+  const whereUser = user ? { user } : {}
+  const stale = await prisma.faultInjectionRun.findMany({
+    where: {
+      ...whereUser,
+      status: 'collecting',
+      OR: [{ claimedAt: { lt: cutoff } }, { claimedAt: null }],
+    },
+    take: 50,
+  })
+  const touchedTasks = new Set<string>()
+  let reclaimed = 0
+  for (const run of stale) {
+    if (run.workerId) {
+      const worker = await prisma.faultInjectionWorker.findUnique({
+        where: { workerId: run.workerId },
+      })
+      // claimedAt is a start time. Renew protection only for live work;
+      // a restarted client can heartbeat while its previous collectors are gone.
+      if (worker && worker.lastSeenAt >= new Date(Date.now() - workerOnlineMs())) {
+        let activeRunIds: unknown
+        try {
+          activeRunIds = JSON.parse(worker.inventoryJson || '{}').activeRunIds
+        } catch { /* Legacy workers do not report individual active runs. */ }
+        if (!Array.isArray(activeRunIds) || activeRunIds.includes(run.runId)) continue
+      }
+    }
+    const result = await prisma.faultInjectionRun.updateMany({
+      where: {
+        id: run.id,
+        status: 'collecting',
+        workerId: run.workerId,
+        claimedAt: run.claimedAt,
+      },
+      data: {
+        status: run.stopRequested ? 'stopped' : 'queued',
+        workerId: null,
+        claimedAt: null,
+        error: run.stopRequested ? run.error || 'stopped by user' : 'claim timeout; requeued',
+      },
+    })
+    // A completion or a fresh claim can win while the worker is checked.
+    if (result.count) {
+      reclaimed += result.count
+      if (run.fiTaskId) touchedTasks.add(run.fiTaskId)
+    }
+  }
+  for (const taskId of touchedTasks) {
+    await refreshTaskProgress(taskId).catch(() => undefined)
+  }
+  return reclaimed
+}
+
+export type ClaimedRunPayload = {
+  runId: string
+  taskKey: string | null
+  platform: string
+  agent: string
+  fault: string
+  submode: string | null
+  prompt: string
+  model: string | null
+  workspaceLogical: string
+  timeoutSeconds: number | null
+  stopRequested: boolean
+}
+
+export function runCanBeClaimedByWorker(
+  requestJson: string | null | undefined,
+  workerId: string,
+): boolean {
+  try {
+    const request = JSON.parse(requestJson || '{}') as { targetWorkerId?: unknown }
+    const targetWorkerId = String(request.targetWorkerId || '').trim()
+    return !targetWorkerId || targetWorkerId === workerId
+  } catch {
+    return true
+  }
+}
+
+export async function claimQueuedRuns(input: {
+  user: string
+  workerId: string
+  limit: number
+}): Promise<ClaimedRunPayload[]> {
+  const limit = Math.max(1, Math.min(input.limit, 8))
+  const claimed: ClaimedRunPayload[] = []
+
+  for (let i = 0; i < limit; i += 1) {
+    const candidates = await prisma.faultInjectionRun.findMany({
+      where: {
+        user: input.user,
+        status: 'queued',
+        stopRequested: false,
+      },
+      orderBy: { queuedAt: 'asc' },
+      take: 100,
+    })
+    const next = candidates.find((candidate: { requestJson: string | null }) =>
+      runCanBeClaimedByWorker(candidate.requestJson, input.workerId))
+    if (!next) break
+
+    const result = await prisma.faultInjectionRun.updateMany({
+      where: { id: next.id, status: 'queued', stopRequested: false },
+      data: {
+        status: 'collecting',
+        workerId: input.workerId,
+        claimedAt: new Date(),
+        error: null,
+      },
+    })
+    if (result.count !== 1) continue
+
+    const run = await prisma.faultInjectionRun.findUnique({ where: { id: next.id } })
+    if (!run) continue
+    const task = run.fiTaskId
+      ? await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
+      : null
+    const req = JSON.parse(run.requestJson || '{}') as {
+      prompt?: string
+      workspace?: string
+      model?: string | null
+      timeoutSeconds?: number | null
+    }
+    claimed.push({
+      runId: run.runId,
+      taskKey: task?.taskKey || null,
+      platform: run.platform,
+      agent: run.agent,
+      fault: run.fault,
+      submode: run.submode,
+      prompt: req.prompt || task?.prompt || '',
+      model: req.model ?? task?.model ?? null,
+      workspaceLogical: req.workspace || task?.workspace || '__default__',
+      timeoutSeconds:
+        typeof req.timeoutSeconds === 'number'
+          ? req.timeoutSeconds
+          : parseTimeoutFromTask(task?.requestJson),
+      stopRequested: run.stopRequested,
+    })
+    if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId).catch(() => undefined)
+  }
+
+  // Mark queued+stopRequested as stopped without claiming
+  const stoppedQueued = await prisma.faultInjectionRun.findMany({
+    where: { user: input.user, status: 'queued', stopRequested: true },
+    take: 20,
+  })
+  for (const run of stoppedQueued) {
+    await prisma.faultInjectionRun.update({
+      where: { id: run.id },
+      data: { status: 'stopped', error: 'stopped by user' },
+    })
+    if (run.fiTaskId) await refreshTaskProgress(run.fiTaskId).catch(() => undefined)
+  }
+
+  return claimed
+}
+
+function parseTimeoutFromTask(requestJson?: string | null): number | null {
+  if (!requestJson) return null
+  try {
+    const parsed = JSON.parse(requestJson) as { timeoutSeconds?: number }
+    return typeof parsed.timeoutSeconds === 'number' ? parsed.timeoutSeconds : null
+  } catch {
+    return null
+  }
+}
+
+export async function upsertWorkerHeartbeat(input: {
+  user: string
+  workerId: string
+  hostname?: string | null
+  version?: string | null
+  inventory?: unknown
+  busySlots?: number
+  partial?: boolean
+}) {
+  if (input.partial) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const previous = await prisma.faultInjectionWorker.findUnique({ where: { workerId: input.workerId } })
+      if (!previous) {
+        await prisma.faultInjectionWorker.upsert({ where: { workerId: input.workerId },
+          create: { workerId: input.workerId, user: input.user, inventoryJson: '{}', lastSeenAt: new Date() }, update: {} })
+        continue
+      }
+      const changed = await prisma.faultInjectionWorker.updateMany({
+        where: { workerId: input.workerId, inventoryJson: previous.inventoryJson },
+        data: { user: input.user, hostname: input.hostname || undefined, version: input.version || undefined,
+          lastSeenAt: new Date(), busySlots: input.busySlots ?? 0,
+          inventoryJson: JSON.stringify(mergeWorkerInventory(previous.inventoryJson, input.inventory)) },
+      })
+      if (changed.count) return prisma.faultInjectionWorker.findUniqueOrThrow({ where: { workerId: input.workerId } })
+    }
+    throw new Error('Worker inventory is being updated; retry heartbeat')
+  }
+  const inventoryJson = JSON.stringify(input.inventory ?? {})
+  return prisma.faultInjectionWorker.upsert({
+    where: { workerId: input.workerId },
+    create: {
+      workerId: input.workerId,
+      user: input.user,
+      hostname: input.hostname || null,
+      version: input.version || null,
+      lastSeenAt: new Date(),
+      inventoryJson,
+      busySlots: input.busySlots ?? 0,
+    },
+    update: {
+      user: input.user,
+      hostname: input.hostname || null,
+      version: input.version || null,
+      lastSeenAt: new Date(),
+      inventoryJson,
+      busySlots: input.busySlots ?? 0,
+    },
+  })
+}
+
+export function mergeWorkerInventory(previous: string | null | undefined, patch: unknown): Record<string, unknown> & { platforms: Record<string, unknown> } {
+  const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  let current: Record<string, unknown> = {}
+  try { current = record(JSON.parse(previous || '{}')) } catch {}
+  const next = record(patch)
+  const platforms = { ...record(current.platforms) }
+  const mergeRows = (left: unknown, right: unknown) => [...new Map([
+    ...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : []),
+  ].map(item => [typeof item === 'string' ? item : record(item).id || record(item).name || JSON.stringify(item), item])).values()]
+  for (const [key, value] of Object.entries(record(next.platforms))) {
+    const entry = record(value)
+    const old = record(platforms[key])
+    platforms[key] = { ...old, ...entry, agents: mergeRows(old?.agents, entry.agents), models: mergeRows(old?.models, entry.models) }
+  }
+  return { ...current, ...next, platforms }
+}
+
+export async function listStopCommandsForWorker(user: string, workerId: string) {
+  const runs = await prisma.faultInjectionRun.findMany({
+    where: {
+      user,
+      workerId,
+      status: 'collecting',
+      stopRequested: true,
+    },
+    select: { runId: true },
+  })
+  return runs.map((r: { runId: string }) => ({ type: 'stop' as const, runId: r.runId }))
+}
+
+export async function getLatestWorkerInventory(user: string | null, platform: string) {
+  if (!user) return null
+  const cutoff = new Date(Date.now() - workerOnlineMs())
+  const worker = await prisma.faultInjectionWorker.findFirst({
+    where: { user, lastSeenAt: { gte: cutoff } },
+    orderBy: { lastSeenAt: 'desc' },
+  })
+  if (!worker) return null
+  try {
+    const inv = JSON.parse(worker.inventoryJson || '{}') as {
+      platforms?: Record<
+        string,
+        { agents?: unknown[]; models?: unknown[]; ready?: boolean; executable?: string | null }
+      >
+    }
+    return {
+      workerId: worker.workerId,
+      lastSeenAt: worker.lastSeenAt,
+      platformInventory: inv.platforms?.[platform] || null,
+      inventory: inv,
+    }
+  } catch {
+    return { workerId: worker.workerId, lastSeenAt: worker.lastSeenAt, platformInventory: null, inventory: {} }
+  }
+}
+
+export type WorkerPlatformInfo = {
+  id: string
+  label: string
+  executable: string | null
+  readiness: 'ready' | 'not_ready'
+  preflight_errors: string[]
+}
+
+export type OnlineWorkerSummary = {
+  workerId: string
+  hostname: string | null
+  lastSeenAt: string
+  version: string | null
+}
+
+export type WorkerExecutionTarget = {
+  workerId: string
+  host: string
+  hostname: string | null
+  platform: string
+  agent: string
+  agentLabel: string
+  models: Array<{ id: string; label: string }>
+  lastSeenAt: string
+}
+
+function inventoryOption(row: unknown): { id: string; label: string } | null {
+  if (typeof row === 'string') {
+    const id = row.trim()
+    return id ? { id, label: id } : null
+  }
+  if (!row || typeof row !== 'object') return null
+  const rec = row as Record<string, unknown>
+  const id = String(rec.id || rec.modelID || rec.name || '').trim()
+  if (!id) return null
+  const label = String(rec.label || rec.name || id).trim() || id
+  const provider = String(rec.providerID || rec.providerId || rec.provider || '').trim()
+  return { id, label: provider ? `${label} · ${provider}` : label }
+}
+
+export function executionTargetsFromWorker(
+  worker: Pick<FaultInjectionWorker, 'workerId' | 'hostname' | 'inventoryJson' | 'lastSeenAt'>,
+): WorkerExecutionTarget[] {
+  try {
+    const inventory = JSON.parse(worker.inventoryJson || '{}') as {
+      reportedIp?: string
+      ip?: string
+      observedIp?: string
+      platforms?: Record<string, { ready?: boolean; agents?: unknown[]; models?: unknown[] }>
+    }
+    const host = pickDisplayClientIp({
+      reportedIp: inventory.reportedIp || inventory.ip || null,
+      observedIp: inventory.observedIp || null,
+    }) || worker.hostname || worker.workerId
+    const out: WorkerExecutionTarget[] = []
+    for (const [platform, info] of Object.entries(inventory.platforms || {})) {
+      if (!info?.ready) continue
+      const agents = (Array.isArray(info.agents) ? info.agents : [])
+        .map(inventoryOption)
+        .filter((row): row is { id: string; label: string } => Boolean(row))
+      const models = (Array.isArray(info.models) ? info.models : [])
+        .map(inventoryOption)
+        .filter((row): row is { id: string; label: string } => Boolean(row))
+      for (const agent of agents) {
+        out.push({
+          workerId: worker.workerId,
+          host,
+          hostname: worker.hostname,
+          platform,
+          agent: agent.id,
+          agentLabel: agent.label,
+          models: [{ id: '', label: '平台默认' }, ...models],
+          lastSeenAt: worker.lastSeenAt.toISOString(),
+        })
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/** All executable Agent targets reported by online configured clients. */
+export async function listWorkerExecutionTargets(user: string | null): Promise<WorkerExecutionTarget[]> {
+  if (!user) return []
+  const cutoff = new Date(Date.now() - workerOnlineMs())
+  let workers: FaultInjectionWorker[]
+  try {
+    workers = await prisma.faultInjectionWorker.findMany({
+      where: { user, lastSeenAt: { gte: cutoff } },
+      orderBy: { lastSeenAt: 'desc' },
+      take: 100,
+    })
+  } catch {
+    return []
+  }
+  const out: WorkerExecutionTarget[] = []
+  for (const worker of workers) {
+    out.push(...executionTargetsFromWorker(worker))
+  }
+  return out
+}
+
+/** Platform readiness from online FI Worker inventory (not server PATH). */
+export async function listPlatformsFromWorkers(user: string | null): Promise<{
+  platforms: WorkerPlatformInfo[]
+  workers: OnlineWorkerSummary[]
+  ok: boolean
+}> {
+  const cutoff = new Date(Date.now() - workerOnlineMs())
+  const workers = user
+    ? await prisma.faultInjectionWorker.findMany({
+        where: { user, lastSeenAt: { gte: cutoff } },
+        orderBy: { lastSeenAt: 'desc' },
+        take: 5,
+      })
+    : []
+
+  const platforms = (['opencode', 'xiaoo'] as const).map((id) => {
+    let ready = false
+    let executable: string | null = null
+    let errors: string[] = []
+    for (const w of workers) {
+      try {
+        const inv = JSON.parse(w.inventoryJson || '{}') as {
+          platforms?: Record<string, { ready?: boolean; executable?: string | null }>
+        }
+        const p = inv.platforms?.[id]
+        if (p?.ready) {
+          ready = true
+          executable = p.executable || id
+          errors = []
+          break
+        }
+        if (p && !p.ready) {
+          errors = [`${id} not ready on worker ${w.workerId}`]
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!workers.length) {
+      errors = [
+        '无在线 FI Worker；请在「新建注入任务」页复制账号相关的 setup 命令并在本机执行',
+      ]
+    }
+    return {
+      id,
+      label: id === 'xiaoo' ? 'xiaoO' : 'OpenCode',
+      executable,
+      readiness: ready ? ('ready' as const) : ('not_ready' as const),
+      preflight_errors: errors,
+    }
+  })
+
+  return {
+    platforms,
+    workers: workers.map((w: FaultInjectionWorker) => ({
+      workerId: w.workerId,
+      hostname: w.hostname,
+      lastSeenAt: w.lastSeenAt.toISOString(),
+      version: w.version,
+    })),
+    ok: workers.length > 0,
+  }
+}

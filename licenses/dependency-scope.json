@@ -1,0 +1,280 @@
+{
+  "reviewDate": "2026-10-26",
+  "scope": "Fixed source snapshots and local dependency paths; not an exhaustive final binary or image SBOM",
+  "remainingNoticeItems": 12,
+  "entries": [
+    {
+      "package": "@tybys/wasm-util@0.10.2",
+      "ecosystem": "npm",
+      "declaredLicense": "MIT",
+      "scope": "build-platform-fallback",
+      "use": "Tailwind CSS optional Wasm backend; not a retired product feature",
+      "dependencyChain": [
+        "@tailwindcss/postcss",
+        "@tailwindcss/oxide",
+        "@tailwindcss/oxide-wasm32-wasi",
+        "@tybys/wasm-util"
+      ],
+      "applicationEvidence": [
+        "package.json",
+        "postcss.config.mjs"
+      ],
+      "lockedLocations": [
+        {
+          "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util",
+          "dev": true,
+          "optional": true
+        }
+      ],
+      "upstream": "https://github.com/toyobayashi/wasm-util/issues/9",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "action": "Retain dependency and published MIT declaration; request authoritative version-specific attribution. No removal or upgrade performed."
+    },
+    {
+      "package": "node-ensure@0.0.0",
+      "ecosystem": "npm",
+      "declaredLicense": "MIT",
+      "scope": "runtime",
+      "use": "PDF parsing for document ingestion, evaluation configuration and Skill attachments",
+      "dependencyChain": [
+        "pdf-parse",
+        "node-ensure"
+      ],
+      "applicationEvidence": [
+        "src/app/api/ingest/parse-document/route.ts",
+        "src/app/api/eval/config/create/route.ts",
+        "src/lib/skill-generator/attachments.ts"
+      ],
+      "lockedLocations": [
+        {
+          "path": "node_modules/node-ensure",
+          "dev": false,
+          "optional": false
+        }
+      ],
+      "upstream": "https://github.com/bauerca/node-ensure",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "action": "Retain dependency and published MIT declaration; request authoritative version-specific attribution. No removal or upgrade performed."
+    },
+    {
+      "package": "react-remove-scroll-bar@2.3.8",
+      "ecosystem": "npm",
+      "declaredLicense": "MIT",
+      "scope": "runtime-ui",
+      "use": "Scroll locking in shared dialogs, sheets and modal popovers",
+      "dependencyChain": [
+        "@radix-ui/react-dialog",
+        "react-remove-scroll",
+        "react-remove-scroll-bar"
+      ],
+      "applicationEvidence": [
+        "src/components/ui/dialog.tsx",
+        "src/components/ui/sheet.tsx",
+        "src/components/ui/popover.tsx"
+      ],
+      "lockedLocations": [
+        {
+          "path": "node_modules/react-remove-scroll-bar",
+          "dev": false,
+          "optional": false
+        }
+      ],
+      "upstream": "https://github.com/theKashey/react-remove-scroll-bar/pull/76",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "action": "Retain dependency and published MIT declaration; request authoritative version-specific attribution. No removal or upgrade performed."
+    },
+    {
+      "package": "remark-github-blockquote-alert@1.3.1",
+      "ecosystem": "npm",
+      "declaredLicense": "MIT",
+      "scope": "runtime-ui",
+      "use": "Markdown alert rendering in the Skill generator editor preview",
+      "dependencyChain": [
+        "@uiw/react-md-editor",
+        "@uiw/react-markdown-preview",
+        "remark-github-blockquote-alert"
+      ],
+      "applicationEvidence": [
+        "src/components/skill-generator/assistant-embed.tsx"
+      ],
+      "lockedLocations": [
+        {
+          "path": "node_modules/remark-github-blockquote-alert",
+          "dev": false,
+          "optional": false
+        }
+      ],
+      "upstream": "https://github.com/jaywcjlove/remark-github-blockquote-alert",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "action": "Retain dependency and published MIT declaration; request authoritative version-specific attribution. No removal or upgrade performed."
+    },
+    {
+      "package": "stable-hash@0.0.5",
+      "ecosystem": "npm",
+      "declaredLicense": "MIT",
+      "scope": "development",
+      "use": "ESLint TypeScript import-resolution cache in the locked development toolchain",
+      "dependencyChain": [
+        "eslint-config-next",
+        "eslint-import-resolver-typescript",
+        "stable-hash"
+      ],
+      "applicationEvidence": [
+        "package.json"
+      ],
+      "lockedLocations": [
+        {
+          "path": "node_modules/stable-hash",
+          "dev": true,
+          "optional": false
+        }
+      ],
+      "upstream": "https://github.com/shuding/stable-hash/issues/25",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "action": "Retain dependency and published MIT declaration; request authoritative version-specific attribution. No removal or upgrade performed."
+    },
+    {
+      "package": "use-composed-ref@1.4.0",
+      "ecosystem": "npm",
+      "declaredLicense": "MIT",
+      "scope": "runtime-ui",
+      "use": "Assistant composer input ref handling and textarea auto-sizing",
+      "dependencyChain": [
+        "@assistant-ui/react",
+        "react-textarea-autosize",
+        "use-composed-ref"
+      ],
+      "applicationEvidence": [
+        "src/components/skill-generator/assistant-embed.tsx"
+      ],
+      "lockedLocations": [
+        {
+          "path": "node_modules/use-composed-ref",
+          "dev": false,
+          "optional": false
+        }
+      ],
+      "upstream": "https://github.com/Andarist/use-composed-ref/issues/7",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "action": "Retain dependency and published MIT declaration; request authoritative version-specific attribution. No removal or upgrade performed."
+    },
+    {
+      "package": "block@0.1.6",
+      "ecosystem": "cargo",
+      "declaredLicense": "MIT",
+      "scope": "macos-native-source-chain",
+      "dependencyChain": [
+        "librsvg-c",
+        "librsvg",
+        "locale_config",
+        "objc-foundation",
+        "block"
+      ],
+      "sourceArchive": "https://static.crates.io/crates/block/block-0.1.6.crate",
+      "sha256": "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a",
+      "targetCondition": "locale_config target_os = macos; this chain is disabled on Linux",
+      "binaryEvidence": "Source/recipe analysis only; no exact binary SBOM or modified rebuild claimed",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "sourceBundleRetained": true
+    },
+    {
+      "package": "malloc_buf@0.0.6",
+      "ecosystem": "cargo",
+      "declaredLicense": "MIT",
+      "scope": "macos-native-source-chain",
+      "dependencyChain": [
+        "librsvg-c",
+        "librsvg",
+        "locale_config",
+        "objc",
+        "malloc_buf"
+      ],
+      "sourceArchive": "https://static.crates.io/crates/malloc_buf/malloc_buf-0.0.6.crate",
+      "sha256": "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb",
+      "targetCondition": "locale_config target_os = macos; this chain is disabled on Linux",
+      "binaryEvidence": "Source/recipe analysis only; no exact binary SBOM or modified rebuild claimed",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "sourceBundleRetained": true
+    },
+    {
+      "package": "objc-foundation@0.1.1",
+      "ecosystem": "cargo",
+      "declaredLicense": "MIT",
+      "scope": "macos-native-source-chain",
+      "dependencyChain": [
+        "librsvg-c",
+        "librsvg",
+        "locale_config",
+        "objc-foundation"
+      ],
+      "sourceArchive": "https://static.crates.io/crates/objc-foundation/objc-foundation-0.1.1.crate",
+      "sha256": "1add1b659e36c9607c7aab864a76c7a4c2760cd0cd2e120f3fb8b952c7e22bf9",
+      "targetCondition": "locale_config target_os = macos; this chain is disabled on Linux",
+      "binaryEvidence": "Source/recipe analysis only; no exact binary SBOM or modified rebuild claimed",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "sourceBundleRetained": true
+    },
+    {
+      "package": "objc_id@0.1.1",
+      "ecosystem": "cargo",
+      "declaredLicense": "MIT",
+      "scope": "macos-native-source-chain",
+      "dependencyChain": [
+        "librsvg-c",
+        "librsvg",
+        "locale_config",
+        "objc-foundation",
+        "objc_id"
+      ],
+      "sourceArchive": "https://static.crates.io/crates/objc_id/objc_id-0.1.1.crate",
+      "sha256": "c92d4ddb4bd7b50d730c215ff871754d0da6b2178849f8a2a2ab69712d0c073b",
+      "targetCondition": "locale_config target_os = macos; this chain is disabled on Linux",
+      "binaryEvidence": "Source/recipe analysis only; no exact binary SBOM or modified rebuild claimed",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "sourceBundleRetained": true
+    },
+    {
+      "package": "parcel_sourcemap@2.1.1",
+      "ecosystem": "cargo",
+      "declaredLicense": "MIT",
+      "scope": "css-build-native-chain",
+      "dependencyChain": [
+        "lightningcss_node",
+        "lightningcss-napi",
+        "parcel_sourcemap"
+      ],
+      "sourceArchive": "https://static.crates.io/crates/parcel_sourcemap/parcel_sourcemap-2.1.1.crate",
+      "sha256": "485b74d7218068b2b7c0e3ff12fbc61ae11d57cb5d8224f525bd304c6be05bbb",
+      "targetCondition": "Node binding has an unconditional parcel_sourcemap dependency; rkyv unconditionally depends on seahash",
+      "binaryEvidence": "Matching parcel_sourcemap-2.1.1 source path strings observed in the inspected Darwin lightningcss node binary",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "sourceBundleRetained": true
+    },
+    {
+      "package": "seahash@4.1.0",
+      "ecosystem": "cargo",
+      "declaredLicense": "MIT",
+      "scope": "css-build-native-chain",
+      "dependencyChain": [
+        "lightningcss_node",
+        "lightningcss-napi",
+        "parcel_sourcemap",
+        "rkyv",
+        "seahash"
+      ],
+      "sourceArchive": "https://static.crates.io/crates/seahash/seahash-4.1.0.crate",
+      "sha256": "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b",
+      "targetCondition": "Node binding has an unconditional parcel_sourcemap dependency; rkyv unconditionally depends on seahash",
+      "binaryEvidence": "Source/recipe analysis only; no exact binary SBOM or modified rebuild claimed",
+      "noticeStatus": "needs-version-specific-attribution-confirmation",
+      "sourceBundleRetained": true
+    }
+  ],
+  "boundaries": [
+    "All 12 packages declare MIT. This is a notice-provenance review, not a finding that they require special-license approval or must be replaced.",
+    "Absence of a package manifest or strings in a bundle does not prove code absence.",
+    "Four macOS-only Rust branches are not Linux binary dependencies through the inspected locale_config chain; their original sources remain in the source bundle.",
+    "Original Cargo locks contain other targets and test/build dependencies. sharp-libvips regenerates its lock during build.",
+    "No dependency, application code, CI or package script was changed; no upstream communication was sent."
+  ]
+}

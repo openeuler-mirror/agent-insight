@@ -1,0 +1,109 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { resolveUser } from '@/lib/auth/auth';
+import { isLlmScoredGenerator } from '@/lib/engine/skill-issues/static-evaluator';
+import { prismaRaw } from '@/lib/storage/prisma';
+import { NextRequest, NextResponse } from 'next/server';
+
+/**
+ * 取当前 SkillVersion 的最近一次静态评估概述（用于 SkillVersionDetailModal 顶部展示）。
+ *
+ * 输出：
+ *   - latest: 最近 ranAt 的 Evaluation + 聚合 issue 统计；不存在则 null
+ *   - history: 最近 5 条 evaluation 的 id/ranAt/status/issuesCount，便于跳详情页
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string; version: string }> },
+) {
+  try {
+    const { id, version: versionStr } = await params;
+    const version = parseInt(versionStr, 10);
+    if (isNaN(version)) {
+      return NextResponse.json({ error: 'Invalid version number' }, { status: 400 });
+    }
+
+    const url = new URL(request.url);
+    const explicitUser = url.searchParams.get('user') || undefined;
+    const { username } = await resolveUser(request, explicitUser);
+
+    const userFilter = username
+      ? { OR: [{ user: username }, { user: null }] }
+      : {};
+
+    const evaluations = await prismaRaw.evaluation.findMany({
+      where: {
+        skillId: id,
+        version,
+        type: 'static',
+        ...userFilter,
+      },
+      orderBy: { ranAt: 'desc' },
+      take: 5,
+      include: {
+        issues: { select: { severity: true } },
+      },
+    });
+
+    if (evaluations.length === 0) {
+      return NextResponse.json({ latest: null, history: [] });
+    }
+
+    const histogramFor = (issues: { severity: string }[]) => {
+      const h = { high: 0, medium: 0, low: 0 };
+      for (const i of issues) {
+        if (i.severity === 'high') h.high++;
+        else if (i.severity === 'medium') h.medium++;
+        else if (i.severity === 'low') h.low++;
+      }
+      return h;
+    };
+
+    const top = evaluations[0];
+    const latest = {
+      evaluationId: top.id,
+      ranAt: top.ranAt,
+      status: top.status,
+      generator: top.generator,
+      durationMs: top.durationMs,
+      errorMessage: top.errorMessage,
+      contentHash: top.contentHash,
+      issuesCount: top.issues.length,
+      severityHistogram: histogramFor(top.issues),
+      // 纯 L1 generator（无 +llm）的历史行可能残留 L1 floor 分数——L1 不单独评分，不下发。
+      l2Scores: top.l2ScoresJson && isLlmScoredGenerator(top.generator) ? safeParse(top.l2ScoresJson) : null,
+    };
+
+    const history = evaluations.map(e => ({
+      evaluationId: e.id,
+      ranAt: e.ranAt,
+      status: e.status,
+      generator: e.generator,
+      issuesCount: e.issues.length,
+      severityHistogram: histogramFor(e.issues),
+    }));
+
+    return NextResponse.json({ latest, history });
+  } catch (e: any) {
+    console.error('[Static Eval] Summary fetch error:', e);
+    return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 500 });
+  }
+}
+
+function safeParse(json: string): any {
+  try { return JSON.parse(json); } catch { return null; }
+}

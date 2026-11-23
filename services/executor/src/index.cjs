@@ -1,0 +1,1392 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use strict'
+
+const { createHash, createHmac, timingSafeEqual } = require('node:crypto')
+const fsp = require('node:fs/promises')
+const http = require('node:http')
+const os = require('node:os')
+const path = require('node:path')
+const { spawn } = require('node:child_process')
+const { GitSourceWorkspace } = require('./git-source-workspace.cjs')
+const { ExecutionBackendRegistry, LocalExecutionBackend } = require('./execution-backend.cjs')
+const { validateExecution, bindingFor, executionCapabilities } = require('./execution-config.cjs')
+const { LocalRetention, SWEEP_INTERVAL } = require('./retention.cjs')
+const { loadProjectConfig } = require('./project-config.cjs')
+const { createGitSourcePolicies } = require('./source-policy-registry.cjs')
+const { PublicBundleWorkspaceProvider, SingleFileCollector, validatePublicBundleSpec } = require('./public-bundle.cjs')
+const { ZsoftTasksWorkspaceProvider, validateZsoftTasksSpec } = require('./zsoft-tasks.cjs')
+const runtimeOptions = require('./runtime-options.cjs')
+
+const DELIVERY_RETRY_STAGES = new Set(['complete_pending', 'upload_pending'])
+const DELIVERY_RETRY_BASE_MS = 5_000
+const DELIVERY_RETRY_MAX_MS = 5 * 60_000
+const GIT_FETCH_ATTEMPTS = 3
+const GIT_FETCH_TIMEOUT_MS = 2 * 60_000
+const GIT_FETCH_RETRY_BASE_MS = 1_000
+const GIT_FETCH_RETRY_JITTER_MS = 250
+const TRANSIENT_GIT_FETCH_ERROR = /(?:could not resolve host|failed to connect|couldn['’]?t connect|connection (?:timed out|reset|closed|refused)|operation timed out|failure when receiving data from the peer|recv failure|send failure|remote end hung up unexpectedly|unexpected disconnect|early eof|partial file|http\/2 (?:stream|protocol_error)|rpc failed;\s*curl\s+(?:6|7|18|28|35|52|55|56|92)\b|the requested url returned error:\s*(?:408|429|500|502|503|504)\b|tls connection was non-properly terminated|network is unreachable|temporary failure)/i
+
+class BenchmarkExecutorError extends Error {
+  constructor(code, message, status = 422, retryable = false) {
+    super(message)
+    this.name = 'BenchmarkExecutorError'
+    this.code = code
+    this.status = status
+    this.retryable = retryable
+  }
+}
+
+function normalizedJson(value) {
+  if (Array.isArray(value)) return value.map(normalizedJson)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, normalizedJson(item)]),
+    )
+  }
+  return value
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(normalizedJson(value))
+}
+
+function sha256(value) {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`
+}
+
+function deviceCredentialHash(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function dispatchDigest(request) {
+  return sha256(canonicalJson({
+    runId: request.runId,
+    task: request.task,
+    callbackBaseUrl: request.callbackBaseUrl,
+    timeoutSeconds: request.timeoutSeconds,
+  }))
+}
+
+function verifySignature(token, credentialHash) {
+  const [encoded, signature, extra] = String(token || '').split('.')
+  if (!encoded || !signature || extra || !/^[0-9a-f]{64}$/i.test(credentialHash)) {
+    throw new BenchmarkExecutorError('DISPATCH_UNAUTHORIZED', '下发 token 不合法', 401)
+  }
+  const expected = createHmac('sha256', Buffer.from(credentialHash, 'hex')).update(encoded).digest()
+  let actual
+  let payload
+  try {
+    actual = Buffer.from(signature, 'base64url')
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+  } catch {
+    throw new BenchmarkExecutorError('DISPATCH_UNAUTHORIZED', '下发 token 不合法', 401)
+  }
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new BenchmarkExecutorError('DISPATCH_UNAUTHORIZED', '下发 token 签名无效', 401)
+  }
+  const now = Math.floor(Date.now() / 1000)
+  if (
+    payload.aud !== 'benchmark-executor'
+    || !Number.isInteger(payload.expiresAt)
+    || payload.expiresAt < now
+    || payload.expiresAt > now + 600
+  ) {
+    throw new BenchmarkExecutorError('DISPATCH_FORBIDDEN', '下发 token 已过期或用途不匹配', 403)
+  }
+  return payload
+}
+
+function bearerToken(headers) {
+  const match = /^Bearer\s+(.+)$/i.exec(String(headers.authorization || '').trim())
+  if (!match) throw new BenchmarkExecutorError('DISPATCH_UNAUTHORIZED', '缺少下发 token', 401)
+  return match[1]
+}
+
+function assertCallbackUrl(callbackBaseUrl, insightBaseUrl, runId, allowAlternateOrigin = false) {
+  let actual
+  let expected
+  try {
+    actual = new URL(callbackBaseUrl)
+    expected = new URL(
+      `${String(insightBaseUrl).replace(/\/$/, '')}/api/benchmark/v1/runs/${encodeURIComponent(runId)}`,
+    )
+  } catch {
+    throw new BenchmarkExecutorError('CALLBACK_URL_INVALID', '回调地址不合法', 403)
+  }
+  if (
+    !['http:', 'https:'].includes(actual.protocol)
+    || actual.username
+    || actual.password
+    || (!allowAlternateOrigin && actual.origin !== expected.origin)
+    || actual.pathname.replace(/\/$/, '') !== expected.pathname.replace(/\/$/, '')
+    || actual.search
+    || actual.hash
+  ) {
+    throw new BenchmarkExecutorError('CALLBACK_URL_FORBIDDEN', '回调地址与当前平台 Run 不匹配', 403)
+  }
+}
+
+const FORBIDDEN_KEYS = new Set([
+  'command',
+  'shell',
+  'args',
+  'executable',
+  'token',
+  'credential',
+  'privatepayload',
+])
+
+function scanForbidden(value, allowRuntimeValues, segments = [], currentPath = '$') {
+  if (allowRuntimeValues && segments.length === 3
+    && segments[0] === 'agentConfig' && segments[1] === 'agentOptions' && segments[2] === 'values') return
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => scanForbidden(item, allowRuntimeValues, [...segments, String(index)], `${currentPath}[${index}]`))
+    return
+  }
+  if (!value || typeof value !== 'object') return
+  for (const [key, item] of Object.entries(value)) {
+    if (FORBIDDEN_KEYS.has(key.toLowerCase())) {
+      throw new BenchmarkExecutorError('TASK_FORBIDDEN_FIELD', `任务包含禁止字段 ${currentPath}.${key}`)
+    }
+    scanForbidden(item, allowRuntimeValues, [...segments, key], `${currentPath}.${key}`)
+  }
+}
+
+function validateTaskEnvelope(task, runId) {
+  if (!task || task.schemaVersion !== 'agent-task/v1') {
+    throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '任务协议标识不受支持')
+  }
+  if (!task.context || task.context.runId !== runId) {
+    throw new BenchmarkExecutorError('TASK_CONTEXT_MISMATCH', '任务上下文与 runId 不一致')
+  }
+  if (!task.benchmark?.key || !task.task?.instruction || !task.task?.benchmarkPayload) {
+    throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '任务缺少 Benchmark 公开输入')
+  }
+  if (task.workspace?.provider === 'zsoft-tasks') {
+    validateZsoftTasksSpec(task.workspace)
+  } else if (task.workspace?.provider === 'public-bundle') {
+    validatePublicBundleSpec(task.workspace)
+  } else if (task.workspace?.provider === 'git') {
+  if (!/^[0-9a-f]{40}$/i.test(String(task.workspace?.revision || ''))) {
+    throw new BenchmarkExecutorError('TASK_WORKSPACE_INVALID', 'Git 工作区契约不合法')
+  }
+  let repository
+  try {
+    repository = new URL(task.workspace.repository)
+  } catch {
+    throw new BenchmarkExecutorError('TASK_REPOSITORY_INVALID', '仓库地址不合法')
+  }
+  if (
+    repository.protocol !== 'https:'
+    || repository.hostname !== 'github.com'
+    || repository.username
+    || repository.password
+    || repository.search
+    || repository.hash
+  ) {
+    throw new BenchmarkExecutorError('TASK_REPOSITORY_INVALID', '仓库必须是 GitHub HTTPS 地址')
+  }
+  } else {
+    throw new BenchmarkExecutorError('TASK_WORKSPACE_INVALID', '工作区类型不受支持')
+  }
+  if (
+    task.policy?.workspaceWrite !== 'allow'
+    || task.policy?.hiddenDataAccess !== 'deny'
+    || !['client-default', ...(task.execution ? ['deny'] : [])].includes(task.policy?.network)
+  ) {
+    throw new BenchmarkExecutorError('POLICY_UNSUPPORTED', '当前执行器只支持 client-default 网络策略')
+  }
+  if (
+    !Array.isArray(task.submission?.requiredArtifacts)
+    || !task.submission.requiredArtifacts.length
+    || !String(task.agentConfig?.platform || '').trim()
+    || !String(task.agentConfig?.agent || '').trim()
+    || !Number.isInteger(task.agentConfig?.timeoutSeconds)
+    || task.agentConfig.timeoutSeconds < 1
+    || task.agentConfig.timeoutSeconds > 86_400
+  ) {
+    throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '提交物或 Agent 配置不合法')
+  }
+  let agentOptions
+  try { ({ agentOptions } = runtimeOptions.runtimeInvocationOptions(task.agentConfig.platform, task.agentConfig.agent, task.agentConfig.agentOptions)) }
+  catch (error) { throw new BenchmarkExecutorError(error.code || 'AGENT_OPTIONS_INVALID', error.message) }
+  const artifactNames = new Set()
+  for (const artifact of task.submission.requiredArtifacts) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(artifact?.name || ''))
+      || artifactNames.has(artifact.name)
+      || !String(artifact.mediaType || '').trim()
+      || !/^[a-z0-9][a-z0-9._/-]{0,127}$/.test(String(artifact.collector || ''))
+      || !Number.isInteger(artifact.maxBytes)
+      || artifact.maxBytes < 1
+    ) {
+      throw new BenchmarkExecutorError('ARTIFACT_CONTRACT_INVALID', '提交物契约不合法')
+    }
+    artifactNames.add(artifact.name)
+  }
+  if (task.execution) validateExecution(task.execution)
+  scanForbidden(task, agentOptions?.version === 2)
+}
+
+class CapabilityRegistry {
+  constructor(kind, entries = []) {
+    this.kind = kind
+    this.capabilities = new Map()
+    for (const [key, capability] of entries) this.register(key, capability)
+  }
+
+  register(key, capability) {
+    if (!/^[a-z0-9][a-z0-9._/-]{0,127}$/.test(String(key || ''))) {
+      throw new TypeError(`${this.kind} capability key is invalid`)
+    }
+    if (this.capabilities.has(key)) throw new TypeError(`duplicate ${this.kind} capability: ${key}`)
+    this.capabilities.set(key, capability)
+    return this
+  }
+
+  replace(entries = []) {
+    const capabilities = new Map()
+    for (const [key, capability] of entries) {
+      if (!/^[a-z0-9][a-z0-9._/-]{0,127}$/.test(String(key || ''))) {
+        throw new TypeError(`${this.kind} capability key is invalid`)
+      }
+      if (capabilities.has(key)) throw new TypeError(`duplicate ${this.kind} capability: ${key}`)
+      capabilities.set(key, capability)
+    }
+    this.capabilities = capabilities
+    return this
+  }
+
+  get(key) {
+    const capability = this.capabilities.get(key)
+    if (!capability) {
+      throw new BenchmarkExecutorError('EXECUTOR_CAPABILITY_MISSING', `执行器未注册 ${this.kind} 能力：${key}`)
+    }
+    return capability
+  }
+
+  keys() {
+    return [...this.capabilities.keys()]
+  }
+}
+
+class WorkspaceProviderRegistry extends CapabilityRegistry {
+  constructor(entries = []) { super('workspace', entries) }
+}
+
+class AgentRuntimeRegistry extends CapabilityRegistry {
+  constructor(entries = []) { super('agent-runtime', entries) }
+}
+
+class ArtifactCollectorRegistry extends CapabilityRegistry {
+  constructor(entries = []) { super('artifact-collector', entries) }
+}
+
+function buildExecutionPlan(task, registries) {
+  return {
+    workspace: task.workspace,
+    backend: registries.executionBackends?.get(task.execution?.profile.backendKey || 'local'),
+    workspaceProvider: task.execution ? null : registries.workspaceProviders.get(task.workspace.provider),
+    policy: task.policy,
+    agentRuntime: task.execution ? null : registries.agentRuntimes.get(task.agentConfig.platform),
+    agent: {
+      ...task.agentConfig,
+      input: task.task.instruction,
+      benchmarkKey: task.benchmark.key,
+      benchmarkPayload: task.task.benchmarkPayload,
+      workspace: task.workspace,
+      correlation: {
+        experimentId: task.context.experimentId,
+        caseRunId: task.context.runId,
+      },
+    },
+    artifacts: task.submission.requiredArtifacts.map((contract) => ({
+      contract,
+      collector: task.execution ? null : registries.collectors.get(contract.collector),
+    })),
+  }
+}
+
+async function atomicWriteJson(filePath, value) {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 })
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  await fsp.writeFile(tempPath, JSON.stringify(value, null, 2), { mode: 0o600 })
+  const handle = await fsp.open(tempPath, 'r')
+  await handle.sync()
+  await handle.close()
+  await fsp.rename(tempPath, filePath)
+}
+
+class FileRunStore {
+  constructor(rootDir) {
+    this.rootDir = rootDir
+    this.stateWrites = new Map()
+  }
+
+  runDir(runId) {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(runId)) {
+      throw new BenchmarkExecutorError('RUN_ID_INVALID', 'runId 不合法', 400)
+    }
+    return path.join(this.rootDir, runId)
+  }
+
+  async readJson(filePath) {
+    try {
+      return JSON.parse(await fsp.readFile(filePath, 'utf8'))
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null
+      throw error
+    }
+  }
+
+  async accept(request) {
+    const runDir = this.runDir(request.runId)
+    const requestPath = path.join(runDir, 'request.json')
+    const existing = await this.readJson(requestPath)
+    if (existing) {
+      if (existing.requestDigest !== request.requestDigest) {
+        throw new BenchmarkExecutorError('RUN_ID_CONFLICT', '同一 runId 的任务摘要不同', 409)
+      }
+      return { created: false, state: await this.state(request.runId) }
+    }
+    await fsp.mkdir(runDir, { recursive: true, mode: 0o700 })
+    await atomicWriteJson(requestPath, request)
+    await this.writeState(request.runId, { stage: 'accepted', updatedAt: new Date().toISOString() })
+    return { created: true, state: await this.state(request.runId) }
+  }
+
+  state(runId) {
+    return this.readJson(path.join(this.runDir(runId), 'state.json'))
+  }
+
+  request(runId) {
+    return this.readJson(path.join(this.runDir(runId), 'request.json'))
+  }
+
+  cancellation(runId) {
+    return this.readJson(path.join(this.runDir(runId), 'cancellation.json'))
+  }
+
+  cancel(runId) {
+    return atomicWriteJson(path.join(this.runDir(runId), 'cancellation.json'), { at: new Date().toISOString() })
+  }
+
+  writeState(runId, patch) {
+    const next = (this.stateWrites.get(runId) || Promise.resolve()).catch(() => {}).then(async () => {
+      const prior = await this.state(runId) || {}
+      const updatedAt = new Date().toISOString()
+      await atomicWriteJson(path.join(this.runDir(runId), 'state.json'), {
+        ...prior, ...patch, updatedAt,
+        ...(patch.stage === 'terminal' ? { terminalAt: prior.terminalAt || updatedAt } : {}),
+      })
+    })
+    this.stateWrites.set(runId, next)
+    return next.finally(() => { if (this.stateWrites.get(runId) === next) this.stateWrites.delete(runId) })
+  }
+
+  async writeArtifact(runId, name, bytes) {
+    const artifactDir = path.join(this.runDir(runId), 'artifacts')
+    await fsp.mkdir(artifactDir, { recursive: true, mode: 0o700 })
+    const target = path.join(artifactDir, name)
+    const temp = `${target}.${process.pid}.tmp`
+    await fsp.writeFile(temp, bytes, { mode: 0o600 })
+    await fsp.rename(temp, target)
+    return target
+  }
+
+  async listRunIds() {
+    try {
+      const entries = await fsp.readdir(this.rootDir, { withFileTypes: true })
+      return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    } catch (error) {
+      if (error?.code === 'ENOENT') return []
+      throw error
+    }
+  }
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) return reject(options.signal.reason || new Error('Execution cancelled'))
+    const useProcessGroup = Boolean(options.killProcessGroup) && process.platform !== 'win32'
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env || process.env,
+      shell: false,
+      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      detached: useProcessGroup,
+    })
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let settled = false
+    let timeoutTimer = null
+    let forceKillTimer = null
+    let hardStopTimer = null
+    const timeoutMs = Number(options.timeoutMs)
+    const clearTimers = () => {
+      options.signal?.removeEventListener('abort', abort)
+      if (timeoutTimer) clearTimeout(timeoutTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (hardStopTimer) clearTimeout(hardStopTimer)
+    }
+    const settle = (callback) => {
+      if (settled) return
+      settled = true
+      clearTimers()
+      callback()
+    }
+    const terminate = (signal) => {
+      try {
+        if (useProcessGroup && child.pid) process.kill(-child.pid, signal)
+        else child.kill(signal)
+      } catch {}
+    }
+    const abort = () => {
+      terminate(options.abortSignal || 'SIGTERM')
+      forceKillTimer = setTimeout(() => terminate('SIGKILL'), Number(options.terminateGraceMs) || 2_000)
+      forceKillTimer.unref?.()
+    }
+    options.signal?.addEventListener('abort', abort, { once: true })
+    const processError = (code, signal) => {
+      const error = timedOut
+        ? new BenchmarkExecutorError(
+          options.timeoutErrorCode || 'PROCESS_TIMEOUT',
+          `${command} ${args[0] || ''} 超过 ${timeoutMs}ms 未结束`,
+          503,
+          true,
+        )
+        : new BenchmarkExecutorError(
+          options.errorCode || 'PROCESS_FAILED',
+          `${command} ${args[0] || ''} 失败: ${stderr.slice(-2000) || `exit ${code}`}`,
+        )
+      error.timedOut = timedOut
+      error.exitCode = code
+      error.signal = signal
+      error.stderr = stderr.slice(-2000)
+      return error
+    }
+    const appendOutput = (current, chunk) => {
+      const next = current + String(chunk)
+      const max = Number(options.maxOutputBytes)
+      return Number.isFinite(max) && max > 0 ? next.slice(-max) : next
+    }
+    child.stdout.on('data', (chunk) => { stdout = appendOutput(stdout, chunk) })
+    child.stderr.on('data', (chunk) => { stderr = appendOutput(stderr, chunk) })
+    child.on('error', (error) => {
+      settle(() => reject(error))
+    })
+    child.on('close', (code, signal) => {
+      if (options.signal?.aborted) settle(() => reject(options.signal.reason || new Error('Execution cancelled')))
+      else if (!timedOut && code === 0) settle(() => resolve({ stdout, stderr }))
+      else settle(() => reject(processError(code, signal)))
+    })
+    if (options.input !== undefined) {
+      child.stdin.on('error', (error) => {
+        terminate('SIGTERM')
+        settle(() => reject(error))
+      })
+      child.stdin.end(options.input)
+    }
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true
+        terminate(options.timeoutSignal || 'SIGTERM')
+        forceKillTimer = setTimeout(() => terminate('SIGKILL'), Number(options.terminateGraceMs) || 2_000)
+        forceKillTimer.unref?.()
+        hardStopTimer = setTimeout(() => {
+          settle(() => reject(processError(null, 'SIGKILL')))
+        }, (Number(options.terminateGraceMs) || 2_000) + 3_000)
+        hardStopTimer.unref?.()
+      }, timeoutMs)
+      timeoutTimer.unref?.()
+    }
+  })
+}
+
+function isTransientGitFetchError(error) {
+  if (error?.timedOut === true || error?.code === 'PROCESS_TIMEOUT') return true
+  return TRANSIENT_GIT_FETCH_ERROR.test(
+    `${error?.stderr || ''}\n${error?.message || error || ''}`,
+  )
+}
+
+function wait(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
+class GitWorkspaceProvider {
+  constructor(rootDir, processRunner = runProcess, options = {}) {
+    this.rootDir = rootDir
+    this.processRunner = processRunner
+    this.sourcePolicies = options.sourcePolicies || new Map()
+    this.sourceWorkspace = new GitSourceWorkspace({ run: processRunner, ErrorType: BenchmarkExecutorError, log: options.log })
+    const fetchAttempts = Number(options.fetchAttempts ?? GIT_FETCH_ATTEMPTS)
+    const fetchTimeoutMs = Number(options.fetchTimeoutMs ?? GIT_FETCH_TIMEOUT_MS)
+    const retryBaseMs = Number(options.retryBaseMs ?? GIT_FETCH_RETRY_BASE_MS)
+    const retryJitterMs = Number(options.retryJitterMs ?? GIT_FETCH_RETRY_JITTER_MS)
+    this.fetchAttempts = Number.isInteger(fetchAttempts)
+      ? Math.min(10, Math.max(1, fetchAttempts))
+      : GIT_FETCH_ATTEMPTS
+    this.fetchTimeoutMs = Number.isFinite(fetchTimeoutMs)
+      ? Math.max(1_000, fetchTimeoutMs)
+      : GIT_FETCH_TIMEOUT_MS
+    this.retryBaseMs = Number.isFinite(retryBaseMs) ? Math.max(0, retryBaseMs) : GIT_FETCH_RETRY_BASE_MS
+    this.retryJitterMs = Number.isFinite(retryJitterMs)
+      ? Math.max(0, retryJitterMs)
+      : GIT_FETCH_RETRY_JITTER_MS
+    this.random = options.random || Math.random
+    this.sleep = options.sleep || wait
+  }
+
+  async initializeWorkspace(workspace, repository) {
+    await fsp.rm(workspace, { recursive: true, force: true })
+    await fsp.mkdir(workspace, { recursive: true, mode: 0o700 })
+    await this.processRunner('git', ['init', '--quiet'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+    await this.processRunner('git', ['config', 'core.hooksPath', '/dev/null'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+    await this.processRunner('git', ['remote', 'add', 'origin', repository], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+  }
+
+  async fetchRevision(workspace, spec) {
+    const failures = []
+    for (let attempt = 1; attempt <= this.fetchAttempts; attempt += 1) {
+      await this.initializeWorkspace(workspace, spec.repository)
+      const args = attempt === this.fetchAttempts && attempt > 1
+        ? ['-c', 'http.version=HTTP/1.1', 'fetch', '--quiet', '--depth=1', 'origin', spec.revision]
+        : ['fetch', '--quiet', '--depth=1', 'origin', spec.revision]
+      try {
+        await this.processRunner('git', args, {
+          cwd: workspace,
+          env: {
+            ...process.env,
+            GIT_TERMINAL_PROMPT: '0',
+            LANG: 'C',
+            LC_ALL: 'C',
+          },
+          errorCode: 'WORKSPACE_PREPARE_FAILED',
+          timeoutErrorCode: 'PROCESS_TIMEOUT',
+          timeoutMs: this.fetchTimeoutMs,
+          killProcessGroup: true,
+        })
+        return
+      } catch (error) {
+        const transient = isTransientGitFetchError(error)
+        failures.push(`第 ${attempt} 次: ${String(error?.message || error).slice(-600)}`)
+        if (!transient) throw error
+        if (attempt >= this.fetchAttempts) {
+          throw new BenchmarkExecutorError(
+            'WORKSPACE_PREPARE_FAILED',
+            `Git fetch 瞬时网络错误，${attempt} 次尝试均失败：${failures.join('；')}`,
+            503,
+            true,
+          )
+        }
+        const backoff = this.retryBaseMs * (2 ** (attempt - 1))
+        const jitter = Math.floor(this.random() * this.retryJitterMs)
+        await this.sleep(backoff + jitter)
+      }
+    }
+  }
+
+  async prepare(spec, context) {
+    const workspace = path.join(this.rootDir, context.runId)
+    const policy = this.sourcePolicies.get(context.benchmarkKey)
+    try {
+      if (policy) {
+        await this.sourceWorkspace.prepare(this, spec, workspace, policy.resolve(spec), context.signal)
+      } else {
+        await this.fetchRevision(workspace, spec)
+      }
+      context.signal?.throwIfAborted()
+      await this.processRunner('git', ['checkout', '--quiet', '--detach', 'FETCH_HEAD'], {
+        cwd: workspace, signal: context.signal, errorCode: 'WORKSPACE_PREPARE_FAILED',
+      })
+      const head = await this.processRunner('git', ['rev-parse', 'HEAD'], { cwd: workspace, errorCode: 'WORKSPACE_PREPARE_FAILED' })
+      if (head.stdout.trim().toLowerCase() !== spec.revision.toLowerCase()) {
+        throw new BenchmarkExecutorError('WORKSPACE_REVISION_MISMATCH', 'Git HEAD 与 baseCommit 不一致')
+      }
+      return { path: workspace, baseCommit: spec.revision }
+    } catch (error) {
+      await fsp.rm(workspace, { recursive: true, force: true })
+      throw error
+    }
+  }
+}
+
+class LocalPolicyEnforcer {
+  async apply(spec) {
+    if (spec.network !== 'client-default') {
+      throw new BenchmarkExecutorError('POLICY_UNSUPPORTED', '本地执行器尚未提供网络沙箱')
+    }
+    return { network: 'client-default' }
+  }
+
+  async release() {}
+}
+
+class GitPatchCollector {
+  constructor(processRunner = runProcess) {
+    this.processRunner = processRunner
+  }
+
+  async collect(contract, context) {
+    const reservedArtifact = `:(top,exclude,literal)${contract.name}`
+    await this.processRunner(
+      'git',
+      ['add', '-A', '--', '.', reservedArtifact],
+      { cwd: context.workspace.path, errorCode: 'ARTIFACT_COLLECT_FAILED' },
+    )
+    const diff = await this.processRunner(
+      'git',
+      [
+        'diff', '--no-ext-diff', '--no-textconv', '--cached', '--binary', '--full-index', context.workspace.baseCommit,
+        '--', '.', reservedArtifact,
+      ],
+      { cwd: context.workspace.path, errorCode: 'ARTIFACT_COLLECT_FAILED' },
+    )
+    const bytes = Buffer.from(diff.stdout, 'utf8')
+    if (!bytes.length) {
+      throw new BenchmarkExecutorError('AGENT_NO_OUTPUT', `Agent 正常结束，但未生成必需的 ${contract.name}`)
+    }
+    if (bytes.length > contract.maxBytes) {
+      throw new BenchmarkExecutorError('ARTIFACT_SIZE_INVALID', `${contract.name} 超过大小上限`)
+    }
+    for (const line of diff.stdout.split(/\r?\n/)) {
+      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
+      if (match && [match[1], match[2]].some((item) => path.isAbsolute(item) || item.split('/').includes('..'))) {
+        throw new BenchmarkExecutorError('ARTIFACT_PATH_INVALID', `${contract.name} 包含越界路径`)
+      }
+    }
+    return {
+      name: contract.name,
+      mediaType: contract.mediaType,
+      bytes,
+      sha256: sha256(bytes),
+    }
+  }
+}
+
+class WorkspaceCleanupManager {
+  async cleanup(context) {
+    if (context.workspace?.path) {
+      await fsp.rm(context.workspace.path, { recursive: true, force: true })
+    }
+    return { status: 'succeeded', finishedAt: new Date().toISOString() }
+  }
+}
+
+class AgentInsightCallbackClient {
+  constructor(options) {
+    this.fetch = options.fetchImpl || fetch
+    this.clientId = options.clientId
+    this.deviceCredential = options.deviceCredential
+    this.insightBaseUrl = String(options.insightBaseUrl).replace(/\/$/, '')
+    this.timeoutMs = Math.max(1_000, Number(options.callbackTimeoutMs) || 30_000)
+  }
+
+  headers(extra = {}) {
+    return {
+      authorization: `Bearer ${this.deviceCredential}`,
+      'x-agent-insight-client-id': this.clientId,
+      ...extra,
+    }
+  }
+
+  runCallbackBaseUrl(request) {
+    return `${this.insightBaseUrl}/api/benchmark/v1/runs/${encodeURIComponent(request.runId)}`
+  }
+
+  async checkedFetch(url, init) {
+    let response
+    try {
+      response = await this.fetch(url, {
+        ...init,
+        redirect: 'error',
+        signal: init?.signal || AbortSignal.timeout(this.timeoutMs),
+      })
+    } catch (error) {
+      throw new BenchmarkExecutorError(
+        'CALLBACK_UNAVAILABLE',
+        `Agent Insight 回调不可达: ${error?.message || String(error)}`,
+        503,
+        true,
+      )
+    }
+    const text = await response.text()
+    if (!response.ok) {
+      let code = 'CALLBACK_REJECTED'
+      try { code = JSON.parse(text)?.error?.code || code } catch {}
+      throw new BenchmarkExecutorError(
+        code,
+        `Agent Insight 回调失败（HTTP ${response.status}）`,
+        response.status,
+        response.status === 429 || response.status >= 500,
+      )
+    }
+    try { return text ? JSON.parse(text) : {} } catch { return {} }
+  }
+
+  progress(request, stage, progress = {}) {
+    return this.checkedFetch(`${this.runCallbackBaseUrl(request)}/progress`, {
+      method: 'POST',
+      headers: this.headers({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ kind: 'execution', stage, progress, occurredAt: new Date().toISOString() }),
+    })
+  }
+
+  async uploadArtifact(request, artifact) {
+    const form = new FormData()
+    form.set('metadata', JSON.stringify({
+      runId: request.runId,
+      name: artifact.name,
+      mediaType: artifact.mediaType,
+      sha256: artifact.sha256,
+    }))
+    form.set('file', new Blob([artifact.bytes], { type: artifact.mediaType }), artifact.name)
+    return this.checkedFetch(`${this.insightBaseUrl}/api/benchmark/v1/artifacts`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: form,
+    })
+  }
+
+  complete(request, body) {
+    return this.checkedFetch(`${this.runCallbackBaseUrl(request)}/complete`, {
+      method: 'POST',
+      headers: this.headers({ 'content-type': 'application/json' }),
+      body: JSON.stringify(body),
+    })
+  }
+}
+
+class BenchmarkExecutionRunner {
+  constructor(options) {
+    Object.assign(this, options)
+    this.executionBackends = options.executionBackends || new ExecutionBackendRegistry([['local', new LocalExecutionBackend(options)]])
+  }
+
+  async progress(request, stage, message, seconds) {
+    if (await this.store.cancellation?.(request.runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
+    this.currentProgress = this.currentProgress || new Map()
+    const progress = { ...(this.currentProgress?.get(request.runId)?.progress.traceId ? { traceId: this.currentProgress.get(request.runId).progress.traceId } : {}), message, stageStartedAt: new Date().toISOString(), ...(seconds ? { stageDeadlineAt: new Date(Date.now() + seconds * 1000).toISOString() } : {}) }
+    this.currentProgress.set(request.runId, { stage, progress })
+    await this.store.writeState(request.runId, { stage, progress })
+    await this.callback.progress(request, stage, progress).catch(() => undefined)
+  }
+
+  async cleanup(backend, handle, request, recovery = false) {
+    try {
+      const context = { runId: request.runId, signal: AbortSignal.timeout((request.task.execution?.profile.timeouts.cleanupSeconds || 120) * 1000) }
+      const result = recovery ? await backend.recover({ ...(await this.store.state(request.runId)), task: request.task }, context) : await backend.close(handle, context)
+      return result || { status: 'failed', message: '执行后端未确认清理结果' }
+    } catch (cause) { return { status: 'failed', message: cause.message || String(cause) } }
+  }
+
+  async execute(request, signal) {
+    const task = request.task
+    const backend = this.executionBackends.get(task.execution?.profile.backendKey || 'local')
+    let handle = null
+    let runFacts = null
+    let cleanup = null
+    let completion = null
+    let stageSignal = signal
+    let stage = 'preparing'
+    const localArtifacts = []
+    const uploadedArtifacts = []
+    const context = {
+      runId: request.runId, signal, insightBaseUrl: this.insightBaseUrl,
+      persist: async (next) => { handle = next; await this.store.writeState(request.runId, { executionHandle: next }) },
+      onTraceId: async ({ traceId }) => {
+        if (typeof traceId !== 'string' || !traceId.trim()) return
+        const latest = this.currentProgress?.get(request.runId)
+        if (!latest) return
+        if (latest.progress.traceId && latest.progress.traceId !== traceId) throw new BenchmarkExecutorError('TRACE_ID_CONFLICT', '本次执行已绑定其他主链路')
+        latest.progress = { ...latest.progress, traceId }
+        await this.store.writeState(request.runId, { stage: latest.stage, progress: latest.progress })
+        await this.callback.progress(request, latest.stage, latest.progress).catch(() => {})
+      },
+      heartbeat: async () => {
+        const latest = this.currentProgress?.get(request.runId)
+        if (latest) await this.callback.progress(request, latest.stage, latest.progress).catch(() => {})
+      },
+    }
+    const timer = setInterval(() => context.heartbeat().catch(() => {}), 10000)
+    timer.unref?.()
+    const timedSignal = seconds => signal ? AbortSignal.any([signal, AbortSignal.timeout(seconds * 1000)]) : AbortSignal.timeout(seconds * 1000)
+    try {
+      const prepareSeconds = task.execution?.profile.timeouts.prepareSeconds
+      await this.progress(request, 'preparing', task.execution ? '正在准备容器执行环境' : task.workspace.provider === 'git' ? '正在准备 Git 工作区' : '正在准备任务工作区', prepareSeconds)
+      stageSignal = prepareSeconds ? timedSignal(prepareSeconds) : signal
+      context.signal = stageSignal
+      handle = await backend.prepare(task, context)
+      const agentSeconds = Math.min(task.agentConfig.timeoutSeconds, request.timeoutSeconds)
+      stage = 'agent_running'
+      await this.progress(request, stage, '正在运行 Agent', agentSeconds)
+      stageSignal = timedSignal(agentSeconds)
+      context.signal = stageSignal
+      const result = await backend.runAgent(handle, {
+        ...task.agentConfig, input: task.task.instruction, benchmarkKey: task.benchmark.key,
+        benchmarkPayload: task.task.benchmarkPayload, workspace: task.workspace,
+        correlation: { experimentId: task.context.experimentId, caseRunId: request.runId },
+        timeoutSeconds: agentSeconds, signal: stageSignal,
+      }, context)
+      if (result?.traceId) await context.onTraceId({ traceId: result.traceId })
+      runFacts = { ...(this.currentProgress?.get(request.runId)?.progress.traceId ? { traceId: this.currentProgress.get(request.runId).progress.traceId } : {}), ...result, platform: task.agentConfig.platform, agent: task.agentConfig.agent, ...(task.agentConfig.model ? { model: task.agentConfig.model } : {}) }
+      await this.store.writeState(request.runId, { runFacts })
+      if (result?.timedOut) throw new BenchmarkExecutorError('AGENT_TIMEOUT', 'Agent 执行超过任务上限并已被终止')
+      if ((result?.exitCode != null && result.exitCode !== 0) || (result?.exitCode === null && result?.signal)) throw new BenchmarkExecutorError('AGENT_EXIT_NONZERO', 'Agent 异常退出')
+      stage = 'collecting'
+      await this.progress(request, stage, '正在收集提交物', 300)
+      stageSignal = timedSignal(300)
+      context.signal = stageSignal
+      for (const contract of task.submission.requiredArtifacts) {
+        const artifact = await backend.collect(handle, contract, { ...context, runFacts })
+        if (artifact.name !== contract.name || artifact.mediaType !== contract.mediaType || !Buffer.isBuffer(artifact.bytes) || artifact.bytes.length < 1 || artifact.bytes.length > contract.maxBytes || artifact.sha256 !== sha256(artifact.bytes)) throw new BenchmarkExecutorError('ARTIFACT_COLLECTOR_OUTPUT_INVALID', '提交物收集器返回了错误的契约')
+        artifact.path = await this.store.writeArtifact(request.runId, artifact.name, artifact.bytes)
+        localArtifacts.push(artifact)
+      }
+      const persisted = localArtifacts.map(({ name, mediaType, sha256: hash, path: artifactPath }) => ({ name, mediaType, sha256: hash, path: artifactPath }))
+      await this.store.writeState(request.runId, { localArtifacts: persisted, runFacts })
+      stage = 'uploading'
+      await this.progress(request, stage, '正在上传 Artifact', 300)
+      for (const artifact of localArtifacts) {
+        signal?.throwIfAborted()
+        const uploaded = await this.callback.uploadArtifact(request, artifact)
+        uploadedArtifacts.push({ artifactId: uploaded.artifactId, name: artifact.name, sha256: artifact.sha256 })
+        await this.store.writeState(request.runId, { uploadedArtifacts })
+      }
+      await this.progress(request, 'cleaning', '正在清理执行环境', task.execution?.profile.timeouts.cleanupSeconds || 120)
+      cleanup = await this.cleanup(backend, handle, request)
+      completion = { kind: 'execution', status: 'succeeded', artifacts: uploadedArtifacts, runFacts, cleanup }
+      if (cleanup.status !== 'succeeded') {
+        await this.store.writeState(request.runId, { stage: 'cleanup_pending', resumeStage: 'complete_pending', completion, cleanup })
+        return
+      }
+      await this.store.writeState(request.runId, { stage: 'complete_pending', completion })
+      signal?.throwIfAborted()
+      await this.callback.complete(request, completion)
+      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'succeeded', completionDeliveredAt: new Date().toISOString() })
+    } catch (cause) {
+      const cancelled = Boolean(await this.store.cancellation?.(request.runId))
+      if (completion && !cancelled) {
+        await this.store.writeState(request.runId, { stage: 'complete_pending', completion, callbackError: cause.message })
+        return
+      }
+      runFacts = { ...(this.currentProgress?.get(request.runId)?.progress.traceId ? { traceId: this.currentProgress.get(request.runId).progress.traceId } : {}), ...(runFacts || { finishedAt: new Date().toISOString() }), ...(cause.runFacts || {}), platform: task.agentConfig.platform, agent: task.agentConfig.agent }
+      if (handle && (!cleanup || cleanup.status !== 'succeeded')) {
+        await backend.cancel(handle).catch(() => {})
+        cleanup = await this.cleanup(backend, handle, request)
+      }
+      cleanup ||= { status: 'succeeded', finishedAt: new Date().toISOString() }
+      const timeout = stageSignal?.aborted && !signal?.aborted
+      const failure = { code: timeout ? stage === 'preparing' ? 'EXECUTION_PREPARE_TIMEOUT' : stage === 'agent_running' ? 'AGENT_TIMEOUT' : 'EXECUTION_PHASE_TIMEOUT' : cause.code || 'EXECUTION_FAILED', message: timeout ? '执行阶段超过冻结期限' : cause.message || String(cause) }
+      const retryUpload = localArtifacts.length && uploadedArtifacts.length < localArtifacts.length && cause.retryable
+      completion = { kind: 'execution', status: 'failed', artifacts: [], runFacts, cleanup, error: failure }
+      const nextStage = cancelled ? 'terminal' : retryUpload ? 'upload_pending' : 'complete_pending'
+      await this.store.writeState(request.runId, {
+        stage: cleanup.status === 'succeeded' ? nextStage : 'cleanup_pending', resumeStage: nextStage,
+        terminalStatus: cancelled ? 'cancelled' : undefined, completion, runFacts, cleanup, uploadedArtifacts,
+        localArtifacts: localArtifacts.map(({ name, mediaType, sha256: hash, path: artifactPath }) => ({ name, mediaType, sha256: hash, path: artifactPath })),
+      })
+      if (cancelled || retryUpload || cleanup.status !== 'succeeded') return
+      try {
+        await this.callback.complete(request, completion)
+        await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'failed', completionDeliveredAt: new Date().toISOString() })
+      } catch (error) { await this.store.writeState(request.runId, { callbackError: error.message }) }
+    } finally {
+      clearInterval(timer)
+      this.currentProgress?.delete(request.runId)
+    }
+  }
+
+  async resume(request, state) {
+    const cancelled = Boolean(await this.store.cancellation?.(request.runId))
+    if (state.stage === 'accepted' && !cancelled) return this.execute(request)
+    if (cancelled || ['preparing', 'agent_running', 'collecting', 'uploading', 'cleaning', 'cleanup_pending', 'cancelling'].includes(state.stage)) {
+      const backend = this.executionBackends.get(state.executionHandle?.backendKey || request.task.execution?.profile.backendKey || 'local')
+      const cleanup = state.cleanup?.status === 'succeeded' ? state.cleanup : await this.cleanup(backend, state.executionHandle, request, true)
+      if (cleanup.status !== 'succeeded') { await this.store.writeState(request.runId, { stage: 'cleanup_pending', cleanup }); return }
+      if (cancelled) { await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'cancelled', cleanup }); return }
+      const completion = state.completion || { kind: 'execution', status: 'failed', artifacts: [], runFacts: state.runFacts || {}, cleanup, error: { code: 'EXECUTOR_RESTARTED', message: '执行器重启，未自动重跑 Agent' } }
+      state = { ...state, stage: state.resumeStage || (state.localArtifacts?.length ? 'upload_pending' : 'complete_pending'), cleanup, completion: { ...completion, cleanup } }
+      await this.store.writeState(request.runId, state)
+    }
+    if (state.stage === 'upload_pending' && Array.isArray(state.localArtifacts)) {
+      const uploaded = state.uploadedArtifacts || []
+      for (const artifact of state.localArtifacts) {
+        if (uploaded.some(item => item.name === artifact.name)) continue
+        const result = await this.callback.uploadArtifact(request, { ...artifact, bytes: await fsp.readFile(artifact.path) })
+        uploaded.push({ artifactId: result.artifactId, name: artifact.name, sha256: artifact.sha256 })
+        await this.store.writeState(request.runId, { uploadedArtifacts: uploaded })
+      }
+      state.completion = { kind: 'execution', status: 'succeeded', artifacts: uploaded, runFacts: state.runFacts || {}, cleanup: state.cleanup }
+      state.stage = 'complete_pending'
+      await this.store.writeState(request.runId, { stage: state.stage, completion: state.completion })
+    }
+    if (state.stage === 'complete_pending' && state.completion) {
+      await this.callback.complete(request, state.completion)
+      await this.store.writeState(request.runId, { stage: 'terminal', terminalStatus: state.completion.status, completionDeliveredAt: new Date().toISOString() })
+    }
+  }
+}
+
+function readRequestBody(req, maxBytes = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > maxBytes) {
+        reject(new BenchmarkExecutorError('REQUEST_TOO_LARGE', '请求体超过上限', 413))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+function sendJson(res, status, body) {
+  const encoded = Buffer.from(JSON.stringify(body))
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(encoded.length),
+    'cache-control': 'no-store',
+  })
+  res.end(encoded)
+}
+
+function createBenchmarkExecutor(options) {
+  if (!options.clientId || !options.deviceCredential || !options.insightBaseUrl) {
+    throw new Error('clientId, deviceCredential and insightBaseUrl are required')
+  }
+  const baseDir = options.baseDir || path.join(os.homedir(), '.agent-insight', 'client')
+  const store = options.store || new FileRunStore(path.join(baseDir, 'benchmark-runs'))
+  const workspaceProvider = options.workspaceProvider
+    || new GitWorkspaceProvider(path.join(baseDir, 'workspaces', 'benchmark'), runProcess, {
+      sourcePolicies: options.sourcePolicies ?? createGitSourcePolicies({
+        home: options.agentInsightHome || path.dirname(baseDir),
+      }),
+      log: options.log || (() => {}),
+    })
+  const workspaceProviders = options.workspaceProviders
+    || new WorkspaceProviderRegistry([
+      ['git', workspaceProvider],
+      ['zsoft-tasks', new ZsoftTasksWorkspaceProvider(path.join(baseDir, 'workspaces', 'zsoft-tasks'), options.mctsConfig)],
+      ['public-bundle', new PublicBundleWorkspaceProvider(path.join(baseDir, 'workspaces', 'public-bundle'),
+        options.publicBundleDir || process.env.AGENT_INSIGHT_PUBLIC_BUNDLES_DIR
+          || path.join(options.agentInsightHome || path.dirname(baseDir), 'benchmark-assets', 'public-bundles'))],
+    ])
+  const configuredAgentPlatforms = options.agentPlatforms === undefined
+    ? ['opencode']
+    : Array.isArray(options.agentPlatforms) ? options.agentPlatforms : []
+  const agentPlatforms = [
+    ...new Set(configuredAgentPlatforms.map((platform) => String(platform || '').trim()).filter(Boolean)),
+  ]
+  const managesAgentRuntimes = !options.agentRuntimes
+  const agentRuntimes = options.agentRuntimes || new AgentRuntimeRegistry()
+  const runtimeCapability = { run: options.runAgent }
+  const setAgentPlatforms = (platforms) => {
+    if (!managesAgentRuntimes) {
+      throw new Error('agent runtime registry is managed externally')
+    }
+    const normalized = [
+      ...new Set((Array.isArray(platforms) ? platforms : [])
+        .map((platform) => String(platform || '').trim())
+        .filter(Boolean)),
+    ]
+    agentRuntimes.replace(normalized.map((platform) => [platform, runtimeCapability]))
+    return normalized
+  }
+  if (managesAgentRuntimes) setAgentPlatforms(agentPlatforms)
+  const collectors = options.collectors instanceof ArtifactCollectorRegistry
+    ? options.collectors
+    : new ArtifactCollectorRegistry(options.collectors || [
+      ['git-patch/v1', new GitPatchCollector()], ['single-file/v1', new SingleFileCollector()],
+    ])
+  const callback = options.callback || new AgentInsightCallbackClient(options)
+  const policyEnforcer = options.policyEnforcer || new LocalPolicyEnforcer()
+  const cleanupManager = options.cleanupManager || new WorkspaceCleanupManager()
+  const executionConfig = options.executionConfig || executionCapabilities().config
+  const executionBackends = options.executionBackends || (() => {
+    const backendEntries = [['local', new LocalExecutionBackend({ workspaceProviders, agentRuntimes, collectors, policyEnforcer, cleanupManager, executionConfig, ...(!options.executionConfig ? { configProvider: () => executionCapabilities().config } : {}) })]]
+    if (Object.values(executionConfig.profiles).some(profile => (profile.backend || 'xgovernor') === 'xgovernor')) {
+      backendEntries.push(['xgovernor', new (require('./xgovernor/backend.cjs').XGovernorExecutionBackend)({ config: executionConfig, ...(!options.executionConfig ? { configProvider: () => executionCapabilities().config } : {}), baseDir, insightBaseUrl: options.insightBaseUrl, processRunner: runProcess, atomicWriteJson, GitPatchCollector })])
+    }
+    return new ExecutionBackendRegistry(backendEntries)
+  })()
+  const runner = options.runner || new BenchmarkExecutionRunner({
+    executionBackends, insightBaseUrl: options.insightBaseUrl,
+    store,
+    workspaceProviders,
+    agentRuntimes,
+    policyEnforcer,
+    collectors,
+    cleanupManager,
+    callback,
+    logError: options.logError,
+  })
+  if (typeof options.runAgent !== 'function' && !options.runner) {
+    throw new Error('runAgent is required')
+  }
+  const credentialHash = deviceCredentialHash(options.deviceCredential)
+  const activeRunIds = new Set()
+  const cancellationControllers = new Map()
+  let deliveryRetryRunId = null
+  let recoveryTimer = null
+  let recoveryTimerDueAt = 0
+  let closed = false
+  const retention = new LocalRetention({
+    baseDir, installRoot: options.retentionInstallationRoot || require('./xgovernor/installation.cjs').installationRoot({ AGENT_INSIGHT_HOME: options.agentInsightHome || path.dirname(baseDir) }),
+    getDays: () => (options.retention || loadProjectConfig('executor').retention).days,
+    isActive: runId => activeRunIds.has(runId) || deliveryRetryRunId === runId || store.stateWrites?.has(runId),
+    hasActiveRuns: () => closed || activeRunIds.size > 0 || Boolean(deliveryRetryRunId),
+    log: options.log, logError: options.logError,
+  })
+  const retentionTimer = setInterval(() => { if (!closed) retention.sweep() }, SWEEP_INTERVAL)
+  retentionTimer.unref?.()
+
+  function deliveryRetryDelay(attempt) {
+    return Math.min(
+      DELIVERY_RETRY_MAX_MS,
+      DELIVERY_RETRY_BASE_MS * (2 ** Math.min(10, Math.max(0, attempt - 1))),
+    )
+  }
+
+  function scheduleRecovery(delayMs = DELIVERY_RETRY_BASE_MS) {
+    if (closed) return
+    const delay = Math.max(0, delayMs)
+    const dueAt = Date.now() + delay
+    if (recoveryTimer && recoveryTimerDueAt <= dueAt) return
+    if (recoveryTimer) clearTimeout(recoveryTimer)
+    recoveryTimerDueAt = dueAt
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = null
+      recoveryTimerDueAt = 0
+      recover().catch((error) => options.logError?.('executor recovery failed', error))
+    }, delay)
+    recoveryTimer.unref?.()
+  }
+
+  function tryAcquire(runId) {
+    if (activeRunIds.has(runId)) return false
+    if (options.tryAcquireSlot && !options.tryAcquireSlot('benchmark', runId)) return false
+    activeRunIds.add(runId)
+    return true
+  }
+
+  function release(runId) {
+    if (!activeRunIds.delete(runId)) return
+    options.releaseSlot?.('benchmark', runId)
+    scheduleRecovery()
+  }
+
+  function runInBackground(request, state) {
+    const controller = new AbortController()
+    cancellationControllers.set(request.runId, controller)
+    queueMicrotask(async () => {
+      try {
+        if (await store.cancellation(request.runId)) {
+          if (!state?.stage || state.stage === 'accepted') await store.writeState(request.runId, { stage: 'terminal', terminalStatus: 'cancelled' })
+          else await runner.resume(request, state)
+          return
+        }
+        if (state?.stage && state.stage !== 'accepted') await runner.resume(request, state)
+        else await runner.execute(request, controller.signal)
+      } catch (error) {
+        options.logError?.(`benchmark run ${request.runId} failed`, error)
+      } finally {
+        cancellationControllers.delete(request.runId)
+        release(request.runId)
+      }
+    })
+  }
+
+  function retryDeliveryInBackground(request, state) {
+    if (closed || deliveryRetryRunId) return false
+    deliveryRetryRunId = request.runId
+    queueMicrotask(async () => {
+      try {
+        await runner.resume(request, state)
+      } catch (error) {
+        if (error?.retryable === false && Number(error?.status) >= 400 && Number(error?.status) < 500) {
+          await store.writeState(request.runId, {
+            stage: 'terminal',
+            terminalStatus: state.completion?.status || 'failed',
+            callbackError: error?.message || String(error),
+          })
+        } else {
+          const latest = await store.state(request.runId)
+          const retryCount = Math.max(0, Number(latest?.deliveryRetryCount) || 0) + 1
+          const delayMs = deliveryRetryDelay(retryCount)
+          await store.writeState(request.runId, {
+            deliveryRetryCount: retryCount,
+            nextDeliveryRetryAt: new Date(Date.now() + delayMs).toISOString(),
+            callbackError: error?.message || String(error),
+          })
+          options.logError?.(`benchmark delivery retry ${request.runId} failed`, error)
+        }
+      } finally {
+        deliveryRetryRunId = null
+        scheduleRecovery(0)
+      }
+    })
+    return true
+  }
+
+  function validateRequest(request, allowAlternateCallbackOrigin = false) {
+    if (!request || typeof request !== 'object') {
+      throw new BenchmarkExecutorError('TASK_SCHEMA_INVALID', '请求体不合法', 400)
+    }
+    const runId = String(request.runId || '')
+    const digest = String(request.requestDigest || '')
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(runId)) {
+      throw new BenchmarkExecutorError('RUN_ID_INVALID', 'runId 不合法', 400)
+    }
+    if (!/^sha256:[0-9a-f]{64}$/i.test(digest)) {
+      throw new BenchmarkExecutorError('REQUEST_DIGEST_INVALID', '请求摘要格式不合法', 400)
+    }
+    if (
+      !Number.isInteger(request.timeoutSeconds)
+      || request.timeoutSeconds < 1
+      || request.timeoutSeconds > 86_400
+    ) {
+      throw new BenchmarkExecutorError('EXECUTION_TIMEOUT_INVALID', '执行超时必须在 1～86400 秒之间', 400)
+    }
+    if (dispatchDigest(request) !== digest) {
+      throw new BenchmarkExecutorError('REQUEST_DIGEST_MISMATCH', '任务摘要不匹配', 403)
+    }
+    validateTaskEnvelope(request.task, runId)
+    assertCallbackUrl(
+      request.callbackBaseUrl,
+      options.insightBaseUrl,
+      runId,
+      allowAlternateCallbackOrigin,
+    )
+    const plan = buildExecutionPlan(request.task, { workspaceProviders, agentRuntimes, collectors, executionBackends })
+    if (request.task.execution) plan.backend.validate?.(request.task)
+    const binding = bindingFor(executionConfig.bindings, request.task.benchmark.key, request.task.agentConfig.platform)
+    if (binding && !request.task.execution && !options.runner && !options.allowLegacyExecution) throw new BenchmarkExecutorError('EXECUTION_PROFILE_REQUIRED', '该执行目标需要冻结的沙箱 Profile；请重新创建实验')
+    return { runId, digest }
+  }
+
+  function authenticateHttpRequest(req, request, validated) {
+    const { runId, digest } = validated
+    if (req.headers['idempotency-key'] !== runId || req.headers['x-agent-insight-request-digest'] !== digest) {
+      throw new BenchmarkExecutorError('DISPATCH_HEADER_MISMATCH', '幂等键或摘要 Header 不匹配', 400)
+    }
+    const payload = verifySignature(bearerToken(req.headers), credentialHash)
+    if (
+      payload.purpose !== 'execute'
+      || payload.clientId !== options.clientId
+      || payload.runId !== runId
+      || payload.requestDigest !== digest
+    ) {
+      throw new BenchmarkExecutorError('DISPATCH_FORBIDDEN', '下发 token 与任务不匹配', 403)
+    }
+  }
+
+  async function acceptValidatedRequest(request, { runId }) {
+    if (await store.cancellation(runId)) throw new BenchmarkExecutorError('EXECUTION_CANCELLED', '实验已取消', 409)
+    const existing = await store.request(runId)
+    if (existing) {
+      const accepted = await store.accept(request)
+      if (DELIVERY_RETRY_STAGES.has(accepted.state?.stage)) {
+        scheduleRecovery(0)
+      } else if (!activeRunIds.has(runId) && accepted.state?.stage !== 'terminal' && tryAcquire(runId)) {
+        runInBackground(request, accepted.state)
+      }
+      return
+    }
+    if (!tryAcquire(runId)) {
+      throw new BenchmarkExecutorError('SERVICE_BUSY', '执行器当前有其他任务', 409, true)
+    }
+    try {
+      await store.accept(request)
+    } catch (error) {
+      release(runId)
+      throw error
+    }
+    runInBackground(request, { stage: 'accepted' })
+  }
+
+  async function acceptHttpRequest(req, request) {
+    const validated = validateRequest(request)
+    authenticateHttpRequest(req, request, validated)
+    await acceptValidatedRequest(request, validated)
+  }
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url || '/', 'http://executor.local')
+      if (req.method === 'GET' && url.pathname === '/health') {
+        const payload = verifySignature(bearerToken(req.headers), credentialHash)
+        if (payload.purpose !== 'health' || payload.clientId !== options.clientId) {
+          throw new BenchmarkExecutorError('DISPATCH_FORBIDDEN', 'health token 不匹配', 403)
+        }
+        sendJson(res, 200, {
+          serviceId: options.clientId,
+          status: 'healthy',
+          busy: activeRunIds.size > 0,
+          concurrentExecution: true,
+          capabilities: options.capabilities || [
+            ...workspaceProviders.keys().map((key) => `${key}-workspace/v1`),
+            ...agentRuntimes.keys().map((key) => `agent-runtime/${key}/v1`),
+            ...collectors.keys(),
+          ],
+        })
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/v1/benchmark-executions') {
+        let request
+        try {
+          request = JSON.parse(await readRequestBody(req))
+        } catch (error) {
+          if (error instanceof BenchmarkExecutorError) throw error
+          throw new BenchmarkExecutorError('REQUEST_JSON_INVALID', '请求体不是合法 JSON', 400)
+        }
+        await acceptHttpRequest(req, request)
+        sendJson(res, 202, {
+          runId: request.runId,
+          status: 'accepted',
+          requestDigest: request.requestDigest,
+        })
+        return
+      }
+      sendJson(res, 404, { error: { code: 'NOT_FOUND', message: '路由不存在', retryable: false } })
+    } catch (error) {
+      const normalized = error instanceof BenchmarkExecutorError
+        ? error
+        : new BenchmarkExecutorError('INTERNAL_ERROR', '执行器内部错误', 500)
+      if (!res.headersSent) {
+        sendJson(res, normalized.status, {
+          error: { code: normalized.code, message: normalized.message, retryable: normalized.retryable },
+        })
+      }
+      options.logError?.('benchmark executor request failed', error)
+    }
+  })
+
+  async function recover() {
+    const runIds = await store.listRunIds()
+    const now = Date.now()
+    const executionCandidates = []
+    let deliveryCandidate = null
+    let nextDeliveryDelay = null
+    for (const runId of runIds) {
+      if (closed) break
+      const [request, state] = await Promise.all([store.request(runId), store.state(runId)])
+      if (!request || !state || state.stage === 'terminal') continue
+      if (DELIVERY_RETRY_STAGES.has(state.stage)) {
+        const retryAt = Date.parse(state.nextDeliveryRetryAt || '')
+        const delay = Number.isFinite(retryAt) ? Math.max(0, retryAt - now) : 0
+        if (delay === 0 && !deliveryCandidate) deliveryCandidate = { request, state }
+        else if (delay > 0 && (nextDeliveryDelay === null || delay < nextDeliveryDelay)) {
+          nextDeliveryDelay = delay
+        }
+        continue
+      }
+      if (!activeRunIds.has(runId)) executionCandidates.push({ runId, request, state })
+    }
+    if (!deliveryRetryRunId && deliveryCandidate) {
+      retryDeliveryInBackground(deliveryCandidate.request, deliveryCandidate.state)
+    } else if (!deliveryCandidate && nextDeliveryDelay !== null) {
+      scheduleRecovery(nextDeliveryDelay)
+    }
+    for (const candidate of executionCandidates) {
+      if (tryAcquire(candidate.runId)) runInBackground(candidate.request, candidate.state)
+    }
+    if (!closed) await retention.sweep()
+  }
+
+  return {
+    server,
+    store,
+    runner,
+    get activeRunId() { return activeRunIds.values().next().value || null },
+    get activeRunIds() { return [...activeRunIds] },
+    get agentPlatforms() { return agentRuntimes.keys() },
+    setAgentPlatforms,
+    async cancel(runId) {
+      const prior = await store.state(runId)
+      await store.cancel(runId)
+      cancellationControllers.get(runId)?.abort()
+      if (!prior || (prior.stage === 'accepted' || prior.cleanup?.status === 'succeeded') && !activeRunIds.has(runId)) {
+        await store.writeState(runId, { stage: 'terminal', terminalStatus: 'cancelled' })
+      }
+      const state = await store.state(runId)
+      return { runId, status: state?.stage === 'terminal' && !activeRunIds.has(runId) ? 'cancelled' : 'cancelling' }
+    },
+    async accept(request) {
+      const validated = validateRequest(request, true)
+      await acceptValidatedRequest(request, validated)
+      return {
+        runId: request.runId,
+        status: 'accepted',
+        requestDigest: request.requestDigest,
+      }
+    },
+    async listen(host = '127.0.0.1', port = 0) {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(port, host, resolve)
+      })
+      await recover()
+      return server.address()
+    },
+    async close() {
+      closed = true
+      clearInterval(retentionTimer)
+      await retention.pending
+      if (recoveryTimer) clearTimeout(recoveryTimer)
+      recoveryTimer = null
+      recoveryTimerDueAt = 0
+      if (!server.listening) return
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    },
+    recover,
+    cleanupRetainedRuns: () => retention.sweep(true),
+  }
+}
+
+module.exports = {
+  AgentRuntimeRegistry,
+  AgentInsightCallbackClient,
+  ArtifactCollectorRegistry,
+  BenchmarkExecutionRunner,
+  ExecutionBackendRegistry,
+  LocalExecutionBackend,
+  atomicWriteJson,
+  BenchmarkExecutorError,
+  FileRunStore,
+  GitPatchCollector,
+  GitWorkspaceProvider,
+  LocalPolicyEnforcer,
+  WorkspaceProviderRegistry,
+  WorkspaceCleanupManager,
+  buildExecutionPlan,
+  canonicalJson,
+  createBenchmarkExecutor,
+  deviceCredentialHash,
+  dispatchDigest,
+  runProcess,
+}

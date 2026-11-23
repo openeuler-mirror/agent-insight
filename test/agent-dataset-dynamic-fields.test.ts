@@ -1,0 +1,351 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  createEvaluatorCatalogField,
+  defaultTraceBackflowSourceForField,
+  evaluatorCatalogFieldKeyFromLabel,
+  hasMeaningfulDatasetCaseValue,
+  nextDatasetFieldKey,
+  parseDatasetNumberValue,
+  sortTraceBackflowDatasetsByRecency,
+  withEvaluatorCatalogFields,
+} from '@/lib/agent-dataset-model';
+import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
+import { POST as saveDataset } from '@/app/api/agent-datasets/route';
+
+import {
+  buildAgentDatasetProjection,
+  buildAgentDatasetItemsView,
+  duplicateDatasetFieldName,
+  normalizeCase,
+  normalizeFields,
+  validateDatasetFieldKeysForWrite,
+  validateCasesForKind,
+} from '@/server/agent_datasets_storage';
+
+test('builds lightweight dataset projections without trajectory payloads', () => {
+  const projection = buildAgentDatasetProjection([normalizeCase({
+    id: 'case-1',
+    input: 'question',
+    expectedOutput: 'answer',
+    evaluationFocus: 'focus',
+    tags: ['smoke'],
+    trajectory: JSON.stringify([{ content: 'very large trace' }]),
+  })]);
+
+  assert.equal(projection.caseCount, 1);
+  assert.deepEqual(JSON.parse(projection.referenceCasesJson), [{
+    id: 'case-1',
+    input: 'question',
+    expectedOutput: 'answer',
+    evaluationFocus: 'focus',
+    tags: ['smoke'],
+  }]);
+  assert.doesNotMatch(projection.referenceCasesJson, /very large trace/);
+});
+
+test('builds a bounded data-items trajectory preview without losing ordinary custom fields', () => {
+  const largeTrace = `trace-start-${'x'.repeat(800)}-trace-end`;
+  const dataset = {
+    id: 'dataset-1', user: 'user', name: 'dataset', description: '', targetAgent: '', targetSkill: '',
+    tags: [], datasetKind: 'trajectory' as const,
+    fields: [
+      { id: 'input', key: 'input', label: '输入', type: 'text' as const },
+      { id: 'trace', key: 'trace', label: '轨迹', type: 'json' as const },
+      { id: 'custom', key: 'custom_field_1', label: '普通字段', type: 'text' as const },
+    ],
+    cases: [normalizeCase({
+      id: 'case-1', input: 'question', trajectory: largeTrace,
+      values: { input: 'question', trace: largeTrace, custom_field_1: 'keep me' },
+    })],
+    createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+  };
+
+  const view = buildAgentDatasetItemsView(dataset);
+  assert.match(view.cases[0].trajectory, /^trace-start-/);
+  assert.match(String(view.cases[0].values?.trace), /…$/);
+  assert.ok(view.cases[0].trajectory.length <= 601);
+  assert.equal(view.cases[0].values?.custom_field_1, 'keep me');
+  assert.equal(dataset.cases[0].trajectory, largeTrace);
+});
+
+test('trace backflow keeps the original user input and final output', async () => {
+  const artifacts = await extractTaskArtifacts({
+    rawInput: '  原始用户输入  ',
+    fallbackOutput: '  Agent 最终输出  ',
+    interactions: [{ role: 'user', content: '原始用户输入' }],
+  });
+
+  assert.equal(artifacts.input, '  原始用户输入  ');
+  assert.equal(artifacts.output, '  Agent 最终输出  ');
+});
+
+test('generates stable internal keys without exposing them as field input', () => {
+  assert.equal(nextDatasetFieldKey([]), 'custom_field_1');
+  assert.equal(
+    nextDatasetFieldKey(['input', 'custom_field_1', 'custom_field_3']),
+    'custom_field_2',
+  );
+});
+
+test('keeps Tool/Skill catalog fields under evaluator-readable JSON keys', () => {
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('available_tools'), 'available_tools');
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('可用 Skill'), 'available_skills');
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('普通备注'), null);
+
+  const fields = withEvaluatorCatalogFields([
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+  ], [{
+    values: {
+      available_tools: [],
+      available_skills: [{ name: 'research' }],
+    },
+  }]);
+
+  assert.deepEqual(fields.slice(1), [
+    createEvaluatorCatalogField('available_tools'),
+    createEvaluatorCatalogField('available_skills'),
+  ]);
+});
+
+test('rejects an entirely empty single dataset item but keeps false and zero as values', () => {
+  const fields = [
+    { id: 'input', key: 'input', label: '输入', type: 'text' as const },
+    { id: 'score', key: 'score', label: '分数', type: 'number' as const },
+    { id: 'enabled', key: 'enabled', label: '启用', type: 'boolean' as const },
+  ];
+  const empty = normalizeCase({ id: 'empty', input: '', expectedOutput: '', values: {} });
+
+  assert.equal(hasMeaningfulDatasetCaseValue(empty, fields), false);
+  assert.equal(hasMeaningfulDatasetCaseValue({ ...empty, values: { score: 0 } }, fields), true);
+  assert.equal(hasMeaningfulDatasetCaseValue({ ...empty, values: { enabled: false } }, fields), true);
+});
+
+test('maps standard dataset fields to trace backflow artifacts by default', () => {
+  assert.equal(defaultTraceBackflowSourceForField('input'), 'input');
+  assert.equal(defaultTraceBackflowSourceForField('reference_output'), 'output');
+  assert.equal(defaultTraceBackflowSourceForField('expected_output'), 'output');
+  assert.equal(defaultTraceBackflowSourceForField('trajectory'), 'trace');
+  assert.equal(defaultTraceBackflowSourceForField('custom_field_1'), 'none');
+});
+
+test('selects the most recently updated dataset first for trace backflow', () => {
+  const datasets = sortTraceBackflowDatasetsByRecency([
+    { id: 'older', updatedAt: '2026-07-01T00:00:00.000Z' },
+    { id: 'latest', updatedAt: '2026-07-30T00:00:00.000Z' },
+    { id: 'unknown' },
+  ]);
+
+  assert.deepEqual(datasets.map(dataset => dataset.id), ['latest', 'older', 'unknown']);
+});
+
+test('detects duplicate dataset field names case-insensitively', () => {
+  assert.equal(duplicateDatasetFieldName([
+    { id: 'a', key: 'a', label: 'Score', type: 'number' },
+    { id: 'b', key: 'b', label: 'score', type: 'text' },
+  ]), 'score');
+  assert.equal(duplicateDatasetFieldName([
+    { id: 'a', key: 'a', label: '输入', type: 'text' },
+    { id: 'b', key: 'b', label: '输出', type: 'text' },
+  ]), null);
+});
+
+test('rejects duplicate field names through the dataset API', async () => {
+  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: 'test-user',
+      name: 'duplicate field names',
+      fields: [
+        { key: 'score_a', label: '评分', type: 'number' },
+        { key: 'score_b', label: '评分', type: 'text' },
+      ],
+      cases: [],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'field name 评分 already exists' });
+});
+
+test('strict write validation rejects duplicate or invalid field keys', () => {
+  assert.equal(validateDatasetFieldKeysForWrite([
+    { key: 'input', label: '输入 1' },
+    { key: 'input', label: '输入 2' },
+  ]), 'field key input already exists');
+  assert.equal(validateDatasetFieldKeysForWrite([
+    { key: 'bad-key', label: '无效字段' },
+  ]), 'field 1 key is invalid');
+  assert.equal(validateDatasetFieldKeysForWrite([
+    null,
+  ]), 'field 1 is invalid');
+  assert.equal(validateDatasetFieldKeysForWrite([]), null);
+  assert.equal(validateDatasetFieldKeysForWrite(undefined), null);
+});
+
+test('dataset API rejects duplicate keys instead of silently dropping fields', async () => {
+  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: 'test-user',
+      name: 'duplicate field keys',
+      fields: [
+        { key: 'input', label: '输入 1', type: 'text' },
+        { key: 'input', label: '输入 2', type: 'text' },
+      ],
+      cases: [],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'field key input already exists' });
+});
+
+test('dataset API rejects invalid keys instead of falling back to default fields', async () => {
+  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: 'test-user',
+      name: 'invalid field keys',
+      fields: [
+        { key: 'bad-key', label: '无效字段', type: 'text' },
+      ],
+      cases: [],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'field 1 key is invalid' });
+});
+
+test('parses dataset number fields without silently converting invalid input to null', () => {
+  assert.equal(parseDatasetNumberValue('12.34'), 12.34);
+  assert.equal(parseDatasetNumberValue('-2'), -2);
+  assert.equal(parseDatasetNumberValue(''), '');
+  assert.equal(parseDatasetNumberValue('   '), '');
+  assert.throws(() => parseDatasetNumberValue('123abc'), /invalid number/);
+  assert.throws(() => parseDatasetNumberValue('12.34.56'), /invalid number/);
+  assert.throws(() => parseDatasetNumberValue('-'), /invalid number/);
+  assert.throws(() => parseDatasetNumberValue(Number.NaN), /invalid number/);
+});
+
+test('normalizes legacy dataset cases into editable values', () => {
+  const row = normalizeCase({
+    id: 'legacy-case',
+    input: 'question',
+    expectedOutput: 'answer',
+    trajectory: '{"steps":[]}',
+  });
+
+  assert.equal(row.values?.input, 'question');
+  assert.equal(row.values?.reference_output, 'answer');
+  assert.equal(row.values?.trajectory, '{"steps":[]}');
+});
+
+test('treats legacy trace backflow output as the approved reference output', () => {
+  const trace = [{ role: 'user', content: 'processed task' }];
+  const row = normalizeCase({
+    id: 'trace-case',
+    expectedOutput: '',
+    values: {
+      input: 'processed task',
+      output: 'processed result',
+      trace,
+      scenario: 'failure',
+    },
+    source: 'trace-backflow',
+  });
+
+  assert.equal(row.input, 'processed task');
+  assert.equal(row.expectedOutput, 'processed result');
+  assert.equal(row.values?.reference_output, 'processed result');
+  assert.equal(row.trajectory, JSON.stringify(trace));
+  assert.deepEqual(row.values?.trace, trace);
+  assert.equal(row.values?.scenario, 'failure');
+  assert.deepEqual(validateCasesForKind([row], 'ideal_output'), []);
+});
+
+test('keeps legacy field edits authoritative when values are also present', () => {
+  const row = normalizeCase({
+    input: 'new question',
+    expectedOutput: 'new answer',
+    trajectory: 'new trace',
+    values: {
+      input: 'old question',
+      reference_output: 'old answer',
+      trajectory: 'old trace',
+    },
+  });
+
+  assert.equal(row.input, 'new question');
+  assert.equal(row.expectedOutput, 'new answer');
+  assert.equal(row.trajectory, 'new trace');
+  assert.equal(row.values?.input, 'new question');
+  assert.equal(row.values?.reference_output, 'new answer');
+});
+
+test('accepts valid custom fields and removes duplicate keys', () => {
+  const fields = normalizeFields([
+    { key: 'input', label: 'Input', type: 'text', system: true },
+    { key: 'scenario', label: 'Scenario', type: 'text' },
+    { key: 'scenario', label: 'Duplicate', type: 'json' },
+    { key: 'bad-key', label: 'Invalid', type: 'text' },
+  ], 'ideal_output');
+
+  assert.deepEqual(fields.map(field => field.key), ['input', 'scenario']);
+});
+
+test('keeps imported benchmark fields without injecting duplicate defaults', () => {
+  const fields = normalizeFields([
+    { key: 'input', label: '任务输入', type: 'text', system: true },
+    { key: 'externalCaseId', label: 'Instance ID', type: 'text', system: true },
+    { key: 'repo', label: '仓库', type: 'text', system: true },
+  ], 'benchmark');
+
+  assert.deepEqual(fields.map(field => field.key), ['input', 'externalCaseId', 'repo']);
+});
+
+test('still injects required reliability fields', () => {
+  const fields = normalizeFields([
+    { key: 'scenario', label: '场景', type: 'text' },
+  ], 'reliability');
+
+  assert.deepEqual(
+    new Set(fields.map(field => field.key)),
+    new Set(['input', 'fault_injection_type', 'reference_output', 'scenario']),
+  );
+});
+
+test('allows datasets and cases without an input field', () => {
+  const row = normalizeCase({
+    values: {
+      output: 'processed result',
+      trace: '{"steps":[]}',
+    },
+    source: 'trace-backflow',
+  });
+
+  assert.equal(Object.hasOwn(row.values || {}, 'input'), false);
+  assert.equal(row.input, '');
+  assert.deepEqual(validateCasesForKind([row], 'trajectory'), []);
+});

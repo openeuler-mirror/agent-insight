@@ -1,0 +1,53 @@
+libvips shared-library build and replacement information
+
+Inspected versions
+sharp 0.34.5; @img/sharp-libvips-{darwin,linux}-arm64 1.2.4; libvips 8.17.3.
+Both published libvips package metadata records identify build revision:
+20b5e899954907a3039d6e3d4c200aaa0ec52c4c
+https://github.com/lovell/sharp-libvips/tree/20b5e899954907a3039d6e3d4c200aaa0ec52c4c
+
+Layout
+The sharp native addon and the libvips shared library are separate files:
+  node_modules/@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node
+  node_modules/@img/sharp-libvips-darwin-arm64/lib/libvips-cpp.8.17.3.dylib
+  node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64.node
+  node_modules/@img/sharp-libvips-linux-arm64/lib/libvips-cpp.so.8.17.3
+An application can have another node_modules tree inside its standalone
+output. Identify the tree actually loaded by the running process before
+testing a replacement; do not assume the first matching file is in use.
+
+Build materials
+The pinned upstream repository includes build.sh, build/posix.sh,
+versions.properties, platform Dockerfiles, CMake toolchains and Meson files.
+Its documented entry points include:
+  bash build.sh linux-arm64v8
+  bash build.sh darwin-arm64v8
+These are upstream build entry points, not commands run by Agent Insight.
+Read the platform recipes and prerequisites before running them in an
+isolated build environment. The recipes download tools and dependencies.
+
+source-manifest.json identifies source archives and external patch files.
+The build recipe also contains in-place edits; preserve the entire recipe,
+not just the separately downloaded patch files. It regenerates librsvg's
+Cargo lock after changing features. The source bundle preserves the original
+release locks and their crate archives as a superset; it does not assert an
+exact inventory of crates linked into the published native binary.
+
+Replacement
+A modified shared library must remain compatible with the addon's ABI and
+expected library name/SONAME. Build the modified library with the applicable
+recipe, preserve the shared-library relationship, then test in a separate
+copy of the installation. Embedded static libraries can be modified by
+rebuilding the containing libvips shared library from their sources.
+Do not impose terms restricting modification of the LGPL portions or reverse
+engineering for debugging such modifications. The GPL/LGPL texts are retained
+in LGPL-3.0-or-later.txt.
+
+Verification boundary
+On 2026-10-26, separate macOS ARM64 and Linux ARM64 installations loaded the
+native addon and libvips from isolated copies. PNG, JPEG and WebP processing
+passed before and after replacing the shared-library file with an identical
+copy. Loaded-object paths and output hashes were checked. This verifies the
+replacement path, not a full rebuild with modified library sources, binary
+reproducibility, or community approval. Other architectures, Windows, musl
+and WebAssembly require their own inspection.

@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # 此脚本用于包装 skill-optimizer main.py，自动处理环境依赖与执行。
 # 支持并行环境检查以加速启动过程。
 
@@ -98,14 +112,21 @@ run_parallel_setup() {
 
     # 显示进度指示器
     echo "  ⏳ 等待任务完成..."
-    local spinner='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    local i=0
-    while kill -0 $deps_pid 2>/dev/null || kill -0 $config_pid 2>/dev/null || ( [ -n "$conn_pid" ] && kill -0 $conn_pid 2>/dev/null ); do
-        i=$(( (i+1) % 10 ))
-        printf "\r  %s 处理中..." "${spinner:$i:1}"
-        sleep 0.1
-    done
-    printf "\r  ✅ 所有任务完成    \n"
+    if [ -t 1 ]; then
+        local spinner='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+        local i=0
+        while kill -0 $deps_pid 2>/dev/null || kill -0 $config_pid 2>/dev/null || ( [ -n "$conn_pid" ] && kill -0 $conn_pid 2>/dev/null ); do
+            i=$(( (i+1) % 10 ))
+            printf "\r  %s 处理中..." "${spinner:$i:1}"
+            sleep 0.1
+        done
+        printf "\r  ✅ 所有任务完成    \n"
+    else
+        while kill -0 $deps_pid 2>/dev/null || kill -0 $config_pid 2>/dev/null || ( [ -n "$conn_pid" ] && kill -0 $conn_pid 2>/dev/null ); do
+            sleep 0.5
+        done
+        echo "  ✅ 所有任务完成"
+    fi
     
     # 等待任务完成并获取状态
     wait $deps_pid || deps_status=$?
@@ -126,15 +147,20 @@ run_parallel_setup() {
     fi
 
     if [ -n "$conn_pid" ] && [ $conn_status -ne 0 ]; then
-        echo "❌ [连通性] 模型连通性检测失败:"
+        echo ""
+        echo "__CONNECTIVITY_FAILED__"
         cat "$conn_log"
     fi
     
     # 清理临时文件
     rm -f "$deps_log" "$config_log" "$conn_log"
     
-    if [ $deps_status -ne 0 ] || ( [ -n "$conn_pid" ] && [ $conn_status -ne 0 ] ); then
+    if [ $deps_status -ne 0 ]; then
         return 1
+    fi
+    
+    if [ -n "$conn_pid" ] && [ $conn_status -ne 0 ]; then
+        return 2
     fi
     
     echo "✅ 环境准备完毕！"
@@ -158,10 +184,18 @@ run_serial_setup() {
 
     uv run scripts/model_config_detector.py > /dev/null 2>&1 || true
     if [ "$RUN_CONNECTIVITY" = true ]; then
+        local conn_output
         if command -v python3 &> /dev/null; then
-            python3 scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env"
+            conn_output=$(python3 scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env" 2>&1)
         else
-            python scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env"
+            conn_output=$(python scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env" 2>&1)
+        fi
+        local conn_exit=$?
+        echo "$conn_output"
+        if [ $conn_exit -ne 0 ]; then
+            echo ""
+            echo "__CONNECTIVITY_FAILED__"
+            return 2
         fi
     fi
 }
@@ -219,8 +253,9 @@ run_fast_check() {
         fi
 
         if [ -n "$conn_pid" ] && [ $conn_status -ne 0 ]; then
-            echo "❌ [连通性] 模型连通性检测失败，启动已中止"
-            return 1
+            echo ""
+            echo "__CONNECTIVITY_FAILED__"
+            return 2
         fi
     else
         uv pip install -r requirements.txt > /dev/null 2>&1 || {
@@ -230,26 +265,41 @@ run_fast_check() {
 
         uv run scripts/model_config_detector.py > /dev/null 2>&1 || true
         if [ "$RUN_CONNECTIVITY" = true ]; then
+            local conn_output
             if command -v python3 &> /dev/null; then
-                python3 scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env"
+                conn_output=$(python3 scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env" 2>&1)
             else
-                python scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env"
+                conn_output=$(python scripts/test_model_connectivity.py --env-file "$OPT_DIR/.env" 2>&1)
+            fi
+            local conn_exit=$?
+            echo "$conn_output"
+            if [ $conn_exit -ne 0 ]; then
+                echo ""
+                echo "__CONNECTIVITY_FAILED__"
+                return 2
             fi
         fi
     fi
 }
 
 # 主逻辑
+setup_result=0
 if [ ! -d "$VENV_DIR" ]; then
     # 首次运行
     if [ "$PARALLEL_MODE" = true ]; then
-        run_parallel_setup
+        run_parallel_setup || setup_result=$?
     else
-        run_serial_setup
+        run_serial_setup || setup_result=$?
     fi
 else
     # 已有虚拟环境，快速检查
-    run_fast_check
+    run_fast_check || setup_result=$?
+fi
+
+if [ $setup_result -eq 2 ]; then
+    exit 2
+elif [ $setup_result -ne 0 ]; then
+    exit 1
 fi
 
 echo "🚀 正在启动 Skill Optimizer..."

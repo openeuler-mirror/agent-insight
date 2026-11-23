@@ -14,6 +14,11 @@ node_modules
 # Log files
 server.log
 *.log
+scripts/**/__pycache__/
+scripts/**/*.pyc
+scripts/otel_data/
+scripts/**/*.jsonl
+scripts/**/*.jsonl.*
 
 # Temporary files
 .DS_Store
@@ -26,6 +31,9 @@ server.log
 .vscode
 .trae
 *.iml
+.agents
+.codex
+AGENTS.md
 
 # Test coverage
 coverage
@@ -46,6 +54,7 @@ prisma/dev.db
 skills/
 README.md
 docs/
+features/
 
 # Development only
 .next/cache
@@ -59,3 +68,21 @@ docs/
 .next/standalone/.env
 .next/standalone/server.log
 .next/standalone/prisma/dev.db
+
+# Local/temp & non-runtime project dirs that next build sweeps into standalone
+exclude/
+.next/standalone/exclude/
+.next/standalone/tests/
+.next/standalone/test/
+.next/standalone/skillbench/
+.next/standalone/features/
+.next/standalone/tools/
+
+# Agent RAS development-only content
+agent_ras/tests/
+agent_ras/docs/
+agent_ras/scripts/
+agent_ras/logs/
+agent_ras/**/__pycache__/
+agent_ras/**/*.pyc
+agent_ras/.pytest_cache/

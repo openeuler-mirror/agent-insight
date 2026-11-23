@@ -1,0 +1,71 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ============================================================================
+# 迭代优化任务配置模板
+#
+# 使用方法：
+#   1. 复制本文件到你的工作目录，命名为 iter-config.yaml
+#   2. 填写各项配置
+#   3. 在 opencode 中告诉 agent: "帮我迭代优化 <skill 路径>"
+#      或手动运行: bash init_workspace.sh 后由 agent 编排后续流程
+# ============================================================================
+
+# --------------------------------------------------------------------------
+# 基本配置
+# --------------------------------------------------------------------------
+
+# 测试框架（当前仅支持 opencode）
+framework: opencode
+
+# 待优化的 skill 信息
+skill:
+  name: <你的 skill 名称>
+  path: <你的 skill 目录路径，如 /path/to/skills/my-skill>
+
+# 迭代参数
+optimization:
+  score_threshold: 0.9
+  goal: <可选，优化目标的文字描述，仅供参考，不参与达标计算>
+  max_rounds: 5
+
+# 默认模型（可选，配置后跳过模型选择）
+# model: deepseek/deepseek-chat
+
+# --------------------------------------------------------------------------
+# 故障注入（可选，不需要可删除此段）
+# 每轮测试任务执行前注入故障，执行后清理恢复
+# --------------------------------------------------------------------------
+
+# fault_injection:
+#   inject: <故障注入命令>
+#   cleanup: <故障停止命令>
+
+# --------------------------------------------------------------------------
+# 任务定义
+# --------------------------------------------------------------------------
+
+tasks:
+  # 测试阶段执行的任务
+  query: |
+    <你的测试任务描述>
+
+# --------------------------------------------------------------------------
+# 交互预设（可选，如果测试任务不涉及交互可删除此段）
+# --------------------------------------------------------------------------
+
+interactions:
+  - scenario: <场景描述>
+    trigger: <关键词|用竖线分隔多个>
+    response: <预设回答>

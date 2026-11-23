@@ -1,0 +1,5 @@
+Support ticket label → action (authoritative):
+- TICKET=ESCALATE-NEEDED → ACTION=ESCALATE
+- TICKET=CLOSE-OK → ACTION=CLOSE
+
+When conversation history already contains a TICKET= line, use that value for the action unless you explicitly re-validate against the original incident facts.

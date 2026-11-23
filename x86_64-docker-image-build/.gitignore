@@ -1,0 +1,8 @@
+# 构建产物，不入库
+images/
+SHA256SUMS
+BUILD-INFO.txt
+
+# 由 make-dockerfile-single.ps1 从仓库 Dockerfile.local 生成
+Dockerfile.agent-insight.single
+Dockerfile.agent-insight.single.dockerignore

@@ -1,5 +1,23 @@
-import { resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { resolveUser } from '@/lib/auth/auth';
+import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
+import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
@@ -86,22 +104,32 @@ export async function POST(request: NextRequest) {
             nextVersionNum = lastVersion ? (lastVersion.version + 1) : 0;
         }
 
-        const storageBase = path.join(process.cwd(), 'data', 'storage', 'skills', skill.id, `v${nextVersionNum}`);
+        const storageBase = getSkillVersionStorageDir(skill.id, nextVersionNum);
         ensureDir(storageBase);
 
         const savedFilesList: string[] = [];
         copyFolderSync(localPath, storageBase, savedFilesList, storageBase);
 
-        const skillVersion = await db.createSkillVersion({
+        await db.createSkillVersion({
             skillId: skill.id,
             version: nextVersionNum,
             content: skillContent,
-            assetPath: `data/storage/skills/${skill.id}/v${nextVersionNum}`,
+            assetPath: getSkillVersionAssetPath(skill.id, nextVersionNum),
             files: JSON.stringify(savedFilesList),
             changeLog: `Auto-imported version ${nextVersionNum}`
         });
 
         await db.updateSkill(skill.id, { activeVersion: nextVersionNum });
+
+        parseSkillFlow(skillContent, skill.id, nextVersionNum, user || null)
+            .then(result => {
+                if (result.success) {
+                    console.log(`[AutoImport] Auto-parsed flow for skill ${skill.name} v${nextVersionNum}`);
+                } else {
+                    console.warn(`[AutoImport] Auto-parse flow failed for skill ${skill.name} v${nextVersionNum}: ${result.error}`);
+                }
+            })
+            .catch(e => console.warn(`[AutoImport] Auto-parse flow error for skill ${skill.name} v${nextVersionNum}:`, e));
 
         return NextResponse.json({
             success: true,

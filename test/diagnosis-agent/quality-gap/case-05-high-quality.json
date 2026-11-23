@@ -1,0 +1,266 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T06:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-05-high-quality-73069",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-05-high-quality-73069",
+        "taskId": "jiuwen-case-05-high-quality-73069",
+        "query": "返回用户总数，要求查询数据库并返回数字。",
+        "framework": "jiuwenswarm",
+        "tokens": 58900,
+        "cost": null,
+        "latency": 10.0,
+        "toolCallCount": 7,
+        "llmCallCount": 7,
+        "inputTokens": 57000,
+        "outputTokens": 1900,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T06:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "answerScore": 95,
+        "isAnswerCorrect": true,
+        "judgmentReason": "按要求查询数据库并返回用户总数，证据充分，格式正确",
+        "agentName": "TeamLeader",
+        "finalResult": "完成，用户总数 1000。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-05-high-quality-73069",
+        "label": "jiuwenswarm",
+        "query": "返回用户总数，要求查询数据库并返回数字。",
+        "startTime": "2026-08-07T06:00:00.000Z",
+        "endTime": "2026-08-07T06:00:10.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "返回用户总数，要求查询数据库并返回数字。",
+            "kind": "user"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，查询用户总数。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"统计小队\", \"team_desc\": \"查询用户总数。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织统计。\"}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建统计任务 cnt2。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"cnt2\", \"title\": \"用户总数\", \"content\": \"查询数据库返回用户总数。\", \"requirements\": [\"查询数据库返回用户总数\"]}]}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 统计。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"统计员\", \"desc\": \"统计用户总数。\", \"prompt\": \"查询数据库。\"}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"统计用户。\"}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-high-quality_reporter",
+            "content": "",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_reporter",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"db\"}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={\"task_id\":\"cnt2\",\"value\":1000,\"source\":\"database\"} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-high-quality_reporter",
+            "content": "用户总数为 1000。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reporter",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"team_leader\", \"content\": \"用户总数 1000\", \"summary\": \"reporter 查询上报\", \"deliverable\": true}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "汇总答复。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-high-quality-73069\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'cnt2','status':'completed','value':1000}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

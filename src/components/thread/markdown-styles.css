@@ -1,0 +1,66 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Base markdown styles */
+.markdown-content code:not(pre code) {
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  /* 内联 code 经常是路径/标识符（如 ./.skill-generator/references/skill-template.md），
+     默认 word-break: normal 不会断；窄屏直接撑爆 message bubble。break-word 让浏览器
+     在没有合适断点时按字符切开，正常单词仍按 word 边界。 */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.markdown-content a {
+  color: #0070f3;
+  text-decoration: none;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}
+
+.markdown-content blockquote {
+  border-left: 4px solid #ddd;
+  padding-left: 1rem;
+  color: #666;
+}
+
+.markdown-content pre {
+  overflow-x: auto;
+}
+
+.markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid #ddd;
+  padding: 8px;
+}
+
+.markdown-content th {
+  background-color: #f2f2f2;
+}
+
+.markdown-content tr:nth-child(even) {
+  background-color: #f9f9f9;
+}

@@ -1,181 +1,205 @@
-# Skill-insight
-
-Skill-insight 是一个开源的 **Agent Skill 生成、优化、观测与分析平台**，帮助开发者量化评估 Skills 在 Agent 上的实际运行效果。通过自动采集执行轨迹、智能评分、深度归因分析，让 Skill 的每一次迭代都有据可依。
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/brand/logo-horizontal-dark.svg" />
+    <img src="public/brand/logo-horizontal-light.svg" alt="Agent Insight" width="400" />
+  </picture>
+</p>
 
 <p align="center">
-  <img src="docs/images/dashboard_main.png" width="48%" />
-  <img src="docs/images/dashboard_list.png" width="44%" />
+  <strong>Observe, evaluate, diagnose, and improve Agent execution.</strong><br/>
+  An open-source AgentOps platform for the Agent lifecycle.
 </p>
-<p align="center"><em>主界面：全景指标概览与执行历史列表</em></p>
-
----
-
-## 🎯 我们在解决什么问题
-
-在 AI 时代，Agent 正在成为新的生产力载体，而 Skill 作为 Agent 执行能力的最小可复用单元，正在快速膨胀。然而，随着Skill 数量增多，不同 Skill 间存在重复与相似内容，执行过程黑盒、评测结果不可追溯，导致 Skill 效果无法量化感知，难以持续优化。
-
-### 核心挑战
-
-| 挑战 | 描述 |
-| :--- | :--- |
-| **1. Skill 数量爆炸，召回率下降与 Token 成本飙升** | 基于大量文档生成的 Skill 往往语义高度相似，导致召回率从 95% 急剧下降至 30% 以下，Token 成本显著增加。 |
-| **2. 评测维度不全面，缺乏可解释与可追溯能力** | 当前评测大多停留在"成功或失败"的结果导向，缺乏 ROI、执行路径偏差等过程级评测，无法定位问题根因。 |
-| **3. Skill 优化缺乏执行过程数据输入** | 优化主要依赖"最终结果是否正确"这一单一信号，缺乏分步骤数据，无法判断瓶颈来源，影响优化效果。 |
-
----
-
-## ✨ 三大核心能力
-
-### 🤖 1. 基于语义聚合的模式抽取
-
-**核心思路**：去冗余、合相似、抽模式
-
-- **去冗余**：从海量案例文档中剔除重复描述、无关上下文与噪声信息
-- **合相似**：基于文本聚类相似度算法结合大模型语义理解，合并语义高度相近的 Skill
-- **抽模式**：提炼通用问题模式与标准解决路径，生成可复用的模式化 Skill
-
-**效果**：将 Skill 数量降低至少一个数量级，提升召回率的同时有效降低 Token 消耗成本。
-
-👉 *[了解详情：Skill 自动生成技术解析](https://gitcode.com/openeuler/witty-skill-insight/wiki/%E5%85%B3%E9%94%AE%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90)*
-
-### 📊 2. 多维评测与过程级可追溯
-
-**核心思路**：构建多维评测体系 + 引入标准数据集 + 提供过程级可追溯能力
-
-- **多维评测指标体系**：包括准确率、时延、Token 成本、ROI 等多维度评测方法
-- **内置标准评测数据集**：集成 SkillsBench 等行业标准数据集，支持自定义扩展
-- **执行过程可追溯**：实时生成动态执行流程图，清晰标识未按预期执行的步骤
-- **偏差定位与原因分析**：逐步回溯执行路径，区分模型推理问题还是 Skill 定义不合理
-
-**效果**：将评测从结果层提升到结果+过程的多维度评测，实现评测结果的全面客观分析。
-
-👉 *[了解详情：多维观测与分析技术解析](https://gitcode.com/openeuler/witty-skill-insight/wiki/%E5%85%B3%E9%94%AE%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90)*
-
-### 🔄 3. 全链路数据驱动优化
-
-**核心思路**：收集结果与执行过程的全链路数据，形成自动化反馈闭环
-
-- **执行链路全追踪**：每一步操作、模型推理与工具调用都被记录，识别关键瓶颈
-- **数据驱动优化闭环**：执行数据被结构化并反馈至 Skill 优化环节，支持问题定位和持续改进
-
-**效果**：使 Skill 优化不再停留在"调文本、改结果"的浅层，而是基于执行数据的深度优化，数据驱动 Agent 自进化。
-
-👉 *[了解详情：Skill 自优化技术解析](https://gitcode.com/openeuler/witty-skill-insight/wiki/%E5%85%B3%E9%94%AE%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90)*
-
----
-
-## 🎨 功能展示
-
-### 执行详情钻取
 
 <p align="center">
-  <img src="docs/images/execution_detail.png" width="45%" />
-  <img src="docs/images/skill_visualization.png" width="40%" />
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
+  <a href="https://nodejs.org/"><img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.9.0-43853d.svg" /></a>
+  <a href="https://gitcode.com/openJiuwen/agent-insight">Repository</a>
 </p>
-<p align="center"><em>执行详情：skill有效性分析 + Skill执行可视化</em></p>
-
-### 耗时 & Token 分析
 
 <p align="center">
-  <img src="docs/images/execution_steps.png" width="80%" />
+  <a href="README.zh.md">简体中文</a> |
+  <a href="README.md">English</a>
 </p>
-<p align="center"><em>逐步拆解 LLM & Tool token和耗时，并支持 Top5 高亮 / 排序与数据详情联动跳转</em></p>
 
-### 多维度指标对比
+## Disclaimer
+
+This product serves solely as a workflow orchestration tool and does not embed any AI model capabilities. When users integrate AI models for specific business scenarios, they shall bear full responsibility for compliance obligations under the EU AI Act and other relevant regulatory frameworks.
+
+## Overview
+
+Agent Insight is an open-source AgentOps platform that helps teams understand Agent execution, evaluate results, diagnose failures, and improve Skills using execution data. It brings observability, evaluation, diagnosis, optimization, and reliability workflows into a self-hosted application.
+
+It integrates with multiple Agent platforms through native plugins, hooks, file collectors, or OTLP, depending on the platform. Steps that require model inference use model services configured by the user; Agent Insight does not include an AI model.
+
+## Features
+
+- **Execution tracing**: inspect Agent call trees, execution timelines, tool calls, and model interactions.
+- **Evaluation**: run benchmark, result, trajectory, and reliability evaluations with built-in or custom evaluators.
+- **Diagnosis**: investigate failures using execution evidence, deterministic checks, and user-configured model services.
+- **Skill generation and optimization**: create Skills from user input or documents, manage versions, evaluate changes, and iterate on identified issues.
+- **Reliability**: use Agent fault injection, anomaly detection, and recovery workflows to assess and improve behavior.
+- **Multiple integrations**: connect supported Agent frameworks using their available collection mechanisms.
+- **Self-hosted deployment**: deploy locally or on a server and control where execution data is stored.
+
+## Architecture Overview
+
+The platform has three main parts:
+
+- **Agent integrations** collect execution data through native plugins, hooks, file collectors, or OTLP. Collection paths differ between platforms.
+- **Application services** use Next.js, React, and TypeScript to provide the Web dashboard and APIs for tracing, evaluation, diagnosis, Skill generation, and optimization.
+- **Data storage** uses Prisma and database adapters to manage execution records and task data. Local SQLite is the default; see the developer guide for other database configurations.
+
+Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
 <p align="center">
-  <img src="docs/images/metrics_comparison.png" width="80%" />
+  <img src="docs/images/architecture.en.png" alt="Agent Insight architecture" />
 </p>
-<p align="center"><em>指标对比：横向对比不同模型、版本的准确率 / 时延 / Token 消耗</em></p>
 
----
+### Agent Insight in the openJiuwen Architecture
 
-## 🚀 快速开始
+Agent Insight provides observability, evaluation, diagnosis, and optimization in openJiuwen. Its position is highlighted in the lower right of the architecture diagram.
 
-### 前置要求
+<p align="center">
+  <img src="docs/images/openjiuwen-architecture.png" alt="openJiuwen architecture with Agent Insight highlighted in the lower right" />
+</p>
 
-- **Node.js** >= 18
-- **npm** >= 9
+## Supported Platforms
 
-### 一键安装
+| Agent platform | Collection method |
+|:---------------|:------------------|
+| OpenCode | Native plugin |
+| Claude Code | OTLP |
+| Qwen Code | Hook collector |
+| QwenPaw | Hook plugin |
+| Hermes | Native plugin |
+| Trae IDE | VS Code extension |
+| JiuwenSwarm | OTLP |
+| LangChain / LangGraph | OTLP |
+| LlamaIndex | OTLP |
+| Dify (Workflow / Agent trajectory) | OTLP |
+| OpenClaw | OTLP |
+| Codex | Hook collector |
+| Pi Agent | Hook collector |
+| Qoder CN | Native plugin |
+| DeepSeek Harness | Native plugin |
+| xiaoO | Hook collector |
+| CodeAgent | OTLP |
+| AcTrail | OTLP |
+| WorkBuddy | File collector |
+
+## Quick Start
+
+### 1. Install and start the server
+
+For a local Node.js deployment, use Node.js 20.9 or later and an available port, normally `3000`. Check any additional runtime requirements reported by the dependencies for optional features.
+
+**npm installation**
 
 ```bash
-npx @witty-ai/skill-insight install
+npx agent-insight install
 ```
 
-### 快速体验
+The installer starts the platform and guides you through Agent integration. You can also manage the service with:
 
-安装完成后，即可开始第一次观测（以OpenCode为例）：
-
-1. **打开 OpenCode** 终端
-2. **执行一个简单任务**：
-   ```
-   你好，请介绍一下你自己
-   ```
-3. **打开浏览器** 访问 `http://localhost:3000`，并登陆初始账号`admin`，在主页面可以看到刚才执行的记录
-
-🎉 恭喜！您已完成第一次数据采集与观测。
-
-*更多功能，请参考[用户手册](https://gitcode.com/openeuler/witty-skill-insight/wiki/%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C)*
-
----
-
-## 📂 项目结构
-
-```
-.
-├── src/                          # 看板前端 + 后端 API
-│   ├── app/api/                  # API 路由
-│   │   ├── setup/                # 一键配置脚本生成
-│   │   ├── skills/               # Skill CRUD、版本管理、上传下载
-│   │   ├── sync/                 # Skill 同步与 Manifest
-│   │   ├── upload/               # 执行数据上报
-│   │   ├── auth/                 # API Key 用户认证
-│   │   └── ...                   # 评估、配置、设置等
-│   ├── components/               # React UI 组件
-│   └── lib/                      # 核心逻辑
-│       ├── auth.ts               # 通用认证模块
-│       ├── judge.ts              # LLM 自动判题引擎
-│       ├── data-service.ts       # 数据读写服务
-│       └── prisma.ts             # 数据库客户端
-├── prisma/schema.prisma          # 数据库模型定义
-├── scripts/                      # 核心采集脚本
-│   └── opencode_plugin.ts        # OpenCode 原生插件
-├── public/sync_skills.ts         # 客户端 Skill 同步工具
-├── skill/                        # 预置 Skill 示例库
-├── docs/                         # 文档与架构图
-└── .env.example                  # 环境变量模板
+```bash
+npx agent-insight start
+npx agent-insight status
+npx agent-insight logs
+npx agent-insight stop --port 3000
 ```
 
----
+**Installation from source**
 
-## 🗺️ Roadmap
+```bash
+git clone https://gitcode.com/openeuler/agent-insight.git
+cd agent-insight
+npm install
 
-### 当前已实现 ✅
+# Optional: build the Trae IDE collector extension.
+(cd scripts/trae-collector && npm install && npm run build)
 
-- [x] **无感采集与接入**：OpenCode, Claude Code, OpenClaw 无侵入数据采集
-- [x] **多维指标监测与对比**：跨模型/框架维度的 Latency, Token, Accuracy 对比
-- [x] **LLM 自动评分与深度归因**：基于标准的判题机制，精准区分模型能力缺失与 Skill 缺陷
-- [x] **Skill 版本管理与同步**：版本隔离、跨框架代码分发
-- [x] **数据集管理** — 统一管理和分享标准评测数据集
-- [x] **Skill 自动生成**：基于案例文档自动提取 Skill 并执行文本聚类合并相似项
-- [x] **Skill 自优化**：基于动静态评估反思机制，驱动 Agent 自动演化为高质量 Skill
-- [x] **用户管理**：多用户隔离与 API Key 认证机制
-- [x] **Skill 可视化** — 独立展示 Skill 的执行流程与控制流结构
+# Start the service from the repository root.
+bash scripts/start.sh
+```
 
-### 计划中 🚧
-- [ ] **团队协作** — 团队资源共享、权限隔离与防并发冲突机制
-- [ ] **成本控制优化** — 细粒度 Token 消耗分布分析与改进建议
-- [ ] **多Skill关联分析** — 分析 Skill 之间的依赖关系，优化执行效率
+For development, use `bash scripts/develop_start.sh`. Stop a source installation with `bash scripts/stop.sh`.
 
----
+**Docker deployment**
 
-## 📄 License
+```bash
+docker pull karaggagent/agent-insight:latest
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
 
-[MIT](LICENSE)
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
 
----
+Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/zh/tutorial/platform/01-quick-start.md) for offline images, mounting source code, and troubleshooting.
 
-<p align="center">
-  <strong>Skills-Insight</strong> — 让每一次 Skill 迭代都有据可依
-</p>
+### 2. Open the dashboard and connect an Agent
+
+Open `http://localhost:3000`. In the default standalone login mode, sign in with your email address; deployments configured for organization authentication use their configured login flow.
+
+In **Installation Guide**, select your Agent platform and run the generated command on the machine or container where that Agent actually runs. A server running in Docker does not automatically configure an Agent on the host.
+
+For OpenCode, the integration also installs the Agent RAS in-process plugin. You can install or update RAS separately with `npx agent-insight install-ras`.
+
+### 3. Run a task and inspect its execution
+
+Run a small task in the connected Agent, then open the execution list in Agent Insight and inspect the trace. The default source/npm data directory is `~/.agent-insight/data`, including `witty_insight.db`; the Docker mount above preserves the equivalent data outside the container.
+
+## Guided Workflow: Generate, Evaluate, and Optimize
+
+1. **Configure a model**: register the external model service needed by generation, evaluation, or optimization workflows.
+2. **Generate a Skill**: use the Skill workspace to describe a task or supply a document. Inspect and save the generated content.
+3. **Evaluate**: configure a dataset and evaluators, run the task, and inspect execution details and evaluation results.
+4. **Optimize**: select an existing Skill and use the findings to create an improved version. Re-run the same task or dataset to compare behavior.
+
+Start with the [quick-start tutorial](docs/zh/tutorial/platform/01-quick-start.md) to connect a real Agent and inspect its first trace. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
+
+## Documentation
+
+Start at the [documentation index](docs/README.md). Existing documentation is primarily Chinese; see the [English translation status](docs/en/README.md).
+
+| Category | Contents |
+| --- | --- |
+| [Tutorials](docs/zh/tutorial/README.md) | Guided first tasks and complete examples |
+| [How-to guides](docs/zh/how-to/README.md) | Installation, configuration, operation, and extension |
+| [Reference](docs/zh/reference/README.md) | APIs, configuration, protocols, and data fields |
+| [Explanation](docs/zh/explanation/README.md) | Concepts, architecture, and responsibility boundaries |
+| [Agent RAS](docs/zh/explanation/reliability/agent-ras/README.md) / [Fault injection](docs/zh/explanation/reliability/agent-fault-injection/README.md) | Reliability documentation |
+| [Internal designs](design/README.md) | Requirements, proposals, plans, and historical material |
+
+## Contributing
+
+Contributions through bug reports, documentation, tests, and code are welcome.
+
+Choose the CLA and contribution guide for the community receiving your PR: **sign the openEuler CLA when contributing to openEuler, or the openJiuwen CLA when contributing to openJiuwen.**
+
+| Target community and repository | CLA signing page | Community contribution guide |
+| --- | --- | --- |
+| [openEuler/agent-insight](https://gitcode.com/openeuler/agent-insight) | [openEuler CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0) | [openEuler contribution guide](https://www.openeuler.org/en/community/contribution/detail.html) |
+| [openJiuwen/agent-insight](https://gitcode.com/openJiuwen/agent-insight) | [openJiuwen CLA](https://clasign.osinfra.cn/sign/68ee0908765718ad08bab9ee) | [openJiuwen contribution guide](https://gitcode.com/openJiuwen/community/blob/main/README.md) |
+
+1. Open an issue in the target community's repository with the version, reproduction steps, and sanitized logs. Discuss larger feature changes before implementing them.
+2. Before contributing code, sign that community's CLA and read its contribution guide and this repository's [AGENTS.md](AGENTS.md).
+3. Fork the target community's repository, create a working branch, make the change, update the relevant documentation, and run `npm run test`. Submit a PR to the same community's repository describing the purpose and validation results.
+
+For focused checks, use `node scripts/test-suites.mjs --module evaluation --concurrency 2` in the same isolated environment required by the full suite. Modules are `observability`, `evaluation`, `skills` (including diagnosis and optimization), `reliability`, and `platform`. Repeat `--module` to combine modules, or add `--list` to print files. Run `--check` and update `test/suites.json` when adding, renaming, or removing tests; the full suite rejects missing, duplicate, or stale entries. Module checks include unit, contract, integration, and performance coverage and do not replace `npm run test` or the full PR gate. Real Benchmark E2E remains opt-in with `RUN_BENCHMARK_REAL_E2E=true`; disabled runs perform no Docker/OpenCode probes, and enabled probes have a 10-second limit. See the [Chinese development guide](docs/zh/how-to/platform/conventions-and-extension.md) for prerequisites.
+
+Actions UT reports include the 20 slowest files, per-process CPU/RSS, visible cgroup CPU and memory limits, sampled memory peak, lifetime kernel peak and OOM deltas. Full sanitized file metrics are in the `e2e-result-ut` artifact as `ut-metrics.json`; unavailable values are not treated as zero. The Actions PR gate schedules eight test files at a time on the verified eight-core Runner through the phase `--ut-concurrency` option (`1..8`), while retaining the complete `npm test` entrypoint. Local and webhook execution keep their existing defaults. See the [Chinese E2E guide](test/e2e/README.md) for measurement scope.
+
+After compilation, the UT job and all five E2E jobs become ready together with independent source and database state. Aggregation waits for every phase; Runner capacity may queue jobs. The workflow keeps a concurrency limit of one for separate PR or manual runs.
+
+The eight-job PR gate includes five named E2E cases: account/model/client setup; OpenCode execution and Trace collection; Skill generation, dataset evaluation and optimized release; existing-Trace evaluation, diagnosis and Skill optimization; and fault injection, interception and recovery. After the trusted `PR Result Comment` workflow is merged into `master`, it scans PR gate runs from the last 24 hours every five minutes, includes open and merged PRs, skips closed unmerged PRs, and updates one bot comment with the tested commit, stage results, UT counts, case modes, failures and run links. Queueing may delay publication. The writer runs only trusted `master` code; fork tests keep read-only permissions. Run it manually on `master` with optional `pr_number` / `run_id`, or `dry_run=true` to preview without posting; manual recovery also supports merged PRs. Reports must match the execution start, artifact and phase timestamps as well as the platform run attempt; legacy reports without an attempt are accepted only for the first attempt. The schedule keeps running until disabled. Global discovery is bounded to 2,000 records; it still processes collected candidates and reports SCAN_INCOMPLETE at the limit. Use pr_number for manual recovery beyond that boundary. Post-merge reporting requires the repository setting that permits comments after merging; disabled repositories are skipped with an explicit reason. See the [Chinese E2E guide](test/e2e/README.md#pr-结果自动评论) for details.
+
+## Open-source License
+
+Agent Insight is licensed under [Apache-2.0](LICENSE). The original MIT copyright and permission notice is retained in [LICENSE-MIT-Historical](LICENSE-MIT-Historical) for historical code.
+
+Independently licensed components retain their own terms. See [Third_Party_Open_Source_Software_Notice.txt](Third_Party_Open_Source_Software_Notice.txt) and the [license materials](licenses/INDEX.txt) for dependency versions, notices, license texts, and source references.

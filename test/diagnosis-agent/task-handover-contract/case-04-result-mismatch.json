@@ -1,0 +1,1619 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T10:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-04-result-mismatch-19074",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-04-result-mismatch-19074",
+        "taskId": "jiuwen-case-04-result-mismatch-19074",
+        "query": "让子智能体返回订单总额，明确要求返回 JSON 格式 {\"total\": number}。",
+        "framework": "jiuwenswarm",
+        "tokens": 341000,
+        "cost": null,
+        "latency": 10.0,
+        "toolCallCount": 52,
+        "llmCallCount": 52,
+        "inputTokens": 330000,
+        "outputTokens": 11000,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T10:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "子智能体返回自然语言而非约定的 JSON 格式，违反 return_format。",
+        "diagnostics": {
+          "expectedViolation": "format_violation"
+        },
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "analyst2"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-04-result-mismatch-19074",
+        "label": "jiuwenswarm",
+        "query": "让子智能体返回订单总额，明确要求返回 JSON 格式 {\"total\": number}。",
+        "startTime": "2026-08-07T10:00:00.000Z",
+        "endTime": "2026-08-07T10:00:10.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "让子智能体返回订单总额，明确要求返回 JSON 格式 {\"total\": number}。",
+            "kind": "user",
+            "requirements": [
+              {
+                "return_format": "json"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，统计总额。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"统计小队\", \"team_desc\": \"统计订单总额。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织统计。\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建任务 s4，交接要求返回 JSON。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"s4\", \"title\": \"订单总额\", \"content\": \"统计订单总额。\", \"return_format\": \"json\"}]}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 analyst2 执行。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"analyst2\", \"display_name\": \"分析师B\", \"desc\": \"统计订单。\", \"prompt\": \"统计并返回 JSON 格式。\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"统计总额。\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "统计订单。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "query_orders_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "query_orders",
+                  "arguments": "[{\"where\": \"all\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "订单总额是 300 万块吧大概。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"team_leader\", \"content\": \"总额大概三百万\", \"summary\": \"analyst2 返回自然语言\", \"deliverable\": true}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "子智能体没返回约定的 JSON 格式。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'s4','status':'completed'}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 0。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_0.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_0.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 1。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-1\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 2。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-2\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 3。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-3\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4000,
+              "completed": 4400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 4。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_4.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_4.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 4400,
+              "completed": 4800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 5。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-5\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4800,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 6。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-6\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 5600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 7。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-7\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 5600,
+              "completed": 6000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 8。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_8.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_8.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 6000,
+              "completed": 6400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 9。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-9\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6400,
+              "completed": 6800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 10。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-10\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6800,
+              "completed": 7200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 11。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-11\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 7200,
+              "completed": 7600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 12。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_12.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_12.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 7600,
+              "completed": 8000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 13。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-13\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8000,
+              "completed": 8400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 14。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-14\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8400,
+              "completed": 8800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 15。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-15\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8800,
+              "completed": 9200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 16。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_16.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_16.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 9200,
+              "completed": 9600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 17。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-17\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 9600,
+              "completed": 10000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 18。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-18\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10000,
+              "completed": 10400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 19。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-19\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10400,
+              "completed": 10800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 20。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_20.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_20.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 10800,
+              "completed": 11200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 21。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-21\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 11200,
+              "completed": 11600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 22。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-22\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 11600,
+              "completed": 12000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 23。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-23\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12000,
+              "completed": 12400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 24。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_24.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_24.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 12400,
+              "completed": 12800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 25。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-25\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12800,
+              "completed": 13200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 26。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-26\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 13200,
+              "completed": 13600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 27。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-27\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 13600,
+              "completed": 14000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 28。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_28.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_28.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 14000,
+              "completed": 14400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 29。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-29\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14400,
+              "completed": 14800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 30。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-30\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14800,
+              "completed": 15200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 31。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-31\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 15200,
+              "completed": 15600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 32。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_32.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_32.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 15600,
+              "completed": 16000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 33。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-33\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16000,
+              "completed": 16400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 34。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-34\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16400,
+              "completed": 16800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 35。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-35\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16800,
+              "completed": 17200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 36。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_36.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_36.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 17200,
+              "completed": 17600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 37。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-37\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17600,
+              "completed": 18000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 38。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-38\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18000,
+              "completed": 18400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 39。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-39\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18400,
+              "completed": 18800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）查阅资料 40。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "read_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "read",
+                  "arguments": "[{\"file\": \"docs_analyst2_40.md\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'status':'ok','note':'unrelated','file':'docs_40.md'} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 18800,
+              "completed": 19200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）核对成员列表 41。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "list_members_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "list_members",
+                  "arguments": "[{\"scope\": \"idle-41\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 19200,
+              "completed": 19600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）浏览任务概览 42。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"scope\": \"overview-42\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 19600,
+              "completed": 20000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst2",
+            "subagent_name": "analyst2",
+            "subagent_session_id": "team_case-04-result-mismatch_analyst2",
+            "content": "（背景·非任务步骤）同步空闲状态 43。",
+            "kind": "background",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_analyst2",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\", \"scope\": \"idle-43\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 20000,
+              "completed": 20400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "返回格式违反 return_format。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-04-result-mismatch-19074\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 20400,
+              "completed": 20800
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

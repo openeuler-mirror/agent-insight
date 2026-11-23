@@ -1,0 +1,638 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { POST as postLogs } from '@/app/api/ingest/otel/v1/logs/route';
+import { POST as postMetrics } from '@/app/api/ingest/otel/v1/metrics/route';
+import { POST as postTraces } from '@/app/api/ingest/otel/v1/traces/route';
+import { buildAgentCallTree, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
+import { aggregateCodeAgentOtelEvents } from '@/lib/ingest/codeagent-otel/aggregator';
+import {
+  isCodeAgentResource,
+  partitionCodeAgentOtlpPayload,
+} from '@/lib/ingest/codeagent-otel/detect';
+import { listCodeAgentOtelSpoolFiles } from '@/lib/ingest/codeagent-otel/spool';
+import type { ClaudeOtelEvent } from '@/lib/ingest/claude-otel/types';
+import { listClaudeOtelSpoolFiles, listOtelTraceSpoolFiles } from '@/lib/ingest/claude-otel/spool';
+import { listSources } from '@/lib/ingest/otel-consumer/sources';
+import { computeOwnSkills, extractExplicitSkillsFromNode, saveExecutionRecord, shouldRefreshStoredQueryFromInteractions } from '@/lib/storage/data-service';
+import { prismaRaw } from '@/lib/storage/prisma';
+
+const attr = (key: string, value: any) => ({
+  key,
+  value: typeof value === 'number'
+    ? Number.isInteger(value) ? { intValue: value } : { doubleValue: value }
+    : typeof value === 'boolean'
+      ? { boolValue: value }
+      : { stringValue: String(value) },
+});
+
+function resourceGroup(serviceName: string, childrenKey: string, children: any[] = []) {
+  return {
+    resource: { attributes: [attr('service.name', serviceName)] },
+    [childrenKey]: children,
+  };
+}
+
+function logRecord(eventName: string, sessionId: string, sequence: number, attributes: Record<string, any>) {
+  return {
+    body: { stringValue: eventName },
+    attributes: [
+      attr('event.name', eventName),
+      attr('session.id', sessionId),
+      attr('event.timestamp', `2026-07-24T01:00:${String(sequence).padStart(2, '0')}.000Z`),
+      attr('event.sequence', sequence),
+      ...Object.entries(attributes).map(([key, value]) => attr(key, value)),
+    ],
+  };
+}
+
+function event(
+  sessionId: string,
+  eventName: string,
+  sequence: number,
+  attributes: Record<string, any> = {},
+): ClaudeOtelEvent {
+  return {
+    receivedAt: '2026-07-24T01:00:00.000Z',
+    eventName,
+    eventTimestamp: `2026-07-24T01:00:${String(sequence).padStart(2, '0')}.000Z`,
+    sequence,
+    sessionId,
+    resource: { 'service.name': 'CodeAgentOC', 'service.component': 'cli3.0' },
+    attributes: { 'session.id': sessionId, ...attributes },
+    traceId: `trace-${sessionId}`,
+    spanId: `span-${sequence}`,
+  };
+}
+
+function findNode(tree: AgentNode, sessionId: string): AgentNode | null {
+  let found: AgentNode | null = null;
+  walkTree(tree, (node) => {
+    if (node.sessionId === sessionId) found = node;
+  });
+  return found;
+}
+
+test('CodeAgent detector identifies CodeAgentOC and partitions every OTLP signal', () => {
+  assert.equal(isCodeAgentResource(resourceGroup('CodeAgentOC', 'scopeLogs').resource), true);
+  assert.equal(isCodeAgentResource(resourceGroup('claude-code', 'scopeLogs').resource), false);
+
+  for (const [signal, topLevelKey, childrenKey] of [
+    ['logs', 'resourceLogs', 'scopeLogs'],
+    ['traces', 'resourceSpans', 'scopeSpans'],
+    ['metrics', 'resourceMetrics', 'scopeMetrics'],
+  ] as const) {
+    const body = {
+      [topLevelKey]: [
+        resourceGroup('CodeAgentOC', childrenKey),
+        resourceGroup('another-service', childrenKey),
+      ],
+    };
+    const partition = partitionCodeAgentOtlpPayload(body, signal);
+    assert.equal(partition.codeAgentResourceCount, 1);
+    assert.equal(partition.hasRemainingResources, true);
+    assert.equal(partition.remainingBody[topLevelKey].length, 1);
+    assert.equal(
+      partition.remainingBody[topLevelKey][0].resource.attributes[0].value.stringValue,
+      'another-service',
+    );
+  }
+});
+
+test('CodeAgent logs are written only to the independent codeagent spool', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeagent-log-route-'));
+  const codeAgentDir = path.join(root, 'codeagent');
+  const claudeDir = path.join(root, 'claude');
+  const previousCodeAgentDir = process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR;
+  const previousClaudeDir = process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
+  process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = codeAgentDir;
+  process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = claudeDir;
+
+  try {
+    const sessionId = 'codeagent-route-session';
+    const body = {
+      resourceLogs: [resourceGroup('CodeAgentOC', 'scopeLogs', [{
+        logRecords: [logRecord('user_prompt', sessionId, 1, { prompt: 'hello codeagent' })],
+      }])],
+    };
+    const response = await postLogs(new Request('http://localhost/api/ingest/otel/v1/logs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+    const result = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(result.frameworks.codeagent.received, 1);
+    assert.equal(result.frameworks.other.received, 0);
+    assert.deepEqual(result.sessions, [sessionId]);
+    assert.equal(listCodeAgentOtelSpoolFiles(codeAgentDir).length, 1);
+    assert.equal(fs.existsSync(claudeDir), false);
+  } finally {
+    if (previousCodeAgentDir === undefined) delete process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR = previousCodeAgentDir;
+    if (previousClaudeDir === undefined) delete process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = previousClaudeDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Qwen native logs never create a phantom Claude execution', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qwen-log-route-'));
+  const claudeDir = path.join(root, 'claude');
+  const traceDir = path.join(root, 'traces');
+  const previousClaudeDir = process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
+  const previousTraceDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
+  process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = claudeDir;
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = traceDir;
+
+  try {
+    const sessionId = 'qwen-native-log-session';
+    const body = {
+      resourceLogs: [resourceGroup('qwencode', 'scopeLogs', [{
+        logRecords: [
+          logRecord('qwen-code.config', sessionId, 1, { model: 'qwen3' }),
+          logRecord('qwen-code.skill_launch', sessionId, 2, { skill_name: 'project-info', success: true }),
+        ],
+      }])],
+    };
+    const response = await postLogs(new Request('http://localhost/api/ingest/otel/v1/logs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+    const result = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(result.frameworks.qwencode.received, 2);
+    assert.equal(result.frameworks.qwencode.skills, 1);
+    assert.equal(result.frameworks.other.received, 0);
+    assert.equal(listClaudeOtelSpoolFiles(claudeDir).length, 0);
+    assert.equal(listOtelTraceSpoolFiles(traceDir).length, 1);
+  } finally {
+    if (previousClaudeDir === undefined) delete process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR = previousClaudeDir;
+    if (previousTraceDir === undefined) delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = previousTraceDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CodeAgent traces and metrics are accepted then discarded before persistence', async () => {
+  const tracesResponse = await postTraces(new Request('http://localhost/api/ingest/otel/v1/traces', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      resourceSpans: [resourceGroup('CodeAgentOC', 'scopeSpans')],
+    }),
+  }));
+  const tracesResult = await tracesResponse.json();
+  assert.equal(tracesResponse.status, 200);
+  assert.equal(tracesResult.framework, 'codeagent');
+  assert.equal(tracesResult.ignored, true);
+  assert.equal(tracesResult.ignoredResourceSpans, 1);
+  assert.equal(tracesResult.received, 0);
+
+  const metricsResponse = await postMetrics(new Request('http://localhost/api/ingest/otel/v1/metrics', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      resourceMetrics: [resourceGroup('CodeAgentOC', 'scopeMetrics')],
+    }),
+  }));
+  const metricsResult = await metricsResponse.json();
+  assert.equal(metricsResponse.status, 200);
+  assert.equal(metricsResult.framework, 'codeagent');
+  assert.equal(metricsResult.ignored, true);
+  assert.equal(metricsResult.ignoredResourceMetrics, 1);
+});
+
+test('CodeAgent aggregation restores query, response, tokens, and tool output', () => {
+  const sessionId = 'codeagent-basic';
+  const events = [
+    event(sessionId, 'api_request', 1, {
+      inference_id: 'inference-1',
+      request_text: JSON.stringify([{ role: 'user', content: 'read the fixture' }]),
+      model: 'test-model',
+    }),
+    event(sessionId, 'api_response', 2, {
+      inference_id: 'inference-1',
+      response_text: '',
+      model: 'test-model',
+      input_token_count: 100,
+      output_token_count: 5,
+      cached_content_token_count: 10,
+      total_token_count: 115,
+    }),
+    event(sessionId, 'tool_request', 3, {
+      inference_id: 'inference-1',
+      tool_call_id: 'read-1',
+      function_name: 'Read',
+      function_args: JSON.stringify({ file_path: 'fixture.txt' }),
+    }),
+    event(sessionId, 'tool_response', 4, {
+      tool_call_id: 'read-1',
+      response_body: JSON.stringify({ content: 'fixture content' }),
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 5, {
+      inference_id: 'inference-2',
+      model: 'test-model',
+    }),
+    event(sessionId, 'api_response', 6, {
+      inference_id: 'inference-2',
+      response_text: 'The fixture contains: fixture content',
+      model: 'test-model',
+      input_token_count: 4,
+      output_token_count: 1,
+      total_token_count: 5,
+    }),
+  ];
+
+  const record = aggregateCodeAgentOtelEvents(sessionId, events);
+  assert.ok(record);
+  assert.equal(record.framework, 'codeagent');
+  assert.equal(record.query, 'read the fixture');
+  assert.equal(record.final_result, 'The fixture contains: fixture content');
+  assert.equal(record.input_tokens, 104);
+  assert.equal(record.output_tokens, 6);
+  assert.equal(record.cache_read_input_tokens, 10);
+  assert.equal(record.tokens, 120);
+  assert.equal(record.llm_call_count, 2);
+  assert.equal(record.tool_call_count, 1);
+  assert.equal(record.interactions?.[0]?.role, 'user');
+  assert.equal(record.interactions?.[0]?.content, 'read the fixture');
+  const readCall = record.interactions
+    ?.flatMap((interaction: any) => interaction.tool_calls || [])
+    .find((call: any) => call.function?.name === 'Read');
+  assert.deepEqual(readCall?.output, { content: 'fixture content' });
+});
+
+test('CodeAgent Skill and Agent fields map to skill ownership and a child trace', () => {
+  const sessionId = 'codeagent-root';
+  const childId = 'codeagent-child';
+  const root = {
+    'execution.agent_run_id': sessionId,
+    'execution.agent_id': 'main',
+    agent_name: 'main',
+  };
+  const child = {
+    'execution.agent_run_id': childId,
+    'execution.parent_agent_run_id': sessionId,
+    'execution.agent_id': 'explore',
+    agent_name: 'Explore',
+  };
+  const events = [
+    event(sessionId, 'user_prompt', 1, { ...root, prompt: 'delegate and inspect' }),
+    event(sessionId, 'api_request', 2, { ...root, inference_id: 'root-1' }),
+    event(sessionId, 'api_response', 3, {
+      ...root,
+      inference_id: 'root-1',
+      response_text: '',
+      input_token_count: 10,
+      output_token_count: 2,
+    }),
+    event(sessionId, 'tool_request', 4, {
+      ...root,
+      inference_id: 'root-1',
+      tool_call_id: 'agent-1',
+      function_name: 'Agent',
+      function_args: JSON.stringify({ subagent_type: 'Explore', prompt: 'inspect' }),
+    }),
+    event(sessionId, 'agent.start', 5, child),
+    event(sessionId, 'api_request', 6, { ...child, inference_id: 'child-1' }),
+    event(sessionId, 'api_response', 7, {
+      ...child,
+      inference_id: 'child-1',
+      response_text: '',
+      input_token_count: 20,
+      output_token_count: 3,
+    }),
+    event(sessionId, 'tool_request', 8, {
+      ...child,
+      inference_id: 'child-1',
+      tool_call_id: 'skill-1',
+      function_name: 'Skill',
+      skill_name: 'otel-smoke-skill',
+      function_args: JSON.stringify({ skill: 'otel-smoke-skill', version: 2 }),
+    }),
+    event(sessionId, 'tool_response', 9, {
+      ...child,
+      tool_call_id: 'skill-1',
+      response_body: 'skill loaded',
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 10, { ...child, inference_id: 'child-2' }),
+    event(sessionId, 'api_response', 11, {
+      ...child,
+      inference_id: 'child-2',
+      response_text: 'child result',
+      input_token_count: 4,
+      output_token_count: 2,
+    }),
+    event(sessionId, 'tool_response', 12, {
+      ...root,
+      tool_call_id: 'agent-1',
+      response_body: JSON.stringify({ agentId: childId, content: 'child result' }),
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 13, { ...root, inference_id: 'root-2' }),
+    event(sessionId, 'api_response', 14, {
+      ...root,
+      inference_id: 'root-2',
+      response_text: 'root final',
+      input_token_count: 3,
+      output_token_count: 2,
+    }),
+  ];
+
+  const record = aggregateCodeAgentOtelEvents(sessionId, events);
+  assert.ok(record);
+  assert.equal(record.agent, 'main');
+  assert.equal(record.agentName, 'main');
+  assert.deepEqual(record.agents, ['main', 'Explore']);
+  assert.equal(record.interactions?.filter((interaction: any) => interaction.role === 'user').length, 1);
+  assert.equal(
+    record.interactions?.find((interaction: any) => interaction.role === 'user')?.agent,
+    'main',
+  );
+  const tree = buildAgentCallTree(record.interactions as any[]);
+  assert.ok(tree);
+  const childNode = findNode(tree, childId);
+  assert.ok(childNode);
+  assert.equal(childNode.agentName, 'Explore');
+  assert.deepEqual(extractExplicitSkillsFromNode(childNode).map((skill) => skill.name), ['otel-smoke-skill']);
+  assert.deepEqual(computeOwnSkills('codeagent', record.interactions).map((skill) => skill.name), []);
+
+  const taskCall = record.interactions
+    ?.flatMap((interaction: any) => interaction.tool_calls || [])
+    .find((call: any) => call.function?.name === 'task');
+  assert.ok(taskCall);
+  assert.equal(taskCall.codeagent_original_name, 'Agent');
+  assert.equal(JSON.parse(taskCall.function.arguments).subagent_session_id, childId);
+
+  const skillCall = record.interactions
+    ?.flatMap((interaction: any) => interaction.tool_calls || [])
+    .find((call: any) => call.function?.name === 'skill');
+  assert.ok(skillCall);
+  assert.equal(skillCall.codeagent_original_name, 'Skill');
+  assert.deepEqual(record.invokedSkills, [{ name: 'otel-smoke-skill', version: 2 }]);
+});
+
+test('CodeAgent aggregation hides automatic memory runs without removing real subagents', () => {
+  const sessionId = 'codeagent-memory-filter';
+  const childId = 'codeagent-real-child';
+  const memoryRunId = 'codeagent-extract-memories';
+  const dreamRunId = 'codeagent-auto-dream';
+  const root = {
+    'execution.agent_run_id': sessionId,
+    'execution.agent_id': 'main',
+    agent_name: 'main',
+  };
+  const child = {
+    'execution.agent_run_id': childId,
+    'execution.parent_agent_run_id': sessionId,
+    'execution.agent_id': 'explore',
+    agent_name: 'Explore',
+  };
+  const background = (runId: string) => ({
+    'execution.agent_run_id': runId,
+    'execution.parent_agent_run_id': sessionId,
+    'execution.agent_id': 'subagent',
+  });
+  const events = [
+    event(sessionId, 'user_prompt', 1, { ...root, prompt: 'inspect the project' }),
+    event(sessionId, 'api_request', 2, { ...root, inference_id: 'root-1' }),
+    event(sessionId, 'api_response', 3, {
+      ...root,
+      inference_id: 'root-1',
+      response_text: '',
+      input_token_count: 10,
+      output_token_count: 2,
+      total_token_count: 12,
+    }),
+    event(sessionId, 'tool_request', 4, {
+      ...root,
+      inference_id: 'root-1',
+      tool_call_id: 'agent-1',
+      function_name: 'Agent',
+      function_args: JSON.stringify({ subagent_type: 'Explore', prompt: 'inspect' }),
+    }),
+    event(sessionId, 'agent.start', 5, child),
+    event(sessionId, 'api_request', 6, { ...child, inference_id: 'child-1' }),
+    event(sessionId, 'api_response', 7, {
+      ...child,
+      inference_id: 'child-1',
+      response_text: 'child result',
+      input_token_count: 20,
+      output_token_count: 3,
+      total_token_count: 23,
+    }),
+    event(sessionId, 'tool_response', 8, {
+      ...root,
+      tool_call_id: 'agent-1',
+      response_body: JSON.stringify({ agentId: childId, content: 'child result' }),
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 9, { ...root, inference_id: 'root-2' }),
+    event(sessionId, 'api_response', 10, {
+      ...root,
+      inference_id: 'root-2',
+      response_text: 'root final',
+      input_token_count: 4,
+      output_token_count: 1,
+      total_token_count: 5,
+    }),
+    event(sessionId, 'api_request', 11, {
+      ...background(memoryRunId),
+      query_source: 'extract_memories',
+      inference_id: 'memory-1',
+    }),
+    event(sessionId, 'api_response', 12, {
+      ...background(memoryRunId),
+      inference_id: 'memory-1',
+      response_text: '',
+      input_token_count: 100,
+      output_token_count: 10,
+      total_token_count: 110,
+    }),
+    event(sessionId, 'tool_request', 13, {
+      ...background(memoryRunId),
+      inference_id: 'memory-1',
+      tool_call_id: 'memory-write',
+      function_name: 'Write',
+      function_args: JSON.stringify({ file_path: '~/.cac/memory/MEMORY.md' }),
+    }),
+    event(sessionId, 'tool_response', 14, {
+      ...background(memoryRunId),
+      tool_call_id: 'memory-write',
+      response_body: 'memory saved',
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 15, {
+      ...background(dreamRunId),
+      query_source: 'auto_dream',
+      inference_id: 'dream-1',
+    }),
+    event(sessionId, 'api_response', 16, {
+      ...background(dreamRunId),
+      inference_id: 'dream-1',
+      response_text: 'dream complete',
+      input_token_count: 80,
+      output_token_count: 8,
+      total_token_count: 88,
+    }),
+    event(sessionId, 'tool_request', 17, {
+      ...background(dreamRunId),
+      inference_id: 'dream-1',
+      tool_call_id: 'dream-read',
+      function_name: 'Read',
+      function_args: JSON.stringify({ file_path: '~/.cac/memory/MEMORY.md' }),
+    }),
+    event(sessionId, 'tool_response', 18, {
+      ...background(dreamRunId),
+      tool_call_id: 'dream-read',
+      response_body: 'memory content',
+      result_status: 'completed',
+    }),
+  ];
+
+  const record = aggregateCodeAgentOtelEvents(sessionId, events);
+  assert.ok(record);
+  assert.equal(record.final_result, 'root final');
+  assert.equal(record.tokens, 40);
+  assert.equal(record.llm_call_count, 3);
+  assert.equal(record.tool_call_count, 1);
+  assert.equal(record.trace_completed_at, '2026-07-24T01:00:10.000Z');
+  assert.deepEqual(record.agents, ['main', 'Explore']);
+  assert.equal(JSON.stringify(record.interactions).includes('MEMORY.md'), false);
+  assert.ok(findNode(buildAgentCallTree(record.interactions as any[])!, childId));
+});
+
+test('CodeAgent background marker never removes the root run', () => {
+  const sessionId = 'codeagent-memory-root-guard';
+  const root = {
+    'execution.agent_run_id': sessionId,
+    'execution.agent_id': 'main',
+  };
+  const record = aggregateCodeAgentOtelEvents(sessionId, [
+    event(sessionId, 'api_request', 1, {
+      ...root,
+      query_source: 'extract_memories',
+      inference_id: 'root-1',
+      request_text: JSON.stringify([{ role: 'user', content: 'keep root' }]),
+    }),
+    event(sessionId, 'api_response', 2, {
+      ...root,
+      inference_id: 'root-1',
+      response_text: 'root stays visible',
+      total_token_count: 2,
+    }),
+  ]);
+
+  assert.ok(record);
+  assert.equal(record.final_result, 'root stays visible');
+  assert.equal(record.llm_call_count, 1);
+});
+
+test('CodeAgent spool source is registered ahead of generic OTel sources', () => {
+  assert.deepEqual(
+    listSources().map((source) => source.id),
+    ['deepseek-harness-otel-logs', 'codeagent-otel-logs', 'claude-otel-logs', 'actrail-otel-traces', 'otel-traces'],
+  );
+});
+
+test('CodeAgent query refresh recognizes UUID placeholders without matching user titles or other frameworks', () => {
+  const placeholder = `CodeAgent Session ${randomUUID()}`;
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder, 'codeagent'), true);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder.toUpperCase(), 'codeagent'), true);
+  assert.equal(shouldRefreshStoredQueryFromInteractions('CodeAgent Session troubleshooting', 'codeagent'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(`${placeholder} troubleshooting`, 'codeagent'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions('用户设置的任务标题', 'codeagent'), false);
+  assert.equal(shouldRefreshStoredQueryFromInteractions(placeholder, 'opencode'), false);
+});
+
+test('CodeAgent replaces an early placeholder in Execution and Session when the user prompt arrives', async () => {
+  const sessionId = randomUUID();
+  const user = `test-codeagent-query-${sessionId}`;
+  const start = event(sessionId, 'agent.start', 1, { agent_name: 'main' });
+  const prompt = event(sessionId, 'user_prompt', 11, { prompt: '你是？', agent_name: 'main' });
+  const saveSnapshot = async (events: ClaudeOtelEvent[]) => {
+    const record = aggregateCodeAgentOtelEvents(sessionId, events);
+    assert.ok(record);
+    const result = await saveExecutionRecord({
+      ...record,
+      user,
+      skip_evaluation: true,
+      skip_internal_judgment: true,
+    });
+    assert.equal(result.success, true);
+  };
+  const readQueries = async () => {
+    const execution = await prismaRaw.execution.findUnique({ where: { id: sessionId }, select: { query: true } });
+    const session = await prismaRaw.session.findUnique({ where: { taskId: sessionId }, select: { query: true } });
+    return [execution?.query, session?.query];
+  };
+
+  try {
+    await saveSnapshot([start]);
+    const placeholder = `CodeAgent Session ${sessionId}`;
+    assert.deepEqual(await readQueries(), [placeholder, placeholder]);
+    await saveSnapshot([start, prompt]);
+    assert.deepEqual(await readQueries(), ['你是？', '你是？']);
+    await saveSnapshot([start, prompt, event(sessionId, 'user_prompt', 12, { prompt: '下一轮输入' })]);
+    assert.deepEqual(await readQueries(), ['你是？', '你是？']);
+  } finally {
+    await prismaRaw.execution.deleteMany({ where: { id: sessionId, user } });
+    await prismaRaw.session.deleteMany({ where: { taskId: sessionId, user } });
+    await prismaRaw.registeredAgent.deleteMany({ where: { platform: 'codeagent', user } });
+  }
+});
+
+test('CodeAgent repairs a saved placeholder from interactions while preserving a custom task title', async () => {
+  for (const customTitle of [false, true]) {
+    const sessionId = randomUUID();
+    const user = `test-codeagent-existing-query-${sessionId}`;
+    const query = customTitle ? 'CodeAgent Session troubleshooting' : `CodeAgent Session ${sessionId}`;
+    try {
+      const result = await saveExecutionRecord({
+        task_id: sessionId,
+        framework: 'codeagent',
+        user,
+        query,
+        interactions: [{ role: 'user', agent: 'main', content: '你是？' }],
+        skip_evaluation: true,
+        skip_internal_judgment: true,
+      });
+      assert.equal(result.success, true);
+      const expected = customTitle ? query : '你是？';
+      const execution = await prismaRaw.execution.findUnique({ where: { id: sessionId }, select: { query: true } });
+      const session = await prismaRaw.session.findUnique({ where: { taskId: sessionId }, select: { query: true } });
+      assert.deepEqual([execution?.query, session?.query], [expected, expected]);
+    } finally {
+      await prismaRaw.execution.deleteMany({ where: { id: sessionId, user } });
+      await prismaRaw.session.deleteMany({ where: { taskId: sessionId, user } });
+      await prismaRaw.registeredAgent.deleteMany({ where: { platform: 'codeagent', user } });
+    }
+  }
+});

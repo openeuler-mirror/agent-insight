@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 
 const { execSync } = require('child_process')
 const fs = require('fs')
@@ -11,13 +27,70 @@ const {
   getDataRoot,
   migrateDataIfNeeded
 } = require('./utils.js')
+const { syncGeneratedPrismaClient } = require('./sync-prisma-client.js')
+const { resolveStartupDatabaseUrl } = require('./agent-insight-home.cjs')
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
-console.log('=== Skill-Insight Post-Install Initialization ===\n')
+// Ensure the standalone bundle's sharp (next/image) native binary matches the
+// CURRENT install platform. The published tarball ships the binary of whatever
+// platform built it; on a different OS/arch we swap in the one npm just resolved
+// for this machine, so the package is build-anywhere / run-anywhere (online install).
+function syncStandaloneSharp(packageRoot, standaloneDir) {
+  try {
+    const target = `${process.platform}-${process.arch}` // e.g. win32-x64, darwin-arm64, linux-x64
+    const standaloneImg = path.join(standaloneDir, 'node_modules', '@img')
+    if (!fs.existsSync(standaloneImg)) return // sharp not bundled in standalone; nothing to do
+
+    // Find an @img dir that already has THIS platform's sharp (installed by npm for the user)
+    const candidates = [
+      path.join(packageRoot, 'node_modules', '@img'), // package's own deps
+      path.join(packageRoot, '..', '@img'),           // hoisted to consumer root (unscoped pkg)
+      path.join(packageRoot, '..', '..', '@img'),     // hoisted (scoped pkg layout)
+    ]
+    const sourceImg = candidates.find((c) => fs.existsSync(path.join(c, `sharp-${target}`)))
+    if (!sourceImg) {
+      console.log(`⚠️  Platform sharp (sharp-${target}) not found; leaving bundled @img unchanged`)
+      return
+    }
+
+    const wanted = [`sharp-${target}`, `sharp-libvips-${target}`]
+    for (const name of wanted) {
+      const src = path.join(sourceImg, name)
+      const dst = path.join(standaloneImg, name)
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.cpSync(src, dst, { recursive: true })
+        console.log(`✓ Synced @img/${name} into standalone`)
+      }
+    }
+
+    // Only prune mismatched binaries once the correct one is confirmed present
+    if (fs.existsSync(path.join(standaloneImg, `sharp-${target}`))) {
+      for (const entry of fs.readdirSync(standaloneImg)) {
+        if (entry.startsWith('sharp-') && !wanted.includes(entry) && !entry.includes('colour')) {
+          fs.rmSync(path.join(standaloneImg, entry), { recursive: true, force: true })
+          console.log(`✓ Removed mismatched @img/${entry} from standalone`)
+        }
+      }
+    }
+  } catch (err) {
+    console.log(`⚠️  sharp sync skipped: ${err.message}`)
+  }
+}
+
+console.log('=== Agent-Insight Post-Install Initialization ===\n')
 
 try {
-  migrateDataIfNeeded()
+  const dataRoot = getDataRoot()
+  const envPath = path.join(dataRoot, '.env')
+  const fileEnv = fs.existsSync(envPath) ? require('dotenv').parse(fs.readFileSync(envPath)) : {}
+  const dbUrl = resolveStartupDatabaseUrl(fileEnv, process.env, dataRoot)
+  const dbPath = dbUrl.startsWith('file:') ? dbUrl.slice(5) : dbUrl
+  if (!process.env.AGENT_INSIGHT_HOME && !process.env.DATABASE_URL && !fileEnv.DATABASE_URL) {
+    migrateDataIfNeeded()
+  }
+  process.env.AGENT_INSIGHT_HOME = dataRoot
+  process.env.DATABASE_URL = dbUrl
   console.log()
 
   ensureEnvFile()
@@ -26,19 +99,7 @@ try {
   ensureDataDirectory()
   console.log()
 
-  const dataRoot = getDataRoot()
-  const dbPath = path.join(dataRoot, 'data', 'witty_insight.db')
-  const dbUrl = `file:${dbPath}`
-  process.env.DATABASE_URL = dbUrl
-
-  console.log('Syncing database schema...')
-  execSync('npx prisma db push', {
-    stdio: 'inherit',
-    cwd: PACKAGE_ROOT,
-    env: { ...process.env, DATABASE_URL: dbUrl }
-  })
-  console.log('✓ Database schema synced')
-  console.log()
+  const standaloneDir = path.join(PACKAGE_ROOT, '.next', 'standalone')
 
   console.log('Generating Prisma client...')
   execSync('npx prisma generate', {
@@ -46,10 +107,38 @@ try {
     cwd: PACKAGE_ROOT,
     env: { ...process.env, DATABASE_URL: dbUrl }
   })
+  syncGeneratedPrismaClient(PACKAGE_ROOT, standaloneDir)
   console.log('✓ Prisma client generated')
   console.log()
 
-  const standaloneDir = path.join(PACKAGE_ROOT, '.next', 'standalone')
+  console.log('Syncing database schema...')
+  try {
+    execSync('node scripts/prepare-ras-sqlite-schema.js', {
+      stdio: 'inherit',
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    execSync('npx prisma db push', {
+      stdio: 'inherit',
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    console.log('✓ Database schema synced')
+  } catch {
+    // prisma 在迁移会删用户数据（删表/删列/加唯一约束）时拒绝执行并退出 1。
+    // 这种情况绝不能让整个 npm install 失败——旧库照常可用，给出恢复指引即可。
+    console.log('⚠️  Database schema sync skipped: prisma db push failed.')
+    console.log(`   现有数据库 ${dbPath}`)
+    console.log('   里可能存在新 schema 需要删除的数据（prisma 拒绝破坏性变更）。')
+    console.log('   恢复方式（二选一）：')
+    console.log('   1) 备份后原地迁移（接受丢弃冲突项）：')
+    console.log(`        cp "${dbPath}" "${dbPath}.bak"`)
+    console.log(`        DATABASE_URL="${dbUrl}" npx prisma db push --accept-data-loss`)
+    console.log('   2) 全新开始：把旧库移走，重新 start 即可自动建库。')
+    console.log('   注意：schema 未同步时服务仍可启动，但部分新功能可能报错。')
+  }
+  console.log()
+
   if (fs.existsSync(standaloneDir)) {
     console.log('Setting up standalone environment...')
 
@@ -70,21 +159,10 @@ try {
       console.log('✓ Public files copied to standalone')
     }
 
-    const prismaClientDir = path.join(PACKAGE_ROOT, 'node_modules', '.prisma', 'client')
     const standaloneNodeModules = path.join(standaloneDir, 'node_modules')
-    const standalonePrismaDir = path.join(standaloneNodeModules, '.prisma')
-    const standaloneClientDir = path.join(standalonePrismaDir, 'client')
+    const standaloneClientDir = path.join(standaloneNodeModules, '.prisma', 'client')
 
-    if (fs.existsSync(prismaClientDir)) {
-      fs.mkdirSync(standalonePrismaDir, { recursive: true })
-
-      if (fs.existsSync(standaloneClientDir)) {
-        fs.rmSync(standaloneClientDir, { recursive: true, force: true })
-      }
-
-      fs.cpSync(prismaClientDir, standaloneClientDir, { recursive: true })
-      console.log('✓ Prisma client copied to standalone')
-    }
+    syncStandaloneSharp(PACKAGE_ROOT, standaloneDir)
 
     const pgDir = path.join(PACKAGE_ROOT, 'node_modules', 'pg')
     if (fs.existsSync(pgDir)) {
@@ -182,9 +260,9 @@ try {
 
   console.log('=== Initialization Complete ===')
   console.log('\nStart the service with:')
-  console.log('  npx @witty-ai/skill-insight start')
+  console.log('  npx agent-insight start')
   console.log('\nOr specify a custom port:')
-  console.log('  npx @witty-ai/skill-insight start --port 3001')
+  console.log('  npx agent-insight start --port 3001')
   console.log('\nAccess the dashboard at: http://localhost:3000')
 } catch (error) {
   console.error('\n❌ Initialization failed:', error.message)

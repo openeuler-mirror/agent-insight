@@ -1,0 +1,15 @@
+{
+  "notice": "AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog",
+  "packages": [
+    {
+      "key": "swe-bench",
+      "digest": "sha256:085c8ebd576f823b90e7707bba31ae5b06f22dde14e50fcf82eb13838818cbd9",
+      "evaluatorDigest": "sha256:70dec12333a5dfe273d4eb2f445caba1cce3b2074c1d2f7d5287d89ba1df4161"
+    },
+    {
+      "key": "zsoft-l1",
+      "digest": "sha256:22b5294a4bb392c9a708b68fd5921d7f0e82c16d6904c0505d0e0f1d5d01a1ba",
+      "evaluatorDigest": "sha256:84c99627ee3d1ac833196ec6814a031754dd261954d7ee370d5094eaab737437"
+    }
+  ]
+}

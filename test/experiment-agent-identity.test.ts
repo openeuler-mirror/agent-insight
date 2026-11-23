@@ -1,0 +1,116 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
+
+import { GET as listExperimentAgents } from '@/app/api/experiments/agents/route';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
+import { prisma } from '@/lib/storage/prisma';
+
+const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const TEST_USER = `experiment-xiaoo-${RUN_ID}`;
+const CLIENT_ID = `xiaoo-client-${RUN_ID}`;
+
+test.after(async () => { await prisma.$disconnect(); database.dispose(); });
+
+test('xiaoo display identity keeps the native CLI agent id on executable targets', async (t) => {
+  assert.equal(canonicalExperimentAgentName('xiaoo', 'defaultagent'), 'xiaoo');
+  assert.equal(canonicalExperimentAgentName('opencode', 'build'), 'build');
+
+  const execution = await prisma.execution.create({
+    data: {
+      taskId: `xiaoo-task-${RUN_ID}`,
+      framework: 'xiaoo',
+      agentName: 'xiaoo',
+      user: TEST_USER,
+    },
+  });
+  await prisma.reliabilityClient.create({
+    data: {
+      clientId: CLIENT_ID,
+      user: TEST_USER,
+      name: 'xiaoo test host',
+      hostname: 'xiaoo-host',
+      status: 'online',
+      serviceHealth: 'healthy',
+      lastSeenAt: new Date(),
+      capabilitiesJson: JSON.stringify({
+        actions: ['RUN_EXPERIMENT_CASE'],
+        platforms: [{
+          id: 'xiaoo',
+          agents: ['defaultagent'],
+          models: ['provider/model'],
+          actions: ['RUN_EXPERIMENT_CASE'],
+          runExperimentCase: { version: 2, returnsTraceId: true },
+        }],
+      }),
+    },
+  });
+
+  t.after(async () => {
+    await prisma.reliabilityClient.deleteMany({ where: { clientId: CLIENT_ID } });
+    await prisma.execution.deleteMany({ where: { id: execution.id } });
+  });
+
+  const response = await listExperimentAgents(
+    new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(TEST_USER)}`),
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.agents.some((agent: { name: string }) => agent.name === 'defaultagent'), false);
+  const xiaoo = body.agents.find((agent: { name: string }) => agent.name === 'xiaoo');
+  assert.ok(xiaoo);
+  assert.equal(xiaoo.traces, 1);
+  assert.deepEqual(xiaoo.frameworks, ['xiaoo']);
+  assert.equal(xiaoo.executable, true);
+  assert.equal(xiaoo.targets.length, 1);
+  assert.equal(xiaoo.targets[0].platform, 'xiaoo');
+  assert.equal(xiaoo.targets[0].agent, 'defaultagent');
+  assert.equal(xiaoo.targets[0].supportsGenericTrace, true);
+});
+
+test('an online JiuwenSwarm target hides trace-only collector names from the new experiment selector', async (t) => {
+  const user = `experiment-jiuwen-${RUN_ID}`;
+  const clientId = `jiuwen-client-${RUN_ID}`;
+  await prisma.execution.createMany({ data: ['main_agent', 'jiuwenswarm', 'main_agent_react'].map((agentName, index) => ({
+    taskId: `jiuwen-candidate-${RUN_ID}-${index}`, framework: 'jiuwenswarm', agentName, user,
+  })) });
+  await prisma.reliabilityClient.create({ data: {
+    clientId, user, name: 'jiuwen host', hostname: 'jiuwen-host', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(),
+    capabilitiesJson: JSON.stringify({
+      actions: ['RUN_EXPERIMENT_CASE'],
+      platforms: [{ id: 'jiuwenswarm', agents: ['main_agent'], models: [], actions: ['RUN_EXPERIMENT_CASE'],
+        runExperimentCase: { version: 2, returnsTraceId: true, ready: true } }],
+      components: { 'agent-runtime/jiuwenswarm/v1': { ready: true } },
+    }),
+  } });
+  t.after(async () => {
+    await prisma.reliabilityClient.deleteMany({ where: { clientId } });
+    await prisma.execution.deleteMany({ where: { user } });
+  });
+
+  const response = await listExperimentAgents(new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(user)}`));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.agents.filter((agent: { frameworks: string[] }) => agent.frameworks.includes('jiuwenswarm'))
+    .map((agent: { name: string }) => agent.name), ['main_agent']);
+  assert.equal(body.agents.find((agent: { name: string }) => agent.name === 'main_agent').traces, 1);
+});

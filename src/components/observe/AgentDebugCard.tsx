@@ -1,0 +1,1756 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use client';
+
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import Link from 'next/link';
+import {
+  AlertTriangle,
+  BrainCircuit,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Eye,
+  FileText,
+  Loader2,
+  MessageSquare,
+  RefreshCw,
+  Sparkles,
+  Zap,
+} from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { AgentDebugSupplementalEvidenceBlock } from '@/components/observe/AgentDebugSupplementalEvidence';
+import { StatusBadge } from '@/components/feedback/StatusBadge';
+import { ExpandableText } from '@/components/text/ExpandableText';
+import { TermPopover } from '@/components/text/TermPopover';
+import { apiFetch } from '@/lib/client/api';
+import { DiagnosisProgressFeed } from './DiagnosisProgressFeed';
+import type { DiagnosisProgressSnapshot } from '@/lib/engine/agent-debug/progress-types';
+import { getModuleActivity, getModulePresentation, getNewModuleSequences, preserveDiagnosisProgress } from './agent-debug-presentation';
+import { DiagnosisModuleStatus } from './DiagnosisModuleStatus';
+import type {
+  AgentDebugFinding,
+  AgentDebugIssue,
+  AgentDebugModule,
+  AgentDebugReportPayload,
+  AgentDebugRootCause,
+  AgentDebugSkillsAnalysis,
+  AgentDebugTraceLocation,
+  AgentDebugDetectorFinding,
+} from '@/lib/engine/agent-debug/types';
+
+interface AgentDebugCardProps {
+  hasInvokedSkill?: boolean;
+  executionId: string;
+  user: string;
+  locale: string;
+  traceExplicitErrors?: TraceExplicitError[];
+  onNodeRefClick?: (nodeId: string) => void;
+}
+
+export interface TraceExplicitError {
+  id: string;
+  title: string;
+  description?: string;
+  context?: string;
+  recovery?: string;
+  anchorId?: string;
+  traceStepIndex?: number;
+  traceNodeLabel?: string;
+  traceNodeKind?: string;
+}
+
+interface AgentDebugResponse {
+  progress?: DiagnosisProgressSnapshot | null;
+  report?: AgentDebugReportPayload | null;
+  row?: {
+    id?: string;
+    status?: string;
+    errorMessage?: string | null;
+    ranAt?: string;
+  } | null;
+  reportId?: string;
+  status?: string;
+  cached?: boolean;
+  error?: string;
+}
+
+interface AgentDebugSkillsAnalysisResponse {
+  report?: AgentDebugReportPayload;
+  skillsAnalysis?: AgentDebugSkillsAnalysis;
+  row?: {
+    status?: string;
+    errorMessage?: string | null;
+  } | null;
+  status?: string;
+  cached?: boolean;
+  error?: string;
+}
+
+const MODULES: Array<{ key: AgentDebugModule; zh: string; en: string }> = [
+  { key: 'memory', zh: '记忆', en: 'Memory' },
+  { key: 'reflection', zh: '反思', en: 'Reflection' },
+  { key: 'planning', zh: '计划', en: 'Planning' },
+  { key: 'action', zh: '行动', en: 'Action' },
+  { key: 'system', zh: '系统', en: 'System' },
+];
+
+const AGENT_DEBUG_POLL_MS = 3000;
+
+function agentDebugStatus(data: AgentDebugResponse): string {
+  return data.row?.status || data.status || '';
+}
+
+function isAgentDebugRunning(data: AgentDebugResponse): boolean {
+  return agentDebugStatus(data) === 'running';
+}
+
+function skillsAnalysisFromResponse(data: AgentDebugSkillsAnalysisResponse): AgentDebugSkillsAnalysis | null {
+  return data.skillsAnalysis || null;
+}
+
+function isSkillsAnalysisRunningResponse(data: AgentDebugSkillsAnalysisResponse): boolean {
+  return skillsAnalysisFromResponse(data)?.status === 'running' || data.status === 'running';
+}
+
+const FINDING_MODULES = MODULES.filter(item => item.key !== 'system');
+
+const MODULE_HELP: Record<string, { zh: string; en: string }> = {
+  memory: {
+    zh: '检查 Agent 是否错误引用历史信息、遗漏用户前文约束，或把不存在的上下文当成事实。',
+    en: 'Checks whether the agent misused prior context, forgot user constraints, or relied on nonexistent history.',
+  },
+  reflection: {
+    zh: '检查 Agent 是否误读工具结果、错误判断成功/失败，或过早认为任务已经完成。',
+    en: 'Checks whether the agent misread tool results, misjudged progress, or claimed success too early.',
+  },
+  planning: {
+    zh: '检查计划是否忽略环境约束、选择不可行路径，或与后续动作明显不一致。',
+    en: 'Checks whether the plan ignored constraints, chose infeasible steps, or diverged from later actions.',
+  },
+  action: {
+    zh: '检查真实工具调用、命令、路径、参数和动作执行结果是否存在明确问题。',
+    en: 'Checks real tool calls, commands, paths, parameters, and action results for concrete issues.',
+  },
+  system: {
+    zh: '检查工具、运行环境、模型限制、权限、超时等外部系统层异常。',
+    en: 'Checks tool, runtime, model-limit, permission, timeout, and other external system errors.',
+  },
+};
+
+const MODULE_ICONS: Record<string, typeof Clock> = {
+  memory: Clock,
+  reflection: MessageSquare,
+  planning: CheckCircle2,
+  action: Zap,
+  system: FileText,
+};
+
+function hasUsableSkillsAnalysis(analysis?: AgentDebugSkillsAnalysis | null): boolean {
+  return analysis?.status === 'done' && extractSkillsKeyActions(analysis as unknown as Record<string, unknown>).length > 0;
+}
+
+function optimisticSkillsAnalysisRunning(interactionHash?: string): AgentDebugSkillsAnalysis {
+  const now = new Date().toISOString();
+  return {
+    status: 'running',
+    source: 'agent-debug',
+    generatedAt: now,
+    updatedAt: now,
+    interactionHash,
+    errorMessage: null,
+    keyActionResults: [],
+  };
+}
+
+function optimisticSkillsAnalysisFailed(errorMessage: string, interactionHash?: string): AgentDebugSkillsAnalysis {
+  const now = new Date().toISOString();
+  return {
+    status: 'failed',
+    source: 'agent-debug',
+    generatedAt: now,
+    updatedAt: now,
+    interactionHash,
+    errorMessage,
+    keyActionResults: [],
+  };
+}
+
+export function AgentDebugCard(props: AgentDebugCardProps) {
+  return <AgentDebugCardContent key={props.executionId} {...props} />;
+}
+
+function AgentDebugCardContent({ executionId, user, locale, traceExplicitErrors = [], onNodeRefClick, hasInvokedSkill }: AgentDebugCardProps) {
+  const zh = locale === 'zh';
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [report, setReport] = useState<AgentDebugReportPayload | null>(null);
+  const [skillsAnalysis, setSkillsAnalysis] = useState<AgentDebugSkillsAnalysis | null>(null);
+  const [error, setError] = useState('');
+  const [requestError, setRequestError] = useState(false);
+  const [progress, setProgress] = useState<DiagnosisProgressSnapshot | null>(null);
+  const requestVersion = useRef(0);
+  const submittingRef = useRef(false);
+  const skillsRequestVersion = useRef(0);
+  const [skillsSubmitting, setSkillsSubmitting] = useState(false);
+  const updateSkillsAnalysis = useCallback((next: AgentDebugSkillsAnalysis | null) => {
+    skillsRequestVersion.current += 1;
+    setSkillsAnalysis(next);
+  }, []);
+  const [taskStatus, setTaskStatus] = useState('');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const observedRunningRef = useRef(false);
+  const requestedSkillsAnalysisRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!executionId) return;
+    let cancelled = false;
+    const version = requestVersion.current;
+    apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`)
+      .then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      .then((data: AgentDebugResponse) => {
+        if (cancelled || version !== requestVersion.current) return;
+        applyAgentDebugResponse(data);
+      })
+      .catch(err => {
+        if (cancelled || version !== requestVersion.current) return;
+        setLoading(false);
+        setRequestError(true);
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => { cancelled = true; };
+  }, [executionId]);
+
+  useEffect(() => {
+    if (!executionId) return;
+    let cancelled = false;
+    const version = skillsRequestVersion.current;
+    apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`)
+      .then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      .then((data: AgentDebugSkillsAnalysisResponse) => {
+        if (cancelled || version !== skillsRequestVersion.current) return;
+        applySkillsAnalysisResponse(data);
+      })
+      .catch(() => {
+        if (!cancelled && version === skillsRequestVersion.current) setSkillsAnalysis(null);
+      });
+    return () => { cancelled = true; };
+  }, [executionId]);
+
+  useEffect(() => {
+    if (!executionId || !loading) return;
+    let cancelled = false;
+
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight || submittingRef.current) return;
+      inFlight = true;
+      const version = requestVersion.current;
+      try {
+        const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`);
+        const data = await res.json().catch(() => ({})) as AgentDebugResponse;
+        if (cancelled || version !== requestVersion.current) return;
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        applyAgentDebugResponse(data);
+      } catch (err) {
+        if (cancelled || version !== requestVersion.current) return;
+        setRequestError(true);
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const timer = window.setInterval(poll, AGENT_DEBUG_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [executionId, loading]);
+
+  async function run(force = false) {
+    if (!executionId || loading) return;
+    requestVersion.current += 1;
+    submittingRef.current = true;
+    setProgress(null);
+    setReport(null);
+    observedRunningRef.current = true;
+    setLoading(true);
+    setError('');
+    setRequestError(false);
+    setTaskStatus('submitting');
+    setStartedAt(Date.now());
+    setLastSyncedAt(null);
+    requestSkillsAnalysis(force);
+    try {
+      const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, force }),
+      });
+      const data = await res.json().catch(() => ({})) as AgentDebugResponse;
+      if (res.status === 409 && isAgentDebugRunning(data)) {
+        applyAgentDebugResponse(data);
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      applyAgentDebugResponse(data);
+    } catch (err) {
+      setLoading(false);
+      setRequestError(true);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      submittingRef.current = false;
+    }
+  }
+
+  function applyAgentDebugResponse(data: AgentDebugResponse) {
+    const status = agentDebugStatus(data);
+    setProgress(previous => preserveDiagnosisProgress(previous, data.progress || null, data.row?.id || data.reportId));
+    setTaskStatus(status);
+    setRequestError(false);
+    setLastSyncedAt(Date.now());
+    const timestamp = data.row?.ranAt ? Date.parse(data.row.ranAt) : NaN;
+    if (Number.isFinite(timestamp)) setStartedAt(timestamp);
+    const nextReport = data.report || null;
+    if (status === 'running') {
+      observedRunningRef.current = true;
+      setReport(nextReport);
+      setError('');
+      setLoading(true);
+      return;
+    }
+
+    observedRunningRef.current = false;
+    setLoading(false);
+    setReport(nextReport);
+    setError(data.row?.errorMessage || data.error || '');
+  }
+
+  function applySkillsAnalysisResponse(data: AgentDebugSkillsAnalysisResponse) {
+    const nextAnalysis = skillsAnalysisFromResponse(data);
+    if (nextAnalysis) {
+      setSkillsAnalysis(nextAnalysis);
+    } else if (!data.error && data.row?.status !== 'running') {
+      setSkillsAnalysis(prev => prev?.status === 'running' ? prev : null);
+    }
+  }
+
+  function requestSkillsAnalysis(force = false) {
+    if (!executionId || !user) return;
+    if (!force && (hasUsableSkillsAnalysis(skillsAnalysis) || skillsAnalysis?.status === 'running')) return;
+    const key = `${executionId}:${force ? 'force' : 'auto'}:${skillsAnalysis?.interactionHash || ''}`;
+    if (!force && requestedSkillsAnalysisRef.current.has(key)) return;
+    if (force) {
+      requestedSkillsAnalysisRef.current.clear();
+    } else {
+      requestedSkillsAnalysisRef.current.add(key);
+    }
+    void ensureSkillsAnalysis(force);
+  }
+
+  async function ensureSkillsAnalysis(force = false) {
+    if (!executionId || !user) return;
+    const currentHash = skillsAnalysis?.interactionHash;
+    const version = ++skillsRequestVersion.current;
+    setSkillsSubmitting(true);
+    setSkillsAnalysis(optimisticSkillsAnalysisRunning(currentHash));
+    try {
+      const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, force }),
+      });
+      const data = await res.json().catch(() => ({})) as AgentDebugSkillsAnalysisResponse;
+      if (version !== skillsRequestVersion.current) return;
+      applySkillsAnalysisResponse(data);
+      if (res.status === 409 && isSkillsAnalysisRunningResponse(data)) return;
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    } catch (err) {
+      if (version !== skillsRequestVersion.current) return;
+      const message = err instanceof Error ? err.message : String(err);
+      setSkillsAnalysis(prev => optimisticSkillsAnalysisFailed(message, prev?.interactionHash || currentHash));
+    } finally {
+      setSkillsSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="mb-6 space-y-4">
+      {!report && !error && !loading && !taskStatus && (
+        <AssistantArticle>
+          <div className="relative overflow-hidden rounded-lg border border-card-border bg-card shadow-sm">
+            <div className="relative p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-primary-subtle-border bg-primary-subtle px-2 py-0.5 text-[10.5px] font-bold tracking-[0.12em] text-primary">
+                    <span className="size-1.5 rounded-full bg-primary" />
+                    {zh ? 'AGENTDEBUG · 四维认知' : 'AGENTDEBUG · FOUR-DIMENSION'}
+                  </div>
+                  <h3 className="text-lg font-extrabold tracking-tight text-foreground">
+                    {zh ? '需要更深入的诊断？' : 'Need deeper diagnosis?'}
+                  </h3>
+                  <p className="mt-1 max-w-[560px] text-[13px] leading-relaxed text-foreground-muted">
+                    {zh
+                      ? '按 AgentDebug 原方案，将每个执行片段抽取为 Memory / Reflection / Planning / Action 四个认知模块；System 作为外部工具/环境异常单独检查，再进入根因定位。'
+                      : 'Use the original AgentDebug pipeline: decompose execution slices into four cognitive modules, check System errors separately, then identify the key diagnostic finding.'}
+                  </p>
+                </div>
+                <ModulePreview />
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center gap-4 text-[11.5px] text-foreground-muted">
+                <span className="inline-flex items-center gap-1"><Clock className="size-3" /> {zh ? '按实际进展分段更新' : 'Updates as work progresses'}</span>
+                <span className="inline-flex items-center gap-1"><BrainCircuit className="size-3" /> {zh ? '初筛 + 根因定位' : 'Phase 1 + Phase 2'}</span>
+                <span className="inline-flex items-center gap-1"><FileText className="size-3" /> {zh ? '报告自动归档' : 'Report archived'}</span>
+              </div>
+
+              <div className="mt-4 flex items-center gap-2">
+                <Button size="sm" onClick={() => run(false)}>
+                  <Zap className="size-4" />
+                  {zh ? '启动智能诊断' : 'Start diagnosis'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </AssistantArticle>
+      )}
+
+      {(loading || error || report || taskStatus) && (
+        <AssistantArticle meta={zh ? '智能诊断' : 'Diagnosis'}>
+          <div className="space-y-3">
+            <DiagnosisTaskSummary
+              loading={loading} status={taskStatus} requestError={requestError} error={error}
+              report={loading || error ? null : report} startedAt={startedAt} lastSyncedAt={lastSyncedAt}
+              progress={progress} zh={zh} onRetry={() => run(true)}
+            />
+            <DiagnosisModuleCards key={progress?.runId || "legacy"}
+              loading={loading} failed={!requestError && (Boolean(error) || taskStatus === 'failed')} requestError={requestError}
+              report={loading || error ? null : report} progress={progress} zh={zh} onNodeRefClick={onNodeRefClick}
+            />
+            {report && !loading && !error && (
+              <ReportView key={report.generatedAt} report={report} zh={zh} traceExplicitErrors={traceExplicitErrors}
+                onNodeRefClick={onNodeRefClick} onRerun={() => run(true)} />
+            )}
+            {hasInvokedSkill && report && !loading && !error && !!report.findings?.length && <div>
+              <Button size="sm" variant="outline" disabled={importing} onClick={async () => {
+                setImporting(true); setImportError('');
+                try {
+                  const response = await apiFetch('/api/diagnosis-runs/from-trace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ executionId, generatedAt: report.generatedAt }) });
+                  const data = await response.json();
+                  if (!response.ok) throw new Error(data.error);
+                  window.location.assign(`${process.env.NEXT_PUBLIC_URL_PREFIX || ''}/fault?runId=${encodeURIComponent(data.runId)}`);
+                } catch (failure) { setImportError(failure instanceof Error ? failure.message : 'Failed'); }
+                finally { setImporting(false); }
+              }}>{zh ? '选择诊断发现用于 Skill 优化' : 'Select diagnosis findings for Skill optimization'}</Button>
+              {importError && <p role="alert" className="mt-2 text-xs text-warning">{importError}</p>}
+            </div>}
+          </div>
+        </AssistantArticle>
+      )}
+      {(skillsAnalysis || report || loading || error) && (
+        <AssistantArticle meta={zh ? 'Skills 步骤核验 · 独立任务' : 'Skills step review · Independent task'}>
+          <SkillsAnalysisSection executionId={executionId} user={user} zh={zh}
+            analysis={skillsAnalysis} submitting={skillsSubmitting} onAnalysisUpdate={updateSkillsAnalysis} />
+        </AssistantArticle>
+      )}
+    </div>
+  );
+}
+
+export function DiagnosisTaskSummary({ loading, status, requestError, error, report, startedAt, lastSyncedAt, progress, zh, onRetry }: {
+  loading: boolean;
+  status: string;
+  requestError: boolean;
+  error: string;
+  report: AgentDebugReportPayload | null;
+  startedAt: number | null;
+  lastSyncedAt: number | null;
+  progress?: DiagnosisProgressSnapshot | null;
+  zh: boolean;
+  onRetry: () => void;
+}) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+  const elapsed = startedAt == null ? null : Math.max(0, (now ?? startedAt) - startedAt);
+  const latest = progress?.events.at(-1);
+  const quietSince = progress?.lastProgressAt ? Date.parse(progress.lastProgressAt) : startedAt;
+  const waitingForUpdate = loading && now != null && quietSince != null && now - quietSince >= 60_000;
+  const failed = !requestError && (Boolean(error) || status === 'failed');
+  const skipped = Boolean(report?.skippedReason);
+  const label = requestError ? (zh ? '状态获取失败' : 'Status unavailable')
+    : failed ? (zh ? '诊断失败' : 'Diagnosis failed')
+      : loading ? (status === 'submitting' ? (zh ? '正在提交' : 'Submitting') : (zh ? '任务处理中' : 'Processing'))
+        : skipped ? (zh ? '未运行' : 'Not run')
+          : report ? (zh ? '报告已返回' : 'Report received') : (zh ? '等待任务状态' : 'Awaiting task status');
+  const description = requestError
+    ? (zh ? '未能获取本次请求的有效结果，当前无法确认后台任务状态。刷新页面可重新获取状态。' : 'No valid response was received. The background task status is unknown. Reload the page to check again.')
+    : failed ? (zh ? '后台报告诊断失败。已获得的过程内容与 Skills 核验结果仍可查看。' : 'The diagnosis failed. Received progress and Skills results remain accessible.')
+      : report?.skippedReason || (loading
+        ? (status === 'submitting' ? (zh ? '正在提交诊断请求，等待后台确认。' : 'Submitting the request and waiting for confirmation.')
+          : (latest ? latest.summary : (zh ? '任务已接收，等待首条执行进展。尚无进展不代表模块已经开始或完成。' : 'Request accepted. Waiting for the first execution update. Module status is not yet known.')))
+        : report ? (zh ? '以下展示报告提供的分析与执行证据；缺少结果的维度会单独标明。' : 'Analysis and execution evidence from the report are shown below. Missing module results are marked explicitly.')
+          : (zh ? '尚未获得可用的诊断报告。' : 'No diagnosis report is available yet.'));
+  return (
+    <section className="rounded-lg border border-card-border bg-card p-4 shadow-sm" aria-label={zh ? '诊断任务概况' : 'Diagnosis task overview'}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold text-foreground">AgentDebug</h3>
+          <StatusBadge status={requestError || skipped ? 'warning' : failed ? 'error' : loading ? 'running' : report ? 'success' : 'pending'} label={label} />
+        </div>
+        <div className="text-xs tabular-nums text-foreground-muted">
+          {loading && elapsed != null && (zh ? `已等待 ${formatDuration(elapsed, zh)}` : `Waiting ${formatDuration(elapsed, zh)}`)}
+          {!loading && report && !skipped && (zh ? `诊断耗时 ${formatDuration(report.stats.durationMs, zh)}` : `Duration ${formatDuration(report.stats.durationMs, zh)}`)}
+        </div>
+      </div>
+      <p className="mt-3 text-xs leading-6 text-foreground-secondary" aria-live="polite">{description}</p>
+      {waitingForUpdate && (
+        <p className="mt-2 text-xs leading-6 text-foreground-muted">{zh ? '超过 1 分钟没有新过程内容，仍在等待后台更新。状态查询成功不代表诊断有新进展。' : 'No new progress for over a minute. Waiting for backend updates; a successful poll does not indicate new progress.'}</p>
+      )}
+      {progress?.lastProgressAt && <p className="mt-2 text-xs text-foreground-muted">{zh ? '最近真实进展：' : 'Last progress: '}<time dateTime={progress.lastProgressAt}>{new Date(progress.lastProgressAt).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</time></p>}
+      {progress?.unavailable && <p role="status" className="mt-2 text-xs text-warning">{zh ? '部分过程记录不可用，诊断任务仍按原流程执行。' : 'Some progress is unavailable; diagnosis continues independently.'}</p>}
+      {progress?.truncated && <p className="mt-2 text-xs text-foreground-muted">{zh ? '过程记录已达到上限，当前保留最近 200 条。' : 'Showing the most recent 200 progress events.'}</p>}
+      {Boolean(progress?.events.some(event => !event.module)) && <details className="mt-3 border-t border-border pt-3"><summary className="cursor-pointer text-xs text-foreground-secondary">{zh ? '执行活动 · ' : 'Execution activity · '}{latest?.title}</summary><div className="mt-3"><DiagnosisProgressFeed events={progress!.events.filter(event => !event.module)} zh={zh} /></div></details>}
+      {lastSyncedAt != null && (
+        <p className="mt-2 text-xs text-foreground-muted">
+          {zh ? '最近成功获取状态：' : 'Last successful status check: '}
+          <time dateTime={new Date(lastSyncedAt).toISOString()} className="tabular-nums">{new Date(lastSyncedAt).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</time>
+          <span>{zh ? ' · 不代表诊断有新进展' : ' · Not a diagnosis progress event'}</span>
+        </p>
+      )}
+      {error && <p role="alert" className="mt-3 break-words text-xs text-error">{error}</p>}
+      {failed && !loading && (
+        <Button className="mt-3" variant="outline" size="sm" onClick={onRetry}><RefreshCw className="size-3.5" />{zh ? '重新诊断' : 'Retry diagnosis'}</Button>
+      )}
+    </section>
+  );
+}
+
+export function DiagnosisModuleCards({ loading, failed, requestError, report, progress, zh, onNodeRefClick }: {
+  loading: boolean;
+  failed: boolean;
+  requestError: boolean;
+  report: AgentDebugReportPayload | null;
+  progress?: DiagnosisProgressSnapshot | null;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<AgentDebugModule>>(() => new Set());
+  const [now, setNow] = useState(() => Date.now());
+  const [arrivals, setArrivals] = useState<Partial<Record<AgentDebugModule, number>>>({});
+  const previousProgress = useRef(progress ?? null);
+  useEffect(() => {
+    if (!loading || failed || requestError || progress?.unavailable) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [loading, failed, requestError, progress?.unavailable]);
+  useEffect(() => {
+    const next = getNewModuleSequences(previousProgress.current, progress ?? null);
+    previousProgress.current = progress ?? null;
+    if (!Object.keys(next).length || !loading || failed || requestError || report) return;
+    setArrivals(next);
+  }, [progress, loading, failed, requestError, report]);
+  useEffect(() => {
+    if (!Object.keys(arrivals).length) return;
+    const timer = setTimeout(() => setArrivals({}), 750);
+    return () => clearTimeout(timer);
+  }, [arrivals]);
+  const events = progress?.events || [];
+  const visibleModules = MODULES.filter(module => {
+    const data = getModulePresentation(report, module.key);
+    return events.some(event => event.module === module.key) || data.status === 'result' || data.records.length > 0;
+  }).sort((a, b) => {
+    const first = (key: AgentDebugModule) => events.find(event => event.module === key)?.seq ?? Number.MAX_SAFE_INTEGER;
+    return first(a.key) - first(b.key);
+  });
+  const pendingModules = MODULES.filter(module => !visibleModules.includes(module));
+  return (
+    <section className="space-y-2" aria-label={zh ? '诊断维度' : 'Diagnosis dimensions'}>
+      <h3 className="px-1 text-xs font-medium text-foreground-muted">{zh ? '模块过程 · 按内容到达顺序展示' : 'Module progress · In order of first update'}</h3>
+      {visibleModules.map(module => {
+        const data = getModulePresentation(report, module.key);
+        const moduleEvents = events.filter(event => event.module === module.key);
+        const latest = moduleEvents.at(-1);
+        const open = !collapsed.has(module.key);
+        const Icon = MODULE_ICONS[module.key];
+        const activity = getModuleActivity({ events: moduleEvents, loading, failed, unavailable: requestError || Boolean(progress?.unavailable), reportStatus: report ? data.status : undefined, now });
+        const summary = latest && !report ? (failed ? (zh ? '任务中断，已保留阶段内容；尚无最终结论。' : 'Task interrupted. Partial updates retained; no final conclusion.') : (zh ? '按实际返回内容逐段更新，阶段分析待最终报告确认。' : 'Updates arrive as available. Stage analysis awaits the final report.')) : loading ? (zh ? '尚未返回该维度的分析结果，无法确认执行进度。' : 'No analysis has been returned for this dimension; its execution progress is unknown.')
+          : requestError ? (zh ? '状态读取失败，无法确认此维度是否完成。' : 'The status could not be retrieved; completion cannot be confirmed.')
+            : failed ? (zh ? '主诊断失败，未获得该维度的结果。' : 'The main diagnosis failed without returning results for this dimension.')
+              : data.status === 'skipped' ? report!.skippedReason!
+                : data.status === 'result' ? (data.hasError ? (zh ? '报告包含异常记录，请结合证据查看。' : 'The report contains issues; review the supporting evidence.')
+                  : data.explicitlyClear ? (zh ? '已返回的检查项未发现明确问题，不代表所有步骤均已覆盖。' : 'Returned checks found no clear issue; this does not imply complete coverage.')
+                    : (zh ? '报告已提供分析依据。' : 'Analysis is available in the report.'))
+                  : data.status === 'early_end' ? (zh ? '主诊断已提前结束，报告未提供此维度的独立结果。' : 'The diagnosis ended early without a separate result for this dimension.')
+                    : (zh ? '报告未提供有效分析结论；不能据此判断正常或已跳过。' : 'No usable conclusion was provided; this does not mean normal or skipped.');
+        return (
+          <section key={module.key} className="rounded-lg border border-card-border bg-card shadow-sm">
+            <button type="button" aria-expanded={open} onClick={() => setCollapsed(prev => {
+              const next = new Set(prev);
+              if (next.has(module.key)) next.delete(module.key); else next.add(module.key);
+              return next;
+            })} className="flex w-full items-start gap-3 rounded-lg p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+              {open ? <ChevronDown className="mt-0.5 size-4 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-0.5 size-4 shrink-0 text-foreground-muted" />}
+              <Icon className="mt-0.5 size-4 shrink-0 text-foreground-secondary" />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-foreground">{module.en}{zh && ` · ${module.zh}`}</span>
+                  <DiagnosisModuleStatus activity={activity} arrivalSeq={arrivals[module.key]} zh={zh} />
+                  {data.status === 'result' && data.hasError && <span className="text-xs text-error">{zh ? '发现异常' : 'Issues found'}</span>}
+                </span>
+                <span className="mt-1 block break-words text-xs leading-5 text-foreground-muted">{activity === 'awaiting_analysis' ? (zh ? '已收到证据或阶段内容，结论待最终报告确认；超过一分钟没有新的模块进展，当前检查状态待确认。' : 'Evidence or stage content received; no module update for over a minute. Current activity is unconfirmed.') : summary}</span>
+                {latest && <span className="mt-1 block text-xs text-foreground-muted">{zh ? '模块最近更新：' : 'Last module update: '}<time dateTime={latest.at} className="tabular-nums">{new Date(latest.at).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</time></span>}
+              </span>
+            </button>
+            {open && (
+              <div className="mx-4 space-y-4 border-t border-border py-4">
+                <DiagnosisProgressFeed events={moduleEvents} zh={zh} onNodeRefClick={onNodeRefClick} />
+                <details className="text-xs text-foreground-muted"><summary className="cursor-pointer">{zh ? '检查范围' : 'Scope'}</summary><p className="mt-2 leading-6 text-foreground-secondary">{zh ? MODULE_HELP[module.key].zh : MODULE_HELP[module.key].en}</p></details>
+                {(data.records.length > 0 || data.cells.length > 0 || data.issues.length > 0) && (
+                  <div>
+                    <h4 className="text-xs font-medium text-foreground">{zh ? '执行证据与分析依据' : 'Execution evidence and analysis'}</h4>
+                    <p className="mb-3 mt-1 text-xs text-foreground-muted">{zh ? '按原 Trace 步骤展示，并非诊断模型的实时处理日志。' : 'Ordered by original Trace steps, not a live diagnosis log.'}</p>
+                    <div className="space-y-3">
+                      {[
+                        ...data.issues.map(issue => ({ ...issue, key: issue.id })),
+                        ...data.cells.filter(cell => !data.issues.some(issue => issue.step === cell.step && issue.errorType === cell.errorType))
+                          .map((cell, index) => ({ ...cell, key: `cell-${cell.step}-${index}` })),
+                      ].sort((a, b) => (a.traceStepIndex ?? a.step) - (b.traceStepIndex ?? b.step)).map(evidence => (
+                        <div key={evidence.key} className="border-l border-border pl-3">
+                          <ModuleEvidenceLocation step={evidence.step} traceStepIndex={evidence.traceStepIndex} anchorId={evidence.anchorId} zh={zh} onNodeRefClick={onNodeRefClick} />
+                          {evidence.evidence && <DiagnosisEvidenceText zh={zh}>{sanitizeReportText(evidence.evidence)}</DiagnosisEvidenceText>}
+                          {evidence.reasoning && <DiagnosisEvidenceText zh={zh}>{sanitizeReportText(evidence.reasoning)}</DiagnosisEvidenceText>}
+                        </div>
+                      ))}
+                      {data.records.length > 0 && (
+                        <details className="rounded-md border border-border p-3">
+                          <summary className="cursor-pointer text-xs text-foreground-secondary">{zh ? `相关执行记录（${data.records.length}）` : `Related execution records (${data.records.length})`}</summary>
+                          <div className="mt-3 space-y-4">{data.records.map((record, index) => (
+                            <div key={`${record.step}-${index}`} className="border-l border-border pl-3">
+                              <ModuleEvidenceLocation step={record.step} traceStepIndex={record.traceStepIndex} anchorId={record.anchorId} zh={zh} onNodeRefClick={onNodeRefClick} />
+                              <DiagnosisEvidenceText zh={zh}>{sanitizeReportText(record.content)}</DiagnosisEvidenceText>
+                              {record.inputContext && <details className="mt-2 text-xs text-foreground-muted"><summary className="cursor-pointer">{zh ? '输入上下文' : 'Input context'}</summary><DiagnosisEvidenceText zh={zh}>{sanitizeReportText(record.inputContext)}</DiagnosisEvidenceText></details>}
+                              {record.environmentResponse && <details className="mt-2 text-xs text-foreground-muted"><summary className="cursor-pointer">{zh ? '环境返回' : 'Environment response'}</summary><DiagnosisEvidenceText zh={zh}>{sanitizeReportText(record.environmentResponse)}</DiagnosisEvidenceText></details>}
+                            </div>
+                          ))}</div>
+                        </details>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {report && <div className="rounded-md bg-background-secondary p-3"><h4 className="mb-1 text-xs font-medium text-foreground">{zh ? '诊断结果' : 'Diagnosis result'}</h4><p className="text-xs leading-6 text-foreground-secondary">{summary}</p></div>}
+              </div>
+            )}
+          </section>
+        );
+      })}
+      {pendingModules.length > 0 && <div className="rounded-md border border-dashed border-border px-4 py-3 text-xs leading-6 text-foreground-muted">
+        <p>{pendingModules.map(module => zh ? `${module.en} · ${module.zh}` : module.en).join(' / ')}</p>
+        <p>{report?.skippedReason || (report ? (zh ? '这些维度未提供独立分析结论，不能据此判断正常或已跳过。' : 'No separate conclusions for these dimensions; normal or skipped cannot be inferred.') : failed ? (zh ? '任务已中断，以上模块没有返回内容。' : 'Task interrupted without updates from these modules.') : requestError ? (zh ? '状态暂不可用，尚未收到以上模块的过程内容。' : 'Status unavailable; no module updates received.') : (zh ? '尚未收到这些模块的过程内容；有内容后自动展开。' : 'Awaiting module updates; cards appear when content arrives.'))}</p>
+      </div>}
+    </section>
+  );
+}
+
+function DiagnosisEvidenceText({ children, zh }: { children: ReactNode; zh: boolean }) {
+  return <ExpandableText className="mt-1 text-xs leading-6 text-foreground-secondary" maxLines={4} expandLabel={zh ? '展开完整内容' : 'Show full content'} collapseLabel={zh ? '收起' : 'Collapse'}>{children}</ExpandableText>;
+}
+
+function ModuleEvidenceLocation({ step, traceStepIndex, anchorId, zh, onNodeRefClick }: {
+  step: number; traceStepIndex?: number; anchorId?: string; zh: boolean; onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const label = traceStepIndex != null ? `Trace #${traceStepIndex}` : (zh ? `诊断记录 #${step}` : `Diagnostic record #${step}`);
+  return anchorId && onNodeRefClick
+    ? <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => onNodeRefClick(anchorId)}>{label}<Eye className="size-3" /></Button>
+    : <span className="text-xs tabular-nums text-foreground-muted">{label}</span>;
+}
+
+export function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }: {
+  report: AgentDebugReportPayload;
+  zh: boolean;
+  traceExplicitErrors: TraceExplicitError[];
+  onNodeRefClick?: (nodeId: string) => void;
+  onRerun?: () => void;
+}) {
+  const findings = useMemo(() => normalizeReportFindings(report), [report]);
+  const detectorFindings = useMemo(
+    () => (Array.isArray(report.detectorFindings) ? report.detectorFindings : []),
+    [report],
+  );
+  const [expandedFindingIds, setExpandedFindingIds] = useState<Set<string>>(() => new Set(findings[0] ? [findings[0].id] : []));
+  const issueCount = report.issues.length + traceExplicitErrors.length;
+  const totalFindings = findings.length + detectorFindings.length;
+
+  if (report.skippedReason) return null;
+
+  if (report.triage?.shortCircuited && report.triage.fatalDiagnosis) {
+    return (
+      <div className="space-y-3">
+        <FatalDiagnosisCard
+          report={report}
+          zh={zh}
+          onNodeRefClick={onNodeRefClick}
+          onRerun={onRerun}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="flex size-7 items-center justify-center rounded-lg border border-error-border bg-error-subtle text-error">
+              <AlertTriangle className="size-3.5" />
+            </div>
+            <div>
+              <div className="text-[10.5px] font-bold tracking-[0.14em] text-error">{zh ? '关键诊断发现' : 'KEY DIAGNOSTIC FINDINGS'}</div>
+              <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
+                {totalFindings > 0
+                  ? (zh ? `${totalFindings} 条发现 · ${issueCount} 条证据节点` : `${totalFindings} findings · ${issueCount} evidence nodes`)
+                  : (zh ? '本次诊断未形成关键发现' : 'This diagnosis produced no key findings')}
+              </div>
+            </div>
+          </div>
+          {onRerun && <Button variant="outline" size="sm" onClick={onRerun}>
+            <RefreshCw className="size-3.5" />
+            {zh ? '重新诊断' : 'Rerun'}
+          </Button>}
+        </div>
+
+        {totalFindings > 0 ? (
+          <div className="space-y-2">
+            {findings.map((finding, index) => (
+              <FindingCard
+                key={finding.id}
+                finding={finding}
+                index={index}
+                report={report}
+                zh={zh}
+                expanded={expandedFindingIds.has(finding.id)}
+                traceExplicitErrors={index === 0 ? traceExplicitErrors : []}
+                onToggle={() => {
+                  setExpandedFindingIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(finding.id)) next.delete(finding.id);
+                    else next.add(finding.id);
+                    return next;
+                  });
+                }}
+                onNodeRefClick={onNodeRefClick}
+              />
+            ))}
+            {detectorFindings.map((finding, i) => (
+              <DetectorFindingRow
+                key={finding.id}
+                finding={finding}
+                index={findings.length + i}
+                zh={zh}
+                relatedFinding={findings.find(candidate => candidate.id === finding.relatedFindingId)}
+                expanded={expandedFindingIds.has(finding.id)}
+                onToggle={() => {
+                  setExpandedFindingIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(finding.id)) next.delete(finding.id);
+                    else next.add(finding.id);
+                    return next;
+                  });
+                }}
+                onNodeRefClick={onNodeRefClick}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-foreground-muted">{zh ? '本次诊断未形成关键发现，不代表执行不存在问题。' : 'This diagnosis produced no key findings; this does not establish that the execution is problem-free.'}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+function DetectorFindingRow({ finding, index, zh, relatedFinding, expanded, onToggle, onNodeRefClick }: {
+  finding: AgentDebugDetectorFinding;
+  index: number;
+  zh: boolean;
+  relatedFinding?: AgentDebugFinding;
+  expanded: boolean;
+  onToggle: () => void;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const span = finding.details.span && typeof finding.details.span === 'object'
+    ? finding.details.span as Record<string, unknown>
+    : null;
+  const fromStep = typeof span?.fromStep === 'number' ? span.fromStep : null;
+  const toStep = typeof span?.toStep === 'number' ? span.toStep : null;
+  const turnCount = typeof span?.turnCount === 'number' ? span.turnCount : null;
+  const detailText = fromStep != null && toStep != null
+    ? '#' + fromStep + '–#' + toStep
+    : turnCount != null ? String(turnCount) + (zh ? ' 个 turn' : ' turns') : null;
+  return (
+    <div className="rounded-lg border border-border bg-background-secondary p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        className="flex w-full items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-card text-[11px] font-bold text-primary">
+          {index + 1}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(finding.summary)}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground-muted">
+            {detailText && <span>{detailText}</span>}
+            {relatedFinding && <span>{zh ? '关联：' : 'Related: '}{sanitizeConclusionText(relatedFinding.summary)}</span>}
+          </div>
+        </div>
+        {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-3 border-t border-border pt-3">
+          <section>
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '故障机制' : 'Mechanism'}</div>
+            <div className="text-[12.5px] leading-6 text-foreground">{sanitizeReportText(finding.mechanism)}</div>
+          </section>
+
+          {finding.faultChain.length > 0 && (
+            <section>
+              <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '故障链' : 'Fault chain'}</div>
+              <ol className="space-y-0.5">
+                {finding.faultChain.map((step, i) => (
+                  <li key={i} className="text-[12px] leading-6 text-foreground-muted">{i + 1}. {sanitizeReportText(step)}</li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {finding.facts.length > 0 && (
+            <section>
+              <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '诊断事实' : 'Diagnostic facts'}</div>
+              <ul className="space-y-0.5">
+                {finding.facts.map((fact, i) => (
+                  <li key={i} className="text-[12px] leading-6 text-foreground-muted">• {sanitizeReportText(fact)}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {finding.anchors.length > 0 && (
+            <section className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '证据节点' : 'Evidence'}</span>
+              {finding.anchors.map((anchor, i) => {
+                const label = anchor.traceStepIndex != null ? `#${anchor.traceStepIndex}` : (anchor.traceNodeLabel || `node ${i + 1}`);
+                const clickable = Boolean(anchor.anchorId && onNodeRefClick);
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    disabled={!clickable}
+                    onClick={() => { if (anchor.anchorId && onNodeRefClick) onNodeRefClick(anchor.anchorId); }}
+                    className={`rounded border border-border px-1.5 py-0.5 text-[11px] ${clickable ? 'cursor-pointer text-error hover:bg-error-subtle' : 'cursor-default text-foreground-muted'}`}
+                    title={anchor.traceNodeLabel || ''}
+                  >
+                    {label}{anchor.note ? ` · ${anchor.note}` : ''}
+                  </button>
+                );
+              })}
+            </section>
+          )}
+
+          <section className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '建议' : 'Guidance'}</div>
+            <div className="text-[12.5px] leading-6 text-foreground">{sanitizeReportText(finding.correctionGuidance)}</div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FatalDiagnosisCard({ report, zh, onNodeRefClick, onRerun }: {
+  report: AgentDebugReportPayload;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+  onRerun?: () => void;
+}) {
+  const fatal = report.triage?.fatalDiagnosis;
+  if (!fatal) return null;
+  return (
+    <div className="rounded-lg border border-error-border bg-card p-4 shadow-sm">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div className="flex size-7 items-center justify-center rounded-lg border border-error-border bg-error-subtle text-error">
+            <AlertTriangle className="size-3.5" />
+          </div>
+          <div>
+            <div className="text-[10.5px] font-bold tracking-[0.14em] text-error">{zh ? '明显失败' : 'FATAL DIAGNOSIS'}</div>
+            <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
+              {formatTriageCategory(report.triage?.category || 'normal', zh)}
+              {fatal.toolName ? ` · ${fatal.toolName}` : ''}
+            </div>
+          </div>
+        </div>
+        {onRerun && <Button variant="outline" size="sm" onClick={onRerun}>
+          <RefreshCw className="size-3.5" />
+          {zh ? '重新诊断' : 'Rerun'}
+        </Button>}
+      </div>
+      <p className="mt-3 text-[13px] leading-7 text-foreground">{fatal.summary}</p>
+      {(fatal.affectedTraceStepIndexes?.length || fatal.affectedSteps.length) > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground-muted">
+          <span className="font-semibold">{zh ? '受影响左侧节点' : 'Affected trace nodes'}</span>
+          {(fatal.affectedTraceStepIndexes?.length ? fatal.affectedTraceStepIndexes : fatal.affectedSteps).map(step => (
+            <span key={step} className="rounded-md border border-border bg-background-secondary px-2 py-1 font-mono text-foreground">
+              {formatNodeIndex(step, zh)}
+            </span>
+          ))}
+        </div>
+      )}
+      {fatal.rawErrorEvidence && (
+        <p className="mt-3 rounded-md border border-border bg-background-secondary p-2 font-mono text-[11.5px] leading-5 text-foreground-muted">{fatal.rawErrorEvidence}</p>
+      )}
+      <div className="mt-3 rounded-lg border border-border bg-background-secondary px-3 py-2.5">
+        <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '建议' : 'Recommendation'}</div>
+        <div className="text-[12.5px] leading-6 text-foreground">{fatal.recommendation}</div>
+      </div>
+      {fatal.anchorId && onNodeRefClick && (
+        <Button className="mt-3" variant="ghost" size="sm" onClick={() => onNodeRefClick(fatal.anchorId!)}>
+          {zh ? '跳到左侧节点' : 'View trace node'}
+          <ChevronRight className="size-3.5" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function ModulePreview() {
+  return (
+    <div className="hidden grid-cols-2 gap-1.5 md:grid">
+      {MODULES.slice(0, 4).map(item => {
+        const Icon = MODULE_ICONS[item.key] || Eye;
+        return (
+          <div key={item.key} className="flex w-[100px] items-center gap-1.5 rounded-lg border border-border bg-background-secondary px-2 py-1.5 text-foreground">
+            <Icon className="size-3" />
+            <span className="text-[10.5px] font-bold">{item.en}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModuleTitle({ title, help }: { title: string; help: string }) {
+  return (
+    <div className="flex items-center gap-1 text-sm font-bold text-foreground">
+      <span>{title}</span>
+      <TermPopover term={title} tag="fault" body={help} side="top" align="center">
+        <span className="sr-only">{title}</span>
+      </TermPopover>
+    </div>
+  );
+}
+
+function FindingCard({ finding, index, report, zh, expanded, traceExplicitErrors, onToggle, onNodeRefClick }: {
+  finding: AgentDebugFinding;
+  index: number;
+  report: AgentDebugReportPayload;
+  zh: boolean;
+  expanded: boolean;
+  traceExplicitErrors: TraceExplicitError[];
+  onToggle: () => void;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const findingIssues = issuesForFinding(finding, report.issues);
+  const rootIssue = findingIssues.find(issue => finding.issueRefs.find(ref => ref.issueId === issue.id)?.role === 'root') || findingIssues[0];
+  const modules = index === 0 ? MODULES : FINDING_MODULES;
+  const conclusion = splitFindingSummary(finding.summary);
+  const [evidenceExpanded, setEvidenceExpanded] = useState(false);
+  return (
+    <div className="rounded-lg border border-border bg-background-secondary p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        className="flex w-full items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-card text-[11px] font-bold text-primary">
+          {index + 1}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(conclusion.conclusion || finding.summary)}</div>
+          {rootIssue && (
+            <div className="mt-0.5 text-[11px] text-foreground-muted">{formatTraceLocation(rootIssue, zh)}</div>
+          )}
+        </div>
+        {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-3 border-t border-border pt-3">
+          <section className="rounded-lg border border-border bg-card">
+            <button
+              type="button"
+              aria-expanded={evidenceExpanded}
+              onClick={() => setEvidenceExpanded(value => !value)}
+              className="flex w-full items-center gap-2 px-3 py-2.5 text-left outline-none hover:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <span className="text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '证据' : 'Evidence'}</span>
+              <span className="h-px min-w-4 flex-1 bg-border" />
+              <span className="text-[11px] text-foreground-muted">
+                {zh ? '展开查看关联模块证据' : 'Expand linked module evidence'}
+              </span>
+              {evidenceExpanded ? <ChevronDown className="size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="size-3.5 shrink-0 text-foreground-muted" />}
+            </button>
+            {evidenceExpanded && (
+              <div className="border-t border-border p-3">
+                {finding.evidence && (
+                  <p className="mb-2 rounded-md border border-border bg-background-secondary p-2 font-mono text-[11.5px] leading-5 text-foreground-muted">
+                    {sanitizeReportText(finding.evidence)}
+                  </p>
+                )}
+                {finding.supplementalEvidence?.map((evidence, evidenceIndex) => (
+                  <AgentDebugSupplementalEvidenceBlock
+                    key={evidenceIndex}
+                    evidence={evidence}
+                    zh={zh}
+                    onNodeRefClick={onNodeRefClick}
+                  />
+                ))}
+                <div className="grid gap-2 md:grid-cols-2">
+                  {modules.map(module => (
+                    <EvidenceModuleCard
+                      key={module.key}
+                      module={module}
+                      zh={zh}
+                      globalSystem={index === 0 && module.key === 'system'}
+                      issues={module.key === 'system'
+                        ? report.issues.filter(issue => issue.module === 'system')
+                        : findingIssues.filter(issue => issue.module === module.key)}
+                      traceExplicitErrors={index === 0 && module.key === 'system' ? traceExplicitErrors : []}
+                      finding={finding}
+                      onNodeRefClick={onNodeRefClick}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {conclusion.details && (
+            <section>
+              <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '分析说明' : 'Analysis notes'}</div>
+              <ExpandableText
+                maxLines={4}
+                className="text-[12px] leading-6 text-foreground-muted"
+                expandLabel={zh ? '展开完整说明' : 'Show full notes'}
+                collapseLabel={zh ? '收起说明' : 'Collapse notes'}
+              >
+                {sanitizeReportText(conclusion.details)}
+              </ExpandableText>
+            </section>
+          )}
+
+          <section className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '建议' : 'Guidance'}</div>
+            <div className="text-[12.5px] leading-6 text-foreground">{sanitizeReportText(finding.correctionGuidance)}</div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvidenceModuleCard({ module, zh, globalSystem, issues, traceExplicitErrors, finding, onNodeRefClick }: {
+  module: { key: AgentDebugModule; zh: string; en: string };
+  zh: boolean;
+  globalSystem: boolean;
+  issues: AgentDebugIssue[];
+  traceExplicitErrors: TraceExplicitError[];
+  finding: AgentDebugFinding;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const Icon = MODULE_ICONS[module.key] || Eye;
+  const [expanded, setExpanded] = useState(false);
+  const orderedIssues = [...issues].sort((a, b) => {
+    const aRole = finding.issueRefs.find(ref => ref.issueId === a.id)?.role || 'contributing';
+    const bRole = finding.issueRefs.find(ref => ref.issueId === b.id)?.role || 'contributing';
+    const roleDelta = findingRoleRank(bRole) - findingRoleRank(aRole);
+    if (roleDelta !== 0) return roleDelta;
+    const severityDelta = severityRank(b.severity) - severityRank(a.severity);
+    if (severityDelta !== 0) return severityDelta;
+    return (locationIndex(a) ?? a.step) - (locationIndex(b) ?? b.step);
+  });
+  const orderedTraceErrors = [...traceExplicitErrors].sort((a, b) => (a.traceStepIndex ?? Number.MAX_SAFE_INTEGER) - (b.traceStepIndex ?? Number.MAX_SAFE_INTEGER));
+  const totalCount = orderedIssues.length + orderedTraceErrors.length;
+  const title = globalSystem ? (zh ? '全局 System 证据' : 'Global System Evidence') : module.en;
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(value => !value)}
+        className="flex w-full items-start justify-between gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="flex items-center gap-2">
+          <div className="flex size-7 items-center justify-center rounded-lg border border-border bg-background-secondary text-primary">
+            <Icon className="size-3.5" />
+          </div>
+          <div>
+            <ModuleTitle
+              title={title}
+              help={(zh ? MODULE_HELP[module.key]?.zh : MODULE_HELP[module.key]?.en) || module.key}
+            />
+            <div className="text-[11px] text-foreground-muted">{globalSystem ? (zh ? '只在第一条关键发现展示一次' : 'Shown once in the first finding') : (zh ? module.zh : module.key)}</div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <StatusBadge status={totalCount > 0 ? 'warning' : 'success'} label={totalCount > 0 ? `${totalCount}` : 'OK'} />
+          {expanded ? <ChevronDown className="mt-0.5 size-3.5 text-foreground-muted" /> : <ChevronRight className="mt-0.5 size-3.5 text-foreground-muted" />}
+        </div>
+      </button>
+      {expanded && (totalCount > 0 ? (
+        <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+          {orderedIssues.map(issue => (
+            <IssueEvidenceItem key={issue.id} issue={issue} role={finding.issueRefs.find(ref => ref.issueId === issue.id)?.role} zh={zh} onNodeRefClick={onNodeRefClick} />
+          ))}
+          {orderedTraceErrors.map(error => (
+            <TraceErrorEvidenceItem key={error.id} error={error} zh={zh} onNodeRefClick={onNodeRefClick} />
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-[12px] leading-6 text-foreground-muted">
+          {zh ? '当前发现未关联该模块问题' : 'This finding has no issue linked to this module.'}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function IssueEvidenceItem({ issue, zh, onNodeRefClick }: {
+  issue: AgentDebugIssue;
+  role?: string;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(issue, zh)}</span>
+      </div>
+      <ExpandableText
+        maxLines={4}
+        className="text-[11.5px] leading-5 text-foreground-muted"
+        expandLabel={zh ? '展开完整原因' : 'Show full reason'}
+        collapseLabel={zh ? '收起原因' : 'Collapse reason'}
+      >
+        {sanitizeReportText(issue.reasoning || issue.evidence)}
+      </ExpandableText>
+      {issue.evidence && issue.reasoning && (
+        <ExpandableText
+          maxLines={3}
+          className="mt-1.5 font-mono text-[10.5px] leading-5 text-foreground-muted"
+          expandLabel={zh ? '展开证据原文' : 'Show evidence'}
+          collapseLabel={zh ? '收起证据原文' : 'Collapse evidence'}
+        >
+          {sanitizeReportText(issue.evidence)}
+        </ExpandableText>
+      )}
+      {issue.anchorId && onNodeRefClick && (
+        <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(issue.anchorId!)}>
+          {zh ? '跳到左侧节点' : 'View trace node'}
+          <ChevronRight className="size-3" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function TraceErrorEvidenceItem({ error, zh, onNodeRefClick }: {
+  error: TraceExplicitError;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
+      </div>
+      {(error.description || error.context) && (
+        <ExpandableText
+          maxLines={4}
+          className="text-[11.5px] leading-5 text-foreground-muted"
+          expandLabel={zh ? '展开详情' : 'Show details'}
+          collapseLabel={zh ? '收起详情' : 'Collapse details'}
+        >
+          {[error.description, error.context].filter(Boolean).join('\n')}
+        </ExpandableText>
+      )}
+      {error.anchorId && onNodeRefClick && (
+        <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(error.anchorId!)}>
+          {zh ? '跳到左侧节点' : 'View trace node'}
+          <ChevronRight className="size-3" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function keyActionBadgeStatus(status: string): 'success' | 'warning' | 'error' | 'pending' {
+  const normalized = status.toLowerCase();
+  if (normalized === 'covered' || normalized === 'passed' || normalized === 'pass' || normalized === 'success') return 'success';
+  if (normalized === 'missing' || normalized === 'failed' || normalized === 'fail' || normalized === 'error') return 'error';
+  if (normalized === 'not_applicable' || normalized === 'not-applicable' || normalized === 'n/a') return 'pending';
+  return 'warning';
+}
+
+function formatKeyActionStatus(status: string, zh: boolean): string {
+  const normalized = status.toLowerCase();
+  if (!zh) return status;
+  if (normalized === 'covered' || normalized === 'passed' || normalized === 'pass' || normalized === 'success') return '\u5df2\u8986\u76d6';
+  if (normalized === 'partial' || normalized === 'partially_covered') return '\u90e8\u5206\u8986\u76d6';
+  if (normalized === 'missing' || normalized === 'failed' || normalized === 'fail' || normalized === 'error') return '\u672a\u8986\u76d6';
+  if (normalized === 'not_applicable' || normalized === 'not-applicable' || normalized === 'n/a') return '\u4e0d\u9002\u7528';
+  return status;
+}
+
+export function SkillsAnalysisSection({ executionId, user, zh, analysis, submitting, onAnalysisUpdate }: {
+  executionId: string;
+  user: string;
+  zh: boolean;
+  analysis: AgentDebugSkillsAnalysis | null;
+  submitting: boolean;
+  onAnalysisUpdate: (analysis: AgentDebugSkillsAnalysis | null) => void;
+}) {
+  const [generating, setGenerating] = useState(false);
+  const [expanded, setExpanded] = useState(true);
+  const [keyActionsExpanded, setKeyActionsExpanded] = useState(false);
+  const contentId = useId();
+  const [wasRunning, setWasRunning] = useState(analysis?.status === 'running');
+  const [error, setError] = useState('');
+  const localAnalysis = analysis;
+
+  const keyActions = extractSkillsKeyActions(localAnalysis as Record<string, unknown> | null);
+  const skillSuggestions = extractSkillsSuggestions(localAnalysis as Record<string, unknown> | null);
+  const summaryText = summarizeSkillsReason(localAnalysis?.reasonText || '');
+  const status = localAnalysis?.status || 'pending';
+  if (wasRunning !== (status === 'running')) {
+    setWasRunning(status === 'running');
+    if (status === 'running') {
+      setExpanded(true);
+      setKeyActionsExpanded(false);
+    }
+  }
+  const hasUsableData = status === 'done' && keyActions.length > 0;
+  const canGenerate = status !== 'running' && !submitting;
+  const failed = status === 'failed';
+  const attentionCount = keyActions.filter(item => item.status === 'partial' || item.status === 'missing' || item.status === 'not_applicable').length;
+
+  useEffect(() => {
+    if (!executionId || status !== 'running' || submitting || generating) return;
+    let cancelled = false;
+
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`);
+        const data = await res.json().catch(() => ({})) as AgentDebugSkillsAnalysisResponse;
+        if (cancelled) return;
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const nextAnalysis = skillsAnalysisFromResponse(data);
+        if (nextAnalysis) {
+          onAnalysisUpdate(nextAnalysis);
+          if (nextAnalysis.status !== 'failed') setError('');
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const timer = window.setInterval(poll, AGENT_DEBUG_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [executionId, onAnalysisUpdate, status, analysis?.runId, submitting, generating]);
+
+  async function generateSkillsAnalysis(force = true) {
+    if (!executionId || !user || generating) return;
+    setGenerating(true);
+    setExpanded(true);
+    setError('');
+    const optimistic = optimisticSkillsAnalysisRunning(localAnalysis?.interactionHash);
+    onAnalysisUpdate(optimistic);
+    try {
+      const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, force }),
+      });
+      const data = await res.json().catch(() => ({})) as {
+        skillsAnalysis?: AgentDebugSkillsAnalysis;
+        status?: string;
+        error?: string;
+      };
+      if (res.status === 409 && isSkillsAnalysisRunningResponse(data)) {
+        applySkillsAnalysisResponse(data);
+        return;
+      }
+      applySkillsAnalysisResponse(data);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function applySkillsAnalysisResponse(data: AgentDebugSkillsAnalysisResponse) {
+    const nextAnalysis = skillsAnalysisFromResponse(data);
+    if (nextAnalysis) {
+      onAnalysisUpdate(nextAnalysis);
+    } else if (!data.error) {
+      if (localAnalysis?.status !== 'running') onAnalysisUpdate(null);
+    }
+    if (!data.error || isSkillsAnalysisRunningResponse(data)) {
+      setError('');
+    }
+  }
+
+  if (localAnalysis?.status === 'skipped') {
+    const missingSkill = localAnalysis.skipReason === 'missing-skill';
+    const reason = missingSkill
+      ? (zh ? '该 Skill 未在 Skill 管理中心注册，或当前账号不可见。' : 'This Skill is unregistered or not visible to your account in Skill Management.')
+      : (zh ? '当前 Trace 未关联可核验的 Skill。' : 'This trace has no linked Skill to review.');
+    return (
+      <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">{zh ? 'Skills 步骤核验' : 'Skills step review'}</span>
+          <StatusBadge status="cancelled" label={zh ? '已跳过' : 'Skipped'} />
+        </div>
+        <p className="mt-1 text-sm text-foreground-secondary">
+          {reason}{zh ? '不影响智能诊断结果。' : ' This does not affect the diagnosis.'}
+        </p>
+        {missingSkill && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="link" size="sm" asChild>
+              <Link href="/config/skills">{zh ? '前往 Skill 管理中心' : 'Open Skill Management'}</Link>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => generateSkillsAnalysis(true)} disabled={!canGenerate}>
+              {zh ? '重新核验' : 'Review again'}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded(value => !value)}
+          className="flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">{zh ? 'Skills 步骤核验' : 'Skills step review'}</span>
+              <StatusBadge status={failed ? 'error' : status === 'running' || generating ? 'running' : status === 'done' ? 'success' : 'pending'} label={failed ? (zh ? '失败' : 'Failed') : status === 'running' || generating ? (zh ? '处理中' : 'Processing') : status === 'done' ? (zh ? '已有结果' : 'Result available') : (zh ? '待核验' : 'Pending')} />
+            </div>
+            {(generating || status === 'running' || !hasUsableData) && (
+              <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
+                {generating || status === 'running'
+                  ? (zh ? '正在生成 Skills 步骤核验' : 'Generating Skills step review')
+                  : (zh ? '暂无 Skills 步骤核验结果' : 'No Skills step review yet')}
+              </div>
+            )}
+            {hasUsableData && (
+              <div className="mt-0.5 text-[11px] text-foreground-muted">
+                {zh ? `${keyActions.length} 个 Skill 步骤 · ${skillSuggestions.length} 条建议` : `${keyActions.length} Skill steps · ${skillSuggestions.length} suggestions`}
+              </div>
+            )}
+          </div>
+        </button>
+        {canGenerate && (
+          <Button variant="outline" size="sm" onClick={() => generateSkillsAnalysis(true)} disabled={generating}>
+            {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+            {failed || localAnalysis ? (zh ? '重新分析' : 'Re-analyze') : (zh ? '生成 Skills 分析' : 'Generate Skills analysis')}
+          </Button>
+        )}
+      </div>
+
+      {localAnalysis?.progress?.unavailable && !expanded && <p className="mt-2 text-xs text-warning">{zh ? '部分核验过程记录不可用。' : 'Some review progress is unavailable.'}</p>}
+      {(error || localAnalysis?.errorMessage) && !expanded && (
+        <p role="alert" className="mt-3 break-words text-xs text-error">{error || localAnalysis?.errorMessage}</p>
+      )}
+        <div id={contentId} hidden={!expanded} className="mt-3">
+          {localAnalysis?.progress?.unavailable && <p className="mb-2 text-xs text-warning">{zh ? '部分核验过程记录不可用。' : 'Some review progress is unavailable.'}</p>}
+          {status !== 'done' && Boolean(localAnalysis?.progress?.events.length) && <div className="mb-4 border-t border-border pt-4"><DiagnosisProgressFeed key={localAnalysis?.runId} events={localAnalysis!.progress!.events} zh={zh} /></div>}
+          {error && (
+            <div className="mb-3 rounded-md border border-error-border bg-error-subtle p-2 text-[12px] text-error">{error}</div>
+          )}
+
+          {hasUsableData ? (
+            <div className="space-y-3">
+              {summaryText && (
+                <div className="rounded-md border border-border bg-background-secondary p-3">
+                  <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '总结' : 'Summary'}</div>
+                  <p className="whitespace-pre-line text-[12.5px] leading-6 text-foreground-muted">{summaryText}</p>
+                </div>
+              )}
+              <div className="rounded-md border border-border bg-background-secondary">
+                <button
+                  type="button"
+                  aria-expanded={keyActionsExpanded}
+                  onClick={() => setKeyActionsExpanded(value => !value)}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-left outline-none hover:bg-card focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <span className="text-[12px] font-bold text-foreground">{zh ? 'Skill 步骤核验' : 'Skill step review'}</span>
+                  <StatusBadge status={attentionCount > 0 ? 'warning' : 'success'} label={`${keyActions.length}`} />
+                  {attentionCount > 0 && (
+                    <span className="text-[11px] text-foreground-muted">{zh ? `${attentionCount} 个需关注` : `${attentionCount} need attention`}</span>
+                  )}
+                  <span className="h-px min-w-4 flex-1 bg-border" />
+                  {keyActionsExpanded ? <ChevronDown className="size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="size-3.5 shrink-0 text-foreground-muted" />}
+                </button>
+                {keyActionsExpanded && (
+                  <div className="space-y-2 border-t border-border p-2.5">
+                    {keyActions.map((item, index) => (
+                      <div key={`${index}-${item.title}`} className="rounded-md border border-border bg-card px-2.5 py-2">
+                        <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                          <StatusBadge status={keyActionBadgeStatus(item.status)} label={formatKeyActionStatus(item.status, zh) || (zh ? 'Skill 步骤' : 'Skill step')} />
+                          <span className="text-[12px] font-semibold text-foreground">{item.title || (zh ? `Skill 步骤 ${index + 1}` : `Skill step ${index + 1}`)}</span>
+                        </div>
+                        {item.description && <p className="text-[11.5px] leading-5 text-foreground-muted">{item.description}</p>}
+                        {item.status !== 'covered' && item.status !== 'not_applicable' && item.suggestion && (
+                          <div className="mt-2 rounded-md border border-success-border bg-success-subtle px-2 py-1.5 text-[11.5px] leading-5 text-success">
+                            <span className="font-semibold">{zh ? '改进建议' : 'Suggestion'}</span>
+                            <span className="ml-1 text-foreground-muted">{item.suggestion}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {skillSuggestions.length > 0 && (
+                <div className="rounded-md border border-border bg-background-secondary">
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <span className="text-[12px] font-bold text-foreground">{zh ? 'Skill 改进建议' : 'Skill improvement suggestions'}</span>
+                    <StatusBadge status="warning" label={`${skillSuggestions.length}`} />
+                    <span className="h-px min-w-4 flex-1 bg-border" />
+                  </div>
+                  <div className="space-y-2 border-t border-border p-2.5">
+                    {skillSuggestions.map((item, index) => (
+                      <div key={`sugg-${index}-${item.summary}`} className="rounded-md border border-border bg-card px-2.5 py-2">
+                        <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                          <StatusBadge status={item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'success'} label={item.category} />
+                          <span className="text-[12px] font-semibold text-foreground">{item.summary}</span>
+                        </div>
+                        {item.evidence && <p className="text-[11.5px] leading-5 text-foreground-muted">{item.evidence}</p>}
+                        <div className="mt-2 rounded-md border border-success-border bg-success-subtle px-2 py-1.5 text-[11.5px] leading-5 text-success">
+                          <span className="font-semibold">{zh ? '改进建议' : 'Suggestion'}</span>
+                          <span className="ml-1 text-foreground-muted">{item.improvementSuggestion}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-md border border-border bg-background-secondary p-3">
+              <p className="text-[12.5px] leading-6 text-foreground-muted">
+                {generating || status === 'running'
+                  ? (zh ? '正在生成 Skills 步骤核验。完成后会保存到 AgentDebug Skills 分析缓存里。' : 'Skills step review is running. The result will be saved in the AgentDebug Skills cache.')
+                  : failed
+                    ? (zh ? `Skills 步骤核验失败：${localAnalysis?.errorMessage || '未知错误'}。可以重新分析。` : `Skills step review failed: ${localAnalysis?.errorMessage || 'unknown error'}. You can re-analyze.`)
+                    : status === 'done'
+                      ? (zh ? '已保存 Skills 分析结果，但缺少步骤核验明细。可以重新分析。' : 'Saved Skills analysis has no step review details. You can re-analyze.')
+                      : (zh ? '当前 trace 还没有 Skills 步骤核验结果。点击生成后会分析 Skill 步骤覆盖情况，并保存到 AgentDebug Skills 分析缓存。' : 'This trace has no Skills step review yet. Generate it to analyze Skill step coverage and save it in the AgentDebug Skills cache.')}
+              </p>
+              {canGenerate && (
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => generateSkillsAnalysis(true)} disabled={generating}>
+                  {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  {failed || localAnalysis ? (zh ? '重新分析' : 'Re-analyze') : (zh ? '生成 Skills 分析' : 'Generate Skills analysis')}
+                </Button>
+              )}
+            </div>
+          )}
+          {status === 'done' && Boolean(localAnalysis?.progress?.events.length) && <details className="mt-4 border-t border-border pt-4" key={localAnalysis?.runId}>
+            <summary className="cursor-pointer text-xs text-foreground-secondary">{zh ? `核验过程（共 ${localAnalysis!.progress!.events.length} 段）` : `Review progress (${localAnalysis!.progress!.events.length} updates)`}</summary>
+            <div className="mt-3"><DiagnosisProgressFeed events={localAnalysis!.progress!.events} zh={zh} /></div>
+          </details>}
+        </div>
+    </div>
+  );
+}
+
+function AssistantArticle({ children, meta }: { children: ReactNode; meta?: string }) {
+  return (
+    <article className="flex items-start gap-3">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-primary-subtle-border bg-primary-subtle text-primary">
+        <Sparkles className="size-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        {meta && <div className="mb-1.5 text-[11px] text-foreground-muted">{meta}</div>}
+        <div className="max-w-[860px]">{children}</div>
+      </div>
+    </article>
+  );
+}
+
+function normalizeReportFindings(report: AgentDebugReportPayload): AgentDebugFinding[] {
+  if (Array.isArray(report.findings) && report.findings.length > 0) return report.findings;
+  return report.rootCause ? [findingFromRootCause(report.rootCause, report.issues)] : [];
+}
+
+function findingFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding {
+  const issueRefs = issueRefsFromRootCause(root, issues);
+  return {
+    id: 'finding-root-cause',
+    severity: issues.find(issue => issue.id === issueRefs[0]?.issueId)?.severity || 'high',
+    impact: 'quality_degrading',
+    summary: root.summary,
+    evidence: root.evidence,
+    issueRefs,
+    correctionGuidance: root.correctionGuidance,
+    confidence: root.confidence,
+  };
+}
+
+function issueRefsFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding['issueRefs'] {
+  const refs: AgentDebugFinding['issueRefs'] = [];
+  const rootIndex = locationIndex(rootTraceLocation(root));
+  const rootIssue = issues.find(issue =>
+    issue.module === root.criticalModule
+    && locationIndex(issue) === rootIndex
+    && issue.errorType === root.criticalErrorType
+  ) || issues.find(issue =>
+    issue.module === root.criticalModule
+    && locationIndex(issue) === rootIndex
+  );
+  if (rootIssue) refs.push({ issueId: rootIssue.id, role: 'root' });
+  for (const item of root.cascadingChain) {
+    const matched = issues.find(issue =>
+      issue.module === item.module
+      && locationIndex(issue) === locationIndex(item)
+      && issue.errorType === item.errorType
+    ) || issues.find(issue =>
+      issue.module === item.module
+      && locationIndex(issue) === locationIndex(item)
+    );
+    if (matched && !refs.some(ref => ref.issueId === matched.id)) refs.push({ issueId: matched.id, role: 'downstream' });
+  }
+  if (refs.length === 0 && issues[0]) refs.push({ issueId: issues[0].id, role: 'root' });
+  return refs;
+}
+
+function issuesForFinding(finding: AgentDebugFinding, issues: AgentDebugIssue[]): AgentDebugIssue[] {
+  const issueById = new Map(issues.map(issue => [issue.id, issue]));
+  return finding.issueRefs
+    .map(ref => issueById.get(ref.issueId))
+    .filter((issue): issue is AgentDebugIssue => Boolean(issue));
+}
+
+function findingRoleRank(role: string): number {
+  if (role === 'root') return 3;
+  if (role === 'contributing') return 2;
+  if (role === 'downstream') return 1;
+  return 0;
+}
+
+function extractSkillsKeyActions(raw: Record<string, unknown> | null): Array<{ title: string; description: string; status: string; suggestion: string }> {
+  if (!raw) return [];
+  const value = raw.keyActionResults || raw.key_action_results;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => ({
+      title: stringValue(item.actionContent)
+        || stringValue(item.action_content)
+        || stringValue(item.actionName)
+        || stringValue(item.name)
+        || stringValue(item.title)
+        || stringValue(item.keyAction)
+        || '',
+      description: stringValue(item.traceComparisonAnalysis)
+        || stringValue(item.trace_comparison_analysis)
+        || stringValue(item.reason)
+        || stringValue(item.description)
+        || stringValue(item.evidence)
+        || '',
+      status: stringValue(item.coverage)
+        || stringValue(item.status)
+        || stringValue(item.result)
+        || stringValue(item.matchStatus)
+        || '',
+      suggestion: stringValue(item.skillImprovementSuggestion)
+        || stringValue(item.skill_improvement_suggestion)
+        || stringValue(item.suggestion)
+        || '',
+    }));
+}
+
+function extractSkillsSuggestions(raw: Record<string, unknown> | null): Array<{ category: string; severity: 'high' | 'medium' | 'low'; summary: string; evidence: string; improvementSuggestion: string }> {
+  if (!raw) return [];
+  const value = raw.skillSuggestions || raw.skill_suggestions;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => {
+      const sev = stringValue(item.severity).toLowerCase();
+      return {
+        category: stringValue(item.category) || '其他',
+        severity: (sev === 'high' || sev === 'low' ? sev : 'medium') as 'high' | 'medium' | 'low',
+        summary: stringValue(item.summary),
+        evidence: stringValue(item.evidence),
+        improvementSuggestion: stringValue(item.improvementSuggestion) || stringValue(item.improvement_suggestion),
+      };
+    })
+    .filter(item => item.summary && item.improvementSuggestion);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function summarizeSkillsReason(value: string): string {
+  return (value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/(完整性(?:\([^)]+\))?[：:])/g, '\n$1')
+    .replace(/(工具选择(?:\([^)]+\))?[：:])/g, '\n$1')
+    .replace(/(冗余(?:\([^)]+\))?[：:])/g, '\n$1')
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(line => line && !/^执行路径分析/.test(line) && !/可能触发封顶|封顶/.test(line))
+    .join('\n');
+}
+
+function rootTraceLocation(root: AgentDebugRootCause): AgentDebugTraceLocation {
+  return {
+    traceStepIndex: root.criticalTraceStepIndex ?? root.criticalStep ?? undefined,
+    traceNodeLabel: root.criticalTraceNodeLabel,
+    traceNodeKind: root.criticalTraceNodeKind,
+  };
+}
+
+function formatTraceLocation(item: AgentDebugTraceLocation, zh: boolean): string {
+  const index = locationIndex(item);
+  const prefix = index == null ? (zh ? '左侧节点' : 'Trace node') : formatNodeIndex(index, zh);
+  const label = item.traceNodeLabel ? ` · ${truncateLabel(item.traceNodeLabel)}` : '';
+  return `${prefix}${label}`;
+}
+
+function formatNodeIndex(index: number, zh: boolean): string {
+  return zh ? `节点 #${index}` : `Node #${index}`;
+}
+
+function locationIndex(item: AgentDebugTraceLocation): number | null {
+  return item.traceStepIndex ?? null;
+}
+
+function truncateLabel(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > 48 ? `${trimmed.slice(0, 48)}...` : trimmed;
+}
+
+function sanitizeReportText(value: string): string {
+  return (value || '')
+    .replace(/步骤\s*\d+\s*[（(]\s*左侧节点\s*#(\d+)\s*[）)]/g, '左侧节点 #$1')
+    .replace(/第\s*\d+\s*步\s*[（(]\s*左侧节点\s*#(\d+)\s*[）)]/g, '左侧节点 #$1')
+    .replace(/步骤\s*\d+/g, '相关节点')
+    .replace(/第\s*\d+\s*步/g, '相关节点');
+}
+
+function sanitizeConclusionText(value: string): string {
+  return sanitizeReportText(value)
+    .replace(/根本原因/g, '关键发现')
+    .replace(/根因为/g, '关键发现是')
+    .replace(/根因是/g, '关键发现是')
+    .replace(/作为根因/g, '作为关键发现')
+    .replace(/根因/g, '关键发现');
+}
+
+function splitFindingSummary(value: string): { conclusion: string; details: string } {
+  const sentences = splitSentences(value);
+  if (sentences.length <= 2) return { conclusion: value, details: '' };
+  return {
+    conclusion: sentences.slice(0, 2).join(''),
+    details: sentences.slice(2).join(''),
+  };
+}
+
+function splitSentences(value: string): string[] {
+  const matches = (value || '').trim().match(/[^。！？.!?]+[。！？.!?]?/g);
+  return matches?.map(item => item.trim()).filter(Boolean) || [];
+}
+
+function formatDuration(ms: number, zh: boolean): string {
+  if (!Number.isFinite(ms) || ms < 0) return zh ? '未知耗时' : 'unknown duration';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const totalSeconds = ms / 1000;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const secondText = formatSeconds(seconds);
+  if (hours > 0) {
+    return zh ? `${hours}小时${minutes}分${secondText}秒` : `${hours}h ${minutes}m ${secondText}s`;
+  }
+  if (minutes > 0) {
+    return zh ? `${minutes}分${secondText}秒` : `${minutes}m ${secondText}s`;
+  }
+  return zh ? `${secondText}秒` : `${secondText}s`;
+}
+
+function formatSeconds(value: number): string {
+  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function severityRank(severity: AgentDebugIssue['severity']): number {
+  if (severity === 'high') return 3;
+  if (severity === 'medium') return 2;
+  return 1;
+}
+
+function formatTriageCategory(category: string, zh: boolean) {
+  if (!zh) return category;
+  if (category === 'infra') return '基础设施级失败';
+  if (category === 'tool_systemic') return '工具系统性失败';
+  if (category === 'early_fatal') return '早期不可恢复失败';
+  return '正常预检';
+}

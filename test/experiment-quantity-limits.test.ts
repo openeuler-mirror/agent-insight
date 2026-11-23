@@ -1,0 +1,89 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
+
+import { POST as appendExperimentCases } from '@/app/api/experiments/[id]/cases/route';
+import { prisma } from '@/lib/storage/prisma';
+
+const TEST_USER = `experiment-quantity-${Date.now()}`;
+
+async function createExperiment(): Promise<string> {
+  const experiment = await prisma.experiment.create({
+    data: {
+      user: TEST_USER,
+      name: '实验数量边界测试',
+      type: 'single',
+      evaluatorIdsJson: JSON.stringify(['preset-agent-task-completion']),
+      status: 'draft',
+    },
+    select: { id: true },
+  });
+  return experiment.id;
+}
+
+function appendRequest(experimentId: string, count: number): Promise<Response> {
+  const cases = Array.from({ length: count }, (_, index) => ({
+    taskId: `${experimentId}-trace-${index + 1}`,
+    input: `输入 ${index + 1}`,
+    actualOutput: `输出 ${index + 1}`,
+  }));
+  return appendExperimentCases(
+    new Request(`http://localhost/api/experiments/${experimentId}/cases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: TEST_USER, cases, autoRun: false }),
+    }),
+    { params: Promise.resolve({ id: experimentId }) },
+  );
+}
+
+test.after(async () => {
+  await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  await prisma.$disconnect();
+  database.dispose();
+});
+
+test('case 追加数量边界：200 条成功，201 条拒绝且不产生部分写入', async () => {
+  const acceptedExperimentId = await createExperiment();
+  const accepted = await appendRequest(acceptedExperimentId, 200);
+  const acceptedBody = await accepted.json();
+
+  assert.equal(accepted.status, 200);
+  assert.equal(acceptedBody.added, 200);
+  assert.equal(acceptedBody.reused, 0);
+  assert.equal(acceptedBody.evaluating, false);
+  assert.equal(
+    await prisma.experimentCase.count({ where: { experimentId: acceptedExperimentId } }),
+    200,
+  );
+
+  const rejectedExperimentId = await createExperiment();
+  const rejected = await appendRequest(rejectedExperimentId, 201);
+  const rejectedBody = await rejected.json();
+
+  assert.equal(rejected.status, 400);
+  assert.match(rejectedBody.error, /一次最多追加 200 条 case/);
+  assert.equal(
+    await prisma.experimentCase.count({ where: { experimentId: rejectedExperimentId } }),
+    0,
+  );
+});

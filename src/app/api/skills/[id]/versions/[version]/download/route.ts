@@ -1,6 +1,24 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-import { canAccessSkill, resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { getSkillVersionStorageDir, resolveRuntimeAssetPath } from '@/lib/env';
+import { db } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import archiver from 'archiver';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -42,7 +60,13 @@ export async function GET(
         console.log(`[Download] Found version. AssetPath: ${skillVersion.assetPath}`);
 
         const assetPath = skillVersion.assetPath;
-        const storageRoot = assetPath ? path.join(process.cwd(), assetPath) : '';
+        let storageRoot = '';
+        if (assetPath && typeof assetPath === 'string') {
+            storageRoot = resolveRuntimeAssetPath(assetPath);
+        }
+        if (!storageRoot) {
+            storageRoot = getSkillVersionStorageDir(id, versionNum);
+        }
 
         const archive = archiver('zip', {
             zlib: { level: 9 }
@@ -81,6 +105,13 @@ export async function GET(
         archive.append(skillVersion.content, { name: 'SKILL.md' });
 
         archive.finalize();
+
+        recordUsageEvent({
+            user: username,
+            featureKey: 'skill',
+            eventKey: 'skill.download',
+            route: request.nextUrl.pathname,
+        });
 
         const webStream = new ReadableStream({
             start(controller) {

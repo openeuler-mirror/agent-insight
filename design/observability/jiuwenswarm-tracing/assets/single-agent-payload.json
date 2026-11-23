@@ -1,0 +1,41 @@
+{
+  "task_id": "jiuwen-spike-6a104a55",
+  "query": "用一句话介绍杭州，并说明今天适不适合去西湖散步。",
+  "framework": "jiuwenswarm",
+  "agentName": "jiuwenswarm/spike_agent",
+  "model": "deepseek-v4-flash",
+  "tokens": 164,
+  "input_tokens": 29,
+  "output_tokens": 135,
+  "tool_call_count": 0,
+  "llm_call_count": 1,
+  "latency": 3.095,
+  "final_result": "杭州是素有“人间天堂”美誉的江南名城，以西湖山水和千年文化著称；今天天气（假设晴朗温和）非常适合去西湖散步，但建议出门前查看实时天气预报，以便带上合适的衣物。",
+  "interactions": [
+    {
+      "role": "user",
+      "content": "用一句话介绍杭州，并说明今天适不适合去西湖散步。",
+      "timestamp": null
+    },
+    {
+      "role": "assistant",
+      "content": "杭州是素有“人间天堂”美誉的江南名城，以西湖山水和千年文化著称；今天天气（假设晴朗温和）非常适合去西湖散步，但建议出门前查看实时天气预报，以便带上合适的衣物。",
+      "tool_calls": [],
+      "usage": {
+        "input": 29,
+        "output": 135,
+        "total": 164
+      },
+      "modelID": "deepseek-v4-flash",
+      "providerID": "openjiuwen",
+      "agent": "jiuwenswarm/spike_agent",
+      "timeInfo": {
+        "created": 1781343997255,
+        "completed": 1781344000304
+      },
+      "timestamp": null
+    }
+  ],
+  "label": "jiuwenswarm",
+  "user": "xutaocao00@gmail.com"
+}

@@ -1,0 +1,374 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { safeUUID } from './safe-uuid';
+import type {
+  DatasetCaseRootCauseMeta,
+  RootCauseItem,
+} from './dataset-case-root-causes';
+import type {
+  BenchmarkPresentation,
+  BenchmarkPresentationColumn,
+  BenchmarkPresentationFormat,
+} from '../../packages/benchmark-protocol/src/contracts';
+
+export type DatasetKind = 'ideal_output' | 'trajectory' | 'reliability' | 'benchmark';
+
+export function coerceDatasetKind(value: unknown): DatasetKind {
+  if (value === 'trajectory' || value === 'reliability' || value === 'benchmark') return value;
+  return 'ideal_output';
+}
+
+/** Case 来源；'user' = 用户手填，'skill-gen-draft' = skill 生成时自动起草。 */
+export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
+
+export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type DatasetFieldDisplayType = BenchmarkPresentationColumn['type'];
+export type TraceBackflowArtifactSource = 'input' | 'output' | 'trace' | 'none';
+
+export function defaultTraceBackflowSourceForField(key: string): TraceBackflowArtifactSource {
+  switch (key.trim().toLocaleLowerCase()) {
+    case 'input':
+      return 'input';
+    case 'output':
+    case 'expected_output':
+    case 'expectedoutput':
+    case 'reference_output':
+      return 'output';
+    case 'trace':
+    case 'trajectory':
+      return 'trace';
+    default:
+      return 'none';
+  }
+}
+
+export function sortTraceBackflowDatasetsByRecency<T extends { createdAt?: string; updatedAt?: string }>(
+  datasets: readonly T[],
+): T[] {
+  return datasets
+    .map((dataset, index) => ({ dataset, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.dataset.updatedAt || left.dataset.createdAt || '');
+      const rightTime = Date.parse(right.dataset.updatedAt || right.dataset.createdAt || '');
+      const normalizedLeft = Number.isFinite(leftTime) ? leftTime : Number.NEGATIVE_INFINITY;
+      const normalizedRight = Number.isFinite(rightTime) ? rightTime : Number.NEGATIVE_INFINITY;
+      return normalizedRight - normalizedLeft || left.index - right.index;
+    })
+    .map(item => item.dataset);
+}
+
+export interface DatasetField {
+  id: string;
+  key: string;
+  label: string;
+  type: DatasetFieldType;
+  path?: string;
+  displayType?: DatasetFieldDisplayType;
+  width?: number;
+  format?: BenchmarkPresentationFormat;
+  truncate?: number;
+  description?: string;
+  system?: boolean;
+}
+
+export function nextDatasetFieldKey(existingKeys: Iterable<string>): string {
+  const used = new Set(existingKeys);
+  let index = 1;
+  while (used.has(`custom_field_${index}`)) index += 1;
+  return `custom_field_${index}`;
+}
+
+export function parseDatasetNumberValue(value: unknown): number | '' {
+  if (value === '' || value === null || value === undefined) return '';
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (normalized === '') return '';
+  const parsed = typeof normalized === 'number' ? normalized : Number(normalized);
+  if (!Number.isFinite(parsed)) throw new Error('invalid number');
+  return parsed;
+}
+
+export interface DatasetCase {
+  id: string;
+  input: string;
+  expectedOutput: string;
+  evaluationFocus: string;
+  tags: string[];
+  trajectory: string;
+  values?: Record<string, unknown>;
+  traceSource?: {
+    taskId: string;
+    executionId?: string;
+    capturedAt: string;
+  };
+  /** 默认 'user'；存量数据无此字段时按 'user' 兜底。 */
+  source?: DatasetCaseSource;
+  /** 隐藏缓存字段：预先从 expectedOutput 提取出的关键观点。 */
+  rootCauses?: RootCauseItem[];
+  /** 隐藏缓存元信息：用于判断缓存是否可复用。 */
+  rootCauseMeta?: DatasetCaseRootCauseMeta;
+}
+
+export function hasMeaningfulDatasetCaseValue(
+  datasetCase: DatasetCase,
+  fields: readonly DatasetField[],
+): boolean {
+  return fields.some(field => {
+    const value = datasetCase.values && Object.hasOwn(datasetCase.values, field.key)
+      ? datasetCase.values[field.key]
+      : field.key === 'input'
+        ? datasetCase.input
+        : field.key === 'reference_output'
+          ? datasetCase.expectedOutput
+          : field.key === 'trajectory' || field.key === 'trace'
+            ? datasetCase.trajectory
+            : undefined;
+
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    return true;
+  });
+}
+
+export interface AgentDataset {
+  generationSource?: string | null;
+  generationStatus?: string | null;
+  id: string;
+  name: string;
+  description: string;
+  targetAgent: string;
+  /** 服务于哪个 skill；空字符串 = 通用 agent eval。 */
+  targetSkill: string;
+  tags: string[];
+  datasetKind: DatasetKind;
+  fields: DatasetField[];
+  cases: DatasetCase[];
+  createdAt: string;
+  updatedAt: string;
+  readOnly?: boolean;
+  shared?: boolean;
+  benchmark?: {
+    adapterKey: string;
+    evaluatorKey: string;
+    displayName: string;
+    status: string;
+    profileKey?: string;
+    presentation?: BenchmarkPresentation;
+  };
+}
+
+export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
+export type EvaluatorCatalogFieldKey = (typeof EVALUATOR_CATALOG_FIELD_KEYS)[number];
+
+const EVALUATOR_CATALOG_FIELD_DEFINITIONS: Record<EvaluatorCatalogFieldKey, Omit<DatasetField, 'id' | 'label'>> = {
+  available_tools: {
+    key: 'available_tools',
+    type: 'json',
+    description: '任务执行时完整的可用 Tool 目录',
+  },
+  available_skills: {
+    key: 'available_skills',
+    type: 'json',
+    description: '任务执行时完整的可用 Skill 目录',
+  },
+};
+
+const EVALUATOR_CATALOG_FIELD_LABELS: Record<EvaluatorCatalogFieldKey, string> = {
+  available_tools: '可用 Tool',
+  available_skills: '可用 Skill',
+};
+
+export function evaluatorCatalogFieldKeyFromLabel(label: string): EvaluatorCatalogFieldKey | null {
+  const normalized = label.trim().toLocaleLowerCase().replace(/[\s_-]/g, '');
+  if (['availabletools', '可用tool', '可用工具'].includes(normalized)) return 'available_tools';
+  if (['availableskills', '可用skill', '可用技能'].includes(normalized)) return 'available_skills';
+  return null;
+}
+
+export function createEvaluatorCatalogField(
+  key: EvaluatorCatalogFieldKey,
+  label = EVALUATOR_CATALOG_FIELD_LABELS[key],
+): DatasetField {
+  return {
+    id: key,
+    ...EVALUATOR_CATALOG_FIELD_DEFINITIONS[key],
+    label: label.trim() || EVALUATOR_CATALOG_FIELD_LABELS[key],
+  };
+}
+
+export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
+  if (kind === 'benchmark') {
+    return [
+      { id: 'input', key: 'input', path: 'input', label: '输入', type: 'text', displayType: 'text', system: true },
+      {
+        id: 'externalCaseId',
+        key: 'externalCaseId',
+        path: 'externalCaseId',
+        label: 'Case ID',
+        type: 'text',
+        displayType: 'code',
+        system: true,
+      },
+    ];
+  }
+  const fields: DatasetField[] = [
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+  ];
+  if (kind === 'reliability') {
+    fields.push({
+      id: 'fault_injection_type',
+      key: 'fault_injection_type',
+      label: '故障注入类型',
+      type: 'text',
+      system: true,
+    });
+  }
+  fields.push({ id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true });
+  if (kind === 'trajectory') {
+    fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
+  }
+  return fields;
+}
+
+export function withEvaluatorCatalogFields(
+  fields: DatasetField[],
+  cases: Iterable<Pick<DatasetCase, 'values'>>,
+): DatasetField[] {
+  const present = new Set<EvaluatorCatalogFieldKey>();
+  for (const item of cases) {
+    const values = item.values;
+    if (!values) continue;
+    for (const key of EVALUATOR_CATALOG_FIELD_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(values, key)) present.add(key);
+    }
+  }
+  const existing = new Set(fields.map(field => field.key));
+  return [
+    ...fields,
+    ...EVALUATOR_CATALOG_FIELD_KEYS
+      .filter(key => present.has(key) && !existing.has(key))
+      .map(key => createEvaluatorCatalogField(key)),
+  ];
+}
+
+export const TRAJECTORY_PLACEHOLDER = `{
+  "id": "trace_id",
+  "root_step": { }
+}`;
+
+export function schemaColumnTags(dataset: Pick<AgentDataset, 'datasetKind'> & Partial<Pick<AgentDataset, 'fields'>>): string[] {
+  if (dataset.datasetKind === 'benchmark') {
+    return (dataset.fields || []).map(field => field.label || field.key).filter(Boolean);
+  }
+  if (dataset.datasetKind === 'trajectory') {
+    return ['input', 'reference_output', 'trajectory'];
+  }
+  if (dataset.datasetKind === 'reliability') {
+    return ['input', 'fault_injection_type', 'reference_output'];
+  }
+  return ['input', 'reference_output'];
+}
+
+/** 轨迹列占位示例（纯文本，可按需填写） */
+export const DEFAULT_TRAJECTORY_JSON_SCHEMA = `{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Trajectory",
+  "description": "Agent execution trajectory structure for evaluation",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "trace_id"
+    },
+    "root_step": {
+      "type": "object",
+      "description": "根节点，记录整个轨迹的信息",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}`;
+
+export type DatasetColumnDataType = 'String' | '轨迹';
+
+export interface DatasetDefaultFieldDef {
+  key: string;
+  dataType: DatasetColumnDataType;
+  required: '否' | '是';
+  description: string;
+  /** 仅 trajectory 字段：展示数据结构 */
+  dataStructureJson?: string;
+}
+
+/** 两种场景下的默认列配置 */
+export function defaultFieldsForKind(kind: DatasetKind): DatasetDefaultFieldDef[] {
+  if (kind === 'benchmark') {
+    return [
+      { key: 'input', dataType: 'String', required: '是', description: '公开任务输入' },
+      { key: 'externalCaseId', dataType: 'String', required: '是', description: 'Benchmark Case 标识' },
+    ];
+  }
+  const base: DatasetDefaultFieldDef[] = [
+    {
+      key: 'input',
+      dataType: 'String',
+      required: kind === 'reliability' ? '是' : '否',
+      description: '作为输入投递给评测对象',
+    },
+  ];
+  if (kind === 'reliability') {
+    base.push({
+      key: 'fault_injection_type',
+      dataType: 'String',
+      required: '是',
+      description: '故障模式 id（须来自 GET /api/reliability/fault-modes）',
+    });
+  }
+  base.push({
+    key: 'reference_output',
+    dataType: 'String',
+    required: '否',
+    description: '预期理想输出，可作为评估时的参考标准',
+  });
+  if (kind === 'trajectory') {
+    base.push({
+      key: 'trajectory',
+      dataType: '轨迹',
+      required: '否',
+      description: '作为 Agent 执行轨迹参考文本投递给评估器',
+      dataStructureJson: undefined,
+    });
+  }
+  return base;
+}
+
+export function createEmptyCase(source: DatasetCaseSource = 'user'): DatasetCase {
+  return {
+    id: safeUUID(),
+    input: '',
+    expectedOutput: '',
+    evaluationFocus: '',
+    tags: [],
+    trajectory: '',
+    values: {},
+    source,
+  };
+}

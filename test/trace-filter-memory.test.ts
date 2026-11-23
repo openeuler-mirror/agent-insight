@@ -1,0 +1,248 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+import { parseAsString } from 'nuqs';
+import ts from 'typescript';
+
+const source = fs.readFileSync(new URL('../src/lib/client/use-trace-filter-memory.ts', import.meta.url), 'utf8');
+const compiled = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+
+function harness(storage = new Map<string, string>(), initialQuery = '', initialUser: string | null = 'reader', unavailable = false, delayUrl = false) {
+    let user = initialUser;
+    let query = initialQuery;
+    let pathname = '/trace';
+    let state: Record<string, string | null> | undefined;
+    let defaults: Record<string, string | null>;
+    let dirty = false;
+    let cursor = 0;
+    const slots: any[] = [];
+    let effects: Array<() => void> = [];
+    const writes: Array<{ history: string }> = [];
+    let heldQuery: string | null = null;
+    const timers = new Map<number, () => void>();
+    let timerId = 0;
+    const react = {
+        useRef: (value: unknown) => {
+            const index = cursor++;
+            return slots[index] ??= { current: value };
+        },
+        useState: (value: unknown) => {
+            const index = cursor++;
+            if (!(index in slots)) slots[index] = value;
+            return [slots[index], (next: unknown) => {
+                if (next !== slots[index]) { slots[index] = next; dirty = true; }
+            }];
+        },
+        useEffect: (callback: () => void, deps: unknown[]) => {
+            const index = cursor++;
+            const previous = slots[index] as unknown[] | undefined;
+            slots[index] = deps;
+            if (!previous || deps.some((value, i) => value !== previous[i])) effects.push(callback);
+        },
+    };
+    const setFilters = (next: Record<string, string | null>, options: { history: string }) => {
+        const previous = JSON.stringify(state);
+        state = { ...state, ...next };
+        const params = new URLSearchParams(query);
+        for (const [key, value] of Object.entries(next)) {
+            if (value === null || value === defaults[key]) params.delete(key);
+            else params.set(key, value);
+        }
+        if (delayUrl) heldQuery = params.toString();
+        else query = params.toString();
+        writes.push(options);
+        dirty ||= previous !== JSON.stringify(state);
+        return Promise.resolve(params);
+    };
+    const exports: any = {};
+    const require = (name: string) => {
+        if (name === 'react') return react;
+        if (name === 'next/navigation') return { useSearchParams: () => new URLSearchParams(query), usePathname: () => pathname };
+        if (name === 'nuqs') return {
+            parseAsString,
+            useQueryStates: (parsers: Record<string, { defaultValue?: string }>) => {
+                defaults = Object.fromEntries(Object.entries(parsers).map(([key, p]) => [key, p.defaultValue ?? null]));
+                state ??= Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, new URLSearchParams(query).get(key) ?? value]));
+                return [state, setFilters];
+            },
+        };
+        throw new Error(`Unexpected import: ${name}`);
+    };
+    const sessionStorage = {
+        getItem: (key: string) => { if (unavailable) throw new Error('disabled'); return storage.get(key) ?? null; },
+        setItem: (key: string, value: string) => { if (unavailable) throw new Error('disabled'); storage.set(key, value); },
+        removeItem: (key: string) => { if (unavailable) throw new Error('disabled'); storage.delete(key); },
+    };
+    new Function('require', 'exports', 'window', compiled)(require, exports, {
+        sessionStorage,
+        setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
+        clearTimeout: (id: number) => timers.delete(id),
+    });
+    let result: { filtersReady: boolean; clearFilterMemory: () => void };
+    const readiness: boolean[] = [];
+    function render() {
+        let renders = 0;
+        do {
+            assert.ok(renders++ < 10, 'filter hydration must settle');
+            dirty = false;
+            cursor = 0;
+            effects = [];
+            result = exports.useTraceFilterMemory(user);
+            readiness.push(result.filtersReady);
+            effects.forEach(effect => effect());
+            const scheduled = [...timers.values()];
+            timers.clear();
+            scheduled.forEach(callback => callback());
+        } while (dirty);
+    }
+    render();
+    return {
+        storage, writes, readiness,
+        filters: () => state!,
+        ready: () => result.filtersReady,
+        query: () => new URLSearchParams(query),
+        choose: (next: Record<string, string | null>) => { setFilters(next, { history: 'replace' }); render(); },
+        reset: () => { result.clearFilterMemory(); render(); },
+        login: (next: string) => { user = next; render(); },
+        leave: () => { pathname = '/agents'; query = ''; state = { ...defaults }; render(); },
+        commitUrl: () => { if (heldQuery !== null) query = heldQuery; heldQuery = null; render(); },
+    };
+}
+
+test('leaving and revisiting bare Trace restores filters before releasing list loading', () => {
+    const first = harness();
+    const chosen = {
+        status: 'failed', framework: 'agenterrorbench', ownership: 'system', scope: 'subagent',
+        time: '7d', agent: 'worker', skill: 'diagnose', tagIds: 'release-v2,regression',
+        anomaly: 'abnormal', q: 'tool timeout', f: '[{"field":"tokens","operator":"gt","value":100}]',
+    };
+    first.choose(chosen);
+    const returned = harness(first.storage);
+    assert.deepEqual(returned.filters(), first.filters());
+    assert.equal(returned.readiness[0], false);
+    assert.equal(returned.ready(), true);
+    assert.equal(returned.query().get('status'), 'failed');
+    assert.equal(returned.query().get('framework'), 'agenterrorbench');
+    assert.equal(returned.writes[0].history, 'replace');
+    assert.equal(returned.query().has('taskId'), false);
+    assert.equal(returned.query().has('page'), false);
+});
+
+test('explicit URL context wins completely over remembered filters', () => {
+    for (const query of ['status=success', 'taskId=trace-123', 'page=3']) {
+        const first = harness();
+        first.choose({ status: 'failed', framework: 'agenterrorbench' });
+        const linked = harness(first.storage, query);
+        assert.equal(linked.filters().status, query.startsWith('status=') ? 'success' : 'all');
+        assert.equal(linked.filters().framework, 'all');
+        assert.equal(linked.writes.length, 0, 'opening a link must not replace its query');
+        assert.equal(linked.query().toString(), query);
+    }
+});
+
+test('custom time bounds survive a revisit and reset clears both bounds', () => {
+    const page = harness();
+    const range = { time: 'custom', timeFrom: '2026-11-04T02:00:01.000Z', timeTo: '2026-11-05T03:00:02.000Z' };
+    page.choose(range);
+    const returned = harness(page.storage);
+    for (const [key, value] of Object.entries(range)) assert.equal(returned.filters()[key], value);
+    returned.reset();
+    assert.equal(returned.filters().time, 'all');
+    assert.equal(returned.filters().timeFrom, '');
+    assert.equal(returned.filters().timeTo, '');
+    assert.equal(returned.query().has('timeFrom'), false);
+    assert.equal(returned.query().has('timeTo'), false);
+});
+
+test('selected Trace owner survives a revisit and is removed by reset', () => {
+    const page = harness(new Map(), '', 'admin');
+    page.choose({ traceUser: 'bob@example.com' });
+    const returned = harness(page.storage, '', 'admin');
+    assert.equal(returned.filters().traceUser, 'bob@example.com');
+    returned.reset();
+    assert.equal(returned.filters().traceUser, '');
+    assert.equal(returned.query().has('traceUser'), false);
+});
+
+test('route departure cannot overwrite the last Trace filters with destination defaults', () => {
+    const page = harness();
+    page.choose({ time: 'custom', timeFrom: '2026-11-04T02:00:00.000Z', timeTo: '2026-11-04T04:00:00.000Z', status: 'success' });
+    const saved = [...page.storage.values()][0];
+    page.leave();
+    assert.equal([...page.storage.values()][0], saved);
+    const returned = harness(page.storage);
+    assert.equal(returned.filters().time, 'custom');
+    assert.equal(returned.filters().timeFrom, '2026-11-04T02:00:00.000Z');
+    assert.equal(returned.filters().status, 'success');
+});
+
+test('restoration waits for the URL commit before releasing list loading', () => {
+    const page = harness();
+    page.choose({ time: 'custom', timeFrom: '2026-11-04T02:00:00.000Z' });
+    const returned = harness(page.storage, '', 'reader', false, true);
+    assert.equal(returned.ready(), false, 'optimistic filter state is not a committed restoration');
+    returned.commitUrl();
+    assert.equal(returned.ready(), true);
+    assert.equal(returned.query().get('time'), 'custom');
+});
+
+test('reset removes memory and old selections do not reappear on return', () => {
+    const page = harness();
+    page.choose({ status: 'failed', framework: 'agenterrorbench', bizTag: 'legacy-tag' });
+    page.reset();
+    assert.equal(page.storage.size, 0);
+    assert.equal(page.filters().status, 'all');
+    assert.equal(page.filters().ownership, 'all');
+    assert.equal(page.filters().bizTag, null);
+    const returned = harness(page.storage);
+    assert.equal(returned.filters().status, 'all');
+    assert.equal(returned.filters().framework, 'all');
+    page.choose({ status: 'success' });
+    assert.equal(harness(page.storage).filters().status, 'success', 'new selections can be remembered after reset');
+});
+
+test('memory waits for login and isolates accounts', () => {
+    const first = harness();
+    first.choose({ status: 'failed' });
+    const other = harness(first.storage, '', 'another-reader');
+    assert.equal(other.filters().status, 'all');
+    const loggedOut = harness(first.storage, '', null);
+    assert.equal(loggedOut.ready(), false);
+    loggedOut.login('reader');
+    assert.equal(loggedOut.filters().status, 'failed');
+    assert.equal(loggedOut.ready(), true);
+});
+
+test('corrupt or unavailable session storage never blocks browsing or reset', () => {
+    for (const raw of ['invalid json', '[]', '{"status":42}', '{"status":null}']) {
+        const seeded = harness();
+        const key = [...seeded.storage.keys()][0];
+        seeded.storage.set(key, raw);
+        const page = harness(seeded.storage);
+        assert.equal(page.ready(), true);
+        assert.equal(page.filters().status, 'all');
+    }
+    const disabled = harness(new Map(), '', 'reader', true);
+    disabled.choose({ status: 'failed' });
+    disabled.reset();
+    assert.equal(disabled.ready(), true);
+    assert.equal(disabled.filters().status, 'all');
+});

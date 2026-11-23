@@ -1,0 +1,173 @@
+---
+name: agent-debug-diagnosis
+description: >
+  统一处理 Agent Insight 的一键诊断、普通诊断追问和定向查因。一键诊断运行 AgentDebug
+  五模块及适用的专项诊断器；普通追问保持现有问答；定向查因仅额外调用命中的专项诊断器，
+  不运行五模块。专项诊断器通过 detectors/*/detector.json 自注册。
+---
+
+# agent-debug-diagnosis
+
+## 任务目标
+
+用同一个 Skill 承载三条互斥路线：一键诊断、普通追问、定向查因。
+
+## 路由边界
+
+1. **一键诊断**：请求明确来自一键诊断入口。运行现有 AgentDebug 五模块，并执行所有支持 `one_click` 的专项诊断器。详见 `references/05-one-click-workflow.md`。
+2. **普通追问**：用户问题未命中专项诊断器。保持现有追问流程，不运行五模块和专项诊断器。详见 `references/06-follow-up-workflow.md`。
+3. **定向查因**：用户问题命中 `detectors/*/detector.json` 中的症状关键词。在普通追问基础上使用匹配诊断器的结果，不运行五模块。详见 `references/07-targeted-workflow.md`。
+
+诊断器注册机制：每个诊断器目录必须包含 `detector.json`；公共 `scripts/detector_runner.py` 扫描这些清单完成发现、匹配和执行。服务端不维护诊断器名称列表，也不包含诊断器业务规则。
+
+一键诊断的 AgentDebug 认知诊断流水线：
+
+```text
+输入 JSON
+  -> 同一个 Agent 执行静态检测、五模块与 Phase 2
+  -> 写入并冻结 core 报告
+  -> 同一个 Agent 调用 Skill-local 专项诊断器
+  -> 同一个 Agent 富化、语义查重与关联
+  -> 写入并校验完整最终报告文件，再返回完成标记
+```
+
+项目后端只负责挂载 Skill、准备输入与 trace 资料包、启动 Agent、存储和流式转发。诊断器运行、通用富化、查重关联和最终报告生成都由执行该 Skill 的同一个 Agent 完成；确定性脚本负责发现诊断器、产出结构化事实和校验最终结果。
+
+## 一键诊断必须读取的资料
+
+仅一键诊断需要按需读取这些文件。普通追问和定向查因只读取各自路线文件，不执行下述 AgentDebug 脚本。
+
+1. `references/01-input-and-extraction.md`
+2. `references/02-error-taxonomy.md`
+3. `references/03-phase-analysis.md`
+4. `references/04-output-schema.md`
+5. 根据当前路线读取 `references/05-one-click-workflow.md`、`06-follow-up-workflow.md` 或 `07-targeted-workflow.md`
+6. 一键诊断第二阶段必须读取 `references/08-detector-reconciliation.md`
+
+## 一键诊断必须执行的脚本
+
+后端会在提示中给出输入文件路径，通常是：
+
+```text
+.agent-insight/agent-debug-input.json
+```
+
+第一步必须运行静态分析脚本：
+
+```bash
+python3 .agent-debug-diagnosis/scripts/agentdebug_static.py \
+  --input .agent-insight/agent-debug-input.json \
+  --output .agent-insight/agent-debug-static.json
+```
+
+然后必须运行统一查询脚本获取全局摘要：
+
+```bash
+python3 .agent-debug-diagnosis/scripts/agentdebug_inspect.py summary \
+  --input .agent-insight/agent-debug-input.json \
+  --static .agent-insight/agent-debug-static.json
+```
+
+根据五模块候选信号，继续使用 `tail`、`range`、`search`、`repeated-calls` 拉取小块证据。不要顺序读取大型 JSON，也不要临时编写 `python3 -c` 查询。静态或查询脚本失败时，不要继续凭空诊断；返回结构化失败报告。
+
+五模块主诊断完成后，先把不含专项结果的完整报告写入：
+
+```text
+.agent-insight/agent-debug-core.json
+```
+
+再运行所有支持 `one_click` 的 Skill-local 诊断器：
+
+```bash
+python3 .agent-debug-diagnosis/scripts/detector_runner.py run-all \
+  --mode one_click \
+  --input .agent-insight/agent-debug-input.json \
+  --output .agent-insight/agent-debug-detectors.json
+```
+
+当前 Agent 读取专项事实后完成富化、查重与关联，把完整最终报告写入 `.agent-insight/agent-debug-final.json`，再运行：
+
+```bash
+python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
+  --input .agent-insight/agent-debug-final.json \
+  --static .agent-insight/agent-debug-static.json \
+  --core .agent-insight/agent-debug-core.json \
+  --detectors .agent-insight/agent-debug-detectors.json
+```
+
+如果校验报错，先修正 JSON 再重新校验。校验只警告时，可以返回最终 JSON，但应优先修正明显的英文说明和缺失证据。
+
+## 一键诊断不可违反的规则
+
+- `.agent-insight/agent-debug-final.json` 是唯一报告真源；校验通过后最终回答只能是 `AGENT_DEBUG_REPORT_READY`，不得回显报告 JSON、摘要或额外说明。
+- 所有自然语言报告字段必须用中文；枚举值保留英文。
+- Action 必须来自真实工具调用或明确动作标签，不能由 LLM 编造。
+- 用户界面永远关联左侧真实 trace 节点；不要把内部诊断 step/turn 当作用户可见位置。
+- `phase1Grid`、`issues`、`findings`、`rootCause`、`cascadingChain` 必须尽量携带或引用可定位到左侧 trace 节点的字段。`diagnosticStep` 仅供内部排查，不能写进自然语言摘要。
+- `issues` 是 Phase 1 原子问题，不等于用户可见的关键发现；`findings` 才是 Phase 2 面向用户展示的关键诊断发现列表。
+- 每条 `finding` 必须通过 `issueRefs` 引用实际存在的 `issues`，并且恰好有一个 `role=root`；下游症状使用 `role=downstream`，不要重复提升成另一条 finding。
+- 用户可见自然语言里默认使用“关键发现”“潜在问题”“过程风险”，不要把已恢复或未造成任务失败的问题写成“根因”。只有 trace 明确失败且该问题直接导致失败时，才可以使用“根因”。
+- `findings[].summary` 和 `rootCause.summary` 只写 1-2 句结论；原始报错、命令、节点、重复模式和长推理放入 `evidence`、`issueRefs`、`cascadingChain` 或 `correctionGuidance`，不要堆在 summary 里。
+- 同一次一键诊断只能启动一次 Agent；不得要求服务端二次运行诊断器、富化器或合并模型。
+- 冻结的 core finding 的 `id`、`summary`、`evidence`、`issueRefs` 和 `correctionGuidance` 不得被专项阶段改写或删除。
+- 每条专项结果必须独立保留或无损写入一条 core finding 的 `supplementalEvidence`，不得静默丢失。
+- 不使用候选窗口，不要只分析局部 trace；必须对输入文件里的全部 step 执行拆分和 Phase 1 检测。
+- `agentdebug_static.py` 必须覆盖全部 turn；智能诊断 agent 根据 `summary` 中 Memory、Reflection、Planning、Action、System 五模块候选信号按需核查语义证据。
+- 不允许使用 read + offset 顺序读取大型 JSON，也不允许临时编写 `python3 -c`；只使用 `agentdebug_inspect.py` 查询。
+- 需要核对超过节点内联阈值的输入或输出时，使用 `search --scope artifact` 查询完整 artifact。
+- 最终报告必须保留静态 `stepRecords`、`phase1Grid` 和 `issues`；误报通过 `resolution=non_blocking` 说明，不能删除或改写原始 evidence。
+- System 是外部环境证据，不属于四个认知模块，但可以参与根因归因。
+- Memory、Reflection、Planning、Action 都允许留白。
+- 留白模块不是错误，不能因为空模块本身选择根因。
+- 不允许从 Action 或 System 失败反推 Planning 一定失败。
+- 不要修改用户项目文件，不要重新执行被诊断的用户任务。
+- 只允许执行本 skill 的分析/校验脚本，以及读取 trace 资料包。
+
+## 一键诊断流程
+
+1. 读取输入文件路径、skill 挂载目录、静态输出路径和最终报告路径。
+2. 读取上述四份 references，确认拆分、词表、Phase 1、Phase 2 和输出协议。
+3. 运行 `agentdebug_static.py`，对全部 turn 生成静态 `stepRecords`、`triage`、`phase1Grid` 和 `issues`。
+4. 运行 `agentdebug_inspect.py summary`，读取全局统计、头尾记录和 Memory、Reflection、Planning、Action、System 五模块候选信号。
+5. 根据候选信号使用 `tail`、`range`、`search`、`repeated-calls` 核查 prior facts、相邻步骤、重复动作与工具结果；需要完整长文本时使用 `search --scope artifact`。
+6. 读取 `triage`，继续完成语义补充：
+   - Memory：检查幻觉、召回失败、过度简化、遗忘用户约束。
+   - Reflection：检查误读工具结果、假成功声明、漏掉测试失败、过早完成。
+   - Planning：检查违反约束、不可能动作、低效计划、计划和动作不一致。
+   - Action：脚本已覆盖大多数静态错误；只在必要时补充 `tool_misuse`。
+   - System：复核超时、认证、上下文限制和系统性工具失败是否属于外部原因。
+7. 保留全部静态事实并追加语义问题，形成 Phase 1 错误网格。
+8. 执行 Phase 2，聚合最值得用户关注的 core `findings`；机制或修复方向不同的问题不得合并。`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
+9. 把完整主诊断写入 `.agent-insight/agent-debug-core.json`，此时不得包含专项结果。
+10. 运行 `detector_runner.py run-all --mode one_click`，读取 `.agent-insight/agent-debug-detectors.json`；诊断器失败必须保留 `errors`，不得伪造结果。
+11. 当前 Agent 基于真实 trace 样本富化专项结果的说明文字，不得改变 `facts`、`anchors`、`details` 中的计数、区间、比例和锚点。
+12. 按 `08-detector-reconciliation.md` 直接生成完整最终报告：重复结果写入 core finding 的 `supplementalEvidence`；不重复结果写入 `detectorFindings`；仅相关结果可设置 `relatedFindingId`。
+13. 写入 `.agent-insight/agent-debug-final.json`，同时传入 `--static`、`--core`、`--detectors` 校验；修正错误并确认校验通过后，只返回 `AGENT_DEBUG_REPORT_READY`。
+
+## 阶段进展上报
+
+若工作目录存在 `.agent-insight/agent-debug-progress-context.json`，在实际开始某模块核验、获得模块证据、完成一轮检查或明确跳过检查时，立即调用本 Skill 的 `scripts/agentdebug_progress.py`，分段提供可展示的工作摘要。不要等最终报告完成后批量补报，也不要按时间编造进度或改变检查顺序。
+
+调用格式：`python3 <skill挂载目录>/scripts/agentdebug_progress.py --module action --state update --title '已核对工具返回' --summary '<已观察到的事实、尚待核验的问题>' --steps <真实traceStepIndex...>`。
+
+- `module` 为 memory / reflection / planning / action / system；跨模块活动使用 overall。System 仅表示系统环境维度，不能用它代替整个诊断任务。“开始五模块诊断”“全局资料读取”等活动必须使用 overall，不触发任何单模块运行状态。
+- 实际开始某模块核验时，先以该模块上报 started，并说明本轮检查范围；获得新的可核查事实时立即上报 update；本轮核验结束立即上报 completed；明确不适用才上报 skipped 并说明原因。重新核验时再发 started。没有实际开始的模块不得提前报 started，没有完成的模块不得报 completed；completed 只表示本轮检查完成，最终结论仍由最终报告确认。
+- 示例：真正开始核验计划约束时调用 `python3 <skill挂载目录>/scripts/agentdebug_progress.py --module planning --state started --title '开始核验计划约束' --summary '<本轮实际核验范围>'`。多个模块交叉检查时按各自实际边界上报，不强制改成串行，不补造五个模块同时开始。
+- 摘要只包含可核查事实、检查范围和阶段结果；不要输出内部思维链、密钥或原始完整工具输出。没有证据就明确说明证据不足，不推断正常。
+- `--steps` 引用真实 Trace 节点索引，不能填诊断步骤序号；没有定位信息时省略。
+- 本脚本仅追加进展记录；失败时继续原诊断流程，不修改 core / final 报告、诊断规则或最终输出协议。
+
+## 一键诊断输出要求
+
+最终报告文件必须包含这些顶层字段：
+
+- `triage`
+- `stepRecords`
+- `phase1Grid`
+- `detectorFindings`（没有独立专项发现时为空数组）
+- `issues`
+- `findings`
+- `rootCause`
+- `humanSummary`
+
+字段结构以 `references/04-output-schema.md` 为准。

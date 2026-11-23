@@ -1,0 +1,146 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { fingerprintJson, type JsonValue } from './contracts'
+import type { EvaluationJob } from './evaluation-contracts'
+
+export type BenchmarkEvaluationProgress = {
+  kind: 'evaluation'
+  stage:
+    | 'downloading_artifacts'
+    | 'preparing_runtime'
+    | 'resolving_image'
+    | 'running_harness'
+    | 'collecting_evidence'
+    | 'uploading_evidence'
+    | 'cleaning'
+  progress?: { message?: string; elapsedSeconds?: number }
+  occurredAt: string
+}
+
+export type BenchmarkEvaluationArtifactDescriptor = {
+  artifactId: string
+  evaluationId: string
+  name: string
+  kind: string
+  mediaType: string
+  sha256: `sha256:${string}`
+  sizeBytes: number
+  source?: string
+  jsonParseError?: string
+  jsonContent?: JsonValue
+}
+
+export type BenchmarkEvaluationCompletion = {
+  status: 'completed' | 'submission_invalid' | 'failed'
+  rawResult: JsonValue
+  evidenceArtifactIds: string[]
+  runtimeFacts: JsonValue
+  cleanup: JsonValue
+  error?: {
+    code: string
+    message: string
+    retryable: boolean
+  }
+}
+
+export type NormalizedBenchmarkPoint = {
+  label: string
+  value: string | number | boolean | null
+  total?: number
+  format?: 'plain' | 'percentage' | 'ratio'
+  score?: number | null
+  evidence?: JsonValue
+}
+
+export type NormalizedBenchmarkPrimaryMetric = {
+  key: string
+  value: boolean | number | null
+  aggregation: 'boolean-rate' | 'mean'
+}
+
+export type NormalizedBenchmarkResult = {
+  status: 'done' | 'failed'
+  verdict?: 'pass' | 'warn' | 'fail'
+  summary: string
+  score: number | null
+  primaryMetric?: NormalizedBenchmarkPrimaryMetric
+  points: NormalizedBenchmarkPoint[]
+  evidence: JsonValue
+  nativeMetrics: JsonValue
+  errorMessage?: string
+}
+
+export type NormalizeBenchmarkResultInput = {
+  evaluationId: string
+  evaluatorKey: string
+  evaluationJob: EvaluationJob
+  completion: BenchmarkEvaluationCompletion
+  evidenceArtifacts: readonly BenchmarkEvaluationArtifactDescriptor[]
+}
+
+export type LocalEvaluationArtifact = {
+  descriptor: BenchmarkEvaluationArtifactDescriptor
+  path: string
+}
+
+export type EvaluatorRuntime = {
+  dataDir: string
+  hostArch: string
+}
+
+export type EvaluatorReadyResult = {
+  ready: boolean
+  formalEligible?: boolean
+  reason?: string
+  runtimeFacts?: JsonValue
+}
+
+export type EvaluationOutput<TRawResult extends JsonValue = JsonValue> = {
+  completion: Omit<BenchmarkEvaluationCompletion, 'rawResult' | 'evidenceArtifactIds'> & {
+    rawResult: TRawResult
+  }
+  evidenceRoot?: string
+  evidenceFiles: Array<{
+    name: string
+    kind: string
+    mediaType: string
+    path: string
+    source?: 'official-file' | 'official-return' | 'runtime-output' | 'platform'
+  }>
+}
+
+export interface BenchmarkEvaluator<
+  TPayload extends JsonValue = JsonValue,
+  TRawResult extends JsonValue = JsonValue,
+> {
+  readonly key: string
+  checkReady(runtime: EvaluatorRuntime): Promise<EvaluatorReadyResult>
+  validateJob(job: EvaluationJob<TPayload>): void
+  evaluate(input: {
+    job: EvaluationJob<TPayload>
+    artifacts: ReadonlyMap<string, LocalEvaluationArtifact>
+    workDir: string
+    signal: AbortSignal
+    reportProgress: (event: BenchmarkEvaluationProgress) => Promise<void>
+  }): Promise<EvaluationOutput<TRawResult>>
+}
+
+export function benchmarkEvaluationCompletionDigest(
+  completion: BenchmarkEvaluationCompletion,
+): `sha256:${string}` {
+  return fingerprintJson(completion as unknown as JsonValue)
+}

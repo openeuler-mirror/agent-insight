@@ -1,0 +1,202 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { resolveUser, canAccessSkill } from '@/lib/auth/auth';
+import { db, prismaRaw } from '@/lib/storage/prisma';
+import { aggregateSkillIssues, type IssueWithPrevalence } from '@/lib/engine/skill-issues';
+
+export const dynamic = 'force-dynamic';
+
+/**
+ * GET /api/skills/by-name/:name/optimization-points
+ *   ?user=...                必填
+ *   &version=N               可选；不传 = 跨版本聚合
+ *   &includeResolved=1       可选；默认只返回 resolvedAt=null 的
+ *
+ * 返回 { issues: OptIssue[] }（与 skill-opt 页 _mock.ts 中 OptIssue 同构）。
+ *
+ * 内部：从 SkillIssue + Evaluation 两表聚合（aggregator 处理 prevalence + severity 抬升），
+ * 再把 IssueWithPrevalence 映射成 OptIssue 形态（category / improvementSuggestion /
+ * occurrence / source）。前端只认 OptIssue。
+ *
+ * 设计文档：design/2026-05-08-skill-opt-issues-api-design.md
+ */
+export async function GET(
+  request: NextRequest,
+  props: { params: Promise<{ name: string }> },
+) {
+  try {
+    const { name: rawName } = await props.params;
+    const name = decodeURIComponent(rawName);
+    const url = new URL(request.url);
+    const versionStr = url.searchParams.get('version');
+    const userParam = url.searchParams.get('user');
+    const includeResolved = url.searchParams.get('includeResolved') === '1';
+
+    let version: number | undefined;
+    if (versionStr !== null && versionStr !== '') {
+      const v = Number(versionStr);
+      if (!Number.isInteger(v)) {
+        return NextResponse.json({ error: 'version must be an integer' }, { status: 400 });
+      }
+      version = v;
+    }
+
+    const { username: user } = await resolveUser(request, userParam);
+
+    // 1) 找 skill；多租户过滤跟 by-name/route.ts 一致
+    const where: any = { name };
+    if (user) {
+      where.OR = [{ user }, { user: null }, { visibility: 'public' }];
+    }
+    const skills = await db.findSkills(where);
+    const skill = skills[0];
+    if (!skill) {
+      return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+    }
+
+    // 鉴权（与现有 skill 路由一致）
+    const { allowed } = await canAccessSkill(skill.id, user);
+    if (!allowed) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    // 2) 聚合：优化点统一来自评测模块写入的 SkillIssue 表。
+    const result = await aggregateSkillIssues({
+      prisma: prismaRaw as any,
+      skillId: skill.id,
+      version,
+      user,
+      includeResolved,
+    });
+
+    // 3) 映射成 OptIssue（前端 _mock.ts 同构）
+    const issues = result.issues.map(it => toOptIssue(it, name));
+
+    return NextResponse.json({
+      skill: name,
+      version: version ?? null,
+      generatedAt: new Date().toISOString(),
+      generator: 'skill-issues@0.2.0',
+      issues,
+      stats: result.stats,
+    });
+  } catch (err) {
+    console.error('[optimization-points] Error:', err);
+    return NextResponse.json(
+      { error: 'Failed to load optimization points', detail: (err as Error)?.message },
+      { status: 500 },
+    );
+  }
+}
+
+interface OptIssue {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  category: string;
+  summary: string;
+  evidence?: string;
+  reasoning?: string;
+  dedupKey?: string;
+  improvementSuggestion?: string;
+  source?: {
+    kind: 'trace' | 'fault' | 'log' | 'static';
+    label: string;
+    url?: string;
+  };
+  occurrence: number;
+  createdAt: string;
+  resolvedAt?: string | null;
+}
+
+function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
+  // Evaluation.type ('static'|'dynamic'|'trigger') → OptIssue.source.kind
+  // 当前没接 fault/log 来源；feedback 收口到 V2，先映射成 'log' 占位（前端 UI 已支持）。
+  // trigger 暂复用 'log' kind——前端 UI 已支持渲染该 kind；label 用「触发评测」+ 短 runId。
+  let kind: 'trace' | 'fault' | 'log' | 'static';
+  let label: string;
+  let url: string | undefined;
+  const experimentId = it.evaluationRunId?.match(/^experiment:([^:]+):/)?.[1];
+
+  if (it.source === 'static' || it.evaluationType === 'static') {
+    kind = 'static';
+    label = '静态评估';
+    url = `/evaluation/${it.evaluationId}`;
+  } else if (it.source === 'trigger' || it.evaluationType === 'trigger') {
+    kind = 'log';
+    label = experimentId ? `触发实验 ${experimentId.slice(0, 8)}`
+      : it.evaluationRunId ? `触发评测 ${it.evaluationRunId.slice(0, 8)}` : '触发评测';
+    // evaluationRunId 这里存的是 SkillTriggerEvalRun.id（见 derive-trigger-opt-points.ts），
+    // 前端 trigger 页可按 runId query 跳到对应历史记录。
+    if (experimentId) {
+      url = `/experiments/${encodeURIComponent(experimentId)}`;
+    } else if (it.evaluationRunId) {
+      url = `/skill-eval/trigger/${encodeURIComponent(skillName)}?runId=${encodeURIComponent(it.evaluationRunId)}`;
+    }
+  } else if (it.source === 'dynamic' || it.evaluationType === 'dynamic') {
+    if (it.ruleId === 'failure') {
+      kind = 'fault';
+      label = it.executionTaskId ? `执行故障 ${shortTaskId(it.executionTaskId)}` : '执行故障';
+    } else {
+      kind = 'trace';
+      label = it.ruleId === 'metric' ? '执行指标' : '动态评估';
+    }
+    if (experimentId) {
+      label = `用例实验 ${experimentId.slice(0, 8)}`;
+      url = `/experiments/${encodeURIComponent(experimentId)}`;
+    } else if (it.executionTaskId) {
+      label = it.ruleId === 'skillIssue' ? shortTaskId(it.executionTaskId) : label;
+      url = `/trace?taskId=${encodeURIComponent(it.executionTaskId)}`;
+    } else {
+      label = it.evaluationRunId ? it.evaluationRunId.slice(0, 8) : '动态评估';
+      url = `/evaluation/${it.evaluationId}`;
+    }
+  } else {
+    kind = 'log';
+    label = it.source;
+  }
+
+  return {
+    id: it.id,
+    severity: it.severity,
+    category: it.category || categoryFromSource(it),
+    summary: it.summary,
+    evidence: it.evidence ?? undefined,
+    reasoning: it.reasoning ?? undefined,
+    dedupKey: it.dedupKey,
+    improvementSuggestion: it.suggestedFix ?? undefined,
+    source: { kind, label, url },
+    occurrence: it.prevalenceCount,
+    createdAt: it.createdAt instanceof Date ? it.createdAt.toISOString() : String(it.createdAt),
+    resolvedAt: it.resolvedAt
+      ? (it.resolvedAt instanceof Date ? it.resolvedAt.toISOString() : String(it.resolvedAt))
+      : null,
+  };
+}
+
+function categoryFromSource(it: IssueWithPrevalence): string {
+  if (it.source === 'static' || it.evaluationType === 'static') return '静态扫描';
+  if (it.source === 'trigger' || it.evaluationType === 'trigger') return '触发评测';
+  if (it.ruleId === 'failure') return '执行故障';
+  if (it.ruleId === 'metric') return '执行指标';
+  return '其它';
+}
+
+function shortTaskId(t: string): string {
+  if (t.length <= 16) return t;
+  return `${t.slice(0, 8)}…${t.slice(-6)}`;
+}

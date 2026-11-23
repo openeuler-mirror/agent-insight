@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "bash \"__HOOK_DIR__/scripts/session-start.sh\"",
+          "timeout": 10
+        }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "bash \"__HOOK_DIR__/scripts/prompt-submit.sh\"",
+          "timeout": 10
+        }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "bash \"__HOOK_DIR__/scripts/pre-tool-use.sh\"",
+          "timeout": 10
+        }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "bash \"__HOOK_DIR__/scripts/post-tool-use.sh\"",
+          "timeout": 10
+        }]
+      }
+    ],
+    "Stop": [
+      {
+        "loop_limit": 5,
+        "hooks": [{
+          "type": "command",
+          "command": "bash \"__HOOK_DIR__/scripts/stop.sh\"",
+          "timeout": 10
+        }]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "bash \"__HOOK_DIR__/scripts/notification.sh\"",
+          "timeout": 5
+        }]
+      }
+    ]
+  }
+}

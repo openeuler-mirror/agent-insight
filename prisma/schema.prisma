@@ -1,3 +1,17 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 generator client {
   provider = "prisma-client-js"
   output   = "../node_modules/.prisma/client"
@@ -9,162 +23,2276 @@ datasource db {
 }
 
 model Skill {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   name        String
-  category    String   @default("Other")
+  category    String  @default("Other")
   description String?
-  tags        String?  // JSON string
-  visibility  String   @default("private") // public, team, private
+  tags        String? // JSON string
+  visibility  String  @default("private") // public, team, private
   author      String?
-  user        String?  // Added for user isolation
-  
+  user        String? // Added for user isolation
+
   // Relations
   versions    SkillVersion[]
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  activeVersion Int?   @default(0)
-  isUploaded    Boolean  @default(false)
+  evaluations Evaluation[]
+  issues      SkillIssue[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activeVersion Int?    @default(0)
+  isUploaded    Boolean @default(false)
 
   @@unique([name, user]) // Skill names are unique per user
 }
 
 model SkillVersion {
-  id        String   @id @default(cuid())
-  skillId   String
-  version   Int
-  content   String
-  assetPath String?
-  files     String?
-  changeLog String?
-  createdAt DateTime @default(now())
-  Skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  id                 String   @id @default(cuid())
+  skillId            String
+  version            Int
+  semanticVersion    String? // 语义化版本号，用于企业同步
+  enterpriseSkillId  Int? // 企业skill的id，用于删除同步
+  content            String
+  assetPath          String?
+  files              String?
+  changeLog          String?
+  verificationStatus String   @default("not_required")
+  verificationMode   String?
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  verificationNote   String?
+  createdAt          DateTime @default(now())
+  Skill              Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
 
   @@unique([skillId, version])
 }
 
-
 model User {
-  id        String   @id @default(cuid())
-  username  String   @unique
-  apiKey    String   @unique
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  username        String   @unique
+  externalAccount String?  @unique
+  apiKey          String   @unique
+  createdAt       DateTime @default(now())
 }
 
 model Execution {
-  id              String   @id @default(cuid()) // upload_id
-  taskId          String?
-  query           String?
-  framework       String?
-  tokens          Int?
-  cost            Float?
-  latency         Float?
-  toolCallCount      Int?
-  llmCallCount       Int?
-  inputTokens        Int?
-  outputTokens       Int?
-  toolCallErrorCount Int?
-  cacheReadInputTokens    Int?
-  cacheCreationInputTokens Int?
-  maxSingleCallTokens     Int?
-  timestamp       DateTime @default(now())
-  model           String?
-  finalResult     String?
-  skill           String?
-  skills          String?  // JSON array of strings (skill names)
-  invokedSkills   String?  // JSON array of {name: string, version: number | null}
-  isSkillCorrect  Boolean? @default(false)
-  isAnswerCorrect Boolean? @default(false)
-  answerScore     Float?
-  skillScore      Float?
-  judgmentReason  String?
-  failures        String?  // JSON array of failures objects
-  skillIssues     String?  // JSON array of skill issue analysis
-  skillVersion    Int?
-  label           String?
-  user            String?
-  skillRecallRate      Float? // Execution-level metric: correct_invoked_skills / expected_skills (per execution)
+  id                       String    @id @default(cuid()) // upload_id
+  taskId                   String?
+  query                    String?
+  framework                String?
+  // Runtime product source and stable source turn/task identity. Nullable for historical traces.
+  sourceExecutionId        String?
+  sourceKind               String?
+  executionStatus          String?
+  traceThreadId            String?
+  // 下面六列是「整个 session 累计求和」，长命 session（尤其带 prompt cache）会突破
+  // 32 位上限 2,147,483,647。Prisma 的 Int 是 i32：超限值仍会被 SQLite 存下，但 Prisma
+  // 回读时抛 P2023，此后任何 select 到这些列的查询整条失败。故一律用 BigInt。
+  // JS 侧仍按 number 使用——读边界由 executionBigIntToNumber 扩展统一转回（见 prisma-client.ts）。
+  tokens                   BigInt?
+  cost                     Float?
+  latency                  Float?
+  toolCallCount            Int?
+  llmCallCount             Int?
+  inputTokens              BigInt?
+  outputTokens             BigInt?
+  toolCallErrorCount       Int?
+  cacheReadInputTokens     BigInt?
+  cacheCreationInputTokens BigInt?
+  // 单次调用取 max、不累计，到不了 32 位上限，保持 Int。
+  maxSingleCallTokens      Int?
+  reasoningTokens          BigInt?
+  timestamp                DateTime  @default(now())
+  lastIngestedAt           DateTime?
+  model                    String?
+  // 真实推理源 URL（scheme://host:port），用作 session↔infra 关联键。
+  endpoint                 String?
+  // 产生本次 Trace 的客户端安装身份与当时主机快照。clientId 是稳定关联键；IP/hostname
+  // 只记录历史事实，不能复用 endpoint，也不能用当前客户端 IP 重写旧 Trace。
+  clientId                 String?
+  hostIp                   String?
+  hostName                 String?
+  observedIp               String?
+  agentName                String?
+  agentId                  String?
+  finalResult              String?
+  skill                    String?
+  skills                   String? // JSON array of strings (skill names)
+  invokedSkills            String? // JSON array of {name: string, version: number | null}
+  isSkillCorrect           Boolean?  @default(false)
+  isAnswerCorrect          Boolean?  @default(false)
+  answerScore              Float?
+  skillScore               Float?
+  judgmentReason           String?
+  failures                 String? // JSON array of failures objects
+  skillIssues              String? // JSON array of skill issue analysis
+  skillVersion             Int?
+  label                    String?
+  user                     String?
+  // Execution-level trigger-accuracy metric: correct_invoked_skills / expected_skills (per execution).
+  skillTriggerRate         Float?
+  // 写入时从 trace interactions 预解析的 agent 名列表(JSON string[],来自 extractObservedAgentNames)。
+  // 让轻量列表(fields=light)无需加载/解析 session interactions 即可拿到完整 agents,根治堆 OOM 又不丢数据。
+  observedAgents           String?
+  // 写入时预解析的 per-call 统计摘要(固定体积对数桶直方图,大盘 B 档面板消费,
+  // 结构见 src/lib/fleet/call-stats.ts / design/platform/fleet-dashboard-tier-b-preparse-risk.md)。
+  callStats                String?
+
+  // --- 多 Agent 拆分字段 ---
+  // 一次主 agent 的 trace 会被拆成 1 条 root execution + N 条 sub-agent execution，
+  // 父子靠 parentExecutionId 串，整棵树共享 rootExecutionId。
+  // 列表/聚合默认按 isSubagent=false 过滤 root；详情页可下钻到任意 sub-agent。
+  parentExecutionId String? // null 表示 root；否则指向上一级 Execution.id
+  rootExecutionId   String? // 整棵树的根（root 自身可为 null 或自指）
+  agentSessionId    String? // 对应 framework 给的 sessionID（root 或 sub-agent 各自的）
+  subagentType      String? // 'kuafu' / 'general' / null（root）
+  subagentName      String? // 完整显示名（如 "Kuafu (General Diagnostic Executor)"）
+  isSubagent        Boolean @default(false)
+
+  // 反向关系：被多少次 Evaluation 评估过（dynamic 类型，重评懒删除）
+  evaluations      Evaluation[]
+  traceEvaluations TraceEvaluation[]
+
+  // 反向关系：这条 Execution（= 某一层 agent）本层实际调用的 skill（按 agent 作用域，不含子 agent）。
+  // 可索引的多对多，替代 skills/invokedSkills JSON blob 做"按 skill+version 反查 trace"与统一筛选。
+  executionSkills ExecutionSkill[]
+
+  // Trace ↔ 用户标签的可索引绑定。系统标签不入库，由读路径派生。
+  executionTags ExecutionTag[]
+
+  traceThread TraceThread? @relation(fields: [traceThreadId], references: [id], onDelete: SetNull)
+
+  // Goal Plus is an orchestration overlay. These links never replace the
+  // native Execution parent/root tree.
+  goalPlusLinks GoalPlusExecutionLink[]
+
+  // Cross-session collaboration only resolves endpoints to an Execution. It
+  // never rewrites the native parent/root tree.
+  collaborationEndpointResolutions CollaborationEndpointResolution[]
+
+  @@index([parentExecutionId])
+  @@index([rootExecutionId])
+  @@index([isSubagent, timestamp])
+  @@index([agentSessionId])
+  @@index([framework, sourceKind, timestamp])
+  @@index([framework, sourceExecutionId])
+  @@index([traceThreadId, sourceExecutionId])
+  // 主列表查询(链路追踪/概览)是 WHERE user=? AND isSubagent=false ORDER BY timestamp DESC。
+  // 缺 user 维度时每个并发请求都要全表扫+排序；该复合索引让规划器按 (user,isSubagent) 定位后
+  // 直接按 timestamp 倒序读，把高并发下的列表查询降为索引范围扫描。
+  @@index([user, isSubagent, timestamp])
+  @@index([user, clientId, timestamp])
+}
+
+model TraceThread {
+  id             String   @id @default(cuid())
+  framework      String
+  sourceThreadId String
+  sourceKind     String?
+  user           String
+  startedAt      DateTime?
+  updatedAt      DateTime?
+  metadataJson   String?
+
+  executions Execution[]
+  events     TraceThreadEvent[]
+
+  @@unique([user, framework, sourceThreadId])
+  @@index([user, framework, updatedAt])
+}
+
+model TraceThreadEvent {
+  id                 String   @id @default(cuid())
+  eventKey           String   @unique
+  traceThreadId      String
+  executionId        String?
+  relatedExecutionId String?
+  kind               String
+  status             String?
+  sourceTurnId       String?
+  phaseId            String?
+  startedAt          DateTime
+  completedAt        DateTime?
+  payloadJson        String?
+
+  thread TraceThread @relation(fields: [traceThreadId], references: [id], onDelete: Cascade)
+
+  @@index([traceThreadId, startedAt])
+  @@index([executionId, startedAt])
+}
+
+/// Trace 级通用评测明细：一行 = 一个 execution 的一个指标。
+model TraceEvaluation {
+  id               String    @id @default(cuid())
+  executionId      String
+  execution        Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  evaluatorId      String
+  evaluatorVersion String
+  dimension        String
+  metricKey        String
+  status           String    @default("pending") // pending | running | done | failed
+  score            Float? // 0–100；null = N/A
+  method           String
+  confidence       Float     @default(0)
+  evidenceJson     String?
+  note             String?
+  interactionsHash String
+  errorMessage     String?
+  ranAt            DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([executionId, evaluatorId, metricKey])
+  @@index([executionId, status])
+}
+
+// Trace(= 单层 agent 的 Execution)↔ skill 的可索引绑定。
+//
+// 设计要点（见相关讨论）：
+//   - 作用域：每条 Execution 只绑定**该层 agent 自己显式调用**(skill/load_skill)的 skill；
+//     子 agent 的 skill 绑在子 agent 自己的 Execution 行上，不向上冒泡到父/root。
+//   - 版本：skillVersion 在写入时定格(显式带版本则用之；否则取当时 Skill.activeVersion 快照)，
+//     不随"当前活跃版本"漂移。null 表示无法解析出版本。
+//   - 快照存名:不硬 FK 到 Skill/SkillVersion(它们 onDelete: Cascade)，避免删 skill 抹掉历史 trace 绑定。
+//   - 写入侧每次 save 先按 executionId 清空再重建，保证幂等(不依赖 NULL 版本的唯一约束语义)。
+model ExecutionSkill {
+  id           String                @id @default(cuid())
+  executionId  String
+  execution    Execution             @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  skillName    String
+  skillVersion Int? // 写入时定格的版本；null = 未解析出
+  isPrimary    Boolean               @default(false) // 是否为该 Execution 的"主/被评测 skill"(对齐 Execution.skill)
+  user         String? // 跟随 trace，便于直接按 user 维度查
+  createdAt    DateTime              @default(now())
+  origin       ExecutionSkillOrigin?
+
+  @@index([skillName, skillVersion]) // 按 skill@version 反查所有 trace（核心诉求）
+  @@index([skillName]) // 按 skill 任意版本反查
+  @@index([executionId])
+}
+
+/// Trace 时客户端实际解析到的 Skill 来源。服务端只把 originRef 当作不透明定位符，
+/// 真正路径由同一 clientId 的本机注册表解析，避免控制指令携带任意文件路径。
+model ExecutionSkillOrigin {
+  id                   String         @id @default(cuid())
+  executionSkillId     String         @unique
+  executionSkill       ExecutionSkill @relation(fields: [executionSkillId], references: [id], onDelete: Cascade)
+  clientId             String
+  platform             String
+  targetMode           String // execution_origin | framework_global
+  originRef            String?
+  displayPath          String?
+  observedSkillVersion Int?
+  observedContentHash  String?
+  locatorVersion       Int            @default(1)
+  observedAt           DateTime       @default(now())
+
+  @@index([clientId, platform])
+  @@index([originRef])
+}
+
+// 用户可维护的 Trace 标签定义。kind = version | business。
+// 系统标签不存这里，避免用户编辑派生事实。
+model Tag {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  kind        String
+  color       String
+  createdBy   String?
+  user        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  executionTags ExecutionTag[]
+
+  @@unique([user, kind, name])
+  @@index([user, kind, createdAt])
+}
+
+// Trace ↔ 用户标签多对多绑定。硬删除 Tag 时级联清理绑定，Trace 本体保留。
+model ExecutionTag {
+  id          String    @id @default(cuid())
+  executionId String
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  tagId       String
+  tag         Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  user        String?
+  createdBy   String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([executionId, tagId])
+  @@index([tagId, createdAt])
+  @@index([executionId])
+  @@index([user, tagId])
+}
+
+/// 一次评估事件——静态评估和动态评估统一到这张表，按 type 区分。
+/// 详细设计见 design/2026-05-08-skill-opt-issues-api-design.md
+model Evaluation {
+  id   String @id @default(cuid())
+  type String // 'static' | 'dynamic' | 'trigger'
+
+  // 评估目标
+  skillId String
+  version Int
+  user    String?
+
+  // dynamic 专用：指向被评估的 trace。同一条 trace 可被多个 evaluation 引用
+  // （重评懒删除：旧 evaluation 不删，多个评估器并存）
+  executionId String?
+  Execution   Execution? @relation(fields: [executionId], references: [id])
+
+  // static 专用：内容 hash，作"快速查最近一次同 content 的评估"的索引线索
+  // 不是 unique 约束——同 SkillVersion 允许多次重评（评估器自行决定 skip）
+  contentHash  String?
+  l2ScoresJson String? // {Role:1-5, Structure:1-5, ...}（V2 接 LLM 5D 时填）
+
+  // 通用元数据
+  ranAt        DateTime @default(now())
+  status       String   @default("ok") // 'ok' | 'partial' | 'failed'
+  errorMessage String?
+  durationMs   Int?
+  generator    String? // 'static-linter@0.1' / 'judge.ts@1.2' 等
+
+  // dynamic 评估批次（trajectory-evaluator 的 evaluatorRunId）；用于过滤"某轮评测产出的 issue"
+  runId String?
+
+  Skill  Skill        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  issues SkillIssue[]
+
+  @@index([skillId, version])
+  @@index([type, ranAt])
+  @@index([skillId, version, type, contentHash]) // 评估器查"最近一次同 content 评估"用；非 unique
+  @@index([executionId])
+  @@index([runId])
+}
+
+/// 单个优化点。每行 = 一个独立 issue。
+/// FK 指向产生它的 Evaluation；source 字段从 Evaluation.type denormalize 过来便于热路径查询。
+model SkillIssue {
+  id           String     @id @default(cuid())
+  evaluationId String
+  Evaluation   Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+
+  // denormalized：避免热路径 join Evaluation
+  source  String // 'static' | 'dynamic' | 'feedback' | 'trigger'
+  skillId String
+  version Int
+  user    String?
+
+  // 内容识别：跨 evaluation 聚合"同一 issue"的语义键
+  // - static: ruleId（如 "frontmatter_missing_name"）
+  // - dynamic: hash6(content + explanation)
+  dedupKey String
+
+  // 内容字段（前端直接消费）
+  severity     String // 'high' | 'medium' | 'low'
+  summary      String
+  evidence     String?
+  reasoning    String?
+  suggestedFix String?
+
+  // 静态专用元数据（前端可忽略）
+  ruleId    String?
+  dimension String? // L2 评估维度，纯审计
+
+  // 业务分类（前端展示用）：'轨迹偏差' | '关键观点遗漏' | '工具误用' | '静态扫描' | '其它'
+  category String?
+
+  // 解决标记：skill-opt 完成一轮优化后调 PATCH /resolve 把对应 id 置位；列表默认过滤
+  resolvedAt    DateTime?
+  resolvedRunId String? // 哪轮 skill-opt（threadId）把它解掉的
+
+  createdAt DateTime @default(now())
+
+  Skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([skillId, version, dedupKey]) // 跨 eval prevalence 聚合用
+  @@index([evaluationId])
+  @@index([source, severity]) // 前端按来源/严重度筛选
+  @@index([skillId, version, resolvedAt]) // 列表默认过滤 resolvedAt = null
 }
 
 model Config {
-  id             String @id @default(cuid())
-  query          String
-  skill          String   @default("")    // Ground truth skill name (Legacy - use expectedSkills instead)
-  skillVersion   Int?    // Expected skill version (Legacy - use expectedSkills instead)
-  expectedSkills String? // JSON array of {skill: string, version: number | null}
-  standardAnswer String
-  rootCauses     String? // JSON array
-  keyActions     String? // JSON array
-  user           String? // Added for user isolation
-  parseStatus    String   @default("completed") // parsing | completed | failed
+  id                  String  @id @default(cuid())
+  query               String?
+  skill               String  @default("") // Ground truth skill name (Legacy - use expectedSkills instead)
+  skillVersion        Int? // Expected skill version (Legacy - use expectedSkills instead)
+  datasetType         String  @default("combined") // combined | routing | outcome
+  routingIntent       String?
+  routingAnchors      String? // JSON array of semantic anchor phrases
+  expectedSkills      String? // JSON array of {skill: string, version: number | null}
+  standardAnswer      String
+  rootCauses          String? // JSON array
+  keyActions          String? // JSON array
+  extractedKeyActions String? // JSON array of ExtractedKeyAction (auto-extracted from Skill)
+  user                String? // Added for user isolation
+  parseStatus         String  @default("completed") // parsing | completed | failed
 
-  @@unique([query, user]) // Queries are unique per user
+  @@unique([query, user, datasetType]) // Allow routing and outcome datasets to coexist for one query
 }
 
 model Session {
-  id           String   @id @default(cuid())
-  taskId       String   @unique
-  label        String?
-  query        String?
-  startTime    DateTime @default(now())
-  endTime      DateTime?
-  interactions String?  // JSON array of interactions
-  user         String?
-  model        String?
+  id                 String    @id @default(cuid())
+  taskId             String    @unique
+  label              String?
+  query              String?
+  startTime          DateTime  @default(now())
+  endTime            DateTime?
+  interactions       String? // JSON array of interactions
+  langfuseTraceNodes String? // Lossless Langfuse observation tree JSON
+  user               String?
+  model              String?
 }
 
 model UserSettings {
-  id             String @id @default(cuid())
-  user           String @unique
-  settingsJson   String // Store ServerSettingsV2 as JSON string
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id           String   @id @default(cuid())
+  user         String   @unique
+  settingsJson String // Store ServerSettingsV2 as JSON string
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
 model ParsedFlow {
-  id          String   @id @default(cuid())
-  skillId     String
-  version     Int
-  user        String?
-  
-  flowJson    String   // JSON: { steps, branches }
-  mermaidCode String   // Generated Mermaid code
-  
-  parsedAt    DateTime @default(now())
-  
+  id      String  @id @default(cuid())
+  skillId String
+  version Int
+  user    String?
+
+  flowJson    String? // JSON: { steps, branches }
+  mermaidCode String? // Generated Mermaid code
+
+  parsedAt DateTime @default(now())
+
   @@unique([skillId, version, user])
 }
 
 model ExecutionMatch {
-  id              String   @id @default(cuid())
-  executionId     String   @unique
-  skillId         String?
-  skillVersion    Int?
-  user            String?
-  
-  mode            String   @default("compare")  // "compare" or "dynamic"
-  matchJson       String?  // JSON: { matches, summary }
-  staticMermaid   String?  // Static flow Mermaid code
-  dynamicMermaid  String   // Dynamic flow Mermaid code
-  analysisText    String?  // LLM analysis text
-  extractedSteps  String?  // JSON: extracted steps from interactions
-  
-  interactionCount Int    // Number of interactions at analysis time
-  
-  matchedAt       DateTime @default(now())
+  id           String  @id @default(cuid())
+  executionId  String  @unique
+  skillId      String?
+  skillVersion Int?
+  user         String?
+
+  mode           String  @default("compare") // "compare" or "dynamic"
+  matchJson      String? // JSON: { matches, summary }
+  staticMermaid  String? // Static flow Mermaid code
+  dynamicMermaid String? // Dynamic flow Mermaid code
+  analysisText   String? // LLM analysis text
+  extractedSteps String? // JSON: extracted steps from interactions
+
+  interactionCount Int // Number of interactions at analysis time
+
+  matchedAt DateTime @default(now())
 }
 
 model UserGuideState {
-  id                String   @id @default(cuid())
-  user              String   @unique
-  guideDisabled     Boolean  @default(false)
-  currentStep       Int      @default(0)
-  completedSteps    String   @default("[]")
-  skippedSteps      String   @default("[]")
-  lastShownAt       DateTime?
-  dismissedAt       DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id             String    @id @default(cuid())
+  user           String    @unique
+  guideDisabled  Boolean   @default(false)
+  currentStep    Int       @default(0)
+  completedSteps String    @default("[]")
+  skippedSteps   String    @default("[]")
+  lastShownAt    DateTime?
+  dismissedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
+model SkillGeneratorSession {
+  id                String                  @id @default(cuid())
+  title             String                  @default("New Chat")
+  user              String? // Link to user username
+  files             String                  @default("{}") // Store FilesState as JSON string
+  // 绑定到 opencode 后端的 sessionID；多轮对话时复用 opencode 内的对话上下文。
+  // opencode server 重启会让此 ID 失效，bridge 检测到后自动起新 session（磁盘文件仍保留，agent 内对话历史会丢）。
+  opencodeSessionId String?
+  // 内部 agent tag 持久化：bridge 跑 runGeneralAgent 时会用 internal-agent-tag.ts 在内存里
+  // 登记 opencodeSessionId → agentName/skill 映射，让 upload 路由把 plugin 默认填的字段
+  // 覆写成正确的系统 agent 归属。但内存映射在 dev server 重启时会清空——重启前生成 session、
+  // 重启后才被 uploader 上报的话，trace 里 agentName 就空了。这里把同一份信息冗余到 DB，
+  // upload 路由内存查不到时回退读这里。
+  agentName         String?
+  // SYSTEM_AGENTS 里该 agent 的 traceSkill 字段，缓存一份避免上报路径再 join 一次。
+  agentTraceSkill   String?
+  messages          SkillGeneratorMessage[]
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  // 表名保留 PlaygroundSession，避免 DB 迁移；只把 Prisma model 层重命名以跟路由统一。
+  @@map("PlaygroundSession")
+}
+
+model SkillGeneratorMessage {
+  id        String                @id @default(cuid())
+  sessionId String
+  session   SkillGeneratorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String // "user" | "agent"
+  content   String // Markdown content (text-only fallback for legacy clients)
+  blocks    String                @default("[]") // JSON-encoded Block[] — restores thinking/tool/download UI on reload
+  createdAt DateTime              @default(now())
+
+  @@map("PlaygroundMessage")
+}
+
+/// skill-opt 优化页的会话。结构镜像 PlaygroundSession，多两个业务字段（skillName/baseVersion）
+/// 标识"哪个 skill 哪个 base 版本起的优化"。详见 design/2026-05-09-skill-opt-history-design.md。
+model SkillOptSession {
+  id                String              @id @default(cuid())
+  user              String? // username（与其它表对齐）
+  skillName         String
+  baseVersion       Int
+  title             String              @default("新对话")
+  files             String              @default("{}") // 最新 vfs 的全量文件 JSON
+  // opencode 多轮上下文复用；server 重启失效时 bridge 自动起新 session
+  opencodeSessionId String?
+  // 同 PlaygroundSession：trace 归属冗余字段，dev server 重启后内存 tag 失效时回退用
+  agentName         String?
+  agentTraceSkill   String?
+  messages          SkillOptMessage[]
+  iterations        SkillOptIteration[]
+  plan              SkillOptPlan?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  // 列表页核心查询：按 user + skill + baseVersion 列出最近会话
+  @@index([user, skillName, baseVersion, updatedAt])
+}
+
+/// 一轮优化会话入口处由归并算子产出的统一优化计划。
+/// SkillIssue 是不可变的原始发现台账（跨 eval 累积）；plan 是它的归并视图，
+/// 生命周期 = 一轮会话 + 一个 baseVersion，不回写台账。
+/// 设计：design/optimization/historical-plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+model SkillOptPlan {
+  id           String             @id @default(cuid())
+  sessionId    String             @unique // 一轮会话至多一份 plan
+  session      SkillOptSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  skillId      String
+  baseVersion  Int
+  status       String             @default("draft") // draft | confirmed | applied | abandoned
+  operatorMeta String             @default("{}") // JSON：批数/层数/模型/耗时，纯审计
+  createdAt    DateTime           @default(now())
+  items        SkillOptPlanItem[]
+
+  @@index([skillId, baseVersion])
+}
+
+model SkillOptPlanItem {
+  id               String       @id @default(cuid())
+  planId           String
+  plan             SkillOptPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  rank             Int // 展示与应用顺序（prevalence×severity 降序）
+  route            String // 'core' | 'reference' | 'backlog'
+  status           String       @default("pending") // pending | conflict | applied | deferred | dismissed
+  title            String
+  rationale        String // 归并理由：为什么这些 issue 是一件事 + 综合后的修改方向
+  severity         String       @default("medium") // 'high' | 'medium' | 'low'（归并后的代表严重度）
+  targetFile       String? // 锚点：相对 baseVersion 快照的文件路径
+  anchorText       String? // 锚点：目标位置原文片段 / section 标题
+  proposedEdit     String? // 建议修改（diff 或指令式描述）
+  conflictNote     String? // status='conflict' 时的矛盾说明，给用户仲裁
+  sourceIssueIds   String       @default("[]") // JSON string[]：归并自哪些 SkillIssue.id
+  sourceRefsJson   String       @default("[]")
+  sourcesBreakdown String       @default("{}") // JSON：{"static":n,"dynamic":m,"trigger":k}
+  prevalence       Int          @default(1) // Σ 源 issues 的 prevalenceCount
+  createdAt        DateTime     @default(now())
+
+  @@index([planId, rank])
+}
+
+model SkillOptMessage {
+  id        String          @id @default(cuid())
+  sessionId String
+  session   SkillOptSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String // "user" | "agent"
+  content   String // markdown 兜底
+  blocks    String          @default("[]") // JSON Block[]，复用 playground Block 协议
+  createdAt DateTime        @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+/// 一次 agent turn 跑完后产生的"草稿"快照——files 全量 + agent 修改总结 + 这次处理了哪些 issue。
+/// 用户点开历史会话时，diff viewer 用它还原"v{N} → 草稿 #M"的对比和优化报告。
+model SkillOptIteration {
+  id               String          @id @default(cuid())
+  sessionId        String
+  session          SkillOptSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// session 内的草稿编号（递增；UI 显示为 "草稿 #N"）
+  draftNumber      Int
+  /// agent 输出的"## 修改总结" markdown 主体，作为优化报告正文
+  summary          String
+  /// 全量文件快照 JSON：{ relPath: content }
+  files            String
+  /// 这次处理的 issue id 列表 JSON。reload 后 UI 上"已优化"标记基于它重建
+  resolvedIssueIds String          @default("[]")
+  createdAt        DateTime        @default(now())
+
+  @@unique([sessionId, draftNumber])
+  @@index([sessionId, createdAt])
+}
+
+/// Skill 对话工作台会话。作为正式编排层复用但不替代生成/优化旧会话；
+/// generatorSessionId / optSessionId 仅保存兼容引用，避免给旧模型增加反向关系。
+model SkillWorkbenchSession {
+  id                  String                    @id @default(cuid())
+  user                String
+  title               String                    @default("新对话")
+  skillName           String?
+  workVersion         Int?
+  source              String?
+  activeView          String                    @default("detail")
+  stage               String                    @default("empty")
+  filesJson           String                    @default("{}")
+  generatorSessionId  String?
+  optSessionId        String?
+  messages            SkillWorkbenchMessage[]
+  tasks               SkillWorkbenchTask[]
+  optimizations       SkillOptimizationRecord[]
+  snapshotEvaluations SkillSnapshotEvaluation[]
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  @@index([user, updatedAt])
+  @@index([user, skillName, workVersion])
+}
+
+/// 工作台消息只负责恢复呈现；评估、实验、优化等领域真状态由 task/result 引用恢复。
+model SkillWorkbenchMessage {
+  id         String                @id @default(cuid())
+  sessionId  String
+  session    SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role       String
+  content    String                @default("")
+  blocksJson String                @default("[]")
+  taskId     String?
+  createdAt  DateTime              @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([taskId])
+}
+
+/// 用户显式启动的一次确定性任务。idempotencyKey 防止重复点击创建重复运行。
+model SkillWorkbenchTask {
+  id             String                @id @default(cuid())
+  sessionId      String
+  session        SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type           String
+  status         String                @default("pending")
+  idempotencyKey String
+  progressJson   String                @default("{}")
+  resultType     String?
+  resultId       String?
+  errorMessage   String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([sessionId, idempotencyKey])
+  @@index([sessionId, status, updatedAt])
+}
+
+/// 一次优化从证据到候选、复测和发布的完整记录。
+/// 候选文件在发布前不写 SkillVersion，避免未验证内容进入正式版本历史。
+model SkillOptimizationRecord {
+  id                    String                @id @default(cuid())
+  sessionId             String
+  session               SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user                  String
+  skillName             String
+  baseVersion           Int
+  candidateVersionLabel String
+  candidateFilesJson    String                @default("{}")
+  candidateContentHash  String?
+  summary               String                @default("")
+  diffJson              String                @default("[]")
+  sourceKind            String                @default("user")
+  sourceRefsJson        String                @default("[]")
+  staticEvaluationId    String?
+  sourceExperimentId    String?
+  retestExperimentId    String?
+  status                String                @default("optimizing")
+  publishedVersion      Int?
+  errorMessage          String?
+  completedAt           DateTime?
+  publishedAt           DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@index([user, skillName, createdAt])
+  @@index([sessionId, status, updatedAt])
+  @@index([sourceExperimentId])
+  @@index([retestExperimentId])
+}
+
+/// 未发布工作快照的静态质量评估。现有 Evaluation 强制关联正式 Skill，
+/// 因此候选内容单独落此表，避免为评估而提前创建 SkillVersion。
+model SkillSnapshotEvaluation {
+  id              String                @id @default(cuid())
+  sessionId       String
+  session         SkillWorkbenchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user            String
+  skillName       String
+  proposedVersion Int
+  contentHash     String
+  generator       String
+  status          String                @default("pending")
+  scoresJson      String?
+  issuesJson      String                @default("[]")
+  errorMessage    String?
+  durationMs      Int?
+  trigger         String                @default("manual")
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([sessionId, createdAt])
+  @@index([user, skillName, proposedVersion, createdAt])
+  @@index([contentHash, generator, status])
+}
+
+/// 用户自建评估器列表（整段 JSON）；预置评估器不入库。
+model CustomEvaluatorList {
+  user      String   @id // username，与其它表的 user 一致
+  itemsJson String   @default("[]")
+  updatedAt DateTime @updatedAt
+}
+
+/// 评测集定义与数据项（cases 存 JSON）
+model AgentEvalDataset {
+  id                 String   @id
+  user               String
+  name               String
+  description        String   @default("")
+  targetAgent        String   @default("")
+  /// 服务于哪个 skill；为空表示通用 agent eval（不绑定 skill）。skill 生成时
+  /// 自动起草的行为评测集会填这个字段（用 Skill.name）。
+  targetSkill        String   @default("")
+  tagsJson           String   @default("[]")
+  fieldsJson         String   @default("[]")
+  casesJson          String   @default("[]")
+  caseCount          Int      @default(0)
+  referenceCasesJson String   @default("[]")
+  projectionReady    Boolean  @default(false)
+  datasetKind        String   @default("ideal_output")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  generationSource String?
+  generationStatus String?
+  generationJob    TraceDatasetGenerationJob?
+
+  benchmarkDataset BenchmarkDataset?
+
+  @@index([user])
+  @@index([user, targetSkill])
+}
+
+model DebugHistory {
+  id          String   @id @default(cuid())
+  user        String
+  skillId     String
+  skillName   String
+  versionA    String
+  versionB    String
+  query       String
+  temperature String
+  resultsJson String // Store results as JSON string
+  createdAt   DateTime @default(now())
+
+  @@index([user])
+}
+
+model BatchEvalTask {
+  id                  String   @id @default(cuid())
+  user                String
+  taskName            String
+  configJson          String   @default("{}") // { datasetIds, skillId, versionId, sourceMode, evaluatorId, traceSkillId, ... }
+  caseStatesJson      String   @default("{}") // { [caseId]: CaseState }
+  traceEvalStatesJson String   @default("{}") // { [key]: TraceEvalStateInfo } — trace-mode eval states
+  createdAt           DateTime @default(now())
+
+  @@index([user])
+}
+
+model GrayscaleTask {
+  id             String   @id @default(cuid())
+  user           String
+  skillId        String
+  skillName      String
+  skillVersion   Int
+  skillVersionId String
+  taskName       String
+  configJson     String   @default("{}") // { datasetIds, skillId, versionAId, versionBId }；skillId/versionBId 必须等于任务绑定 skill + B 版本
+  caseStatesJson String   @default("{}") // { [caseId]: { a: PerVersionState, b: PerVersionState } }
+  createdAt      DateTime @default(now())
+
+  // 任务名作为身份的一部分:同一 (user, skill, 版本) 下允许多个不同名的 A/B 任务。
+  // 之前是 @@unique([user, skillName, skillVersion])(每个版本仅一个),拓宽后:
+  //  - 新名字 → 建新任务;同名+同版本 → 命中已有(创建路由按这四元组判重)。
+  //  - 改名是原地 PATCH(甲语义),只在改成"同版本已存在的别的名字"时才会撞键。
+  @@unique([user, skillName, skillVersion, taskName])
+  @@index([user])
+  @@index([user, skillId])
+  @@index([user, skillId, skillVersion])
+}
+
+/// Persisted debug job results — survives server restarts
+model DebugJobResult {
+  id         String   @id // jobId
+  user       String
+  status     String // "completed" | "failed"
+  output     String?
+  timeCost   String?
+  tokenUsage Int?
+  sessionId  String? // opencode session id — used for Trace link and trajectory eval
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([user])
+}
+
+/// 轨迹评估器单次评测结果（one row = one case × one execution trace）
+/// 由 trajectory-evaluator（deepagents）产出。同一 (datasetId, caseId, executionId)
+/// 可重跑多次 → 多行历史，按 evaluatorRunId 分组。
+/// 对接 EvaluatorsCenter 中预置评估器 preset-agent-trace-quality 的执行链路。
+model TrajectoryEvalResult {
+  id             String  @id @default(cuid())
+  user           String
+  evaluatorRunId String
+  datasetId      String
+  caseId         String
+  executionId    String?
+  taskId         String?
+  status         String  @default("pending") // pending | running | done | failed
+  errorMessage   String?
+
+  trajectoryScore     Float?
+  /// JSON: { completeness, toolChoice, redundancy, attribution }
+  dimensionScoresJson String?
+  /// JSON: 偏离步骤列表 [{ stepIndex, kind, name, deviation, severity }]
+  deviationStepsJson  String?
+  rootCauseStep       String?
+  reasonText          String?
+  /// 评估器原始输出（含 subagent 中间结果）
+  rawAnalysisJson     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([user])
+  @@index([datasetId])
+  @@index([executionId])
+  @@index([evaluatorRunId])
+}
+
+model RegisteredAgent {
+  id             String   @id @default(cuid())
+  platform       String
+  name           String
+  description    String?
+  user           String?
+  agentType      String   @default("main")
+  agentOwnership String   @default("user")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([platform, name, user])
+}
+
+model FaultDiagnosisSession {
+  id                String                  @id @default(cuid())
+  executionId       String                  @unique
+  user              String?
+  opencodeSessionId String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  messages          FaultDiagnosisMessage[]
+}
+
+model FaultDiagnosisMessage {
+  id        String                @id @default(cuid())
+  sessionId String
+  session   FaultDiagnosisSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  createdAt DateTime              @default(now())
+}
+
+model DiagnosisRun {
+  id                String    @id @default(cuid())
+  user              String
+  experimentId      String?
+  caseId            String?
+  executionId       String
+  attemptId         String?
+  requestKey        String
+  inputHash         String
+  inputSnapshotJson String
+  generatorVersion  String
+  status            String    @default("pending")
+  reportJson        String?
+  errorMessage      String?
+  retryOfRunId      String?
+  leaseUntil        DateTime?
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  @@unique([user, requestKey])
+  @@index([user, inputHash, generatorVersion, status])
+  @@index([user, experimentId, caseId, createdAt])
+}
+
+model AgentDebugReport {
+  id               String  @id @default(cuid())
+  executionId      String  @unique
+  user             String?
+  interactionsHash String
+  status           String  @default("pending") // pending | running | done | failed
+  errorMessage     String?
+
+  reportJson   String?
+  stepCount    Int     @default(0)
+  issueCount   Int     @default(0)
+  llmCallCount Int     @default(0)
+  durationMs   Int?
+  generator    String  @default("agent-debug-diagnosis-skill@0.1")
+
+  ranAt     DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([user, ranAt])
+  @@index([status])
+}
+
+model AgentDebugSkillsAnalysis {
+  id               String  @id @default(cuid())
+  executionId      String  @unique
+  user             String?
+  interactionsHash String
+  status           String  @default("pending") // pending | running | done | failed
+  errorMessage     String?
+
+  analysisJson   String?
+  keyActionCount Int     @default(0)
+
+  ranAt     DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([user, ranAt])
+  @@index([status])
+}
+
+// 注：旧 `SkillOptimizationPoint` 单表方案已废弃，统一收敛到 `Evaluation` + `SkillIssue`
+// 两表设计（详见 design/2026-05-08-skill-opt-issues-api-design.md）。
+// `SkillIssue.category` / `resolvedAt` / `resolvedRunId` + `Evaluation.runId` 把原表能力
+// 全部覆盖；frequency 合并由读取时的 prevalenceCount 派生（重评懒删除模型）。
+
+// =========================================================================
+// Skill 触发评价集（TriggerTestSet）—— 给 skill 分析页"触发分析"卡用
+// 详见 docs/designs/agents/skill-eval-datasets/design.md
+// =========================================================================
+
+model SkillTriggerEvalSet {
+  id                   String   @id @default(cuid())
+  user                 String
+  /// (user, skillName) 下的一个**版本快照**——一行 = 一个数据集版本
+  skillName            String
+  /// 同 (user, skillName) 下递增；最大版本即「latest / 当前可编辑版本」
+  version              Int      @default(1)
+  /// 该版本怎么来：'llm-draft' | 'user-upload' | 'manual'
+  versionSource        String   @default("manual")
+  /// 可选备注：上传时落文件名，AI 起草时落模型名等
+  versionNote          String?
+  description          String   @default("")
+  /// JSON array of { id, query, shouldTrigger, rationale?, source }
+  /// source: 'llm-draft' | 'user-added' | 'user-edited' | 'trace-mined'
+  itemsJson            String   @default("[]")
+  /// 起草时基于的 SKILL.md 内容 hash（sha256 前 16 位即可）
+  /// 用于后续判断 SKILL.md 改了之后要不要建议"重新起草"
+  draftedFromSkillHash String?
+  /// 起草状态：'drafting' | 'ready'（生成 pipeline 异步起草时 drafting，完成后 ready）
+  status               String   @default("ready")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([user, skillName, version])
+  @@index([user, skillName])
+}
+
+model SkillTriggerEvalRun {
+  id                String   @id @default(cuid())
+  user              String
+  skillName         String
+  skillVersion      Int
+  /// FK 到 SkillTriggerEvalSet（按 user+skillName 唯一，不用 id 关联也行；这里冗余 id 方便排障）
+  triggerSetId      String
+  /// JSON array of { itemId, query, shouldTrigger, runsTriggered, runsTotal, triggerRate, pass, latencyMsAvg, competingSkill? }
+  /// competingSkill: 命中的不是本 skill 而是别的 skill（兄弟竞争诊断）
+  resultsJson       String   @default("[]")
+  passRate          Float    @default(0)
+  truePositiveRate  Float    @default(0)
+  falsePositiveRate Float    @default(0)
+  runsPerQuery      Int      @default(1)
+  triggerThreshold  Float    @default(0.5)
+  timeoutMs         Int      @default(30000)
+  durationMs        Int?
+  modelId           String?
+  /// opencode 看到的项目根目录（worktree path），便于排障
+  workspaceRoot     String?
+  /// 'running' | 'done' | 'failed'
+  status            String   @default("running")
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([user, skillName, skillVersion, createdAt])
+}
+
+// 会话级 infra 关联的人工覆盖：按整棵 trace 树（rootExecutionId）存一组关联。
+// 存在行 = 人工权威集合（覆盖按 endpoint 的自动推断）；无行 = 走自动推断。
+model SessionInfraLink {
+  id              String   @id @default(cuid())
+  rootExecutionId String
+  sourceId        String
+  model           String?
+  createdAt       DateTime @default(now())
+
+  @@unique([rootExecutionId, sourceId, model])
+  @@index([rootExecutionId])
+}
+
+// 已注册的「AI 推理 infra 源」（任意暴露 Prometheus /metrics 的 vLLM/OpenAI 兼容服务）。
+// endpoint = 源身份键，既是展示身份也是 session↔infra 的关联键。裸机源是 scheme://host:port；
+// 网关托管的源（如 https://gw/spark/qwen35）保留实例路径，见 normalizeEndpoint。
+model InfraSource {
+  id               String   @id @default(cuid())
+  endpoint         String   @unique
+  scrapeUrl        String
+  kind             String   @default("pull") // pull | push
+  // 拉取时附加的鉴权 header，JSON 对象字符串如 {"Authorization":"bearer xxx"}。
+  // 仅 pull 模式使用；含明文凭证，GET 接口必须脱敏后再返回（见 lib/infra/auth-headers.ts）。
+  authHeaders      String?
+  model            String?
+  hardwareName     String?
+  memBandwidthGBs  Float?
+  scrapeIntervalMs Int      @default(1000)
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  samples InfraMetricSample[]
+
+  @@index([endpoint])
+}
+
+/// 故障注入编排任务（1:N Run）。
+model FaultInjectionTask {
+  id           String    @id @default(cuid())
+  taskKey      String    @unique // task-{hex}
+  name         String
+  status       String // queued | running | completed | failed | stopped
+  platform     String
+  agent        String
+  prompt       String
+  workspace    String // logical: __default__ | relative | client absolute (never server-expanded ~)
+  model        String?
+  requestJson  String? // timeouts, auto, etc.
+  itemsJson    String // TaskFaultItem[]
+  progressJson String?
+  error        String?
+  user         String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  runs FaultInjectionRun[]
+
+  @@index([user, createdAt])
+  @@index([status, createdAt])
+}
+
+/// 单次故障注入采集 + 服务端评判。
+model FaultInjectionRun {
+  id                     String              @id @default(cuid())
+  runId                  String              @unique // ras-...
+  fiTaskId               String?
+  fiTask                 FaultInjectionTask? @relation(fields: [fiTaskId], references: [id], onDelete: SetNull)
+  itemId                 String?
+  user                   String?
+  platform               String
+  agent                  String
+  fault                  String
+  submode                String?
+  injectionMethod        String?
+  status                 String // queued|collecting|judging|completed|failed|judge_skipped|stopped
+  workerId               String?
+  stopRequested          Boolean             @default(false)
+  queuedAt               DateTime            @default(now())
+  claimedAt              DateTime?
+  sessionTaskId          String? // Trace ID = Session.taskId / Execution.taskId (platform session)
+  faultActivated         Boolean             @default(false)
+  faultActivatedAt       DateTime?
+  requestJson            String?
+  markersJson            String?
+  outcome                String?
+  faultContainmentStatus String?
+  judgeReason            String?
+  judgeRawJson           String?
+  judgedAt               DateTime?
+  error                  String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([user, createdAt])
+  @@index([fiTaskId])
+  @@index([sessionTaskId])
+  @@index([status, createdAt])
+  @@index([workerId, status])
+}
+
+/// 本机 FI Worker 注册与 inventory 缓存。
+model FaultInjectionWorker {
+  id            String   @id @default(cuid())
+  workerId      String   @unique
+  user          String
+  hostname      String?
+  version       String?
+  lastSeenAt    DateTime
+  inventoryJson String   @default("{}")
+  busySlots     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([user, lastSeenAt])
+}
+
+/// RAS 环内事件旁路落库（对齐 ingest 规范；不进 OTLP spool）。
+/// taskId = witty.session.id = Execution.taskId / Session.taskId。
+model RasAnomalyEvent {
+  id            String   @id @default(cuid())
+  deliveryId    String
+  type          String
+  taskId        String
+  rasSessionKey String?
+  platform      String?
+  framework     String?
+  anomalyKind   String?
+  severity      String?
+  summary       String?
+  actionTypes   String?
+  payloadJson   String
+  executionId   String?
+  ts            DateTime
+  user          String?
+  createdAt     DateTime @default(now())
+
+  @@unique([taskId, deliveryId])
+  @@index([taskId, ts])
+  @@index([user, ts])
+  @@index([anomalyKind, ts])
+  @@index([severity, ts])
+  @@index([type, ts])
+  @@index([executionId])
+}
+
+// 一次采样 = 某源在 T 时刻的状态。counters 存累计值（查询时算 rate），histogram 存 buckets/sum/count。
+// gauges/counters/histograms/waitingByReason 都以 JSON 字符串落库（SQLite 无 JSON 列）。
+model InfraMetricSample {
+  id              String      @id @default(cuid())
+  sourceId        String
+  source          InfraSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  tsMs            Float
+  via             String?
+  model           String?
+  gauges          String
+  counters        String
+  histograms      String
+  waitingByReason String?
+  createdAt       DateTime    @default(now())
+
+  @@index([sourceId, tsMs])
+}
+
+/// ─── 评测「实验」域（单组实验 + LLM 对比实验）───
+/// 实验 = 一批 case × 一组评估器。单组实验为原「评测执行」的演进形态；
+/// LLM 对比实验 = 1 个 Experiment(type='llm') + N 个 ExperimentGroup + 带 groupId的 ExperimentCase。
+model Experiment {
+  id                   String    @id @default(cuid())
+  deletedAt            DateTime?
+  user                 String
+  name                 String
+  /// 'single'（默认）| 'llm'（对比实验）| 'framework' | 'skill'（Skill 工作台对比）
+  type                 String    @default("single")
+  /// 待评测 Agent（Execution.agentName）
+  agentName            String    @default("")
+  /// 选中的评估器 id 列表（JSON string[]；预置/自建统一 id 空间）
+  evaluatorIdsJson     String    @default("[]")
+  /// 可配置预置评估器的实验级运行参数（版本化 JSON；旧实验 `{}` 按严格默认值解释）
+  evaluatorConfigsJson String    @default("{}")
+  /// draft | running | done | partial | failed
+  status               String    @default("draft")
+  /// 来源标记：''=全局实验；'skill-workbench'=Skill 工作台实验；
+  /// 其他历史值由对应评测后端维护。列表必须按数据域过滤，不能跨域混排。
+  scope                String    @default("")
+  /// backing 实验绑定的 skill（评测任务列表按 skill 过滤显示用；来自 eval-traces 落库）
+  skillName            String    @default("")
+  skillVersion         Int?
+  /// Skill 工作台预设；旧实验为空，不参与旧执行分支判断。
+  preset               String?
+  /// 版本化 JSON：参与实验的 Skill 名称、版本或候选快照引用。
+  skillContextJson     String?
+  /// 冻结的 Agent、运行目标、模型、数据集、Case 顺序、评估器与运行参数。
+  configSnapshotJson   String?
+  /// 复测来源实验；只存审计引用，不级联删除旧实验。
+  sourceExperimentId   String?
+  /// 关联 SkillOptimizationRecord；只存审计引用，旧实验为空。
+  optimizationRecordId String?
+  /// 监听模式：开启后 agentName 指定的 Agent 新上报的 trace 自动进本实验评测（取代旧 autoWatch）
+  watchMode            Boolean   @default(false)
+  /// 监听开启时刻——只自动评此后新产生的 trace，避免把历史 trace 全灌进来
+  watchEnabledAt       DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  cases            ExperimentCase[]
+  traceAttempts    ExperimentTraceAttempt[]
+  comments         ExperimentEvalComment[]
+  groups           ExperimentGroup[]
+  benchmarkBinding BenchmarkExperimentBinding?
+  benchmarkRuns    BenchmarkCaseRun[]
+
+  @@index([user, createdAt])
+  @@index([user, scope, skillName])
+  @@index([watchMode, agentName])
+  @@index([sourceExperimentId])
+  @@index([optimizationRecordId])
+}
+
+model ExperimentCancellation {
+  id           String   @id
+  user         String
+  experimentId String
+  caseKey      String   @default("")
+  status       String   @default("pending")
+  targetsJson  String   @default("[]")
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([experimentId, caseKey])
+  @@index([status, updatedAt])
+  @@index([user, status])
+}
+
+model ExperimentLocalExecution {
+  id           String   @id
+  experimentId String
+  caseKey      String   @default("")
+  createdAt    DateTime @default(now())
+
+  @@index([experimentId, caseKey])
+}
+
+/// 对比实验的分组记录。1 个 Experiment(type='llm') 关联 N（本期固定 2：A/B）个 Group。
+/// variableValue 为该组变量取值（LLM 维度对应 Execution.model）。
+model ExperimentGroup {
+  id            String           @id @default(cuid())
+  experimentId  String
+  experiment    Experiment       @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  /// 'A' | 'B'（本期固定）
+  key           String
+  /// 该组的变量取值（LLM 维度对应 Execution.model 值）
+  variableValue String
+  createdAt     DateTime         @default(now())
+  cases         ExperimentCase[]
+
+  @@unique([experimentId, key])
+  @@index([experimentId])
+}
+
+/// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的预期输出，
+/// null=未标注——依赖预期输出的评估器在 ④ 步按此硬门控。
+/// groupId 关联 ExperimentGroup（对比实验用）；单组实验的 case groupId=null 完全向后兼容。
+model ExperimentCase {
+  id                       String           @id @default(cuid())
+  deletedAt                DateTime?
+  experimentId             String
+  experiment               Experiment       @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  executionId              String?
+  taskId                   String?
+  /// 冗余展示字段（Case 明细/详情页免跨表拼装）
+  input                    String           @default("")
+  /// 创建实验时确定性匹配到的数据集 case input 快照；与 input（实际任务输入）分离。
+  datasetInput             String?
+  actualOutput             String           @default("")
+  referenceOutput          String?
+  /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。
+  /// availableTools: [] 表示调用方明确确认本任务无需工具。
+  /// 禁止写入 FI 元数据（faultInjectionType / fi* 走独立列）。
+  evaluatorContextJson     String?
+  /// 对比实验分组关联（单组实验为 null）；onDelete: SetNull 保历史（trace 删时 case 不删）
+  groupId                  String?
+  group                    ExperimentGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  /// 可靠性 case 故障模式 id（对齐数据集 values.fault_injection_type）
+  faultInjectionType       String?
+  /// 数据集 values 快照 JSON（不受后续数据集修改影响）
+  caseValuesJson           String?
+  /// FI 编排回填（排障用；评估器不依赖）
+  fiTaskId                 String?
+  fiRunId                  String?
+  /// 普通评测数据集生成 Trace 时下发的客户端控制指令；不复用 FI 字段。
+  traceGenerationCommandId String?
+  /// 客户端执行失败、Trace 为空或等待超时；成功绑定 Trace 后清空。
+  traceGenerationError     String?
+  createdAt                DateTime         @default(now())
+
+  results       ExperimentEvalResult[]
+  traceAttempts ExperimentTraceAttempt[]
+  benchmarkRuns BenchmarkCaseRun[]
+
+  @@unique([experimentId, taskId, groupId])
+  @@index([experimentId])
+  @@index([executionId])
+  @@index([faultInjectionType])
+  @@index([traceGenerationCommandId])
+  @@index([groupId])
+}
+
+model BenchmarkDataset {
+  id                 String           @id @default(cuid())
+  agentEvalDatasetId String           @unique
+  agentEvalDataset   AgentEvalDataset @relation(fields: [agentEvalDatasetId], references: [id], onDelete: Cascade)
+  user               String
+  name               String
+  adapterKey         String
+  contentHash        String
+  status             String           @default("ready")
+  caseCount          Int              @default(0)
+  sourceJson         String           @default("{}")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  cases    BenchmarkDatasetCase[]
+  bindings BenchmarkExperimentBinding[]
+
+  @@unique([user, name])
+  @@index([user, adapterKey, status])
+}
+
+model BenchmarkDatasetCase {
+  id                 String           @id @default(cuid())
+  datasetId          String
+  dataset            BenchmarkDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  externalCaseId     String
+  rawCaseJson        String
+  publicPayloadJson  String
+  privatePayloadJson String
+  sourceFingerprint  String
+  publicFingerprint  String
+  privateFingerprint String
+  ordinal            Int
+  createdAt          DateTime         @default(now())
+
+  runs BenchmarkCaseRun[]
+
+  @@unique([datasetId, externalCaseId])
+  @@unique([datasetId, ordinal])
+  @@index([datasetId])
+}
+
+model BenchmarkExperimentBinding {
+  experimentId       String           @id
+  experiment         Experiment       @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  datasetId          String
+  dataset            BenchmarkDataset @relation(fields: [datasetId], references: [id])
+  datasetContentHash String
+  adapterKey         String
+  selectionJson      String
+  runConfigJson      String
+  schedulerStatus    String           @default("idle")
+  expectedCaseCount  Int
+  callbackOrigin     String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([datasetId])
+  @@index([schedulerStatus])
+}
+
+model BenchmarkCaseRun {
+  id                     String                @id
+  experimentId           String
+  experiment             Experiment            @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  experimentCaseId       String
+  experimentCase         ExperimentCase        @relation(fields: [experimentCaseId], references: [id], onDelete: Cascade)
+  datasetCaseId          String?
+  datasetCase            BenchmarkDatasetCase? @relation(fields: [datasetCaseId], references: [id], onDelete: SetNull)
+  ordinal                Int
+  status                 String                @default("pending")
+  adapterKey             String
+  clientId               String?
+  submissionSource       String                @default("agent")
+  submissionContractJson String?
+  publicPayloadJson      String?
+  privatePayloadJson     String?
+  taskEnvelopeJson       String?
+  taskDigest             String?
+  progressJson           String?
+  runFactsJson           String?
+  cleanupJson            String?
+  completionDigest       String?
+  failureCode            String?
+  failureMessage         String?
+  retryOfRunId           String?
+  lastProgressAt         DateTime?
+  startedAt              DateTime?
+  finishedAt             DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  dispatch    BenchmarkDispatchOutbox?
+  artifacts   BenchmarkArtifact[]
+  evaluations BenchmarkEvaluation[]
+
+  @@unique([experimentCaseId, id])
+  @@index([experimentId, status, ordinal])
+  @@index([clientId, status])
+  @@index([retryOfRunId])
+}
+
+model BenchmarkArtifact {
+  id          String           @id
+  runId       String
+  run         BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  name        String
+  mediaType   String
+  sha256      String
+  sizeBytes   Int
+  storagePath String
+  createdAt   DateTime         @default(now())
+
+  @@unique([runId, name])
+  @@index([runId])
+  @@index([sha256])
+}
+
+model BenchmarkDispatchOutbox {
+  id            String           @id @default(cuid())
+  runId         String           @unique
+  run           BenchmarkCaseRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind          String           @default("agent_execution")
+  commandId     String?          @unique
+  requestJson   String
+  requestDigest String
+  status        String           @default("pending")
+  attemptCount  Int              @default(0)
+  nextAttemptAt DateTime         @default(now())
+  leasedUntil   DateTime?
+  responseJson  String?
+  errorCode     String?
+  errorMessage  String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leasedUntil])
+}
+
+model BenchmarkEvaluation {
+  id                   String           @id
+  caseRunId            String
+  caseRun              BenchmarkCaseRun @relation(fields: [caseRunId], references: [id], onDelete: Cascade)
+  attemptNo            Int              @default(1)
+  retryOfEvaluationId  String?
+  status               String           @default("queued")
+  adapterKey           String
+  evaluatorKey         String
+  evaluatorTargetKey   String?
+  evaluatorBaseUrl     String?
+  requestJson          String
+  requestDigest        String
+  callbackBaseUrl      String
+  timeoutSeconds       Int
+  progressJson         String?
+  rawResultJson        String?
+  rawResultDigest      String?
+  runtimeFactsJson     String?
+  cleanupJson          String?
+  normalizedResultJson String?
+  completionDigest     String?
+  failureCode          String?
+  failureMessage       String?
+  continuationStatus   String           @default("completed")
+  continuationAttempts Int              @default(0)
+  continuationTriedAt  DateTime?
+  continuationError    String?
+  lastProgressAt       DateTime?
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  dispatch  BenchmarkEvaluationDispatchOutbox?
+  artifacts BenchmarkEvaluationArtifact[]
+
+  @@unique([caseRunId, attemptNo])
+  @@index([status, createdAt])
+  @@index([status, updatedAt])
+  @@index([continuationStatus, continuationTriedAt])
+  @@index([retryOfEvaluationId])
+}
+
+model BenchmarkEvaluationArtifact {
+  id           String              @id
+  evaluationId String
+  evaluation   BenchmarkEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  name         String
+  kind         String
+  mediaType    String
+  sha256       String
+  sizeBytes    Int
+  storagePath  String
+  createdAt    DateTime            @default(now())
+
+  @@unique([evaluationId, name])
+  @@index([evaluationId])
+  @@index([sha256])
+}
+
+model BenchmarkEvaluationDispatchOutbox {
+  id                 String              @id @default(cuid())
+  evaluationId       String              @unique
+  evaluation         BenchmarkEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  destinationBaseUrl String?
+  requestJson        String
+  requestDigest      String
+  status             String              @default("pending")
+  attemptCount       Int                 @default(0)
+  nextAttemptAt      DateTime            @default(now())
+  leasedUntil        DateTime?
+  httpStatus         Int?
+  responseJson       String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leasedUntil])
+}
+
+/// 普通评测数据集生成 Trace 的单次尝试。Trace ID 是唯一运行关联键；输入文本不参与绑定。
+model ExperimentTraceAttempt {
+  id             String         @id @default(cuid())
+  experimentId   String
+  experiment     Experiment     @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  caseId         String
+  case           ExperimentCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  attemptNo      Int
+  workerId       String
+  platform       String
+  agent          String
+  model          String?
+  timeoutSeconds Int            @default(180)
+  commandId      String?
+  traceId        String?
+  /// queued|dispatching|running|waiting_trace|retry_wait|ready|failed|cancelled|superseded
+  status         String         @default("queued")
+  failureCode    String?
+  errorMessage   String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([caseId, attemptNo])
+  @@index([experimentId, status])
+  @@index([commandId])
+  @@index([traceId])
+}
+
+/// 一行 = 一个 case × 一个评估器，按统一契约落库（见 src/lib/evaluators/eval-output.ts）：
+/// verdict/summary（结论，卡头默认展示）+ score（0-100 可选，无分不入均分）
+/// + pointsJson（评分点）+ evidenceJson（{md}|{json}）。
+/// 评估失败（status=failed）由平台调用层记录（errorMessage），支持按行单项重评。
+model ExperimentEvalResult {
+  id           String         @id @default(cuid())
+  experimentId String
+  caseId       String
+  case         ExperimentCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  evaluatorId  String
+  /// pending | running | done | failed
+  status       String         @default("pending")
+  /// 结论判定：pass | warn | fail。评估器未上报时前端按 score 派生（deriveVerdict），
+  /// 故此处为空不代表"没有结论"——不落派生值，口径调整后老数据自动跟随。
+  verdict      String?
+  /// 一句话结论（评估器上报，≤200 字），呈现层的主信息；评分点/证据是它的展开明细。
+  summary      String?
+  score        Float?
+  pointsJson   String?
+  evidenceJson String?
+  /// ── 人工修正分（分层存储：机器分 score 只读保留，聚合取 humanScore ?? score）──
+  /// 机器分与人工分的差值是校准评估器的依据，故绝不就地覆盖 score。
+  humanScore   Float?
+  humanReason  String?
+  humanBy      String?
+  humanAt      DateTime?
+  errorMessage String?
+  attempts     Int            @default(0)
+  durationMs   Int?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([caseId, evaluatorId])
+  @@index([experimentId, evaluatorId])
+}
+
+/// 评测评论：对一次评测结果的意见/建议，三粒度共用一张表——
+/// 只有 experimentId = 实验级；带 caseId = 该 case 级；带 resultId = 该评估器结果行级。
+/// 与 ExperimentEvalResult.humanReason 分开：那个是"改分必填的结构化理由"，
+/// 这里是自由的多条讨论。caseId/resultId 不设 FK（实验级联删除已覆盖清理）。
+model ExperimentEvalComment {
+  id           String     @id @default(cuid())
+  experimentId String
+  experiment   Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  caseId       String?
+  resultId     String?
+  /// 评论作者（= 工作区用户名）
+  user         String
+  body         String
+  createdAt    DateTime   @default(now())
+
+  @@index([experimentId, createdAt])
+  @@index([caseId, createdAt])
+  @@index([resultId, createdAt])
+}
+
+/// 平台用量原始事件：默认保留 365 天，只用于短期回溯，不参与"全部"范围统计。
+/// user 存字符串不建外键 —— 与 Execution.user 口径一致，避免用户删除导致历史统计丢失。
+model PlatformUsageEvent {
+  id         String   @id @default(cuid())
+  eventId    String   @unique
+  occurredAt DateTime
+  dateKey    String
+  user       String
+  featureKey String
+  eventKey   String
+  source     String
+  route      String?
+  createdAt  DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([dateKey, featureKey])
+  @@index([user, dateKey, featureKey])
+}
+
+/// 平台用量日聚合：永久保留，"全部"范围只读这张表，因此不受原始事件清理影响。
+model PlatformUsageDaily {
+  dateKey         String
+  user            String
+  featureKey      String
+  eventKey        String
+  count           Int      @default(0)
+  firstOccurredAt DateTime
+  lastOccurredAt  DateTime
+  updatedAt       DateTime @updatedAt
+
+  @@id([dateKey, user, featureKey, eventKey])
+  @@index([dateKey, featureKey])
+  @@index([featureKey, dateKey])
+  @@index([user, dateKey])
+}
+
+// ---------------------------------------------------------------------------
+// Agent RAS 客户端控制面
+// 设计：design/reliability/agent-ras/reliability-client-control-plane.md
+// ---------------------------------------------------------------------------
+
+/// 一次性安装令牌：只保存哈希，注册成功即消费。
+model ReliabilityInstallToken {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  user       String
+  name       String?
+  platform   String?
+  expiresAt  DateTime
+  consumedAt DateTime?
+  clientId   String?
+  createdAt  DateTime  @default(now())
+
+  @@index([user, createdAt])
+}
+
+/// 独立常驻客户端。status 是网络在线度，serviceHealth 是本机进程健康度，两者不可合并。
+model ReliabilityClient {
+  id                   String    @id @default(cuid())
+  clientId             String    @unique
+  user                 String
+  name                 String
+  hostname             String?
+  reportedIp           String?
+  observedIp           String?
+  os                   String?
+  arch                 String?
+  status               String    @default("offline") // online|offline|degraded|disabled
+  serviceHealth        String    @default("unknown") // healthy|degraded|unknown
+  supervisor           String? // systemd|launchd
+  processStartedAt     DateTime?
+  restartCount         Int       @default(0)
+  lastSeenAt           DateTime
+  agentVersion         String?
+  capabilitiesJson     String    @default("{}")
+  capabilitiesRevision String?
+  // 同一台机器改绑到别的账号时，旧记录保留但标记解绑：配置下发历史仍可追溯，
+  // 页面据此显示「已解绑」而非「离线」——后者会让人以为机器只是掉线了。
+  unboundAt            DateTime?
+  unboundToClientId    String?
+  // 稳定的机器标识（macOS IOPlatformUUID / Linux machine-id）。
+  // 没有它就只能靠本机 config.json 认机器，文件一删就会重复建记录。
+  // 可空：旧版本客户端装的记录没有，SQL 里 NULL 互不相等，不会互相冲突。
+  machineId            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  credentials      ReliabilityClientCredential[]
+  commands         ReliabilityCommand[]
+  configs          ReliabilityClientConfig[]
+  deliveries       ReliabilityConfigDelivery[]
+  skillDeployments SkillDeployment[]
+
+  @@unique([user, machineId])
+  @@index([user, lastSeenAt])
+  @@index([user, status])
+}
+
+/// 一次正式 Skill 版本到指定用户端的部署尝试。客户端安装版本与 Skill.activeVersion 独立。
+model SkillDeployment {
+  id                   String                 @id @default(cuid())
+  deploymentId         String                 @unique
+  user                 String
+  skillName            String
+  targetSkillVersion   Int
+  semanticVersion      String?
+  artifactHash         String
+  artifactRef          String                 @unique
+  artifactExpiresAt    DateTime
+  artifactClaimedAt    DateTime?
+  optimizationRecordId String?
+  sourceExecutionId    String
+  clientId             String
+  client               ReliabilityClient      @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+  platform             String
+  targetMode           String
+  originRef            String?
+  previousSkillVersion Int?
+  previousContentHash  String?
+  backupRef            String?
+  direction            String
+  status               String                 @default("CREATED")
+  commandId            String?
+  errorCode            String?
+  errorMessage         String?
+  resultJson           String?
+  idempotencyKey       String
+  createdAt            DateTime               @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  updatedAt            DateTime               @updatedAt
+  events               SkillDeploymentEvent[]
+
+  @@unique([user, idempotencyKey])
+  @@index([clientId, status])
+  @@index([user, skillName, createdAt])
+  @@index([skillName, targetSkillVersion])
+  @@index([commandId])
+}
+
+/// Skill 下发阶段事件；detailJson 只保存受限状态，不保存 Skill 正文或凭证。
+model SkillDeploymentEvent {
+  id           String          @id @default(cuid())
+  deploymentId String
+  deployment   SkillDeployment @relation(fields: [deploymentId], references: [deploymentId], onDelete: Cascade)
+  phase        String
+  status       String
+  detailJson   String          @default("{}")
+  createdAt    DateTime        @default(now())
+
+  @@index([deploymentId, createdAt])
+}
+
+/// 设备凭证：只存哈希，可撤销，按客户端隔离。
+model ReliabilityClientCredential {
+  id             String            @id @default(cuid())
+  clientId       String
+  client         ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  credentialHash String            @unique
+  createdAt      DateTime          @default(now())
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+
+  @@index([clientId, revokedAt])
+}
+
+/// 控制指令审计与幂等。在线不代表送达——只有 receivedAt 非空才算 ACK。
+model ReliabilityCommand {
+  id           String            @id @default(cuid())
+  commandId    String            @unique
+  clientId     String
+  client       ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user         String
+  action       String // APPLY_CLIENT_CONFIG|PREPARE_EXPERIMENT_CASE|RUN_EXPERIMENT_CASE|RUN_BENCHMARK_CASE|REFRESH_CAPABILITIES
+  payloadJson  String            @default("{}")
+  status       String            @default("CREATED") // CREATED|SENT|RECEIVED|RUNNING|SUCCEEDED|FAILED|EXPIRED|DELIVERY_FAILED
+  channel      String? // wss|poll
+  expiresAt    DateTime
+  sentAt       DateTime?
+  receivedAt   DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorCode    String?
+  errorMessage String?
+  resultJson   String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([clientId, status])
+  @@index([user, createdAt])
+  @@index([status, expiresAt])
+}
+
+/// 客户端差异项：只存被修改的 JSON Path，恢复默认等价于删除覆盖项。
+model ReliabilityClientConfig {
+  id            String            @id @default(cuid())
+  clientId      String
+  client        ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user          String
+  platform      String
+  schemaVersion String            @default("1.0")
+  revision      Int               @default(0)
+  overrideJson  String            @default("{}")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([clientId, platform])
+  @@index([user, platform])
+}
+
+/// 不可变权威配置快照。创建后不修改；configRef 只允许绑定客户端拉取。
+model ReliabilityConfigSnapshot {
+  id              String   @id @default(cuid())
+  configRef       String   @unique
+  clientId        String
+  user            String
+  platform        String
+  scope           String   @default("client") // client|experiment
+  schemaVersion   String   @default("1.0")
+  configVersion   String
+  checksum        String
+  configJson      String
+  correlationJson String?
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  @@index([clientId, platform])
+  @@index([expiresAt])
+}
+
+/// 一次配置通知 → 拉取 → 写入 → 加载的完整状态。服务端只能写 saved/sync_notified/notify_failed。
+model ReliabilityConfigDelivery {
+  id            String            @id @default(cuid())
+  deliveryId    String            @unique
+  clientId      String
+  client        ReliabilityClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user          String
+  platform      String
+  configRef     String
+  configVersion String
+  checksum      String
+  commandId     String?
+  status        String            @default("saved") // saved|sync_notified|pulling|written|ras_loaded|notify_failed|pull_failed|write_failed|load_failed|version_mismatch
+  pulledAt      DateTime?
+  writtenAt     DateTime?
+  loadedAt      DateTime?
+  errorCode     String?
+  errorMessage  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([clientId, platform, createdAt])
+  @@index([configRef])
+}
+
+/// RAS 加载回报历史。只有成功回报后页面才能显示「RAS 已加载」。
+model ReliabilityConfigLoad {
+  id            String   @id @default(cuid())
+  clientId      String
+  user          String
+  platform      String
+  scope         String   @default("client")
+  configVersion String
+  checksum      String?
+  rasProcessId  String?
+  status        String // loaded|failed|version_mismatch
+  errorCode     String?
+  errorMessage  String?
+  loadedAt      DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([clientId, platform, loadedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Goal Plus observability overlay
+// Design: design/observability/goal-plus-observability/
+// ---------------------------------------------------------------------------
+
+model GoalPlusSource {
+  id                     String    @id @default(cuid())
+  user                   String
+  sourceId               String
+  workspaceFingerprint   String
+  label                  String?
+  collectorVersion       String?
+  sourceSchemaVersion    Int?
+  firstSeenAt            DateTime  @default(now())
+  lastSeenAt             DateTime  @default(now())
+  lastScanCompletedAt    DateTime?
+  semanticCheckpointJson String?
+
+  goals     GoalPlusGoal[]
+  runs      GoalPlusRun[]
+  links     GoalPlusExecutionLink[]
+  snapshots GoalPlusSemanticSnapshot[]
+
+  @@unique([user, sourceId])
+  @@index([user, lastSeenAt])
+}
+
+model GoalPlusGoal {
+  id                String         @id @default(cuid())
+  sourceDbId        String
+  source            GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalPlusId        String
+  currentRevision   Int
+  status            String
+  phase             String
+  goalDigest        String
+  boundedGoal       String?
+  policyJson        String         @default("{}")
+  triageJson        String?
+  revisionsJson     String         @default("[]")
+  workItemsJson     String         @default("[]")
+  searchTasksJson   String         @default("[]")
+  finalChecksJson   String         @default("[]")
+  activeSessionJson String?
+  nextActionJson    String?
+  sourceCreatedAt   DateTime?
+  sourceUpdatedAt   DateTime?
+  observedAt        DateTime
+
+  runs  GoalPlusRun[]
+  links GoalPlusExecutionLink[]
+
+  @@unique([sourceDbId, goalPlusId])
+  @@index([sourceDbId, status, observedAt])
+}
+
+model GoalPlusRun {
+  id                   String         @id @default(cuid())
+  sourceDbId           String
+  source               GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalDbId             String?
+  goal                 GoalPlusGoal?  @relation(fields: [goalDbId], references: [id], onDelete: SetNull)
+  runId                String
+  frozenSpecId         String
+  sourceRunId          String?
+  replacementRunId     String?
+  state                String
+  strategy             String?
+  metricName           String?
+  metricDirection      String?
+  bestCandidateId      String?
+  bestScore            Float?
+  selectedCandidateId  String?
+  selectedIteration    Int?
+  selectedScore        Float?
+  selectedGitHead      String?
+  selectedArtifactHash String?
+  invalidationReason   String?
+  invalidationSummary  String?
+  budgetUsedJson       String         @default("{}")
+  selectedModelsJson   String         @default("[]")
+  bestJson             String?
+  reportJson           String?
+  sourceCreatedAt      DateTime?
+  invalidatedAt        DateTime?
+  observedAt           DateTime
+
+  candidates    GoalPlusCandidate[]
+  agentSessions GoalPlusAgentSession[]
+  links         GoalPlusExecutionLink[]
+
+  @@unique([sourceDbId, runId])
+  @@index([sourceDbId, state, observedAt])
+  @@index([goalDbId])
+}
+
+model GoalPlusCandidate {
+  id               String      @id @default(cuid())
+  runDbId          String
+  run              GoalPlusRun @relation(fields: [runDbId], references: [id], onDelete: Cascade)
+  candidateId      String
+  status           String
+  selectedModel    String?
+  baseGitHead      String?
+  bestIteration    Int?
+  bestScore        Float?
+  bestArtifactHash String?
+  taskJson         String      @default("{}")
+  scoreReportJson  String?
+  promotionJson    String?
+  observedAt       DateTime
+
+  iterations    GoalPlusIteration[]
+  agentSessions GoalPlusAgentSession[]
+  links         GoalPlusExecutionLink[]
+
+  @@unique([runDbId, candidateId])
+  @@index([runDbId, status])
+}
+
+model GoalPlusIteration {
+  id               String            @id @default(cuid())
+  candidateDbId    String
+  candidate        GoalPlusCandidate @relation(fields: [candidateDbId], references: [id], onDelete: Cascade)
+  iteration        Int
+  agentSessionId   String?
+  selectedModel    String?
+  score            Float?
+  processPassed    Boolean?
+  disposition      String?
+  failureClass     String?
+  gitHead          String?
+  ledgerGitHead    String?
+  artifactHash     String?
+  changedFilesJson String            @default("[]")
+  metricsJson      String            @default("{}")
+  summary          String?
+  hypothesis       String?
+  sourceCreatedAt  DateTime?
+  observedAt       DateTime
+
+  @@unique([candidateDbId, iteration])
+  @@index([agentSessionId])
+}
+
+model GoalPlusAgentSession {
+  id                    String             @id @default(cuid())
+  runDbId               String
+  run                   GoalPlusRun        @relation(fields: [runDbId], references: [id], onDelete: Cascade)
+  candidateDbId         String?
+  candidate             GoalPlusCandidate? @relation(fields: [candidateDbId], references: [id], onDelete: SetNull)
+  agentSessionId        String
+  host                  String
+  role                  String
+  nativeSessionId       String?
+  taskName              String?
+  transcriptFingerprint String?
+  selectedModel         String?
+  usageJson             String             @default("{}")
+  hostMetadataJson      String             @default("{}")
+  countersJson          String             @default("{}")
+  sourceCreatedAt       DateTime?
+  sourceUpdatedAt       DateTime?
+  observedAt            DateTime
+
+  links GoalPlusExecutionLink[]
+
+  @@unique([runDbId, agentSessionId])
+  @@index([nativeSessionId])
+  @@index([taskName])
+}
+
+model GoalPlusExecutionLink {
+  id               String                @id @default(cuid())
+  sourceDbId       String
+  source           GoalPlusSource        @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  goalDbId         String?
+  goal             GoalPlusGoal?         @relation(fields: [goalDbId], references: [id], onDelete: SetNull)
+  runDbId          String?
+  run              GoalPlusRun?          @relation(fields: [runDbId], references: [id], onDelete: SetNull)
+  candidateDbId    String?
+  candidate        GoalPlusCandidate?    @relation(fields: [candidateDbId], references: [id], onDelete: SetNull)
+  agentSessionDbId String?
+  agentSession     GoalPlusAgentSession? @relation(fields: [agentSessionDbId], references: [id], onDelete: SetNull)
+  executionId      String
+  execution        Execution             @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  role             String
+  linkMethod       String
+  linkState        String
+  priority         Int
+  evidenceJson     String?
+  linkedAt         DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([sourceDbId, executionId, role])
+  @@index([executionId])
+  @@index([agentSessionDbId, linkState])
+  @@index([goalDbId, linkState])
+  @@index([runDbId, linkState])
+}
+
+model GoalPlusSemanticSnapshot {
+  id                   String         @id @default(cuid())
+  sourceDbId           String
+  source               GoalPlusSource @relation(fields: [sourceDbId], references: [id], onDelete: Cascade)
+  snapshotId           String
+  kind                 String
+  objectKey            String
+  parentKeysJson       String         @default("{}")
+  contentHash          String
+  sourceSchemaVersion  Int?
+  sanitizedPayloadJson String
+  redactionJson        String         @default("{}")
+  observedAt           DateTime
+  ingestedAt           DateTime       @default(now())
+
+  @@unique([sourceDbId, snapshotId])
+  @@index([sourceDbId, kind, objectKey, observedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Cross-session collaboration trace overlay
+// Designs: design/observability/cross-session-collaboration*/
+// ---------------------------------------------------------------------------
+
+model Collaboration {
+  id              String  @id @default(cuid())
+  user            String
+  collaborationId String
+  sourceType      String  @default("reported") // reported | goal-plus-semantic
+  sourceRef       String?
+  diagnosticsJson String  @default("[]")
+  createdAt       String
+  updatedAt       String  @default(dbgenerated("CURRENT_TIMESTAMP"))
+
+  events CollaborationEvent[]
+
+  @@unique([user, collaborationId])
+  @@unique([user, sourceType, sourceRef])
+  @@index([user, updatedAt])
+}
+
+model CollaborationEvent {
+  id                String         @id @default(cuid())
+  collaborationDbId String?
+  collaboration     Collaboration? @relation(fields: [collaborationDbId], references: [id], onDelete: Cascade)
+  user              String
+  collaborationId   String
+  eventId           String
+  fromSessionId     String?
+  toSessionId       String?
+  description       String?
+  observedAt        DateTime?
+  content           String?
+  fromLocatorJson   String?
+  sourceType        String         @default("reported") // reported | goal-plus-semantic
+  sourceRef         String?
+  relationKind      String?
+  role              String?
+  eventBodyJson     String         @map("bodyJson")
+  contentHash       String         @map("bodyHash")
+  receivedAt        String
+
+  endpointResolutions CollaborationEndpointResolution[]
+
+  @@unique([collaborationDbId, eventId])
+  @@unique([user, collaborationId, eventId])
+  @@index([collaborationDbId, receivedAt])
+  @@index([user, collaborationId, receivedAt, id])
+  @@index([fromSessionId])
+  @@index([toSessionId])
+  @@index([sourceType, sourceRef])
+}
+
+model CollaborationEndpointResolution {
+  id           String             @id @default(cuid())
+  eventDbId    String
+  event        CollaborationEvent @relation(fields: [eventDbId], references: [id], onDelete: Cascade)
+  side         String // from | to
+  executionId  String?
+  execution    Execution?         @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  linkState    String             @default("pending") // pending | linked | ambiguous | superseded
+  linkMethod   String?
+  evidenceJson String             @default("{}")
+  anchorState  String?
+  anchorJson   String?
+  resolvedAt   DateTime?
+  updatedAt    DateTime           @default(now()) @updatedAt
+
+  @@unique([eventDbId, side])
+  @@index([executionId])
+  @@index([linkState, updatedAt])
+}
+
+model CollaborationSessionBinding {
+  id              String @id @default(cuid())
+  user            String
+  collaborationId String
+  sessionId       String
+  traceSessionId  String
+  eventClock      String
+  createdAt       String
+
+  @@unique([user, collaborationId, sessionId])
+}
+
+model TraceDatasetGenerationJob {
+  id                  String           @id
+  datasetId           String           @unique
+  dataset             AgentEvalDataset @relation(fields: [datasetId], references: [id])
+  owner               String
+  configJson          String
+  status              String           @default("queued")
+  stage               String           @default("queued")
+  stageIndex          Int              @default(0)
+  generatedCount      Int              @default(0)
+  errorCode           String?
+  errorMessage        String?
+  leaseEpoch          Int              @default(0)
+  leaseOwner          String?
+  leaseUntil          DateTime?
+  cancelRequested     Boolean          @default(false)
+  requestId           String
+  requestHash         String
+  captureState        String           @default("pending")
+  captureManifestHash String?
+  attemptCount        Int              @default(0)
+  nextEligibleAt      DateTime?
+  cleanupPending      Boolean          @default(false)
+  deletionId          String?          @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@unique([owner, requestId])
+  @@index([owner, status, createdAt])
+  @@index([status, leaseUntil])
+}
+
+model TraceDatasetOperationReceipt {
+  id               String    @id
+  ownerKey         String
+  kind             String
+  operationKey     String
+  requestHash      String?
+  datasetId        String?
+  jobId            String?
+  deletionId       String?
+  outcome          String
+  expiresAt        DateTime?
+  clockHighWaterMs BigInt?
+
+  @@unique([ownerKey, kind, operationKey])
+  @@index([expiresAt])
+}

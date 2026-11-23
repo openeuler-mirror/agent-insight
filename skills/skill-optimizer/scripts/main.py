@@ -1,9 +1,24 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import argparse
 import datetime
 import logging
 import os
 import re
 import sys
+import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -16,7 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from architecture.genome import SkillGenome
-from constants import ENV_FILE
+from constants import ENV_FILE, GLOBAL_CONFIG_DIR
 from engine.report_generator import OptimizationReportGenerator
 from optimizer import SkillOptimizer
 from skill_insight_api import get_skill_logs
@@ -32,25 +47,29 @@ logger = logging.getLogger(__name__)
 # --- LLM Client Setup ---
 class RealLLMClient:
     def __init__(self):
-        # 优先检查 DEEPSEEK 配置
-        deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-
-        if deepseek_api_key:
-            # 使用 DeepSeek 配置
+        # Override: if LLM_* env vars are set, use them directly
+        llm_key = os.getenv("LLM_API_KEY")
+        if llm_key:
+            api_key = llm_key
+            base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/")
+            model_name = os.getenv("LLM_MODEL", "deepseek-chat")
+        elif os.getenv("DEEPSEEK_API_KEY"):
+            api_key = os.getenv("DEEPSEEK_API_KEY")
             base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/")
             model_name = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-            api_key = deepseek_api_key
-        elif openai_api_key:
-            # 使用 OpenAI 配置
+        elif os.getenv("OPENAI_API_KEY"):
+            api_key = os.getenv("OPENAI_API_KEY")
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
             model_name = os.getenv("OPENAI_MODEL", "gpt-4")
-            api_key = openai_api_key
+        elif os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"):
+            api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+            model_name = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         else:
             from constants import ENV_FILE
 
             raise ValueError(
-                f"\n❌ Error: Neither DEEPSEEK_API_KEY nor OPENAI_API_KEY is set.\n"
+                f"\n❌ Error: No API key found in environment.\n"
                 f"Please configure your AI model API key in the environment file:\n"
                 f"   -> {ENV_FILE.absolute()}\n"
                 f"Alternatively, you can run './scripts/opt.sh --help' to use the interactive setup."
@@ -65,6 +84,7 @@ class RealLLMClient:
             max_tokens=8192,
             request_timeout=300.0,
         )
+        logger.info(f"[RealLLM] Using base_url={base_url}, model={model_name}")
 
     def __call__(self, prompt):
         logger.info(f"\n[RealLLM] Sending Prompt (truncated): {prompt[:100]}...")
@@ -176,16 +196,17 @@ def integrate_auxiliary_references(
         return skill_content
     
     auxiliary_meta = auxiliary_meta or {}
-    section_titles = ["## 辅助文件", "## 相关文件", "## auxiliary files", "## related files"]
-    content_lower = skill_content.lower()
-    has_section = any(title.lower() in content_lower for title in section_titles)
+    section_heading_re = re.compile(
+        r"(?im)^\s*##\s*(辅助文件|相关文件|auxiliary files|related files)\s*$"
+    )
+    has_section = bool(section_heading_re.search(skill_content))
     should_replace = has_section and ("由优化器自动创建" in skill_content)
 
     base_content = skill_content
     if should_replace:
-        idx = content_lower.rfind("## 辅助文件")
-        if idx != -1:
-            base_content = skill_content[:idx].rstrip()
+        matches = list(section_heading_re.finditer(skill_content))
+        if matches:
+            base_content = skill_content[: matches[-1].start()].rstrip()
 
     excluded_prefixes = ("snapshots/", ".opt/")
     excluded_exact = {
@@ -290,6 +311,7 @@ def integrate_auxiliary_references(
     entrypoints: list[str] = []
     references: list[str] = []
     others: list[str] = []
+    content_lower = skill_content.lower()
 
     def is_entrypoint_script(rel_path: str, summary: str) -> bool:
         if not rel_path.startswith("scripts/"):
@@ -310,6 +332,16 @@ def integrate_auxiliary_references(
             continue
         if not (rel_path.startswith("scripts/") or rel_path.startswith("references/")):
             continue
+        if not should_replace:
+            if rel_path.lower() in content_lower:
+                continue
+            base = Path(rel_path).name
+            if base and base != rel_path:
+                if re.search(
+                    rf"(?i)(?<![A-Za-z0-9._-]){re.escape(base)}(?![A-Za-z0-9._-])",
+                    skill_content,
+                ):
+                    continue
         summary = ensure_summary(rel_path)
         is_ref = rel_path.startswith("references/")
         is_entry = is_entrypoint_script(rel_path, summary)
@@ -371,35 +403,39 @@ def integrate_auxiliary_references(
 
         return block + "\n" + content.lstrip("\n")
 
-    section = "\n\n## 辅助文件\n\n"
-    if entrypoints:
-        section += "### 执行入口\n\n"
-        for p in entrypoints:
-            section += line_for(p)
-        section += "\n"
-    if references:
-        section += "### 参考资料\n\n"
-        for p in references:
-            section += line_for(p)
-        section += "\n"
-    if others:
-        section += "### 其他\n\n"
-        for p in others:
-            section += line_for(p)
-        section += "\n"
+    section = ""
+    if entrypoints or references or others:
+        section = "\n\n## 辅助文件\n\n"
+        if entrypoints:
+            section += "### 执行入口\n\n"
+            for p in entrypoints:
+                section += line_for(p)
+            section += "\n"
+        if references:
+            section += "### 参考资料\n\n"
+            for p in references:
+                section += line_for(p)
+            section += "\n"
+        if others:
+            section += "### 其他\n\n"
+            for p in others:
+                section += line_for(p)
+            section += "\n"
 
     if has_section and not should_replace:
         injected = inject_progressive_references(skill_content)
         return injected
 
     injected = inject_progressive_references(base_content)
+    if not section:
+        return injected.rstrip() + "\n"
     return injected.rstrip() + section.rstrip() + "\n"
 
 
 def extract_referenced_skill_paths(skill_content: str) -> set[str]:
     if not skill_content:
         return set()
-    matches = re.findall(r"\b(?:scripts|references)/[A-Za-z0-9._/\-]+\b", skill_content)
+    matches = re.findall(r"\b(?:scripts|references)/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+\b", skill_content)
     return set(matches)
 
 
@@ -466,24 +502,108 @@ def print_completion_summary(
     print("=" * 60)
 
 
+def _resolve_skill_dir_in_workspace(workspace_dir: Path, skill_name: str) -> Path:
+    """Resolve the inner skill directory path within a workspace.
+
+    The workspace has a two-layer structure:
+      workspace_dir/           <- outer: snapshots, reports, etc.
+        skill-name/            <- inner: pure skill content (SKILL.md + auxiliary files)
+
+    When iterating on an existing workspace (input has snapshots),
+    the skill content lives in the workspace root for backward compatibility.
+    """
+    inner_dir = workspace_dir / skill_name
+    if inner_dir.exists() and (inner_dir / "SKILL.md").exists():
+        return inner_dir
+    if (workspace_dir / "SKILL.md").exists():
+        return workspace_dir
+    return inner_dir
+
+
+def _sync_skill_to_inner_dir(skill_dir: Path, inner_dir: Path, skill_name: str):
+    """Sync pure skill files from skill_dir to inner_dir within the workspace.
+
+    Only copies SKILL.md and auxiliary files (scripts/, references/),
+    excluding snapshots, reports, diagnoses, and other process artifacts.
+    """
+    import shutil
+
+    inner_dir.mkdir(parents=True, exist_ok=True)
+
+    exclude_names = {
+        "snapshots", ".git", "__pycache__", "node_modules",
+        ".venv", "venv", ".opt", "diagnoses.json",
+        "OPTIMIZATION_REPORT.md", "AUXILIARY_META.json",
+    }
+
+    for item in skill_dir.iterdir():
+        if item.name in exclude_names:
+            continue
+        if item.name.startswith("."):
+            continue
+        dest = inner_dir / item.name
+        if item.is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(item, dest)
+        else:
+            shutil.copy2(item, dest)
+
+    logger.info(f"Synced pure skill content to inner dir: {inner_dir}")
+
+
+def _archive_old_skill(skill_name: str, opencode_skills_dir: Path) -> Optional[Path]:
+    """Archive an old skill from .opencode/skills/ to ~/.agent-insight/skill-history/.
+
+    Handles name collisions by appending timestamp and optional index suffix.
+
+    Returns:
+        Path to the archive directory if archived, None if nothing to archive.
+    """
+    import shutil
+    from pathlib import Path
+
+    old_skill_dir = opencode_skills_dir / skill_name
+    if not old_skill_dir.exists():
+        return None
+
+    history_base = GLOBAL_CONFIG_DIR / "skill-history"
+    history_base.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_dir = history_base / f"{skill_name}-{timestamp}"
+
+    if archive_dir.exists():
+        idx = 1
+        while (history_base / f"{skill_name}-{timestamp}-{idx}").exists():
+            idx += 1
+        archive_dir = history_base / f"{skill_name}-{timestamp}-{idx}"
+
+    shutil.move(str(old_skill_dir), str(archive_dir))
+    logger.info(f"Archived old skill to: {archive_dir}")
+    return archive_dir
+
+
 def run_optimizer(
     mode: str,
     input_path: Path,
-    output_path: Optional[Path] = None,
+    project_dir: Path,
     human_feedback: Optional[str] = None,
+    trajectories: Optional[Path] = None,
     open_diff: bool = True,
 ) -> List[Path]:
     """
     Main entry point for function calls.
 
     Args:
-        mode: 'static' or 'dynamic' or 'hybrid'
+        mode: 'static' or 'dynamic' or 'feedback' or 'traces'
         input_path: Path to input directory or file
-        output_path: Path to output directory (optional)
+        project_dir: Project root directory for creating the optimized workspace
         human_feedback: Optional human feedback content to guide optimization
+        open_diff: Whether to open diff in browser
 
     Returns:
-        List[Path]: List of paths to the optimized skill directories
+        List[Path]: List of paths to the optimized skill directories (inner skill dirs)
     """
 
     load_dotenv(ENV_FILE)
@@ -503,37 +623,53 @@ def run_optimizer(
     input_path = Path(input_path).resolve()
     input_dir = input_path.parent if input_path.is_file() else input_path
 
-    if output_path:
-        workspace_dir = Path(output_path).resolve()
+    # Determine the skill name from the input directory
+    # For iteration on existing workspaces, try to find the inner skill dir first
+    skill_name = input_dir.name
+    if (input_dir / "snapshots").exists():
+        # This is an existing workspace - look for inner skill dir
+        for sub in input_dir.iterdir():
+            if sub.is_dir() and (sub / "SKILL.md").exists() and sub.name != "snapshots":
+                skill_name = sub.name
+                break
+
+    # Check if input_dir already looks like a workspace (has snapshots)
+    if (input_dir / "snapshots").exists():
+        workspace_dir = input_dir
     else:
-        # If no output_path is provided:
-        # Check if input_dir already looks like a workspace (has snapshots)
-        if (input_dir / "snapshots").exists():
-            workspace_dir = input_dir
-        else:
-            # Otherwise, create a new timestamped directory next to input_dir
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            workspace_dir = input_dir.parent / f"{input_dir.name}-optimized-{timestamp}"
+        base_dir = Path(project_dir).resolve()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        workspace_dir = base_dir / f"{input_dir.name}-optimized-{timestamp}"
+
+    # Determine if this is a new workspace (first-time optimization) or iteration
+    is_new_workspace = workspace_dir != input_dir and not workspace_dir.exists()
 
     # Initialize workspace if it's new
-    if workspace_dir != input_dir and not workspace_dir.exists():
+    # Two-layer structure: workspace_dir/ (outer) -> skill_name/ (inner, pure skill)
+    if is_new_workspace:
         import shutil
+        inner_skill_dir = workspace_dir / skill_name
+
         def ignore_patterns(d, contents):
             return ['snapshots', '.git', '__pycache__', 'node_modules', '.venv', 'venv', '.opt']
-        shutil.copytree(input_dir, workspace_dir, ignore=ignore_patterns)
+        shutil.copytree(input_dir, inner_skill_dir, ignore=ignore_patterns)
         logger.info(f"Created new workspace: {workspace_dir}")
+        logger.info(f"Inner skill directory: {inner_skill_dir}")
+    else:
+        inner_skill_dir = _resolve_skill_dir_in_workspace(workspace_dir, skill_name)
+        # Ensure inner skill dir exists for iteration on existing workspaces
+        if not inner_skill_dir.exists() or not (inner_skill_dir / "SKILL.md").exists():
+            # Backward compat: if workspace root has SKILL.md, create inner dir
+            if (workspace_dir / "SKILL.md").exists():
+                _sync_skill_to_inner_dir(workspace_dir, inner_skill_dir, skill_name)
 
-    # 3. Locate SKILL.md
+    # 3. Locate SKILL.md - search in the inner skill directory
     skill_files = []
     explicit_skill_file = input_path.is_file() and input_path.name.lower() == "skill.md"
     if explicit_skill_file:
-        try:
-            rel_path = input_path.relative_to(input_dir)
-            skill_files.append(workspace_dir / rel_path)
-        except ValueError:
-            skill_files.append(workspace_dir / "SKILL.md")
+        skill_files.append(inner_skill_dir / "SKILL.md")
     else:
-        skill_files = list(workspace_dir.rglob("SKILL.md"))  # Recursive search
+        skill_files = list(inner_skill_dir.rglob("SKILL.md"))
 
     if explicit_skill_file:
         skill_files = [f for f in skill_files if f.exists()]
@@ -546,7 +682,7 @@ def run_optimizer(
     skill_files.sort()
 
     if not skill_files:
-        logger.error(f"No SKILL.md found in {workspace_dir}")
+        logger.error(f"No SKILL.md found in {inner_skill_dir}")
         return []
 
     logger.info(f"Found {len(skill_files)} skill(s) to process in workspace {workspace_dir}.")
@@ -593,8 +729,45 @@ def run_optimizer(
             elif mode == "dynamic":
                 logger.info("Mode: Dynamic (Experience Crystallization)")
                 logger.info("⏳ [进度] 正在获取历史执行记录...")
-                report_items = get_skill_logs(skill=initial_genome.name, limit=3)
-                logger.info("⏳ [进度] 正在执行动态优化（经验结晶）...")
+                try:
+                    report_items = get_skill_logs(skill=initial_genome.name, limit=3)
+                except ValueError as e:
+                    logger.warning(str(e))
+                    print("\n" + "=" * 60)
+                    print("⚠️ Agent Insight 平台配置不可用，无法获取执行日志。")
+                    print("动态优化需要执行日志中的优化建议，请先配置 Agent Insight 平台。")
+                    print("配置方式：在 ~/.agent-insight/.env 中设置 AGENT_INSIGHT_HOST 和 AGENT_INSIGHT_API_KEY")
+                    print("=" * 60)
+                    continue
+
+                if not report_items:
+                    print("\n" + "=" * 60)
+                    print("⚠️ 未获取到执行日志，无法进行动态优化。")
+                    print(f"Skill: {initial_genome.name}")
+                    print("可能原因：该 Skill 尚未在 Insight 平台上运行过，没有历史执行记录。")
+                    print("建议：先运行该 Skill 产生执行日志，或改用 static 模式进行优化。")
+                    print("=" * 60)
+                    continue
+
+                suggestion_count = 0
+                for item in report_items:
+                    issues = item.get("skill_issues")
+                    if isinstance(issues, list):
+                        for issue in issues:
+                            if isinstance(issue, dict) and issue.get("improvement_suggestion"):
+                                suggestion_count += 1
+
+                if suggestion_count == 0:
+                    print("\n" + "=" * 60)
+                    print("⚠️ 执行日志中未包含优化建议（improvement_suggestion），无法进行动态优化。")
+                    print(f"Skill: {initial_genome.name}")
+                    print(f"获取到 {len(report_items)} 条执行日志，但其中没有包含 improvement_suggestion 优化建议。")
+                    print("建议：改用 static 模式进行优化。")
+                    print("=" * 60)
+                    continue
+
+                logger.info(f"📊 获取到 {len(report_items)} 条执行日志，共 {suggestion_count} 条优化建议。")
+                logger.info("⏳ [进度] 正在执行动态优化...")
                 logger.info("⏳ [进度] 预计需要 3-5 分钟，请耐心等待...")
                 logger.info("⏳ [进度] LLM 调用中...")
                 optimized_genome, diagnoses = optimizer.optimize_dynamic(
@@ -604,18 +777,81 @@ def run_optimizer(
             elif mode == "hybrid":
                 logger.info("Mode: Hybrid (Static + Dynamic)")
                 logger.info("⏳ [进度] 正在获取历史执行记录...")
-                report_items = get_skill_logs(skill=initial_genome.name, limit=3)
-                logger.info("⏳ [进度] 正在执行混合优化（静态 + 动态）...")
-                logger.info("⏳ [进度] 预计需要 5-8 分钟，请耐心等待...")
+                try:
+                    report_items = get_skill_logs(skill=initial_genome.name, limit=3)
+                except ValueError as e:
+                    logger.warning(str(e))
+                    logger.warning("Agent Insight 配置不可用，降级为 static 模式。")
+                    print("\n" + "=" * 60)
+                    print("⚠️ Agent Insight 平台配置不可用，降级为静态优化模式。")
+                    print("=" * 60)
+                    optimized_genome, diagnoses = optimizer.optimize_static(skill_file)
+                else:
+                    if not report_items:
+                        logger.warning("未获取到执行日志，降级为静态优化模式。")
+                        print("\n" + "=" * 60)
+                        print("⚠️ 未获取到执行日志，降级为静态优化模式。")
+                        print(f"Skill: {initial_genome.name}")
+                        print("建议：先运行该 Skill 产生执行日志后再尝试混合优化。")
+                        print("=" * 60)
+                        optimized_genome, diagnoses = optimizer.optimize_static(skill_file)
+                    else:
+                        suggestion_count = 0
+                        for item in report_items:
+                            issues = item.get("skill_issues")
+                            if isinstance(issues, list):
+                                for issue in issues:
+                                    if isinstance(issue, dict) and issue.get("improvement_suggestion"):
+                                        suggestion_count += 1
+
+                        if suggestion_count == 0:
+                            logger.warning("执行日志中未包含优化建议，降级为静态优化模式。")
+                            print("\n" + "=" * 60)
+                            print("⚠️ 执行日志中未包含优化建议（improvement_suggestion），降级为静态优化模式。")
+                            print(f"Skill: {initial_genome.name}")
+                            print(f"获取到 {len(report_items)} 条执行日志，但其中没有包含 improvement_suggestion 优化建议。")
+                            print("=" * 60)
+                            optimized_genome, diagnoses = optimizer.optimize_static(skill_file)
+                        else:
+                            logger.info(f"📊 获取到 {len(report_items)} 条执行日志，共 {suggestion_count} 条优化建议。")
+                            logger.info("⏳ [进度] 正在执行混合优化（静态 + 动态）...")
+                            logger.info("⏳ [进度] 预计需要 5-8 分钟，请耐心等待...")
+                            logger.info("⏳ [进度] LLM 调用中...")
+                            optimized_genome, diagnoses = optimizer.optimize_hybrid(
+                                skill_path=skill_file,
+                                report_items=report_items,
+                            )
+
+            elif mode == "trace":
+                logger.info("Mode: Trace (Trajectory-Driven Optimization)")
+                if not trajectories:
+                    print("\n" + "=" * 60)
+                    print("⚠️ 轨迹目录未提供，无法进行轨迹优化。")
+                    print("请使用 --trajectories 参数指定轨迹目录。")
+                    print("=" * 60)
+                    continue
+
+                trajectory_path = Path(trajectories)
+                if not trajectory_path.exists():
+                    print("\n" + "=" * 60)
+                    print(f"⚠️ 轨迹目录不存在: {trajectory_path}")
+                    print("=" * 60)
+                    continue
+
+                logger.info(f"📂 轨迹目录: {trajectory_path}")
+                logger.info("⏳ [进度] 正在执行轨迹分析...")
+                logger.info("⏳ [进度] 预计需要 5-10 分钟，请耐心等待...")
                 logger.info("⏳ [进度] LLM 调用中...")
-                optimized_genome, diagnoses = optimizer.optimize_hybrid(
+                optimized_genome, diagnoses = optimizer.optimize_trace(
                     skill_path=skill_file,
-                    report_items=report_items,
+                    trajectories=trajectory_path,
+                    project_path=workspace_dir,
                 )
 
             # 5. Save Result
             from snapshot_manager import SnapshotManager
-            sm = SnapshotManager(skill_file.parent)
+            workspace_snapshots_dir = workspace_dir / "snapshots"
+            sm = SnapshotManager(inner_skill_dir, snapshots_dir=workspace_snapshots_dir)
             sm.create_v0_if_needed()
             base_for_diff = (
                 sm.get_current_base_version()
@@ -650,6 +886,7 @@ def run_optimizer(
 
                 referenced = extract_referenced_skill_paths(new_content)
                 if referenced:
+                    initial_referenced = initial_genome.referenced_files
                     missing = []
                     for p in referenced:
                         if p in optimized_genome.files:
@@ -658,6 +895,9 @@ def run_optimizer(
                             optimized_genome.files[p] = initial_genome.files[p]
                             if p in initial_genome.file_meta and p not in optimized_genome.file_meta:
                                 optimized_genome.file_meta[p] = initial_genome.file_meta[p]
+                            continue
+                        if p in initial_referenced:
+                            logger.info(f"Referenced file {p} was missing in original SKILL.md, skipping validation")
                             continue
                         missing.append(p)
                     if missing:
@@ -783,20 +1023,33 @@ def run_optimizer(
             # Also update the actual skill directory to match the latest snapshot
             sm.revert_to(new_version)
 
+            # Copy optimization report to workspace root for easy access
+            if optimized_genome and diagnoses:
+                snapshot_report = skill_save_dir / "OPTIMIZATION_REPORT.md"
+                if snapshot_report.exists():
+                    import shutil
+                    workspace_report = workspace_dir / "OPTIMIZATION_REPORT.md"
+                    shutil.copy2(snapshot_report, workspace_report)
+                    logger.info(f"Copied optimization report to workspace root: {workspace_report}")
+
             diff_open_payload = {
                 "snapshots_dir": sm.snapshots_dir,
                 "title": initial_genome.name,
                 "default_base": base_for_diff,
                 "default_current": new_version,
-                "skill_dir": skill_file.parent,
+                "skill_dir": inner_skill_dir,
             }
 
-            # Record successful optimization path
-            optimized_paths.append(skill_save_dir)
+            # Record successful optimization path (inner skill dir for loading/uploading)
+            optimized_paths.append(inner_skill_dir)
             logger.info(f"Optimization completed for: {skill_file}. New version: {new_version}")
+            logger.info(f"Inner skill directory (for loading): {inner_skill_dir}")
+            logger.info(f"Workspace directory (for iteration): {workspace_dir}")
             
             print("\n" + "=" * 60)
             print(f"✅ 优化完成！已生成新版本: {new_version}")
+            print(f"📁 工作区目录（含快照与报告）: {workspace_dir}")
+            print(f"📁 Skill 目录（可加载到 .opencode/skills）: {inner_skill_dir}")
             print("👉 Diff 页面将在本次运行结束后生成（必要时自动打开）。")
             print("👉 下一步选择：满意就继续下一步 / 不满意先改 / 到此为止")
             print("=" * 60 + "\n")
@@ -855,8 +1108,14 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["static", "dynamic", "feedback", "hybrid"],
-        help="Optimization mode: static (cold) or dynamic (trace-based) or feedback (human revision) or hybrid (static+dynamic). Required for 'optimize' action.",
+        choices=["static", "dynamic", "feedback", "trace"],
+        help="Optimization mode: static (cold), dynamic (trace-based), feedback (human revision), or trace (Trace2Skill). Required for 'optimize' action.",
+    )
+    parser.add_argument(
+        "--trajectories",
+        "-t",
+        type=str,
+        help="Path to trajectories directory. Required for --mode trace.",
     )
     parser.add_argument(
         "--input",
@@ -866,10 +1125,11 @@ def main():
         help="Input path (directory containing SKILL.md or file path)",
     )
     parser.add_argument(
-        "--output",
-        "-o",
+        "--project-dir",
+        "-p",
         type=str,
-        help="Output directory (optional, defaults to input dir)",
+        required=True,
+        help="Project root directory where the optimized workspace will be created.",
     )
     parser.add_argument(
         "--no-open-diff",
@@ -895,10 +1155,32 @@ def main():
     if args.action == "accept":
         from snapshot_manager import SnapshotManager
         skill_dir = input_path.parent if input_path.is_file() else input_path
-        if not (skill_dir / "snapshots").exists():
+        snapshots_dir = skill_dir / "snapshots"
+        inner_skill_dir = None
+        if snapshots_dir.exists():
+            # Two-layer workspace: snapshots in workspace root, find inner skill dir
+            for sub in skill_dir.iterdir():
+                if sub.is_dir() and sub.name != "snapshots" and (sub / "SKILL.md").exists():
+                    inner_skill_dir = sub
+                    break
+            if inner_skill_dir is None:
+                # Single-layer workspace (backward compat): skill_dir has SKILL.md directly
+                if (skill_dir / "SKILL.md").exists():
+                    inner_skill_dir = skill_dir
+        else:
+            # Single-layer workspace: snapshots inside skill dir
+            for sub in skill_dir.iterdir():
+                if sub.is_dir() and (sub / "SKILL.md").exists() and (sub / "snapshots").exists():
+                    inner_skill_dir = sub
+                    snapshots_dir = sub / "snapshots"
+                    break
+            if inner_skill_dir is None:
+                if (skill_dir / "SKILL.md").exists():
+                    inner_skill_dir = skill_dir
+        if not snapshots_dir.exists():
             logger.error(f"❌ 目录 {skill_dir} 中没有 snapshots。请确保你在已优化的工作区中执行 accept。")
             return
-        sm = SnapshotManager(skill_dir)
+        sm = SnapshotManager(inner_skill_dir, snapshots_dir=snapshots_dir if snapshots_dir != inner_skill_dir / "snapshots" else None)
         new_ver = sm.accept_latest()
         if new_ver:
             sm.revert_to(new_ver)
@@ -912,10 +1194,29 @@ def main():
             parser.error("--target-version is required for 'revert' action")
         from snapshot_manager import SnapshotManager
         skill_dir = input_path.parent if input_path.is_file() else input_path
-        if not (skill_dir / "snapshots").exists():
+        snapshots_dir = skill_dir / "snapshots"
+        inner_skill_dir = None
+        if snapshots_dir.exists():
+            for sub in skill_dir.iterdir():
+                if sub.is_dir() and sub.name != "snapshots" and (sub / "SKILL.md").exists():
+                    inner_skill_dir = sub
+                    break
+            if inner_skill_dir is None:
+                if (skill_dir / "SKILL.md").exists():
+                    inner_skill_dir = skill_dir
+        else:
+            for sub in skill_dir.iterdir():
+                if sub.is_dir() and (sub / "SKILL.md").exists() and (sub / "snapshots").exists():
+                    inner_skill_dir = sub
+                    snapshots_dir = sub / "snapshots"
+                    break
+            if inner_skill_dir is None:
+                if (skill_dir / "SKILL.md").exists():
+                    inner_skill_dir = skill_dir
+        if not snapshots_dir.exists():
             logger.error(f"❌ 目录 {skill_dir} 中没有 snapshots。请确保你在已优化的工作区中执行 revert。")
             return
-        sm = SnapshotManager(skill_dir)
+        sm = SnapshotManager(inner_skill_dir, snapshots_dir=snapshots_dir if snapshots_dir != inner_skill_dir / "snapshots" else None)
         if sm.revert_to(args.target_version):
             logger.info(f"✅ 成功回滚到版本: {args.target_version}")
         else:
@@ -924,8 +1225,8 @@ def main():
 
     if not args.mode:
         parser.error("--mode is required for 'optimize' action")
-
-    output_path = Path(args.output) if args.output else None
+        
+    trajectories_path = Path(args.trajectories) if args.trajectories else None
 
     try:
         human_feedback_content = resolve_human_feedback_content(args.mode, args.feedback)
@@ -937,8 +1238,9 @@ def main():
     optimized_paths = run_optimizer(
         args.mode,
         input_path,
-        output_path,
+        project_dir=Path(args.project_dir),
         human_feedback=human_feedback_content,
+        trajectories=trajectories_path,
         open_diff=not args.no_open_diff,
     )
 

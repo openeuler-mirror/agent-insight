@@ -1,0 +1,293 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { freezeCustomEvaluators, type CustomSnapshots } from '@/lib/evaluators/evaluator-skill-service'
+import { resolveAgentOptions } from '../../../packages/agent-runtime/index.cjs'
+import { parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency'
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity'
+import { randomUUID } from 'node:crypto'
+import type { Prisma } from '@prisma/client'
+
+import type { JsonValue } from '../../../packages/benchmark-protocol/src/contracts'
+import { normalizeBenchmarkAgentOptions } from '../../../packages/benchmark-protocol/src/contracts'
+import { BenchmarkProtocolError } from '../../../packages/benchmark-protocol/src/errors'
+import { prisma } from '@/lib/storage/prisma'
+
+import { benchmarkEvaluatorId, getBenchmarkAdapter } from './adapter-registry'
+import { benchmarkDatasetOwners } from './dataset-ownership'
+import { assertBenchmarkExecutionTarget } from './execution-targets'
+import { prepareExperimentEvaluatorConfigs } from '@/lib/evaluators/evaluator-execution-config.server'
+import { EvaluatorRunConfigValidationError } from '@/lib/evaluators/evaluator-run-config'
+
+type BenchmarkCaseSelection =
+  | { mode: 'all' }
+  | { mode: 'explicit'; caseIds: string[] }
+
+export type CreateBenchmarkExperimentInput = {
+  frozenCustomEvaluators?: CustomSnapshots
+  user: string
+  name: string
+  agentName?: string
+  datasetId: string
+  agentEvalDatasetId?: string
+  caseSelection: BenchmarkCaseSelection
+  clientId: string
+  evaluatorIds?: string[]
+  evaluatorConfigs?: unknown
+  evaluatorExecutionConfig?: unknown
+  runConfig: {
+    platform: string
+    agent: string
+    model?: string
+    executionProfileDigest?: string
+    agentOptions?: unknown
+    agentTimeoutSeconds?: number
+    executionConcurrency?: number
+    maxParallelAgentCases?: number
+  }
+}
+
+function newRunId(): string {
+  return `erun_${randomUUID().replaceAll('-', '')}`
+}
+
+function newExperimentCaseId(): string {
+  return `ecase_${randomUUID().replaceAll('-', '')}`
+}
+
+function parsePublicPayload(json: string): Record<string, JsonValue> {
+  const value = JSON.parse(json) as JsonValue
+  if (!value || Array.isArray(value) || typeof value !== 'object') {
+    throw new BenchmarkProtocolError('DATASET_PUBLIC_PAYLOAD_INVALID', '数据集公开 Case 不是对象')
+  }
+  return value
+}
+
+function selectedCaseRows<T extends { id: string }>(
+  allCases: T[],
+  selection: BenchmarkCaseSelection,
+): T[] {
+  if (selection.mode === 'all') return allCases
+  const ids = selection.caseIds.map(String).filter(Boolean)
+  if (!ids.length || new Set(ids).size !== ids.length) {
+    throw new BenchmarkProtocolError('CASE_SELECTION_INVALID', '显式 Case 选择不能为空或重复', 400)
+  }
+  const byId = new Map(allCases.map((row) => [row.id, row]))
+  const selected = ids.map((id) => byId.get(id))
+  if (selected.some((row) => !row)) {
+    throw new BenchmarkProtocolError('CASE_SELECTION_INVALID', '选中的 Case 不属于该数据集', 400)
+  }
+  return selected as T[]
+}
+
+type BenchmarkDatasetCaseSnapshot = {
+  id: string
+  rawCaseJson: string
+  publicPayloadJson: string
+  privatePayloadJson: string
+  sourceFingerprint: string
+  publicFingerprint: string
+  privateFingerprint: string
+  ordinal: number
+}
+
+export async function createBenchmarkExperiment(input: CreateBenchmarkExperimentInput): Promise<{
+  id: string
+  status: string
+  caseCount: number
+}> {
+  const user = input.user.trim()
+  const name = input.name.trim()
+  const datasetId = input.datasetId.trim()
+  const clientId = input.clientId.trim()
+  const platform = input.runConfig.platform.trim()
+  const agent = input.runConfig.agent.trim()
+  let agentOptions = normalizeBenchmarkAgentOptions(input.runConfig.agentOptions)
+  if (!user || !name || !datasetId || !clientId || !platform || !agent) {
+    throw new BenchmarkProtocolError(
+      'BENCHMARK_EXPERIMENT_INVALID',
+      'name、datasetId、clientId、platform 和 agent 均为必填项',
+      400,
+    )
+  }
+  let executionConcurrency: number
+  try { executionConcurrency = parseExecutionConcurrency(input.runConfig.executionConcurrency ?? input.runConfig.maxParallelAgentCases) }
+  catch { throw new BenchmarkProtocolError('EXECUTION_CONCURRENCY_INVALID', '执行并发必须为正整数', 400) }
+  const dataset = await prisma.benchmarkDataset.findFirst({
+    where: { id: datasetId, user: { in: benchmarkDatasetOwners(user) } },
+    include: {
+      cases: { orderBy: { ordinal: 'asc' } },
+      agentEvalDataset: { select: { casesJson: true } },
+    },
+  })
+  if (!dataset || dataset.status !== 'ready') {
+    throw new BenchmarkProtocolError('BENCHMARK_DATASET_NOT_FOUND', 'Benchmark 数据集不存在或未就绪', 404)
+  }
+  const adapter = getBenchmarkAdapter(dataset.adapterKey)
+  if (adapter.manifest.supportsAgentExecution === false) {
+    throw new BenchmarkProtocolError('BENCHMARK_AGENT_EXECUTION_UNSUPPORTED', '该 Benchmark 不支持 Agent 执行', 409)
+  }
+  const catalogInputs = new Map<string, string>()
+  try {
+    const catalogCases = JSON.parse(dataset.agentEvalDataset.casesJson) as Array<{
+      id?: unknown
+      input?: unknown
+    }>
+    if (Array.isArray(catalogCases)) {
+      for (const item of catalogCases) {
+        const caseId = String(item?.id || '')
+        if (caseId) catalogInputs.set(caseId, String(item?.input || ''))
+      }
+    }
+  } catch {
+    // 旧数据缺少公共投影时，下面回退到 publicPayload。
+  }
+  const cases = selectedCaseRows(
+    dataset.cases as BenchmarkDatasetCaseSnapshot[],
+    input.caseSelection,
+  )
+  const timeoutSeconds = input.runConfig.agentTimeoutSeconds ?? adapter.manifest.defaultTimeoutSeconds
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86_400) {
+    throw new BenchmarkProtocolError('AGENT_TIMEOUT_INVALID', 'Agent 超时时间必须在 1～86400 秒之间', 400)
+  }
+
+  const client = await prisma.reliabilityClient.findFirst({ where: { clientId, user } })
+  if (!client || client.unboundAt) {
+    throw new BenchmarkProtocolError('EXECUTOR_NOT_FOUND', '执行客户端不存在', 404)
+  }
+  const target = assertBenchmarkExecutionTarget(client, adapter.manifest, { platform, agent, agentOptions })
+  if (input.runConfig.executionProfileDigest !== undefined && input.runConfig.executionProfileDigest !== target.executionProfile?.definitionDigest) {
+    throw new BenchmarkProtocolError('EXECUTION_PROFILE_CHANGED', '执行环境已变化，请刷新后重新确认', 409)
+  }
+  const resolved = resolveAgentOptions(target.parameterDefinitions, platform, agent, agentOptions)
+  agentOptions = resolved.agentOptions
+  if (executionConcurrency > 1 && JSON.parse(client.capabilitiesJson || '{}').components?.['concurrent-execution/v1']?.ready !== true) {
+    throw new BenchmarkProtocolError('CLIENT_UPGRADE_REQUIRED', '执行并发大于 1 需要升级客户端', 400)
+  }
+
+  const runConfig = {
+    ...(target.executionProfile ? { executionProfile: target.executionProfile, executionArch: ['arm64', 'aarch64'].includes(client.arch || '') ? 'arm64' as const : 'amd64' as const } : {}),
+    platform,
+    agent,
+    ...(agentOptions ? { agentOptions, agentParameterDefinition: resolved.definition } : {}),
+    ...(input.runConfig.model?.trim() ? { model: input.runConfig.model.trim() } : {}),
+    timeoutSeconds,
+    executionConcurrency,
+  }
+  const evaluatorIds = Array.from(new Set([
+    benchmarkEvaluatorId(dataset.adapterKey),
+    ...(input.evaluatorIds || []).map(String).filter(Boolean),
+  ]))
+  const preparedCases = cases.map((datasetCase, ordinal) => {
+    const publicPayload = parsePublicPayload(datasetCase.publicPayloadJson)
+    const runId = newRunId()
+    const experimentCaseId = newExperimentCaseId()
+    adapter.buildAgentTask({
+      publicPayload, runConfig,
+      context: { runId, experimentId: 'preflight', caseId: experimentCaseId },
+    })
+    return {
+      datasetCase,
+      ordinal,
+      publicPayload,
+      experimentCaseId,
+      runId,
+    }
+  })
+
+  const customEvaluatorSnapshots = input.frozenCustomEvaluators ?? await freezeCustomEvaluators(user, evaluatorIds)
+  let evaluatorConfigsJson: string
+  try {
+    evaluatorConfigsJson = await prepareExperimentEvaluatorConfigs(user, evaluatorIds, input.evaluatorConfigs, input.evaluatorExecutionConfig)
+  } catch (error) {
+    if (error instanceof EvaluatorRunConfigValidationError) throw new BenchmarkProtocolError('EVALUATOR_CONFIG_INVALID', error.message, 400)
+    throw error
+  }
+
+  const experiment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const created = await tx.experiment.create({
+      data: {
+        user,
+        name,
+        type: 'single',
+        agentName: canonicalExperimentAgentName(platform, input.agentName?.trim() || agent),
+        evaluatorIdsJson: JSON.stringify(evaluatorIds),
+        evaluatorConfigsJson,
+        status: 'draft',
+        scope: 'benchmark',
+        configSnapshotJson: JSON.stringify({
+          customEvaluatorSnapshots,
+          datasetId: dataset.id,
+          agentEvalDatasetId: input.agentEvalDatasetId || dataset.agentEvalDatasetId,
+          datasetContentHash: dataset.contentHash,
+          adapterKey: dataset.adapterKey,
+          evaluatorKey: adapter.manifest.evaluation.evaluatorKey,
+          clientId,
+          evaluatorIds,
+          traceSource: 'generate',
+          caseIds: preparedCases.map((row) => row.datasetCase.id),
+          runConfig,
+        }),
+        benchmarkBinding: {
+          create: {
+            datasetId: dataset.id,
+            datasetContentHash: dataset.contentHash,
+            adapterKey: dataset.adapterKey,
+            selectionJson: JSON.stringify(input.caseSelection),
+            runConfigJson: JSON.stringify(runConfig),
+            expectedCaseCount: preparedCases.length,
+          },
+        },
+      },
+    })
+    await tx.experimentCase.createMany({
+      data: preparedCases.map(row => ({
+        id: row.experimentCaseId,
+        experimentId: created.id,
+        input: catalogInputs.get(row.datasetCase.id)
+          || (typeof row.publicPayload.input === 'string' ? row.publicPayload.input : JSON.stringify(row.publicPayload)),
+        datasetInput: JSON.stringify(row.publicPayload),
+        caseValuesJson: JSON.stringify(row.publicPayload),
+      })),
+    })
+    await tx.benchmarkCaseRun.createMany({
+      data: preparedCases.map(row => ({
+        id: row.runId,
+        experimentId: created.id,
+        experimentCaseId: row.experimentCaseId,
+        datasetCaseId: row.datasetCase.id,
+        ordinal: row.ordinal,
+        status: 'pending',
+        adapterKey: dataset.adapterKey,
+        clientId,
+        publicPayloadJson: row.datasetCase.publicPayloadJson,
+      })),
+    })
+    if (input.agentEvalDatasetId) {
+      await tx.experimentEvalResult.createMany({
+        data: preparedCases.flatMap(row => evaluatorIds.map(evaluatorId => ({
+          experimentId: created.id,
+          caseId: row.experimentCaseId,
+          evaluatorId,
+          status: 'pending',
+        }))),
+      })
+    }
+    return created
+  })
+
+  return { id: experiment.id, status: experiment.status, caseCount: preparedCases.length }
+}

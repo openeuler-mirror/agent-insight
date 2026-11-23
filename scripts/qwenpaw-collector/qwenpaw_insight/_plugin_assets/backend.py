@@ -1,0 +1,96 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""QwenPaw plugin backend entry point."""
+
+from __future__ import annotations
+
+import atexit
+import shutil
+import sys
+from pathlib import Path
+from typing import Any
+
+_PLUGIN_DIR = Path(__file__).resolve().parent
+if str(_PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_DIR))
+
+from qwenpaw_insight import patches
+from qwenpaw_insight.collector import Collector
+from qwenpaw_insight.config import ensure_spool_dir, load_config
+from qwenpaw_insight.hooks import AgentInsightCleanupHook, AgentInsightRootHook
+from qwenpaw_insight.middleware import AgentInsightToolMiddleware
+
+_collector: Collector | None = None
+
+
+def register(api: Any) -> None:
+    """QwenPaw plugin protocol: called by the plugin loader with a PluginApi."""
+
+    global _collector
+    config = load_config(getattr(api, "config", None) or {})
+    if not config.enabled:
+        return
+
+    ensure_spool_dir(config)
+    _collector = Collector(config)
+
+    api.register_startup_hook("qwenpaw_start", _collector.start, priority=10)
+    api.register_runtime_hook(AgentInsightRootHook(_collector))
+    api.register_runtime_hook(AgentInsightCleanupHook(_collector))
+    api.register_middleware(
+        lambda ctx, agent_config: AgentInsightToolMiddleware(_collector),
+        priority=90,
+    )
+    api.register_shutdown_hook("qwenpaw_flush", _collector.flush, priority=90)
+    api.register_uninstall_hook(
+        "qwenpaw_uninstall",
+        _uninstall,
+        priority=10,
+    )
+    patches.install_all(_collector)
+    # AC21: process-exit flush even when QwenPaw's own shutdown hook is missed.
+    atexit.register(_collector.flush)
+
+
+def _uninstall(plugin_id: str | None = None, delete_files: bool = False) -> None:
+    global _collector
+    config = _collector.config if _collector is not None else None
+    patches.uninstall_all()
+    if _collector is not None:
+        _collector.close()
+        _collector = None
+    # The QwenPaw plugin loader calls this only for an explicit removal when
+    # delete_files is true. Do not erase telemetry on a temporary reload.
+    if delete_files and config is not None:
+        try:
+            shutil.rmtree(Path(config.spool_dir).expanduser())
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def get_collector() -> Collector | None:
+    return _collector
+
+
+class QwenPawPlugin:
+    """New-style QwenPaw plugin entry (exports a ``plugin`` object)."""
+
+    def register(self, api: Any) -> None:
+        register(api)
+
+
+plugin = QwenPawPlugin()

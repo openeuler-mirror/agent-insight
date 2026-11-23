@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "public",
+    "private"
+  ],
+  "properties": {
+    "public": {
+      "type": "object",
+      "required": [
+        "taskId",
+        "title",
+        "description",
+        "submissionKind",
+        "maxBytes",
+        "tags"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "submissionKind": {
+          "enum": [
+            "python",
+            "c",
+            "binary"
+          ]
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "x-agent-visibility": "public"
+    },
+    "private": {
+      "type": "object",
+      "required": [
+        "sourceTaskDigest"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "sourceTaskDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "x-agent-visibility": "private"
+    }
+  },
+  "additionalProperties": false
+}

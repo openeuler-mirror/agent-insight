@@ -1,0 +1,378 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+import React from 'react';
+import { renderToString } from 'react-dom/server';
+import { parseAsString, useQueryStates } from 'nuqs';
+import { NuqsTestingAdapter } from 'nuqs/adapters/testing';
+import ts from 'typescript';
+import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
+
+const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
+const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+
+function findNode(predicate: (node: ts.Node) => boolean, parsedSource = ast): ts.Node {
+    let result: ts.Node | undefined;
+    function visit(node: ts.Node) {
+        if (!result && predicate(node)) result = node;
+        ts.forEachChild(node, visit);
+    }
+    visit(parsedSource);
+    assert.ok(result, 'production callback must exist');
+    return result;
+}
+
+function expression(node: ts.Node, scope: Record<string, unknown>, parsedSource = ast): any {
+    const js = ts.transpileModule(`const value = ${node.getText(parsedSource)};`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    return new Function(...Object.keys(scope), `${js}; return value;`)(...Object.values(scope));
+}
+
+function effectContaining(text: string): ts.Node {
+    const call = findNode(node => ts.isCallExpression(node)
+        && node.expression.getText(ast) === 'useEffect'
+        && Boolean(node.arguments[0]?.getText(ast).includes(text))) as ts.CallExpression;
+    return call.arguments[0];
+}
+
+const listEffect = effectContaining('paginated=1&databasePagination=1');
+const timerEffect = effectContaining('TRACE_LIST_REFRESH_MS');
+const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+function listHarness(initialFiltersReady = true, overrides: Record<string, unknown> = {}) {
+    let loading = true;
+    let records: unknown[] = [];
+    let reloadKey = 0;
+    let listError = false;
+    let statsRequest = '';
+    let tick: (() => void) | undefined;
+    let cleanup: (() => void) | undefined;
+    const pending: Array<{ url: string; resolve: (value: unknown) => void; reject: (error: Error) => void; signal?: AbortSignal }> = [];
+    const scope: Record<string, any> = {
+        user: 'reader', apiKey: null, filtersReady: initialFiltersReady, agentScopeFilter: 'root', skillFilter: 'all',
+        selectedUserTagIds: [], search: '', clauses: [], clausesRaw: '',
+        frameworkFilter: 'all', sourceFilter: 'all', agentFilter: 'all', ownershipFilter: 'user', traceUserFilter: '',
+        anomalyFilter: 'all', reliabilityAnomalyFilter: 'all', timeFilter: 'all', customTimeRange: null,
+        sortKey: 'timestamp', sortDir: 'desc', page: 1, pageSize: 20,
+        listFilterKey: 'filters', listRequestKey: 'page-1',
+        listRequestIdRef: { current: 0 }, listRequestPendingRef: { current: false },
+        previousListFilterKeyRef: { current: 'filters' }, previousListRequestKeyRef: { current: null },
+        setPage: () => {},
+        setData: (value: unknown[]) => { records = value; },
+        setTotal: () => {}, setStats: () => {},
+        setHasMore: () => {}, setStatsRequest: (url: string) => { statsRequest = url; },
+        setGlobalTraceViewer: () => {},
+        setListError: (value: boolean) => { listError = value; },
+        setLoading: (value: boolean) => { loading = value; },
+        setReloadKey: (update: (current: number) => number) => { reloadKey = update(reloadKey); },
+        TRACE_LIST_REFRESH_MS: 5_000,
+        window: { setInterval: (callback: () => void) => { tick = callback; return 1; }, clearInterval: () => {} },
+        document: { visibilityState: 'visible', addEventListener: () => {}, removeEventListener: () => {} },
+        apiFetch: (url: string, options: RequestInit) => new Promise((resolve, reject) => {
+            pending.push({ url, resolve, reject, signal: options.signal ?? undefined });
+        }),
+        ...overrides,
+    };
+    function render() {
+        cleanup?.();
+        cleanup = expression(listEffect, scope)();
+    }
+    expression(timerEffect, scope)();
+    render();
+    return {
+        pending,
+        loading: () => loading,
+        records: () => records,
+        error: () => listError,
+        statsRequest: () => statsRequest,
+        tick: () => {
+            const previous = reloadKey;
+            tick!();
+            if (previous !== reloadKey) render();
+        },
+        reload: render,
+        restoreFilters: () => { scope.filtersReady = true; render(); },
+        changePage: () => { scope.page = 2; scope.listRequestKey = 'page-2'; render(); },
+        resolve: async (index: number, id: string) => {
+            pending[index].resolve({ ok: true, json: async () => ({ records: [{ task_id: id }], hasMore: false }) });
+            await flush();
+        },
+        reject: async (index: number) => { pending[index].reject(new Error('network failed')); await flush(); },
+        unmount: () => cleanup?.(),
+    };
+}
+
+test('Trace list waits for remembered filters instead of requesting default results first', () => {
+    const h = listHarness(false);
+    assert.equal(h.pending.length, 0);
+    h.restoreFilters();
+    assert.equal(h.pending.length, 1);
+    h.unmount();
+});
+
+test('slow initial Trace request survives repeated polling ticks and releases the skeleton', async () => {
+    const h = listHarness();
+    h.tick();
+    h.tick();
+    assert.equal(h.pending.length, 1, 'polling must wait for the current request');
+    await h.resolve(0, 'initial');
+    assert.equal(h.loading(), false);
+    assert.deepEqual(h.records(), [{ task_id: 'initial' }]);
+    h.tick();
+    assert.equal(h.pending.length, 2, 'polling resumes once the request settles');
+    assert.equal(h.loading(), false, 'background refresh keeps the populated list visible');
+    await h.reject(1);
+    assert.deepEqual(h.records(), [{ task_id: 'initial' }], 'a background error preserves the last list');
+});
+
+test('HTTP 500 is a list error and must not silently replace visible records with an empty list', async () => {
+    const h = listHarness();
+    await h.resolve(0, 'visible');
+    h.tick();
+    h.pending[1].resolve({ ok: false, status: 500, json: async () => ({ error: 'Failed to read data' }) });
+    await flush();
+    assert.deepEqual(h.records(), [{ task_id: 'visible' }]);
+    assert.equal(h.error(), true);
+    assert.equal(h.loading(), false);
+});
+
+test('independent statistics retain page parameters for the OpenGauss compatibility path', async () => {
+    const h = listHarness();
+    h.changePage();
+    await h.resolve(1, 'page-2');
+    const url = new URL(h.statsRequest(), 'http://localhost');
+    assert.equal(url.searchParams.get('listPart'), 'stats');
+    assert.equal(url.searchParams.get('page'), '2');
+    assert.equal(url.searchParams.get('pageSize'), '20');
+});
+
+test('Codex source, custom time bounds and advanced clauses coexist in list and statistics queries', async () => {
+    const range = resolveTraceTimeRange('2026-11-04T02:00:00.000Z', '2026-11-04T04:00:00.000Z');
+    const advanced = { column: 'tokens', operator: '>=', value: 100 };
+    const h = listHarness(true, { sourceFilter: 'desktop', timeFilter: 'custom', customTimeRange: range, clauses: [advanced] });
+    await h.resolve(0, 'inside-range');
+    const list = new URL(h.pending[0].url, 'http://localhost');
+    const stats = new URL(h.statsRequest(), 'http://localhost');
+    assert.deepEqual(JSON.parse(list.searchParams.get('filters')!), [advanced, ...range.clauses]);
+    assert.equal(list.searchParams.get('filters'), stats.searchParams.get('filters'));
+    assert.equal(list.searchParams.get('sourceKind'), 'desktop');
+    assert.equal(stats.searchParams.get('sourceKind'), 'desktop');
+    h.unmount();
+});
+
+test('selected Trace owner is preserved identically in list and statistics requests', async () => {
+    const h = listHarness(true, { traceUserFilter: 'bob@example.com' });
+    await h.resolve(0, 'bob-trace');
+    const list = new URL(h.pending[0].url, 'http://localhost');
+    const stats = new URL(h.statsRequest(), 'http://localhost');
+    assert.equal(list.searchParams.get('traceUser'), 'bob@example.com');
+    assert.equal(stats.searchParams.get('traceUser'), 'bob@example.com');
+    h.unmount();
+});
+
+test('invalid custom ranges stop loading and never issue an unbounded request', () => {
+    const h = listHarness(true, { timeFilter: 'custom', customTimeRange: resolveTraceTimeRange('invalid', '') });
+    assert.equal(h.pending.length, 0);
+    assert.equal(h.loading(), false);
+    assert.equal(h.error(), true);
+    assert.deepEqual(h.records(), []);
+});
+
+test('statistics refresh independently, avoid overlapping requests and ignore obsolete results', async () => {
+    const statsEffect = effectContaining('TRACE_STATS_REFRESH_MS');
+    const pending: Array<{ resolve: (value: unknown) => void; reject: (reason: Error) => void }> = [];
+    let stats: unknown = null;
+    let error = false;
+    let loading = false;
+    let tick!: () => void;
+    const scope = {
+        statsRequest: '/api/observe/data?listPart=stats', apiKey: null,
+        setStats: (value: unknown) => { stats = value; },
+        setStatsError: (value: boolean) => { error = value; },
+        setStatsLoading: (value: boolean) => { loading = value; },
+        TRACE_STATS_REFRESH_MS: 30_000,
+        document: { visibilityState: 'visible' },
+        window: { setInterval: (callback: () => void) => { tick = callback; return 1; }, clearInterval: () => {} },
+        apiFetch: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    };
+    const stop = expression(statsEffect, scope)();
+    assert.equal(loading, true);
+    tick(); tick();
+    assert.equal(pending.length, 1, 'slow statistics must not enqueue another query');
+    const value = { total: 25, failedCount: 0, avgLatencyMs: 10, toolErrorRate: 0 };
+    pending[0].resolve({ ok: true, json: async () => ({ stats: value }) });
+    await flush();
+    assert.deepEqual(stats, value);
+    assert.equal(loading, false);
+    tick();
+    pending[1].reject(new Error('stats timeout'));
+    await flush();
+    assert.equal(error, true);
+    assert.deepEqual(stats, value, 'failed refresh keeps the last successful statistics');
+    tick();
+    stop();
+    const stopNew = expression(statsEffect, scope)();
+    pending[2].resolve({ ok: true, json: async () => ({ stats: { ...value, total: 999 } }) });
+    await flush();
+    assert.notEqual((stats as any)?.total, 999, 'old filter statistics cannot overwrite new filter state');
+    pending[3].resolve({ ok: false, status: 500 });
+    await flush();
+    assert.equal(error, true);
+    stopNew();
+});
+
+test('a replacement request releases initial loading even when its request key is unchanged', async () => {
+    const h = listHarness();
+    h.reload();
+    await h.resolve(0, 'stale');
+    assert.equal(h.loading(), true, 'the obsolete response must not release the active request');
+    await h.resolve(1, 'latest');
+    assert.deepEqual(h.records(), [{ task_id: 'latest' }]);
+    assert.equal(h.loading(), false, 'the latest result must stop the initial skeleton');
+});
+
+test('changing Trace pages aborts obsolete transport and ignores its late response', async () => {
+    const h = listHarness();
+    h.changePage();
+    assert.equal(h.pending[0].signal?.aborted, true);
+    await h.resolve(1, 'page-2');
+    await h.resolve(0, 'page-1');
+    assert.deepEqual(h.records(), [{ task_id: 'page-2' }]);
+    assert.equal(h.loading(), false);
+});
+
+test('unmount aborts the Trace list request and ignores a late completion', async () => {
+    const h = listHarness();
+    h.unmount();
+    assert.equal(h.pending[0].signal?.aborted, true);
+    await h.resolve(0, 'unmounted');
+    assert.deepEqual(h.records(), []);
+});
+
+test('initial errors release loading and permit the next refresh', async () => {
+    const h = listHarness();
+    h.tick();
+    await h.reject(0);
+    assert.equal(h.loading(), false);
+    h.tick();
+    assert.equal(h.pending.length, 2);
+    assert.equal(h.error(), true, 'a pending retry must not disguise the failed request as an empty list');
+    await h.resolve(1, 'recovered');
+    assert.deepEqual(h.records(), [{ task_id: 'recovered' }]);
+    assert.equal(h.error(), false);
+});
+
+const taskIdHook = findNode(node => ts.isCallExpression(node)
+    && node.expression.getText(ast) === 'useQueryStates'
+    && Boolean(node.arguments[0]?.getText(ast).includes('executionId')));
+const selectDeclaration = findNode(node => ts.isVariableDeclaration(node)
+    && node.name.getText(ast) === 'handleSelectExecution') as ts.VariableDeclaration;
+const selectCallback = (selectDeclaration.initializer as ts.CallExpression).arguments[0];
+const importSource = fs.readFileSync(new URL('../src/components/trace/trace-batch-import-dialog.tsx', import.meta.url), 'utf8');
+const importAst = ts.createSourceFile('trace-batch-import-dialog.tsx', importSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const importClick = findNode(node => ts.isJsxAttribute(node) && node.name.getText(importAst) === 'onClick'
+    && Boolean(node.initializer?.getText(importAst).includes('window.open')), importAst) as ts.JsxAttribute;
+const detailPathDeclaration = findNode(node => ts.isVariableDeclaration(node)
+    && node.name.getText(importAst) === 'TRACE_DETAIL_PATH', importAst) as ts.VariableDeclaration;
+
+async function navigationHarness(run: (scope: Record<string, unknown>) => void, initialQuery = '?page=3&status=failed') {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: new URL('http://example.test/trace' + initialQuery) });
+    try {
+        let setter: (value: { taskId: string | null; executionId: string | null }, options?: { history?: 'push' | 'replace' }) => Promise<URLSearchParams>;
+        const updates: Array<{ queryString: string; options: { history: string } }> = [];
+        function Harness() {
+            const [, update] = expression(taskIdHook, { useQueryStates, parseAsString });
+            setter = update;
+            return null;
+        }
+        renderToString(React.createElement(NuqsTestingAdapter, {
+            searchParams: initialQuery,
+            onUrlUpdate: event => updates.push(event),
+            children: React.createElement(Harness),
+        }));
+        let pending: Promise<URLSearchParams> | undefined;
+        run({
+            setSelectedExecution: () => {}, reportTraceDetailView: () => {}, setImportResult: () => {},
+            importResult: { rootTaskId: 'trace-123' },
+            setTraceTarget: (value: { taskId: string | null; executionId: string | null }, options?: { history?: 'push' | 'replace' }) => {
+                pending = setter(value, options);
+                return pending;
+            },
+        });
+        await pending;
+        return updates;
+    } finally {
+        if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+        else Reflect.deleteProperty(globalThis, 'window');
+        if (previousLocation) Object.defineProperty(globalThis, 'location', previousLocation);
+        else Reflect.deleteProperty(globalThis, 'location');
+    }
+}
+
+test('opening a list Trace adds history so Back and Forward retain list filters', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)({ task_id: 'trace-123' }));
+    assert.equal(updates[0].options.history, 'push');
+    assert.equal(updates[0].queryString, '?page=3&status=failed&taskId=trace-123');
+    const history = ['/dashboard', '/trace?page=3&status=failed'];
+    history.push('/trace' + updates[0].queryString);
+    assert.equal(history.at(-2), '/trace?page=3&status=failed');
+    assert.equal(history.at(-1), '/trace?page=3&status=failed&taskId=trace-123');
+});
+
+test('opening a batch-imported Trace uses a separate tab and preserves the filtered list', () => {
+    const callback = (importClick.initializer as ts.JsxExpression).expression!;
+    const location = new URL('https://example.test/insight/trace?page=3&status=failed');
+    const calls: unknown[][] = [];
+    const open = (result: { rootTaskId?: string | null; rootExecutionId?: string } | undefined) => expression(callback, {
+        item: { result }, basePath: '/insight',
+        TRACE_DETAIL_PATH: expression(detailPathDeclaration.initializer!, {}, importAst),
+        window: { location, open: (...args: unknown[]) => calls.push(args) },
+    }, importAst)();
+    open({ rootTaskId: 'trace:123 /?&', rootExecutionId: 'execution-123' });
+    assert.deepEqual(calls.pop(), ['/insight/trace?taskId=trace%3A123%20%2F%3F%26', '_blank', 'noopener']);
+    open({ rootTaskId: null, rootExecutionId: 'execution-123' });
+    assert.deepEqual(calls.pop(), ['/insight/trace?taskId=execution-123', '_blank', 'noopener']);
+    open(undefined);
+    open({});
+    assert.equal(calls.length, 0);
+    assert.equal(location.href, 'https://example.test/insight/trace?page=3&status=failed');
+});
+
+test('the in-page return-to-list action replaces detail state instead of adding another entry', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&status=failed&taskId=trace-123&executionId=execution-123');
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].options.history, 'replace');
+    assert.equal(updates[0].queryString, '?page=3&status=failed');
+});
+
+test('leaving a Dify drilldown clears the Workflow return context before opening another list item', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)(null), '?page=3&framework=dify&taskId=dify:child&workflowTaskId=dify:workflow');
+    assert.equal(updates[0].queryString, '?page=3&framework=dify');
+});
+
+test('switching away from an exact execution clears its identity in the same history update', async () => {
+    const updates = await navigationHarness(scope => expression(selectCallback, scope)({ task_id: 'trace-456' }), '?taskId=trace-123&executionId=execution-123');
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].options.history, 'push');
+    assert.equal(updates[0].queryString, '?taskId=trace-456');
+});

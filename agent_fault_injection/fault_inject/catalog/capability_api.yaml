@@ -1,0 +1,48 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# L2 injection capability surface (closed set).
+# Fault modes (skills/*/fault.json) may only reference methods/ops listed here.
+# Evolving this file is an infrastructure change (capability surface), not a fault-mode PR.
+version: "1"
+
+injection_methods:
+  skill_inject:
+    label_zh: Skill 注入
+  file_tamper:
+    label_zh: 文件篡改
+  prompt_modify:
+    label_zh: 提示词修改
+  tool_result_tamper:
+    label_zh: 工具结果篡改
+  intercept_rewrite:
+    label_zh: 拦截改写
+
+structural_ops:
+  - file.write
+  - file.delete
+  - file.delete_section
+  - file.truncate
+  - file.replace_text
+
+runtime_ops:
+  - tool_result.replace_text
+  - tool_result.replace_all
+  - system.append
+  - system.replace_text
+  - messages.history.drop
+  - messages.inject
+  - assistant.replace_text
+  - assistant.truncate
+  - assistant.tool_call.replace_argument

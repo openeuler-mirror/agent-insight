@@ -1,0 +1,225 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+import { spawnSync } from 'node:child_process'
+
+const { manage, formatManagementOutput } = require('../services/evaluator/src/manage.cjs')
+const { ServiceControl, recordManagedImage } = require('../services/evaluator/src/service-control.cjs')
+const { EvaluationJobJournal, atomicWriteJson } = require('../services/evaluator/src/job-journal.cjs')
+
+test('management uses bundled code without a host source mount for service and image-pool commands', () => {
+  for (const args of ['', '--start', '--purge-images', '--purge-images --dry-run', '--images-list', '--images-purge', '--images-purge --dry-run']) {
+    const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; }
+CONTAINER_NAME=test-evaluator
+DATA_VOLUME=test-data
+DOCKER_SOCKET=/test/docker.sock
+MANAGEMENT_READONLY=,readonly
+evaluator_management_run sha256:test ${args}
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const calls = result.stderr.trim().split('\n')
+    assert.equal(calls.length, 2)
+    assert.match(calls[0], /--read-only/)
+    assert.match(calls[0], /MANAGEMENT_PROTOCOL_VERSION !== 2/)
+    assert.doesNotMatch(calls[0], /--mount/)
+    assert.match(calls[1], /sha256:test \/app\/services\/evaluator\/src\/manage\.cjs/)
+    assert.match(calls[1], /type=volume,src=test-data,dst=\/data,readonly/)
+    assert.match(calls[1], /type=bind,src=\/test\/docker.sock,dst=\/var\/run\/docker.sock/)
+    assert.doesNotMatch(result.stderr, /dst=\/management|src=[^,\n]*services\/evaluator\/src,/)
+    assert.ok(calls[1].endsWith(`/app/services/evaluator/src/manage.cjs${args ? ` ${args}` : ''}`))
+  }
+})
+
+test('online image management uses the running Controller code and environment, not a host Catalog or helper', () => {
+  for (const args of ['--images-list', '--images-purge', '--images-purge --dry-run', '--runtimes-purge']) {
+    const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; }
+CONTAINER_NAME=test-evaluator
+evaluator_management_online ${args}
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const calls = result.stderr.trim().split('\n')
+    assert.equal(calls.length, 2)
+    assert.match(calls[0], /^exec test-evaluator node -e/)
+    assert.match(calls[0], /MANAGEMENT_PROTOCOL_VERSION !== 2/)
+    assert.match(calls[0], /RUNTIME_IMAGE_MANAGEMENT_VERSION !== 1/)
+    assert.equal(calls[1], `exec --env EVALUATOR_INSTANCE_ID=test-evaluator test-evaluator node /app/services/evaluator/src/manage.cjs ${args}`)
+    assert.doesNotMatch(result.stderr, /--mount|run --rm|--env EVALUATOR_RUNTIME_IMAGE_PREFIX/)
+  }
+})
+
+test('online image management refuses an old or stopped Controller before cleanup', () => {
+  const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; return 1; }
+CONTAINER_NAME=test-evaluator
+evaluator_management_online --images-purge
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /尚未执行清理/)
+  assert.doesNotMatch(result.stderr, /manage\.cjs --images-purge/)
+})
+
+test('missing bundled management code fails before mounting Docker or service data', () => {
+  const result = spawnSync('bash', ['-c', `
+set -eu
+source "$1"
+docker() { printf '%s\\n' "$*" >&2; return 1; }
+evaluator_management_run sha256:legacy --purge-images
+`, 'test', path.resolve(__dirname, '../scripts/evaluator-management.sh')], { encoding: 'utf8' })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /尚未执行停止或清理/)
+  assert.match(result.stderr, /evaluator\.sh start/)
+  assert.doesNotMatch(result.stderr, /--mount|--purge-images/)
+})
+
+test('startup summary omits Runtime inventories while manual output preserves the full result', () => {
+  const result = { runtimes: { candidates: [{ reference: 'runtime:long-digest', id: 'sha256:long-id' }],
+    removed: [{ reference: 'runtime:old', existed: true }, { reference: 'runtime:missing', existed: false }],
+    retained: [{ reference: 'runtime:current' }], skipped: [] } }
+  const summary = formatManagementOutput(result, true)
+  assert.match(summary, /删除 1 个镜像，保留 1 项，失败 0 项/)
+  assert.match(summary, /清除 1 条失效/)
+  assert.doesNotMatch(summary, /runtime:|sha256:|candidates|\{/)
+  assert.deepEqual(JSON.parse(formatManagementOutput(result)), result)
+})
+
+test('startup management summaries keep actionable failures and never claim an incomplete stop succeeded', () => {
+  const result = { runtimes: { removed: [], retained: [], skipped: [{ reference: 'runtime:old', reason: 'Docker connection interrupted' }] } }
+  assert.match(formatManagementOutput(result, true), /Runtime 清理失败：runtime:old：Docker connection interrupted/)
+  assert.match(formatManagementOutput({ initialized: true }, true), /管理状态已就绪/)
+  assert.match(formatManagementOutput({ stopped: true }, true), /旧评测服务已停止/)
+  const failed = formatManagementOutput({ stopped: false, skipped: [{ target: 'container', reason: 'still running' }] }, true)
+  assert.match(failed, /未完全停止/)
+  assert.match(failed, /container：still running/)
+})
+
+async function fixture(t: any) {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'evaluator-management-'))
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }))
+  const containers: any[] = [
+    { Id: 'controller', Names: ['/evaluator'], State: 'running', Labels: {} },
+    { Id: 'runtime', Labels: { 'agent-insight.evaluator-instance': 'evaluator' } },
+    { Id: 'other', Labels: { 'agent-insight.evaluator-instance': 'another' } },
+  ]
+  const calls: string[] = []
+  const images = new Map([['runtime:v1', { id: 'runtime-image' }], ['controller:v1', { id: 'controller-image' }]])
+  const docker = {
+    async request(method: string, endpoint: string, _stream: boolean, payload: any) {
+      calls.push(`${method} ${endpoint}`)
+      if (endpoint === '/info') return { ID: 'daemon' }
+      if (endpoint === '/containers/json?all=1') return [...containers]
+      if (endpoint === '/containers/controller/json') return { Mounts: [{ Name: 'data', Destination: '/data' }] }
+      if (endpoint.endsWith('/update')) { assert.deepEqual(payload, { RestartPolicy: { Name: 'no' } }); return {} }
+      if (endpoint.includes('/stop?')) return null
+      if (method === 'DELETE') { const index = containers.findIndex((item) => endpoint.startsWith(`/containers/${item.Id}?`)); if (index >= 0) containers.splice(index, 1); return null }
+      throw new Error(endpoint)
+    },
+    async inspect(ref: string) { return images.get(ref) || null },
+    async referenced() { return false },
+    async remove(ref: string) { calls.push(`remove ${ref}`); images.delete(ref) },
+  }
+  const journal = new EvaluationJobJournal(dataDir)
+  await journal.accept({ runId: 'run1', requestDigest: 'digest' })
+  return { dataDir, docker, journal, containers, calls, images, instance: 'evaluator', volume: 'data' }
+}
+
+test('stop cancels persisted jobs and removes only owned containers', async (t) => {
+  const f = await fixture(t)
+  const result = await manage(f)
+  assert.equal(result.stopped, true)
+  assert.deepEqual(f.containers.map((item) => item.Id), ['other'])
+  assert.equal((await f.journal.state('run1')).stage, 'cancelled')
+  const control = new ServiceControl(f.dataDir)
+  await assert.rejects(() => control.assertRunning(), /停止/)
+  await control.resume()
+  await assert.rejects(() => control.assertRunning('run1'), /停止/)
+  assert.equal(f.images.size, 2)
+  assert.ok(f.calls.indexOf('POST /containers/controller/stop?t=2') < f.calls.indexOf('DELETE /containers/runtime?force=true&v=false'))
+})
+
+test('dry-run does not mutate Docker or journal', async (t) => {
+  const f = await fixture(t)
+  await manage({ ...f, dryRun: true, purge: true })
+  assert.ok(f.calls.every((call) => call.startsWith('GET ')))
+  assert.equal(await new ServiceControl(f.dataDir).stopped(), null)
+  assert.equal((await f.journal.state('run1')).stage, 'accepted')
+})
+
+test('offline purge deletes owned runtime refs, defers controller, and can repeat', async (t) => {
+  const f = await fixture(t)
+  await recordManagedImage(f.dataDir, { reference: 'runtime:v1', id: 'runtime-image', daemonId: 'daemon', role: 'runtime' })
+  await recordManagedImage(f.dataDir, { reference: 'controller:v1', id: 'controller-image', daemonId: 'daemon', role: 'controller' })
+  const result = await manage({ ...f, purge: true })
+  assert.deepEqual(result.controllerImages, [{ reference: 'controller:v1', id: 'controller-image' }])
+  assert.equal(f.images.has('runtime:v1'), false)
+  assert.equal(f.images.has('controller:v1'), true)
+  assert.equal((await manage({ ...f, purge: true })).stopped, true)
+})
+
+test('purge preserves pool with unconfirmed pulls and retargeted runtime refs', async (t) => {
+  const f = await fixture(t)
+  await atomicWriteJson(path.join(f.dataDir, 'image-pool/state.json'), {
+    version: 1, daemonId: 'daemon', images: {}, operations: { pull: { uncertain: true } },
+  })
+  await recordManagedImage(f.dataDir, { reference: 'runtime:v1', id: 'old-image', daemonId: 'daemon', role: 'runtime' })
+  const result = await manage({ ...f, purge: true })
+  assert.equal(result.skipped.length, 2)
+  assert.equal(f.images.has('runtime:v1'), true)
+})
+
+test('wrong controller volume rejects before any writes', async (t) => {
+  const f = await fixture(t)
+  await assert.rejects(() => manage({ ...f, volume: 'wrong' }), /volume does not match/)
+  assert.ok(f.calls.every((call) => call.startsWith('GET ')))
+})
+
+test('evaluation cancellation waits for active execution and never releases protection before cleanup', async (t) => {
+  const f = await fixture(t)
+  const { BenchmarkEvaluatorService } = require('../services/evaluator/src/service.cjs')
+  let cleaned = false
+  let releases = 0
+  const service = new BenchmarkEvaluatorService({ dataDir: f.dataDir, journal: f.journal,
+    cleanupContainers: async () => ({ status: cleaned ? 'succeeded' : 'failed' }),
+    imagePool: { config: {}, release: async () => { releases++ } } })
+  const controller = new AbortController()
+  service.controllers.set('run1', controller)
+  service.active.set('run1', new Promise(() => {}))
+  assert.equal((await service.cancel('run1')).status, 'cancelling')
+  assert.equal(controller.signal.aborted, true)
+  assert.equal(releases, 0)
+  service.active.delete('run1')
+  assert.equal((await service.cancel('run1')).status, 'cancelling')
+  assert.equal(releases, 0)
+  cleaned = true
+  service.imageOwner = () => ({ runId: 'run1' })
+  assert.equal((await service.cancel('run1')).status, 'cancelled')
+  assert.equal(releases, 1)
+  await assert.rejects(() => service.start('run1'), /停止/)
+  assert.equal((await service.cancel('not-yet-accepted')).status, 'cancelled')
+  await assert.rejects(() => service.control.assertRunning('not-yet-accepted'), /停止/)
+})

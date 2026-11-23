@@ -1,0 +1,130 @@
+{
+  "$schema": "https://design-tokens.github.io/community-group/format/",
+  "$description": "Agent-Insight 设计令牌——逆向自 src/app/globals.css（:root / [data-theme='dark']）。规范的亮色主题原始 + 语义值。单一真源是 globals.css；其变更时重新生成。",
+  "color": {
+    "$type": "color",
+    "neutral": {
+      "$description": "95% 的 UI 由这套灰阶（类 Zinc）构成。在 :root 中以裸 hex 编写。",
+      "white": { "$value": "#ffffff" },
+      "50": { "$value": "#FAFAFA" },
+      "100": { "$value": "#F4F4F5" },
+      "200": { "$value": "#E4E4E7" },
+      "300": { "$value": "#D4D4D8" },
+      "400": { "$value": "#A1A1AA" },
+      "500": { "$value": "#71717A" },
+      "600": { "$value": "#52525B" },
+      "900": { "$value": "#18181B" },
+      "950": { "$value": "#09090B" }
+    },
+    "indigo": {
+      "$description": "唯一的品牌/强调色相——仅用于交互状态（链接、选中、主按钮）。",
+      "300": { "$value": "#A5B4FC" },
+      "400": { "$value": "#818CF8" },
+      "500": { "$value": "#4F46E5" },
+      "600": { "$value": "#4338CA" },
+      "subtle-bg": { "$value": "#EEF2FF" },
+      "subtle-border": { "$value": "#C7D2FE" }
+    },
+    "green": { "500": { "$value": "#16A34A" }, "subtle-bg": { "$value": "#F0FDF4" }, "subtle-border": { "$value": "#BBF7D0" }, "text": { "$value": "#15803D" } },
+    "amber": { "500": { "$value": "#D97706" }, "subtle-bg": { "$value": "#FFFBEB" }, "subtle-border": { "$value": "#FDE68A" }, "text": { "$value": "#92400E" } },
+    "red":   { "500": { "$value": "#DC2626" }, "subtle-bg": { "$value": "#FEF2F2" }, "subtle-border": { "$value": "#FECACA" }, "text": { "$value": "#B91C1C" } }
+  },
+  "semantic": {
+    "color": {
+      "$type": "color",
+      "background":            { "$value": "{color.neutral.white}", "$description": "页面 / 应用画布" },
+      "background-secondary":  { "$value": "{color.neutral.100}", "$description": "细微填充、悬停、表头" },
+      "foreground":            { "$value": "{color.neutral.900}", "$description": "主文本——在 bg 上 17.7:1（AAA）" },
+      "foreground-secondary":  { "$value": "{color.neutral.600}", "$description": "次文本——在 bg 上 7.7:1（AAA）" },
+      "foreground-muted":      { "$value": "{color.neutral.500}", "$description": "弱化文本——在 bg 上 4.83:1（AA 正常，不达 AAA）" },
+      "card-bg":               { "$value": "{color.neutral.white}" },
+      "card-border":           { "$value": "{color.neutral.200}" },
+      "border":                { "$value": "{color.neutral.200}" },
+      "border-dark":           { "$value": "{color.neutral.300}" },
+      "primary":               { "$value": "{color.indigo.500}", "$description": "白字配主色 = 6.29:1（AA）" },
+      "primary-hover":         { "$value": "{color.indigo.600}" },
+      "primary-foreground":    { "$value": "{color.neutral.white}" },
+      "primary-subtle":        { "$value": "{color.indigo.subtle-bg}" },
+      "primary-subtle-border": { "$value": "{color.indigo.subtle-border}" },
+      "success":               { "$value": "{color.green.500}" },
+      "warning":               { "$value": "{color.amber.500}" },
+      "error":                 { "$value": "{color.red.500}" },
+      "input-bg":              { "$value": "{color.neutral.white}" },
+      "input-border":          { "$value": "{color.neutral.300}" },
+      "overlay-bg":            { "$value": "rgba(0, 0, 0, 0.5)" },
+      "ring":                  { "$value": "rgba(79, 70, 229, 0.25)", "$description": "焦点环" }
+    }
+  },
+  "font": {
+    "family": {
+      "$type": "fontFamily",
+      "sans": { "$value": ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"] },
+      "mono": { "$value": ["ui-monospace", "SFMono-Regular", "SF Mono", "Menlo", "Consolas", "monospace"], "$description": "指标、ID、代码、tokens/cost/latency 徽章" }
+    },
+    "size": {
+      "$type": "dimension",
+      "$description": "为可观测性密度，有意设定为比 Tailwind 默认值低一级（globals.css @theme）。",
+      "xs":   { "$value": "11px" },
+      "sm":   { "$value": "12px" },
+      "base": { "$value": "14px" },
+      "body": { "$value": "13px", "$description": "全局 body 字号" }
+    },
+    "lineHeight": {
+      "xs":   { "$value": "16px" },
+      "sm":   { "$value": "18px" },
+      "base": { "$value": "20px" },
+      "body": { "$value": "1.5" }
+    },
+    "weight": {
+      "$type": "fontWeight",
+      "normal":   { "$value": 400 },
+      "medium":   { "$value": 500, "$description": "最常用的字重（UI 标签、按钮）" },
+      "semibold": { "$value": 600, "$description": "标题、强调" },
+      "bold":     { "$value": 700 }
+    },
+    "letterSpacing": {
+      "tight": { "$value": "-0.01em", "$description": "正文 + 标题" },
+      "caps":  { "$value": "0.04em", "$description": "大写引导标签 / 表头" }
+    }
+  },
+  "dimension": {
+    "$type": "dimension",
+    "radius": {
+      "sm": { "$value": "0.375rem", "$description": "6px" },
+      "md": { "$value": "0.5rem",   "$description": "8px" },
+      "lg": { "$value": "0.625rem", "$description": "10px" }
+    },
+    "spacing": {
+      "$description": "4px 基准网格（4/8/12/16/24…）。最常用：8/10/6/12/4/14px。",
+      "1": { "$value": "4px" },
+      "2": { "$value": "8px" },
+      "3": { "$value": "12px" },
+      "4": { "$value": "16px" },
+      "5": { "$value": "20px" },
+      "6": { "$value": "24px" },
+      "8": { "$value": "32px" }
+    },
+    "control": {
+      "button-height":      { "$value": "36px", "$description": "ui/button.tsx size=default (h-9)" },
+      "button-height-sm":   { "$value": "32px", "$description": "h-8" },
+      "button-height-lg":   { "$value": "40px", "$description": "h-10" },
+      "input-height":       { "$value": "36px", "$description": "ui/input.tsx (h-9)" },
+      "icon":               { "$value": "16px", "$description": "默认 lucide 图标 (size-4)" },
+      "container-max":      { "$value": "1600px", "$description": ".dashboard-container 最大宽度" },
+      "modal-lg-width":     { "$value": "900px" }
+    }
+  },
+  "shadow": {
+    "$type": "shadow",
+    "sm": { "$value": { "offsetX": "0", "offsetY": "1px", "blur": "2px", "spread": "0", "color": "rgba(0, 0, 0, 0.04)" } },
+    "md": { "$value": { "offsetX": "0", "offsetY": "4px", "blur": "12px", "spread": "0", "color": "rgba(0, 0, 0, 0.08)" } },
+    "primary": { "$value": { "offsetX": "0", "offsetY": "2px", "blur": "8px", "spread": "0", "color": "rgba(79, 70, 229, 0.12)" }, "$description": "卡片悬停抬升" }
+  },
+  "motion": {
+    "$type": "duration",
+    "$description": "不存在正式的时长/缓动令牌；过渡都是内联的。观察到的常见值：",
+    "fast":   { "$value": "100ms" },
+    "base":   { "$value": "150ms" },
+    "deliberate": { "$value": "120ms" }
+  }
+}

@@ -1,0 +1,2002 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import {
+    Plus,
+    Search,
+    Server,
+    Key,
+    Pencil,
+    Trash2,
+    Check,
+    Info,
+    CircleCheck,
+    BadgeCheck,
+    Star,
+    HeartPulse,
+    BookOpen,
+    ExternalLink,
+    RefreshCw,
+    Loader2,
+    XCircle,
+} from 'lucide-react';
+import { apiFetch } from '@/lib/client/api';
+import { useAuth } from '@/lib/auth/auth-context';
+import { useLocale } from '@/lib/client/locale-context';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import {
+    LLM_PROVIDERS,
+    CATEGORY_ORDER,
+    getProvider,
+    getProviderLogoUrl,
+    resolveCatalogProvider,
+    type LlmProvider,
+    type LlmProviderCategory,
+} from '@/lib/llm-providers';
+import {
+    isModelConnectionReady,
+    normalizeCustomHeaders,
+    supportsCustomHeaders,
+    type ModelProtocol,
+} from '@/lib/shared/model-connection';
+
+import { DEFAULT_MODEL_TEST_TIMEOUT_MS, resolveModelTestTimeoutMs, formatModelTestResult, type ModelTestResult } from '@/lib/shared/model-connection-test';
+
+export interface EvalConfigItem {
+    id: string;
+    name: string;
+    provider: 'deepseek-official' | 'openai' | 'anthropic' | 'siliconflow' | 'custom';
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    headers?: Record<string, string>;
+    protocol?: ModelProtocol;
+    testTimeoutMs?: number;
+}
+
+type ProviderCategory = 'saas' | 'cn' | 'local' | 'other';
+
+const PROVIDER_META: Record<EvalConfigItem['provider'], {
+    label: string;
+    monogram: string;
+    category: ProviderCategory;
+}> = {
+    'deepseek-official': { label: 'DeepSeek (Official)', monogram: 'DS', category: 'cn' },
+    siliconflow:         { label: 'SiliconFlow',         monogram: 'SF', category: 'cn' },
+    openai:              { label: 'OpenAI',              monogram: 'OA', category: 'saas' },
+    anthropic:           { label: 'Anthropic',           monogram: 'AN', category: 'saas' },
+    custom:              { label: 'Custom', monogram: 'CX', category: 'other' },
+};
+
+const CAPACITY_LIMIT = 32;
+
+type HealthState = 'ok' | 'checking' | 'failed' | 'unconfigured' | 'timeout' | 'cancelled';
+
+const isDefaultConfig = (id: string | null) => !!id && id.startsWith('default_');
+
+const initialHealth = (c: EvalConfigItem): HealthState => (isModelConnectionReady(c) ? 'ok' : 'unconfigured');
+
+function toBackendProvider(catalogId: string): EvalConfigItem['provider'] {
+    if (catalogId === 'openai') return 'openai';
+    if (catalogId === 'anthropic') return 'anthropic';
+    if (catalogId === 'deepseek-official') return 'deepseek-official';
+    if (catalogId === 'siliconflow') return 'siliconflow';
+    return 'custom';
+}
+
+export function ModelConfigManager() {
+    const { user } = useAuth();
+    const { t, locale } = useLocale();
+
+    const [allConfigs, setAllConfigs] = useState<EvalConfigItem[]>([]);
+    const [activeConfigId, setActiveConfigId] = useState<string>('default');
+    const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
+    const [tempConfig, setTempConfig] = useState<EvalConfigItem>({
+        id: 'new', name: locale === 'zh' ? '新配置' : 'New Config', provider: 'deepseek-official', model: 'deepseek-v4-flash',
+    });
+    const [isSaving, setIsSaving] = useState(false);
+    const [isTesting, setIsTesting] = useState(false);
+    const saveController = useRef<AbortController | null>(null);
+    const healthController = useRef<AbortController | null>(null);
+    const [healthResults, setHealthResults] = useState<Record<string, ModelTestResult>>({});
+    useEffect(() => () => {
+        saveController.current?.abort();
+        healthController.current?.abort();
+        saveController.current = null;
+        healthController.current = null;
+    }, []);
+    const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info', msg: string } | null>(null);
+    const [loaded, setLoaded] = useState(false);
+    const [query, setQuery] = useState('');
+    const [categoryFilter, setCategoryFilter] = useState<'all' | ProviderCategory>('all');
+    const [pendingDelete, setPendingDelete] = useState<EvalConfigItem | null>(null);
+    const [healthMap, setHealthMap] = useState<Record<string, HealthState>>({});
+    const [isRechecking, setIsRechecking] = useState(false);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const [pickedProvider, setPickedProvider] = useState<LlmProvider | null>(null);
+
+    const fetchSettings = useCallback(async () => {
+        if (!user) {
+            setLoaded(true);
+            return;
+        }
+        try {
+            const res = await apiFetch(`/api/eval/settings?user=${encodeURIComponent(user)}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.configs) {
+                    setAllConfigs(data.configs);
+                    setActiveConfigId(data.activeConfigId || data.configs[0]?.id || 'default');
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch settings', e);
+        } finally {
+            setLoaded(true);
+        }
+    }, [user]);
+
+    useEffect(() => {
+        fetchSettings();
+    }, [fetchSettings]);
+
+    useEffect(() => {
+        setHealthMap(prev => {
+            const next: Record<string, HealthState> = { ...prev };
+            for (const c of allConfigs) {
+                if (!(c.id in next)) next[c.id] = initialHealth(c);
+            }
+            for (const k of Object.keys(next)) {
+                if (!allConfigs.find(x => x.id === k)) delete next[k];
+            }
+            return next;
+        });
+    }, [allConfigs]);
+
+    const recheckHealth = useCallback(async () => {
+        if (healthController.current || allConfigs.length === 0) return;
+        const controller = new AbortController();
+        healthController.current = controller;
+        setHealthResults({});
+        setIsRechecking(true);
+        setHealthMap(prev => {
+            const n: Record<string, HealthState> = { ...prev };
+            for (const c of allConfigs) n[c.id] = isModelConnectionReady(c) ? 'checking' : 'unconfigured';
+            return n;
+        });
+        const results = await Promise.all(allConfigs.map(async (c) => {
+            if (!isModelConnectionReady(c)) return [c.id, 'unconfigured' as HealthState] as const;
+            const startedAt = Date.now();
+            let result: ModelTestResult;
+            try {
+                const res = await apiFetch('/api/eval/settings/test', {
+                    method: 'POST',
+                    signal: controller.signal,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider: c.provider,
+                        protocol: c.protocol,
+                        apiKey: c.apiKey,
+                        baseUrl: c.baseUrl,
+                        model: c.model,
+                        headers: c.headers,
+                        testTimeoutMs: c.testTimeoutMs,
+                        user,
+                        configId: c.id,
+                    }),
+                });
+                result = await res.json();
+            } catch {
+                result = { success: false, code: controller.signal.aborted ? 'cancelled' : 'network',
+                    elapsedMs: Date.now() - startedAt, timeoutMs: c.testTimeoutMs ?? DEFAULT_MODEL_TEST_TIMEOUT_MS };
+            }
+            if (healthController.current === controller) {
+                setHealthResults(prev => ({ ...prev, [c.id]: result }));
+            }
+            return [c.id, (result.success ? 'ok' : result.code === 'timeout' ? 'timeout' : result.code === 'cancelled' ? 'cancelled' : 'failed') as HealthState] as const;
+        }));
+        if (healthController.current !== controller) return;
+        healthController.current = null;
+        setHealthMap(prev => {
+            const n: Record<string, HealthState> = { ...prev };
+            for (const [id, state] of results) n[id] = state;
+            return n;
+        });
+        setIsRechecking(false);
+    }, [allConfigs, user]);
+
+    const persist = useCallback(async (configs: EvalConfigItem[], activeId: string) => {
+        const finalPayload = { settings: { activeConfigId: activeId, configs }, user };
+        return apiFetch('/api/eval/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(finalPayload),
+        });
+    }, [user]);
+
+    const saveCurrentConfig = async () => {
+        if (saveController.current || isSaving) return;
+        const controller = new AbortController();
+        saveController.current = controller;
+        const startedAt = Date.now();
+        let phase: 'validation' | 'test' | 'save' = 'validation';
+        setIsSaving(true);
+        setIsTesting(true);
+        setStatus({ type: 'info', msg: locale === 'zh' ? '正在测试连接…' : 'Testing connection…' });
+        try {
+            let newConfigs = [...allConfigs];
+            const configToSave = {
+                ...tempConfig,
+                testTimeoutMs: resolveModelTestTimeoutMs(tempConfig.testTimeoutMs),
+                headers: supportsCustomHeaders(tempConfig)
+                    ? normalizeCustomHeaders(tempConfig.headers)
+                    : undefined,
+            };
+            if (!isModelConnectionReady(configToSave)) {
+                throw new Error(locale === 'zh'
+                    ? '请填写完整的模型连接信息。Custom 模型至少需要 Base URL 和模型名。'
+                    : 'Complete the model connection. Custom models require a Base URL and model name.');
+            }
+            if (configToSave.id === 'new') {
+                configToSave.id = `config_${Date.now()}`;
+                newConfigs.push(configToSave);
+            } else {
+                newConfigs = newConfigs.map(c => (c.id === configToSave.id ? configToSave : c));
+            }
+
+            phase = 'test';
+            const testRes = await apiFetch('/api/eval/settings/test', {
+                method: 'POST',
+                signal: controller.signal,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    provider: configToSave.provider,
+                    protocol: configToSave.protocol,
+                    apiKey: configToSave.apiKey,
+                    baseUrl: configToSave.baseUrl,
+                    model: configToSave.model,
+                    headers: configToSave.headers,
+                    testTimeoutMs: configToSave.testTimeoutMs,
+                    user,
+                    configId: configToSave.id,
+                    // 用户点保存触发的主动测试才计入用量；recheckHealth 的页面轮询不传这个标记
+                    usageActive: true,
+                }),
+            });
+            const testData: ModelTestResult = await testRes.json();
+            controller.signal.throwIfAborted();
+            if (saveController.current !== controller) return;
+            setIsTesting(false);
+            if (!testData.success) {
+                setStatus({ type: 'error', msg: formatModelTestResult(testData, locale) });
+                return;
+            }
+            setStatus({ type: 'info', msg: formatModelTestResult(testData, locale) + (locale === 'zh' ? '正在保存…' : 'Saving…') });
+
+            let newActiveId = activeConfigId;
+            if (newConfigs.length === 1 || activeConfigId === 'default') {
+                newActiveId = configToSave.id;
+            }
+
+            phase = 'save';
+            const res = await persist(newConfigs, newActiveId);
+            if (res.ok) {
+                // Reload from the server so state holds masked keys, not the
+                // plaintext key just typed (the server never returns real keys).
+                await fetchSettings();
+                setEditingConfigId(null);
+                setPickedProvider(null);
+                setHealthMap(prev => ({ ...prev, [configToSave.id]: 'ok' }));
+                setHealthResults(prev => ({ ...prev, [configToSave.id]: testData }));
+                setStatus({ type: 'success', msg: formatModelTestResult(testData, locale) + (locale === 'zh' ? '配置已保存。' : 'Configuration saved.') });
+            } else {
+                const err = await res.json().catch(() => ({}));
+                setStatus({ type: 'error', msg: (locale === 'zh' ? '保存失败：' : 'Save failed: ') + (err.error || res.statusText) });
+            }
+        } catch (e: unknown) {
+            if (saveController.current !== controller) return;
+            if (phase === 'validation') {
+                setStatus({ type: 'error', msg: locale === 'zh'
+                    ? '请检查模型连接信息、请求头以及测试超时（10～300 秒）。'
+                    : 'Check the model connection, headers and test timeout (10–300 seconds).' });
+                return;
+            }
+            if (phase === 'save') {
+                setStatus({ type: 'error', msg: locale === 'zh'
+                    ? '未能确认配置是否保存，请刷新列表检查后再重试。'
+                    : 'Could not confirm whether the configuration was saved. Refresh the list before retrying.' });
+                return;
+            }
+            setStatus({ type: controller.signal.aborted ? 'info' : 'error', msg: formatModelTestResult({
+                success: false,
+                code: controller.signal.aborted ? 'cancelled' : e instanceof TypeError ? 'network' : 'unknown',
+                elapsedMs: Date.now() - startedAt,
+                timeoutMs: tempConfig.testTimeoutMs ?? DEFAULT_MODEL_TEST_TIMEOUT_MS,
+            }, locale) });
+        } finally {
+            if (saveController.current === controller) {
+                saveController.current = null;
+                setIsTesting(false);
+                setIsSaving(false);
+            }
+        }
+    };
+
+    const cancelTest = () => {
+        saveController.current?.abort();
+    };
+
+    const activateConfig = async (id: string) => {
+        const res = await persist(allConfigs, id);
+        if (res.ok) {
+            setActiveConfigId(id);
+            setStatus({ type: 'success', msg: locale === 'zh' ? '默认模型已切换' : 'Active model updated' });
+            setTimeout(() => setStatus(null), 1500);
+        }
+    };
+
+    const deleteEvalConfig = async (id: string) => {
+        const newConfigs = allConfigs.filter(c => c.id !== id);
+        let newActive = activeConfigId;
+        if (id === activeConfigId) newActive = newConfigs[0]?.id || 'default';
+        const res = await persist(newConfigs, newActive);
+        if (res.ok) {
+            setAllConfigs(newConfigs);
+            setActiveConfigId(newActive);
+            setStatus({ type: 'success', msg: locale === 'zh' ? '已删除' : 'Deleted' });
+            setTimeout(() => setStatus(null), 1500);
+        }
+    };
+
+    const startNew = () => {
+        setPickerOpen(true);
+        setPickedProvider(null);
+        setEditingConfigId(null);
+        setStatus(null);
+    };
+
+    const pickProvider = (p: LlmProvider) => {
+        setTempConfig({
+            id: 'new',
+            name: p.label,
+            provider: toBackendProvider(p.id),
+            protocol: p.id === 'anthropic' ? 'anthropic' : 'openai-compatible',
+            baseUrl: p.baseUrl,
+            model: p.defaultModel,
+            apiKey: '',
+            headers: undefined,
+        });
+        setPickedProvider(p);
+        setPickerOpen(false);
+        setEditingConfigId('new');
+        setStatus(null);
+    };
+
+    const reopenPicker = () => {
+        setEditingConfigId(null);
+        setPickerOpen(true);
+    };
+
+    const startEdit = (c: EvalConfigItem) => {
+        setTempConfig({ ...c });
+        setPickedProvider(null);
+        setEditingConfigId(c.id);
+        setPickerOpen(false);
+        setStatus(null);
+    };
+
+    const filteredConfigs = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        return allConfigs.filter(c => {
+            if (categoryFilter !== 'all') {
+                if (PROVIDER_META[c.provider]?.category !== categoryFilter) return false;
+            }
+            if (!q) return true;
+            return (
+                c.name.toLowerCase().includes(q) ||
+                (c.model || '').toLowerCase().includes(q) ||
+                (c.baseUrl || '').toLowerCase().includes(q) ||
+                (PROVIDER_META[c.provider]?.label || c.provider || '').toLowerCase().includes(q)
+            );
+        });
+    }, [allConfigs, query, categoryFilter]);
+
+    const categoryCounts = useMemo(() => {
+        const counts: Record<ProviderCategory, number> = { saas: 0, cn: 0, local: 0, other: 0 };
+        for (const c of allConfigs) {
+            const cat = PROVIDER_META[c.provider]?.category;
+            if (cat) counts[cat] += 1;
+        }
+        return counts;
+    }, [allConfigs]);
+
+    const activeConfig = allConfigs.find(c => c.id === activeConfigId);
+    const providerKinds = new Set(allConfigs.map(c => c.provider)).size;
+
+    if (!loaded) {
+        return <div style={{ padding: 32, color: 'var(--foreground-muted)', fontSize: 12 }}>{t('common.loading')}</div>;
+    }
+
+    return (
+        <div style={pageWrap}>
+          <div style={pageInner}>
+            {status && <StatusBar status={status} onDismiss={() => setStatus(null)} locale={locale} />}
+
+            {pickerOpen ? (
+                <ProviderPicker
+                    onPick={pickProvider}
+                    onCancel={() => setPickerOpen(false)}
+                    locale={locale}
+                />
+            ) : editingConfigId ? (
+                <EditForm
+                    config={tempConfig}
+                    setConfig={config => {
+                        if (config.provider !== tempConfig.provider) setPickedProvider(null);
+                        setTempConfig(config);
+                    }}
+                    onCancel={() => { setEditingConfigId(null); setPickedProvider(null); }}
+                    onReselect={editingConfigId === 'new' ? reopenPicker : undefined}
+                    onSave={saveCurrentConfig}
+                    isSaving={isSaving}
+                    isTesting={isTesting}
+                    onCancelTest={cancelTest}
+                    isDefault={isDefaultConfig(editingConfigId)}
+                    pickedProvider={pickedProvider}
+                    locale={locale}
+                />
+            ) : (
+                <>
+                    {/* === Page intro: description + primary CTA === */}
+                    <div style={introRow}>
+                        <p style={descText}>
+                            {locale === 'zh' ? (
+                                <>注册并管理评测 / 优化使用的 <b style={descStrong}>LLM</b>，可切换默认、编辑参数、管理 API Key。兼容 <b style={descStrong}>OpenAI / Anthropic / DeepSeek</b> 等主流厂商，亦支持<b style={descStrong}>国内厂商</b>与<b style={descStrong}>本地推理</b>部署。</>
+                            ) : (
+                                <>Register and manage LLMs used for evaluation/optimization. Set the default, edit parameters, and manage API keys. Compatible with <b style={descStrong}>OpenAI / Anthropic / DeepSeek</b> as well as <b style={descStrong}>regional providers</b> and <b style={descStrong}>self-hosted</b> inference.</>
+                            )}
+                        </p>
+                        <button style={primaryBtn} onClick={startNew}>
+                            <Plus size={14} strokeWidth={2.4} />
+                            {locale === 'zh' ? '新增模型' : 'New Model'}
+                        </button>
+                    </div>
+
+                    {/* === Body: 2-column with right sidebar === */}
+                    <div style={twoColGrid}>
+                        {/* --- Main column --- */}
+                        <div style={mainCol}>
+                            {/* Toolbar */}
+                            <div style={toolbar}>
+                                <div style={searchWrap}>
+                                    <Search size={14} strokeWidth={2} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--foreground-muted)' }} />
+                                    <input
+                                        type="text"
+                                        placeholder={locale === 'zh' ? '搜索名称 / 模型 / Base URL' : 'Search name / model / Base URL'}
+                                        value={query}
+                                        onChange={e => setQuery(e.target.value)}
+                                        style={searchInput}
+                                    />
+                                </div>
+
+                                <div style={chipsWrap}>
+                                    <FilterChip active={categoryFilter === 'all'} onClick={() => setCategoryFilter('all')} count={allConfigs.length}>
+                                        {locale === 'zh' ? '全部' : 'All'}
+                                    </FilterChip>
+                                    <FilterChip active={categoryFilter === 'saas'} onClick={() => setCategoryFilter('saas')} count={categoryCounts.saas}>
+                                        {locale === 'zh' ? '主流闭源' : 'SaaS'}
+                                    </FilterChip>
+                                    <FilterChip active={categoryFilter === 'cn'} onClick={() => setCategoryFilter('cn')} count={categoryCounts.cn}>
+                                        {locale === 'zh' ? '国内厂商' : 'Regional'}
+                                    </FilterChip>
+                                    <FilterChip active={categoryFilter === 'other'} onClick={() => setCategoryFilter('other')} count={categoryCounts.other}>
+                                        {locale === 'zh' ? '自定义' : 'Custom'}
+                                    </FilterChip>
+                                </div>
+                            </div>
+
+                            {/* Section heading */}
+                            <div style={sectionHeading}>
+                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                                    {locale === 'zh' ? '已注册模型' : 'Registered Models'}
+                                </span>
+                                <span style={countPill}>{filteredConfigs.length}</span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                    {locale === 'zh' ? `容量 ${allConfigs.length} / ${CAPACITY_LIMIT}` : `Capacity ${allConfigs.length} / ${CAPACITY_LIMIT}`}
+                                </span>
+                            </div>
+
+                            {/* List */}
+                            {filteredConfigs.length === 0 ? (
+                                <EmptyState locale={locale} hasConfigs={allConfigs.length > 0} onAdd={startNew} onReset={() => { setQuery(''); setCategoryFilter('all'); }} />
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    {filteredConfigs.map(c => (
+                                        <ModelCard
+                                            key={c.id}
+                                            config={c}
+                                            isActive={c.id === activeConfigId}
+                                            isDefault={isDefaultConfig(c.id)}
+                                            health={healthMap[c.id]}
+                                            onActivate={() => activateConfig(c.id)}
+                                            onEdit={() => startEdit(c)}
+                                            onDelete={() => setPendingDelete(c)}
+                                            locale={locale}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Footer hint */}
+                            <div style={hintBox}>
+                                <div style={hintIcon}><Info size={16} /></div>
+                                <div style={{ flex: 1, fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.6 }}>
+                                    <b style={{ color: 'var(--foreground)', fontWeight: 600 }}>{locale === 'zh' ? '提示' : 'Tip'}</b> · {locale === 'zh'
+                                        ? '至少保留一个默认模型，用于评测与优化任务的兜底调用。删除默认模型前，请先指定其它模型为默认。'
+                                        : 'Keep at least one default model for evaluation/optimization fallback. Switch the default before deleting it.'}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* --- Right sidebar --- */}
+                        <aside style={sideCol}>
+                            <CurrentDefaultPanel
+                                active={activeConfig}
+                                providerKinds={providerKinds}
+                                registeredCount={allConfigs.length}
+                                locale={locale}
+                            />
+                            <HealthCheckPanel
+                                configs={allConfigs}
+                                healthMap={healthMap}
+                                results={healthResults}
+                                onCancel={() => healthController.current?.abort()}
+                                isRechecking={isRechecking}
+                                onRecheck={recheckHealth}
+                                locale={locale}
+                            />
+                            <DocsPanel locale={locale} />
+                        </aside>
+                    </div>
+                </>
+            )}
+
+          </div>
+            <ConfirmDialog
+                open={!!pendingDelete}
+                onOpenChange={(o) => !o && setPendingDelete(null)}
+                tone="danger"
+                title={locale === 'zh' ? '删除该模型？' : 'Delete this model?'}
+                description={pendingDelete ? (locale === 'zh'
+                    ? `将永久删除「${pendingDelete.name}」配置，无法恢复。`
+                    : `"${pendingDelete.name}" will be permanently removed.`) : ''}
+                confirmText={locale === 'zh' ? '删除' : 'Delete'}
+                cancelText={locale === 'zh' ? '取消' : 'Cancel'}
+                onConfirm={async () => {
+                    if (pendingDelete) await deleteEvalConfig(pendingDelete.id);
+                }}
+            />
+        </div>
+    );
+}
+
+/* ====================== Sub-components ====================== */
+
+function StatusBar({ status, onDismiss, locale }: { status: { type: 'success' | 'error' | 'info', msg: string }; onDismiss: () => void; locale: string }) {
+    const tone = status.type === 'success'
+        ? { bg: 'var(--success-subtle)', fg: 'var(--success)', border: 'var(--success-subtle-border)' }
+        : status.type === 'error'
+        ? { bg: 'var(--error-subtle)', fg: 'var(--error)', border: 'var(--error-subtle-border)' }
+        : { bg: 'var(--primary-subtle)', fg: 'var(--primary)', border: 'var(--primary-subtle-border)' };
+    return (
+        <div style={{
+            padding: '8px 12px',
+            marginBottom: 14,
+            borderRadius: 8,
+            background: tone.bg,
+            color: tone.fg,
+            border: `1px solid ${tone.border}`,
+            fontSize: 12,
+            fontWeight: 500,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+        }}>
+            {status.type === 'success' && <Check size={13} strokeWidth={2.5} />}
+            <span role={status.type === 'error' ? 'alert' : 'status'} style={{ flex: 1 }}>{status.msg}</span>
+            <button type="button" style={ghostBtn} onClick={onDismiss} aria-label={locale === 'zh' ? '关闭提示' : 'Dismiss'}>×</button>
+        </div>
+    );
+}
+
+function FilterChip({
+    active, onClick, count, children,
+}: {
+    active: boolean;
+    onClick: () => void;
+    count?: number;
+    children: React.ReactNode;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-pressed={active}
+            className="ai-filter-chip"
+            data-active={active ? 'true' : 'false'}
+            style={chipBase}
+        >
+            {children}
+            {typeof count === 'number' && count > 0 && (
+                <span className="ai-filter-chip__count">{count}</span>
+            )}
+        </button>
+    );
+}
+
+function ModelCard({
+    config, isActive, isDefault, health, onActivate, onEdit, onDelete, locale,
+}: {
+    config: EvalConfigItem;
+    isActive: boolean;
+    isDefault: boolean;
+    health?: HealthState;
+    onActivate: () => void;
+    onEdit: () => void;
+    onDelete: () => void;
+    locale: string;
+}) {
+    const meta = PROVIDER_META[config.provider] ?? {
+        label: config.provider || 'Unknown',
+        monogram: (config.provider?.slice(0, 2) || '??').toUpperCase(),
+        category: 'other' as ProviderCategory,
+    };
+    const catalogProvider = resolveCatalogProvider(config.provider, config.baseUrl);
+    const effHealth: HealthState = health ?? initialHealth(config);
+
+    return (
+        <article
+            style={{
+                ...modelCard,
+                borderColor: isActive ? 'var(--primary-subtle-border)' : 'var(--card-border)',
+                background: isActive ? 'linear-gradient(180deg, var(--primary-subtle) 0%, var(--card-bg) 56px)' : 'var(--card-bg)',
+            }}
+        >
+            {isActive && <span style={activeStripe} />}
+
+            <ProviderLogo
+                slug={catalogProvider?.logoSlug}
+                initials={meta.monogram}
+                size={48}
+                radius={12}
+            />
+
+            <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <span style={modelName}>{config.name}</span>
+                    {isActive && (
+                        <span style={badgeDefault}>
+                            <BadgeCheck size={11} strokeWidth={2.5} />
+                            {locale === 'zh' ? '当前默认' : 'Default'}
+                        </span>
+                    )}
+                    {effHealth === 'ok' && (
+                        <span style={badgeHealthy}>
+                            <span style={dotPulse} />
+                            {locale === 'zh' ? '正常' : 'Healthy'}
+                        </span>
+                    )}
+                    {effHealth === 'checking' && (
+                        <span style={badgeChecking}>
+                            <Loader2 size={11} strokeWidth={2.4} style={{ animation: 'spin 1s linear infinite' }} />
+                            {locale === 'zh' ? '连接中' : 'Checking'}
+                        </span>
+                    )}
+                    {(effHealth === 'failed' || effHealth === 'timeout' || effHealth === 'cancelled') && (
+                        <span style={badgeFailed}>
+                            <XCircle size={11} strokeWidth={2.4} />
+                            {effHealth === 'timeout' ? (locale === 'zh' ? '测试超时' : 'Test timed out') : effHealth === 'cancelled' ? (locale === 'zh' ? '已取消' : 'Cancelled') : (locale === 'zh' ? '连接失败' : 'Connection failed')}
+                        </span>
+                    )}
+                    {effHealth === 'unconfigured' && (
+                        <span style={badgeWarn}>{locale === 'zh' ? '配置不完整' : 'Incomplete'}</span>
+                    )}
+                    {isDefault && <span style={badgeGhost}>{locale === 'zh' ? '系统默认' : 'System'}</span>}
+                </div>
+
+                <div style={metaRow}>
+                    <span style={metaItem}>
+                        <span style={metaLabel}>Provider</span>
+                        <span style={{ ...metaValue, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{meta.label}</span>
+                    </span>
+                    <span style={metaSep} />
+                    <span style={metaItem}>
+                        <span style={metaLabel}>Model</span>
+                        <span style={{ ...metaValue, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{config.model || '—'}</span>
+                    </span>
+                    {config.baseUrl && (
+                        <>
+                            <span style={metaSep} />
+                            <span style={metaItem}>
+                                <span style={metaLabel}>Base URL</span>
+                                <span style={{ ...metaValue, fontFamily: 'var(--font-mono)', fontSize: 12 }} title={config.baseUrl}>
+                                    {config.baseUrl}
+                                </span>
+                            </span>
+                        </>
+                    )}
+                </div>
+
+                <div style={apiKeyRow}>
+                    <Key size={12} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                    {config.apiKey ? (
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                            {config.apiKey}
+                        </span>
+                    ) : (
+                        <span style={{ color: 'var(--foreground-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                            {locale === 'zh' ? '(未设置)' : '(not set)'}
+                        </span>
+                    )}
+                    {supportsCustomHeaders(config) && Object.keys(config.headers ?? {}).length > 0 && (
+                        <span style={{ color: 'var(--foreground-muted)', marginLeft: 8 }}>
+                            · {Object.keys(config.headers ?? {}).length} {locale === 'zh' ? '个自定义请求头' : 'custom headers'}
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            <div style={cardActions}>
+                {isActive ? (
+                    <button style={inUseBtn} disabled>
+                        <CircleCheck size={13} strokeWidth={2.4} />
+                        {locale === 'zh' ? '当前使用' : 'In use'}
+                    </button>
+                ) : (
+                    <button style={ghostBtn} onClick={onActivate}>
+                        <Check size={13} strokeWidth={2.2} />
+                        {locale === 'zh' ? '设为默认' : 'Set default'}
+                    </button>
+                )}
+                {!isDefault && (
+                    <>
+                        <button style={ghostBtn} onClick={onEdit}>
+                            <Pencil size={13} strokeWidth={2.2} />
+                            {locale === 'zh' ? '编辑' : 'Edit'}
+                        </button>
+                        <button style={dangerBtn} onClick={onDelete}>
+                            <Trash2 size={13} strokeWidth={2.2} />
+                            {locale === 'zh' ? '删除' : 'Delete'}
+                        </button>
+                    </>
+                )}
+            </div>
+        </article>
+    );
+}
+
+function CurrentDefaultPanel({
+    active, providerKinds, registeredCount, locale,
+}: {
+    active?: EvalConfigItem;
+    providerKinds: number;
+    registeredCount: number;
+    locale: string;
+}) {
+    return (
+        <section style={panelCard}>
+            <header style={panelHeader}>
+                <Star size={13} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                <span>{locale === 'zh' ? '当前默认' : 'Current Default'}</span>
+            </header>
+            {active ? (
+                <ul style={panelKv}>
+                    <KvRow label={locale === 'zh' ? '名称' : 'Name'} value={active.name} bold />
+                    <KvRow label="Provider" value={active.provider} mono />
+                    <KvRow label="Model" value={active.model || '—'} mono />
+                    {active.baseUrl && (
+                        <KvRow label="Base URL" value={active.baseUrl} mono ellipsis />
+                    )}
+                    <KvRow
+                        label={locale === 'zh' ? '已注册' : 'Registered'}
+                        value={`${registeredCount} / ${CAPACITY_LIMIT}`}
+                    />
+                    <KvRow
+                        label={locale === 'zh' ? '供应商种类' : 'Providers'}
+                        value={String(providerKinds)}
+                    />
+                </ul>
+            ) : (
+                <div style={{ padding: '4px 0', fontSize: 12, color: 'var(--foreground-muted)' }}>
+                    {locale === 'zh' ? '尚未选定默认模型。' : 'No default selected.'}
+                </div>
+            )}
+        </section>
+    );
+}
+
+function HealthCheckPanel({
+    configs, healthMap, results, isRechecking, onRecheck, onCancel, locale,
+}: {
+    configs: EvalConfigItem[];
+    healthMap: Record<string, HealthState>;
+    results: Record<string, ModelTestResult>;
+    onCancel: () => void;
+    isRechecking: boolean;
+    onRecheck: () => void;
+    locale: string;
+}) {
+    return (
+        <section style={panelCard}>
+            <header style={panelHeader}>
+                <HeartPulse size={13} strokeWidth={2.2} style={{ color: 'var(--success)' }} />
+                <span>{locale === 'zh' ? '健康检查' : 'Health Check'}</span>
+            </header>
+            {configs.length === 0 ? (
+                <div style={{ padding: '4px 0', fontSize: 12, color: 'var(--foreground-muted)' }}>
+                    {locale === 'zh' ? '暂无模型可检查。' : 'No models to check.'}
+                </div>
+            ) : (
+                <>
+                    <ul style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 0, margin: 0, listStyle: 'none' }}>
+                        {configs.map(c => {
+                            const h = healthMap[c.id] ?? initialHealth(c);
+                            return (
+                                <li key={c.id} style={{ ...healthRow, flexWrap: 'wrap' }}>
+                                    <span style={{
+                                        flex: 1,
+                                        minWidth: 0,
+                                        fontSize: 12.5,
+                                        color: 'var(--foreground)',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }} title={c.model || c.name}>
+                                        {c.model || c.name}
+                                    </span>
+                                    <HealthBadge state={h} locale={locale} />
+                                    {results[c.id] && <div style={{ width: '100%', fontSize: 12, color: 'var(--foreground-secondary)' }}>{formatModelTestResult(results[c.id], locale)}</div>}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                    {isRechecking && <button style={ghostBtn} onClick={onCancel}>{locale === 'zh' ? '取消检查' : 'Cancel checks'}</button>}
+                    <button style={recheckBtn} onClick={onRecheck} disabled={isRechecking}>
+                        <RefreshCw size={12} strokeWidth={2.2} style={isRechecking ? { animation: 'spin 1s linear infinite' } : undefined} />
+                        {isRechecking
+                            ? (locale === 'zh' ? '检查中…' : 'Checking…')
+                            : (locale === 'zh' ? '重新检查' : 'Re-check')}
+                    </button>
+                </>
+            )}
+        </section>
+    );
+}
+
+function DocsPanel({ locale }: { locale: string }) {
+    const links = locale === 'zh' ? [
+        { label: '如何获取 API Key', href: '#' },
+        { label: '密钥加密与轮转策略', href: '#' },
+        { label: '模型注册最佳实践', href: '#' },
+    ] : [
+        { label: 'How to obtain an API Key', href: '#' },
+        { label: 'Key encryption & rotation', href: '#' },
+        { label: 'Model registry best practices', href: '#' },
+    ];
+    return (
+        <section style={panelCard}>
+            <header style={panelHeader}>
+                <BookOpen size={13} strokeWidth={2.2} style={{ color: 'var(--foreground-secondary)' }} />
+                <span>{locale === 'zh' ? '相关文档' : 'Related Docs'}</span>
+            </header>
+            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
+                {links.map(l => (
+                    <li key={l.label}>
+                        <a href={l.href} style={docLink}>
+                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
+                            <ExternalLink size={12} strokeWidth={2} style={{ color: 'var(--foreground-muted)', flexShrink: 0 }} />
+                        </a>
+                    </li>
+                ))}
+            </ul>
+        </section>
+    );
+}
+
+function KvRow({
+    label, value, mono, bold, ellipsis,
+}: {
+    label: string;
+    value: string;
+    mono?: boolean;
+    bold?: boolean;
+    ellipsis?: boolean;
+}) {
+    return (
+        <li style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '5px 0', borderBottom: '1px dashed var(--border)', minWidth: 0 }}>
+            <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)', flexShrink: 0 }}>{label}</span>
+            <span style={{
+                flex: 1,
+                minWidth: 0,
+                textAlign: 'right',
+                fontSize: 12,
+                color: 'var(--foreground)',
+                fontWeight: bold ? 600 : 500,
+                fontFamily: mono ? 'var(--font-mono)' : 'inherit',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+            }} title={ellipsis ? value : undefined}>
+                {value}
+            </span>
+        </li>
+    );
+}
+
+type LogoAttempt = 'color' | 'plain' | 'failed';
+
+function ProviderLogo({
+    slug, initials, size = 36, radius = 10,
+}: {
+    slug?: string;
+    initials: string;
+    size?: number;
+    radius?: number;
+}) {
+    const [attempt, setAttempt] = useState<LogoAttempt>('color');
+
+    useEffect(() => {
+        setAttempt('color');
+    }, [slug]);
+
+    const url = attempt === 'failed' ? undefined : getProviderLogoUrl(slug, attempt);
+    const showLogo = !!url;
+
+    return (
+        <div
+            style={{
+                ...providerIcon,
+                width: size,
+                height: size,
+                borderRadius: radius,
+                fontSize: Math.round(size * 0.32),
+                background: showLogo ? '#ffffff' : 'var(--background-secondary)',
+                padding: showLogo ? Math.round(size * 0.16) : 0,
+                color: 'var(--foreground)',
+            }}
+        >
+            {showLogo ? (
+                <img
+                    src={url}
+                    alt={initials}
+                    onError={() => setAttempt(attempt === 'color' ? 'plain' : 'failed')}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    loading="lazy"
+                />
+            ) : (
+                initials
+            )}
+        </div>
+    );
+}
+
+function HealthBadge({ state, locale }: { state: HealthState, locale: string }) {
+    if (state === 'ok') {
+        return (
+            <span style={badgeHealthy}>
+                <CircleCheck size={11} strokeWidth={2.4} />
+                {locale === 'zh' ? '正常' : 'OK'}
+            </span>
+        );
+    }
+    if (state === 'checking') {
+        return (
+            <span style={badgeChecking}>
+                <Loader2 size={11} strokeWidth={2.4} style={{ animation: 'spin 1s linear infinite' }} />
+                {locale === 'zh' ? '检测中' : 'Checking'}
+            </span>
+        );
+    }
+    if (state === 'failed' || state === 'timeout' || state === 'cancelled') {
+        return (
+            <span style={badgeFailed}>
+                <XCircle size={11} strokeWidth={2.4} />
+                {state === 'timeout' ? (locale === 'zh' ? '测试超时' : 'Timed out') : state === 'cancelled' ? (locale === 'zh' ? '已取消' : 'Cancelled') : (locale === 'zh' ? '连接失败' : 'Failed')}
+            </span>
+        );
+    }
+    return (
+        <span style={badgeWarn}>{locale === 'zh' ? '未配置' : 'No key'}</span>
+    );
+}
+
+function EmptyState({
+    locale, hasConfigs, onAdd, onReset,
+}: {
+    locale: string;
+    hasConfigs: boolean;
+    onAdd: () => void;
+    onReset: () => void;
+}) {
+    return (
+        <div style={emptyBox}>
+            <div style={emptyIcon}><Server size={20} /></div>
+            <div style={{ fontSize: 13.5, color: 'var(--foreground)', fontWeight: 500, marginBottom: 4 }}>
+                {hasConfigs
+                    ? (locale === 'zh' ? '没有匹配的模型' : 'No matching models')
+                    : (locale === 'zh' ? '尚未注册任何模型' : 'No models registered yet')}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginBottom: 14, textAlign: 'center', maxWidth: 360 }}>
+                {hasConfigs
+                    ? (locale === 'zh' ? '试试调整搜索关键字或筛选条件。' : 'Try a different keyword or filter.')
+                    : (locale === 'zh' ? '注册首个 LLM 后即可在评测、优化、对比中使用。' : 'Register your first LLM to use it for evaluation, optimization and comparison.')}
+            </div>
+            {hasConfigs ? (
+                <button style={ghostBtn} onClick={onReset}>{locale === 'zh' ? '清除筛选' : 'Reset filters'}</button>
+            ) : (
+                <button style={primaryBtn} onClick={onAdd}>
+                    <Plus size={14} strokeWidth={2.4} />
+                    {locale === 'zh' ? '注册首个模型' : 'Register your first model'}
+                </button>
+            )}
+        </div>
+    );
+}
+
+function ProviderPicker({
+    onPick, onCancel, locale,
+}: {
+    onPick: (p: LlmProvider) => void;
+    onCancel: () => void;
+    locale: string;
+}) {
+    const [q, setQ] = useState('');
+    const [activeCat, setActiveCat] = useState<LlmProviderCategory | 'all'>('all');
+
+    const filtered = useMemo(() => {
+        const query = q.trim().toLowerCase();
+        return LLM_PROVIDERS.filter(p => {
+            if (activeCat !== 'all' && p.category !== activeCat) return false;
+            if (!query) return true;
+            return (
+                p.label.toLowerCase().includes(query) ||
+                p.id.toLowerCase().includes(query) ||
+                p.defaultModel.toLowerCase().includes(query) ||
+                p.suggestedModels.some(m => m.toLowerCase().includes(query))
+            );
+        });
+    }, [q, activeCat]);
+
+    const grouped = useMemo(() => {
+        const byCat: Record<string, LlmProvider[]> = {};
+        for (const p of filtered) {
+            if (!byCat[p.category]) byCat[p.category] = [];
+            byCat[p.category].push(p);
+        }
+        return byCat;
+    }, [filtered]);
+
+    const catCounts = useMemo(() => {
+        const c: Record<string, number> = { all: LLM_PROVIDERS.length };
+        for (const p of LLM_PROVIDERS) c[p.category] = (c[p.category] || 0) + 1;
+        return c;
+    }, []);
+
+    return (
+        <div style={editCard}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 16 }}>
+                <div>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
+                        {locale === 'zh' ? '选择模型供应商' : 'Choose a Model Provider'}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 3 }}>
+                        {locale === 'zh'
+                            ? '挑选预置供应商即可自动填写 Base URL 与默认模型；所有供应商均可配置自定义请求头鉴权。'
+                            : 'Pick a provider to prefill its Base URL and model. Local and custom endpoints can also authenticate with custom headers.'}
+                    </div>
+                </div>
+                <button style={ghostBtn} onClick={onCancel}>{locale === 'zh' ? '返回列表' : 'Back to list'}</button>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+                <div style={{ ...searchWrap, width: 280 }}>
+                    <Search size={14} strokeWidth={2} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--foreground-muted)' }} />
+                    <input
+                        type="text"
+                        placeholder={locale === 'zh' ? '搜索供应商 / 模型' : 'Search provider / model'}
+                        value={q}
+                        onChange={e => setQ(e.target.value)}
+                        style={searchInput}
+                    />
+                </div>
+                <div style={chipsWrap}>
+                    <FilterChip active={activeCat === 'all'} onClick={() => setActiveCat('all')} count={catCounts.all}>
+                        {locale === 'zh' ? '全部' : 'All'}
+                    </FilterChip>
+                    {CATEGORY_ORDER.map(c => (
+                        <FilterChip
+                            key={c.id}
+                            active={activeCat === c.id}
+                            onClick={() => setActiveCat(c.id)}
+                            count={catCounts[c.id] || 0}
+                        >
+                            {locale === 'zh' ? c.labelZh : c.labelEn}
+                        </FilterChip>
+                    ))}
+                </div>
+            </div>
+
+            {filtered.length === 0 ? (
+                <div style={{ padding: '40px 0', textAlign: 'center', fontSize: 13, color: 'var(--foreground-muted)' }}>
+                    {locale === 'zh' ? '没有匹配的供应商。' : 'No matching provider.'}
+                </div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+                    {CATEGORY_ORDER.map(cat => {
+                        const items = grouped[cat.id];
+                        if (!items || items.length === 0) return null;
+                        return (
+                            <section key={cat.id}>
+                                <div style={pickerSectionHead}>
+                                    <span>{locale === 'zh' ? cat.labelZh : cat.labelEn}</span>
+                                    <span style={countPill}>{items.length}</span>
+                                </div>
+                                <div style={pickerGrid}>
+                                    {items.map(p => (
+                                        <button
+                                            key={p.id}
+                                            type="button"
+                                            onClick={() => onPick(p)}
+                                            style={providerCard}
+                                            className="provider-pick-card"
+                                        >
+                                            <ProviderLogo slug={p.logoSlug} initials={p.initials} size={36} radius={9} />
+                                            <div style={{ minWidth: 0, flex: 1 }}>
+                                                <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {p.label}
+                                                </div>
+                                                <div style={{ marginTop: 3, fontSize: 11.5, color: 'var(--foreground-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.suggestedModels.join(' · ') || p.defaultModel}>
+                                                    {p.suggestedModels.slice(0, 3).join(' · ') || p.defaultModel || (locale === 'zh' ? '自填模型' : 'Custom model')}
+                                                </div>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </section>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function EditForm({
+    config, setConfig, onCancel, onReselect, onSave, isSaving, isTesting, onCancelTest, isDefault, pickedProvider: providerFromPicker, locale,
+}: {
+    config: EvalConfigItem;
+    setConfig: (c: EvalConfigItem) => void;
+    onCancel: () => void;
+    onReselect?: () => void;
+    onSave: () => void;
+    isTesting: boolean;
+    onCancelTest: () => void;
+    isSaving: boolean;
+    isDefault: boolean;
+    pickedProvider?: LlmProvider | null;
+    locale: string;
+}) {
+    const isAzureOpenAI = resolveCatalogProvider(config.provider, config.baseUrl)?.id === 'azure-openai';
+    const pickedProvider = providerFromPicker?.id === 'azure-openai' && !isAzureOpenAI ? null : providerFromPicker;
+    const onProviderChange = (p: EvalConfigItem['provider']) => {
+        const preset = getProvider(p);
+        setConfig({
+            ...config,
+            provider: p,
+            protocol: p === 'anthropic' ? 'anthropic' : 'openai-compatible',
+            baseUrl: preset?.baseUrl || config.baseUrl,
+            model: preset?.defaultModel || config.model,
+            headers: config.headers,
+        });
+    };
+
+    return (
+        <div style={editCard}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 18, gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                    {pickedProvider && (
+                        <ProviderLogo slug={pickedProvider.logoSlug} initials={pickedProvider.initials} size={40} radius={10} />
+                    )}
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
+                            {config.id === 'new'
+                                ? (pickedProvider ? pickedProvider.label : (locale === 'zh' ? '新增模型' : 'New Model'))
+                                : (locale === 'zh' ? '编辑模型' : 'Edit Model')}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 3 }}>
+                            {pickedProvider?.note
+                                ? pickedProvider.note
+                                : (locale === 'zh' ? '保存前会自动测试连接，连通后才会写入。' : 'Connection is tested before saving.')}
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                    {onReselect && (
+                        <button style={ghostBtn} disabled={isSaving} onClick={onReselect}>
+                            {locale === 'zh' ? '← 选择其它供应商' : '← Choose other provider'}
+                        </button>
+                    )}
+                    <button style={ghostBtn} disabled={isSaving} onClick={onCancel}>{locale === 'zh' ? '返回列表' : 'Back to list'}</button>
+                </div>
+            </div>
+
+            <fieldset disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px 18px' }}>
+                <Field label={locale === 'zh' ? '配置名称' : 'Config Name'}>
+                    <input
+                        style={inputStyle}
+                        placeholder={locale === 'zh' ? '例如：我的 DeepSeek' : 'e.g. My DeepSeek'}
+                        value={config.name || ''}
+                        disabled={isDefault}
+                        onChange={e => setConfig({ ...config, name: e.target.value })}
+                    />
+                </Field>
+
+                <Field label={locale === 'zh' ? '供应商' : 'Provider'}>
+                    <select
+                        style={inputStyle}
+                        value={config.provider}
+                        disabled={isDefault}
+                        onChange={e => onProviderChange(e.target.value as EvalConfigItem['provider'])}
+                    >
+                        <option value="deepseek-official">DeepSeek (Official)</option>
+                        <option value="siliconflow">SiliconFlow</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </Field>
+
+                <Field label="Base URL">
+                    <input
+                        style={inputStyle}
+                        placeholder="https://api.deepseek.com"
+                        value={config.baseUrl || ''}
+                        disabled={isDefault}
+                        onChange={e => setConfig({ ...config, baseUrl: e.target.value.replace(/\/chat\/completions\/?$/, '') })}
+                    />
+                </Field>
+
+                <Field label={isAzureOpenAI
+                    ? (locale === 'zh' ? '部署名称' : 'Deployment Name')
+                    : (locale === 'zh' ? '模型名' : 'Model Name')}>
+                    <input
+                        style={inputStyle}
+                        placeholder={isAzureOpenAI ? 'my-model-deployment' : 'deepseek-v4-flash / gpt-4o / ...'}
+                        value={config.model || ''}
+                        disabled={isDefault}
+                        onChange={e => setConfig({ ...config, model: e.target.value })}
+                    />
+                    {pickedProvider && pickedProvider.suggestedModels.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+                            {pickedProvider.suggestedModels.slice(0, 6).map(m => (
+                                <button
+                                    key={m}
+                                    type="button"
+                                    onClick={() => setConfig({ ...config, model: m })}
+                                    style={{
+                                        ...modelChip,
+                                        background: config.model === m ? 'var(--primary-subtle)' : 'var(--background-secondary)',
+                                        color: config.model === m ? 'var(--primary)' : 'var(--foreground-secondary)',
+                                        borderColor: config.model === m ? 'var(--primary-subtle-border)' : 'var(--border)',
+                                    }}
+                                >
+                                    {m}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </Field>
+
+                <div style={{ gridColumn: '1 / -1' }}>
+                    <Field label={supportsCustomHeaders(config)
+                        ? (locale === 'zh' ? 'API 密钥（可选）' : 'API Key (optional)')
+                        : (locale === 'zh' ? 'API 密钥' : 'API Key')}>
+                        <input
+                            style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                            type="text"
+                            placeholder="sk-..."
+                            value={config.apiKey || ''}
+                            disabled={isDefault}
+                            onChange={e => setConfig({ ...config, apiKey: e.target.value })}
+                        />
+                        {(config.apiKey || '').includes('•') && (
+                            <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                {locale === 'zh'
+                                    ? '出于安全考虑仅显示掩码。保持不变则沿用原 Key；如需更换请清空后输入新 Key。'
+                                    : 'Masked for security. Leave unchanged to keep the current key; clear and type a new key to replace it.'}
+                            </div>
+                        )}
+                        {pickedProvider?.docsUrl && (
+                            <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                <a href={pickedProvider.docsUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                    {locale === 'zh' ? '如何获取 API Key' : 'How to obtain an API Key'}
+                                    <ExternalLink size={11} strokeWidth={2} />
+                                </a>
+                            </div>
+                        )}
+                    </Field>
+                </div>
+
+                {supportsCustomHeaders(config) && (
+                    <div style={{ gridColumn: '1 / -1' }}>
+                        <Field label={locale === 'zh' ? '自定义请求头（可选）' : 'Custom Headers (optional)'}>
+                            <HeaderEditor
+                                headers={config.headers}
+                                onChange={headers => setConfig({ ...config, headers })}
+                                disabled={isDefault}
+                                locale={locale}
+                            />
+                        </Field>
+                    </div>
+                )}
+            </div>
+
+            <details style={{ marginTop: 16 }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--foreground-secondary)' }}>{locale === 'zh' ? '高级设置' : 'Advanced settings'}</summary>
+                <div style={{ marginTop: 12 }}>
+                    <Field label={locale === 'zh' ? '接口协议' : 'API protocol'}>
+                        <select style={inputStyle} disabled={isDefault} value={config.protocol ?? ''}
+                            onChange={e => setConfig({ ...config, protocol: e.target.value ? e.target.value as ModelProtocol : undefined })}>
+                            <option value="">{locale === 'zh' ? '沿用旧配置行为' : 'Keep legacy behavior'}</option>
+                            <option value="openai-compatible">OpenAI Compatible</option>
+                            <option value="anthropic">Anthropic Messages</option>
+                        </select>
+                        <p style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 6 }}>
+                            {locale === 'zh' ? '按模型网关实际支持的接口选择。显式选择后，连接测试与业务调用使用相同协议。' : 'Match the protocol supported by your gateway. An explicit selection applies to both connection tests and business requests.'}
+                        </p>
+                    </Field>
+                    <Field label={locale === 'zh' ? '连接测试超时（秒）' : 'Connection test timeout (seconds)'}>
+                        <input aria-label={locale === 'zh' ? '连接测试超时（秒）' : 'Connection test timeout (seconds)'}
+                            type="number" min={10} max={300} step={1} style={inputStyle} disabled={isDefault}
+                            value={config.testTimeoutMs === undefined ? 60 : config.testTimeoutMs === 0 ? '' : config.testTimeoutMs / 1000}
+                            onChange={e => setConfig({ ...config, testTimeoutMs: Number(e.target.value) * 1000 })} />
+                        <p style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 6 }}>
+                            {locale === 'zh' ? '默认 60 秒，范围 10～300 秒。用于保存前测试和手动健康检查，不影响评测任务超时。每次测试仅请求一次。' : 'Default 60s; range 10–300s. Applies to save-time tests and health checks only, not evaluation tasks. Each test sends one request.'}
+                        </p>
+                    </Field>
+                </div>
+            </details>
+            </fieldset>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+                {isTesting && <button style={ghostBtn} onClick={onCancelTest}>{locale === 'zh' ? '取消测试' : 'Cancel test'}</button>}
+                <button style={ghostBtn} disabled={isSaving} onClick={onCancel}>{locale === 'zh' ? '取消' : 'Cancel'}</button>
+                {!isDefault && (
+                    <button style={isSaving ? primaryBtnDisabled : primaryBtn} disabled={isSaving} onClick={onSave}>
+                        {isSaving
+                            ? (locale === 'zh' ? '测试并保存中…' : 'Testing & Saving…')
+                            : (locale === 'zh' ? '测试连接并保存' : 'Test & Save')}
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function HeaderEditor({
+    headers,
+    onChange,
+    disabled,
+    locale,
+}: {
+    headers?: Record<string, string>;
+    onChange: (headers: Record<string, string> | undefined) => void;
+    disabled: boolean;
+    locale: string;
+}) {
+    const entries = Object.entries(headers ?? {});
+    const replaceEntry = (index: number, name: string, value: string) => {
+        const nextEntries = entries.map(([currentName, currentValue], currentIndex) =>
+            currentIndex === index ? [name, value] : [currentName, currentValue],
+        );
+        onChange(Object.fromEntries(nextEntries));
+    };
+    const removeEntry = (index: number) => {
+        const nextEntries = entries.filter((_, currentIndex) => currentIndex !== index);
+        onChange(nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined);
+    };
+    const addEntry = () => {
+        let name = 'Authorization';
+        let suffix = 2;
+        const used = new Set(entries.map(([headerName]) => headerName.toLowerCase()));
+        while (used.has(name.toLowerCase())) {
+            name = `X-Custom-Header-${suffix++}`;
+        }
+        onChange({ ...(headers ?? {}), [name]: '' });
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {entries.map(([name, value], index) => (
+                <div key={`${index}-${name}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 0.8fr) minmax(220px, 1.2fr) auto', gap: 8 }}>
+                    <input
+                        style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                        value={name}
+                        disabled={disabled}
+                        aria-label={locale === 'zh' ? '请求头名称' : 'Header name'}
+                        placeholder="Authorization"
+                        onChange={e => replaceEntry(index, e.target.value, value)}
+                    />
+                    <input
+                        style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                        value={value}
+                        disabled={disabled}
+                        aria-label={locale === 'zh' ? '请求头值' : 'Header value'}
+                        placeholder={locale === 'zh' ? '请求头值' : 'Header value'}
+                        onChange={e => replaceEntry(index, name, e.target.value)}
+                    />
+                    <button
+                        type="button"
+                        style={dangerBtn}
+                        disabled={disabled}
+                        onClick={() => removeEntry(index)}
+                        aria-label={locale === 'zh' ? '删除请求头' : 'Remove header'}
+                    >
+                        <Trash2 size={13} />
+                    </button>
+                </div>
+            ))}
+            <div>
+                <button type="button" style={ghostBtn} disabled={disabled} onClick={addEntry}>
+                    <Plus size={13} />
+                    {locale === 'zh' ? '添加请求头' : 'Add header'}
+                </button>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', lineHeight: 1.5 }}>
+                {locale === 'zh'
+                    ? '请求头会随每次模型调用发送，值将按密钥处理并脱敏显示。'
+                    : 'Headers are sent with every model request. Values are treated as secrets and masked.'}
+            </div>
+        </div>
+    );
+}
+
+function Field({ label, children }: { label: string, children: React.ReactNode }) {
+    return (
+        <div>
+            <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--foreground-secondary)', marginBottom: 6, letterSpacing: '0.01em' }}>{label}</div>
+            {children}
+        </div>
+    );
+}
+
+/* ====================== Styles ====================== */
+
+const pageWrap: CSSProperties = {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    padding: '24px 28px 40px',
+    width: '100%',
+};
+
+const pageInner: CSSProperties = {
+    maxWidth: 1320,
+    margin: '0 auto',
+};
+
+const introRow: CSSProperties = {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 24,
+    marginBottom: 22,
+};
+
+const descText: CSSProperties = {
+    margin: 0,
+    fontSize: 13,
+    lineHeight: 1.65,
+    color: 'var(--foreground-secondary)',
+    maxWidth: 720,
+};
+
+const descStrong: CSSProperties = {
+    color: 'var(--foreground)',
+    fontWeight: 600,
+};
+
+const twoColGrid: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 300px',
+    gap: 22,
+    alignItems: 'flex-start',
+};
+
+const mainCol: CSSProperties = {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+};
+
+const sideCol: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+    position: 'sticky',
+    top: 0,
+};
+
+const sectionHeading: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '2px 2px 6px',
+    borderBottom: '1px solid var(--border)',
+};
+
+const countPill: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '1px 8px',
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: 'var(--font-mono)',
+    color: 'var(--foreground-secondary)',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 999,
+    lineHeight: 1.5,
+};
+
+const panelCard: CSSProperties = {
+    background: 'var(--card-bg)',
+    border: '1px solid var(--card-border)',
+    borderRadius: 12,
+    padding: '14px 16px 12px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+};
+
+const panelHeader: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+    letterSpacing: '-0.005em',
+    paddingBottom: 8,
+    borderBottom: '1px solid var(--border)',
+};
+
+const panelKv: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    padding: 0,
+    margin: 0,
+    listStyle: 'none',
+};
+
+const healthRow: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '5px 0',
+    minWidth: 0,
+};
+
+const recheckBtn: CSSProperties = {
+    width: '100%',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: '7px 10px',
+    marginTop: 4,
+    background: 'var(--card-bg)',
+    color: 'var(--foreground-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 7,
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all .12s ease',
+};
+
+const docLink: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '7px 8px',
+    fontSize: 12.5,
+    color: 'var(--foreground-secondary)',
+    textDecoration: 'none',
+    borderRadius: 6,
+    transition: 'background .1s',
+};
+
+const pickerSectionHead: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--foreground-secondary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+};
+
+const pickerGrid: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+    gap: 10,
+};
+
+const providerCard: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '11px 12px',
+    background: 'var(--card-bg)',
+    border: '1px solid var(--card-border)',
+    borderRadius: 10,
+    cursor: 'pointer',
+    textAlign: 'left',
+    fontFamily: 'inherit',
+    transition: 'all .12s ease',
+    minWidth: 0,
+};
+
+const modelChip: CSSProperties = {
+    padding: '3px 10px',
+    fontSize: 11,
+    fontFamily: 'var(--font-mono)',
+    border: '1px solid var(--border)',
+    borderRadius: 999,
+    cursor: 'pointer',
+    transition: 'all .12s',
+    lineHeight: 1.5,
+};
+
+const toolbar: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 14,
+    flexWrap: 'wrap',
+};
+
+const searchWrap: CSSProperties = {
+    position: 'relative',
+    width: 280,
+};
+
+const searchInput: CSSProperties = {
+    width: '100%',
+    height: 34,
+    padding: '0 12px 0 32px',
+    border: '1px solid var(--input-border)',
+    borderRadius: 8,
+    background: 'var(--input-bg)',
+    fontSize: 12.5,
+    color: 'var(--foreground)',
+    outline: 'none',
+};
+
+const chipsWrap: CSSProperties = {
+    display: 'inline-flex',
+    flexWrap: 'wrap',
+    gap: 6,
+};
+
+const chipBase: CSSProperties = {
+    padding: '6px 12px',
+    fontSize: 12,
+    fontWeight: 500,
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    whiteSpace: 'nowrap',
+    lineHeight: 1.4,
+};
+
+const modelCard: CSSProperties = {
+    background: 'var(--card-bg)',
+    border: '1px solid var(--card-border)',
+    borderRadius: 12,
+    padding: '18px 22px',
+    display: 'grid',
+    gridTemplateColumns: 'auto 1fr auto',
+    gap: 22,
+    alignItems: 'center',
+    transition: 'all .15s ease',
+    position: 'relative',
+    overflow: 'hidden',
+};
+
+const activeStripe: CSSProperties = {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
+    background: 'var(--primary)',
+};
+
+const providerIcon: CSSProperties = {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--card-border)',
+    display: 'grid',
+    placeItems: 'center',
+    fontWeight: 600,
+    fontSize: 14,
+    color: 'var(--foreground-secondary)',
+    letterSpacing: '0.02em',
+    flexShrink: 0,
+};
+
+const modelName: CSSProperties = {
+    fontSize: 16,
+    fontWeight: 600,
+    color: 'var(--foreground)',
+    letterSpacing: '-0.01em',
+};
+
+const badgeBase: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '2px 8px',
+    fontSize: 10.5,
+    fontWeight: 600,
+    borderRadius: 999,
+    lineHeight: 1.5,
+    letterSpacing: '0.01em',
+};
+
+const badgeDefault: CSSProperties = {
+    ...badgeBase,
+    background: 'var(--primary)',
+    color: 'var(--primary-foreground)',
+};
+
+const badgeHealthy: CSSProperties = {
+    ...badgeBase,
+    background: 'var(--success-subtle)',
+    color: 'var(--success)',
+};
+
+const badgeWarn: CSSProperties = {
+    ...badgeBase,
+    background: 'var(--warning-subtle)',
+    color: 'var(--warning)',
+};
+
+const badgeChecking: CSSProperties = {
+    ...badgeBase,
+    background: 'var(--primary-subtle)',
+    color: 'var(--primary)',
+};
+
+const badgeFailed: CSSProperties = {
+    ...badgeBase,
+    background: 'var(--error-subtle)',
+    color: 'var(--error)',
+};
+
+const badgeGhost: CSSProperties = {
+    ...badgeBase,
+    background: 'var(--background-secondary)',
+    color: 'var(--foreground-secondary)',
+    border: '1px solid var(--border)',
+};
+
+const dotPulse: CSSProperties = {
+    width: 5,
+    height: 5,
+    background: 'var(--success)',
+    borderRadius: '50%',
+};
+
+const metaRow: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+    marginBottom: 10,
+    fontSize: 12.5,
+    color: 'var(--foreground-secondary)',
+};
+
+const metaItem: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+};
+
+const metaLabel: CSSProperties = {
+    fontSize: 10.5,
+    fontWeight: 500,
+    color: 'var(--foreground-muted)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+};
+
+const metaValue: CSSProperties = {
+    color: 'var(--foreground)',
+    fontWeight: 500,
+    maxWidth: 280,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+};
+
+const metaSep: CSSProperties = {
+    width: 1,
+    height: 11,
+    background: 'var(--border)',
+};
+
+const apiKeyRow: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '5px 10px',
+    background: 'var(--background-secondary)',
+    border: '1px solid var(--border)',
+    borderRadius: 7,
+    color: 'var(--foreground-secondary)',
+    maxWidth: 'fit-content',
+};
+
+const cardActions: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    paddingLeft: 16,
+    borderLeft: '1px dashed var(--border)',
+};
+
+const primaryBtn: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '7px 14px',
+    background: 'var(--primary)',
+    color: 'var(--primary-foreground)',
+    border: 'none',
+    borderRadius: 8,
+    fontSize: 12.5,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'background .12s ease',
+    lineHeight: 1.4,
+};
+
+const primaryBtnDisabled: CSSProperties = {
+    ...primaryBtn,
+    opacity: 0.6,
+    cursor: 'not-allowed',
+};
+
+const ghostBtn: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '6px 12px',
+    background: 'var(--card-bg)',
+    color: 'var(--foreground-secondary)',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'var(--border)',
+    borderRadius: 7,
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all .12s ease',
+    lineHeight: 1.4,
+};
+
+const inUseBtn: CSSProperties = {
+    ...ghostBtn,
+    background: 'var(--success-subtle)',
+    color: 'var(--success)',
+    borderColor: 'var(--success-subtle-border)',
+    cursor: 'default',
+};
+
+const dangerBtn: CSSProperties = {
+    ...ghostBtn,
+    color: 'var(--foreground-secondary)',
+};
+
+const editCard: CSSProperties = {
+    background: 'var(--card-bg)',
+    border: '1px solid var(--card-border)',
+    borderRadius: 12,
+    padding: '22px 26px',
+};
+
+const inputStyle: CSSProperties = {
+    width: '100%',
+    padding: '8px 10px',
+    background: 'var(--input-bg)',
+    border: '1px solid var(--input-border)',
+    borderRadius: 7,
+    color: 'var(--foreground)',
+    fontSize: 12.5,
+    outline: 'none',
+};
+
+const hintBox: CSSProperties = {
+    marginTop: 24,
+    padding: '14px 18px',
+    border: '1px dashed var(--border-dark)',
+    borderRadius: 10,
+    background: 'var(--background-secondary)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+};
+
+const hintIcon: CSSProperties = {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    background: 'var(--primary-subtle)',
+    color: 'var(--primary)',
+    display: 'grid',
+    placeItems: 'center',
+    flexShrink: 0,
+};
+
+const emptyBox: CSSProperties = {
+    padding: '40px 24px',
+    background: 'var(--card-bg)',
+    border: '1px dashed var(--border-dark)',
+    borderRadius: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+};
+
+const emptyIcon: CSSProperties = {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    background: 'var(--background-secondary)',
+    color: 'var(--foreground-muted)',
+    display: 'grid',
+    placeItems: 'center',
+    marginBottom: 12,
+};

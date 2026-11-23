@@ -1,0 +1,88 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+export interface TrajectoryTaskMeta {
+    title: string;
+    description: string;
+    scope?: string;
+    skillName?: string;
+    skillVersion?: number | null;
+}
+
+const DEFAULT_TITLE_PREFIX = '评测执行';
+
+function pad(value: number): string {
+    return String(value).padStart(2, '0');
+}
+
+function safeParseObject(value: string | null | undefined): Record<string, unknown> | null {
+    if (!value) return null;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+export function formatTrajectoryTaskTimestamp(date: Date): string {
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function buildDefaultTrajectoryTaskTitle(date = new Date()): string {
+    return `${DEFAULT_TITLE_PREFIX} ${formatTrajectoryTaskTimestamp(date)}`;
+}
+
+export function normalizeTrajectoryTaskMeta(
+    input: { title?: unknown; description?: unknown; scope?: unknown; skillName?: unknown; skillVersion?: unknown },
+    fallbackDate = new Date(),
+): TrajectoryTaskMeta {
+    const title = String(input.title || '').trim();
+    const description = String(input.description || '').trim();
+    const scope = String(input.scope || '').trim();
+    const skillName = String(input.skillName || '').trim();
+    const rawSkillVersion = input.skillVersion;
+    const skillVersion = rawSkillVersion === null || rawSkillVersion === undefined || rawSkillVersion === ''
+        ? null
+        : Number(rawSkillVersion);
+    return {
+        title: title || buildDefaultTrajectoryTaskTitle(fallbackDate),
+        description,
+        ...(scope ? { scope } : {}),
+        ...(skillName ? { skillName } : {}),
+        ...(skillVersion != null && Number.isFinite(skillVersion) ? { skillVersion } : {}),
+    };
+}
+
+export function extractTrajectoryTaskMeta(
+    rawAnalysisJson: string | null | undefined,
+    fallbackDate = new Date(),
+): TrajectoryTaskMeta {
+    const parsed = safeParseObject(rawAnalysisJson);
+    const taskMeta = parsed?.taskMeta && typeof parsed.taskMeta === 'object' && !Array.isArray(parsed.taskMeta)
+        ? parsed.taskMeta as Record<string, unknown>
+        : null;
+
+    return normalizeTrajectoryTaskMeta({
+        title: taskMeta?.title ?? parsed?.taskTitle,
+        description: taskMeta?.description ?? parsed?.taskDescription,
+        scope: taskMeta?.scope ?? parsed?.taskScope,
+        skillName: taskMeta?.skillName ?? parsed?.skillName,
+        skillVersion: taskMeta?.skillVersion ?? parsed?.skillVersion,
+    }, fallbackDate);
+}

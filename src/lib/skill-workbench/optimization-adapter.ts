@@ -1,0 +1,635 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { claimOptimizationFinalization, OptimizationCancelledError } from './optimization-cancellation';
+import {
+  describeFinalizationError,
+  OptimizationFinalizationError,
+  releaseWorkbenchOptimizationSession,
+  settleWorkbenchOptimizationTask,
+  withBoundedFinalizationRetry,
+  type OptimizationTaskSettlement,
+} from './optimization-finalization';
+import { findSkillMd, type PlaygroundFiles } from '@/lib/skill-generator/skill-files';
+import { prismaRaw } from '@/lib/storage/prisma';
+import { resolveRetestableExperimentBaseline } from './experiment-baseline';
+import {
+  beginSkillOptimizationRecord,
+  completeSkillOptimizationRecord,
+  createSkillOptimizationCandidate,
+  transitionSkillOptimizationRecord,
+} from './optimization-service';
+import { runSnapshotStaticEvaluation } from './snapshot-evaluator';
+import { computeSkillSnapshotHash, isBlockingStaticQualityIssue } from './domain';
+import { STATIC_EVAL_GENERATOR_L1_L2 } from '@/lib/engine/skill-issues/static-evaluator';
+import { getActiveConfig } from '@/lib/storage/server-config';
+import { verificationHash } from '@/lib/engine/skill-opt/verification-policy';
+import { getSkillWorkbenchSession } from './session-service';
+import { createOrReuseSkillWorkbenchTask, updateSkillWorkbenchTask } from './task-service';
+import { normalizeOptimizationCandidate } from './optimization-candidate';
+import { cleanupOptimizationVerificationExperiments, linkCandidateVerification } from './verification-evidence';
+import { applyCompletedOptimizationPlan } from './optimization-plan-state';
+
+function parseObject(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+export interface WorkbenchOptimizationIssue {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  dimension: string;
+  summary: string;
+  evidence?: string;
+  reasoning?: string;
+  suggestedFix?: string;
+}
+
+function normalizeOptimizationIssues(evaluationId: string, value: string): WorkbenchOptimizationIssue[] {
+  let parsed: unknown = [];
+  try { parsed = JSON.parse(value || '[]'); } catch { parsed = []; }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((raw, index) => {
+    const issue = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const severity = issue.severity === 'high' || issue.severity === 'medium' ? issue.severity : 'low';
+    return {
+      id: typeof issue.ruleId === 'string' && issue.ruleId ? issue.ruleId : `${evaluationId}:${index}`,
+      severity,
+      dimension: typeof issue.dimension === 'string' ? issue.dimension : '',
+      summary: typeof issue.summary === 'string' ? issue.summary : '未命名质量问题',
+      ...(typeof issue.evidence === 'string' && issue.evidence.trim() ? { evidence: issue.evidence } : {}),
+      ...(typeof issue.reasoning === 'string' && issue.reasoning.trim() ? { reasoning: issue.reasoning } : {}),
+      ...(typeof issue.suggestedFix === 'string' && issue.suggestedFix.trim() ? { suggestedFix: issue.suggestedFix } : {}),
+    };
+  });
+}
+
+function buildCandidateDiff(baselineFiles: Record<string, string>, candidateFiles: Record<string, string>) {
+  return [...new Set([...Object.keys(baselineFiles), ...Object.keys(candidateFiles)])]
+    .sort()
+    .filter((filePath) => baselineFiles[filePath] !== candidateFiles[filePath])
+    .map((filePath) => ({
+      path: filePath,
+      before: baselineFiles[filePath] ?? null,
+      after: candidateFiles[filePath] ?? null,
+      changeType: !(filePath in baselineFiles) ? 'added' : !(filePath in candidateFiles) ? 'deleted' : 'modified',
+    }));
+}
+
+export async function startWorkbenchOptimization(input: {
+  user: string;
+  sessionId: string;
+}) {
+  const result = await prismaRaw.$transaction(async (tx) => {
+    const session = await tx.skillWorkbenchSession.findFirst({
+      where: { id: input.sessionId, user: input.user, skillName: { not: null }, workVersion: { not: null } },
+    });
+    if (!session?.skillName || session.workVersion == null) return null;
+    if (session.optSessionId) return { optSessionId: session.optSessionId, reused: true };
+    if (session.source === 'management') {
+      const ownedSkill = await tx.skill.findFirst({
+        where: {
+          name: session.skillName,
+          user: input.user,
+          versions: { some: { version: session.workVersion } },
+        },
+        select: { id: true },
+      });
+      if (!ownedSkill) return { readonly: true };
+    } else if (!parseObject(session.filesJson)['SKILL.md']) {
+      return null;
+    }
+    const opt = await tx.skillOptSession.create({
+      data: {
+        user: input.user,
+        skillName: session.skillName,
+        baseVersion: session.workVersion,
+        title: '新对话',
+        files: session.filesJson,
+      },
+      select: { id: true },
+    });
+    await tx.skillWorkbenchSession.update({
+      where: { id: session.id },
+      data: { optSessionId: opt.id },
+    });
+    return { optSessionId: opt.id, reused: false };
+  });
+  if (!result) return null;
+  if ('readonly' in result) return { kind: 'readonly' as const };
+  return { ...result, session: await getSkillWorkbenchSession(input.user, input.sessionId) };
+}
+
+export async function getWorkbenchOptimization(user: string, sessionId: string) {
+  const session = await prismaRaw.skillWorkbenchSession.findFirst({
+    where: { id: sessionId, user, optSessionId: { not: null } },
+    select: { optSessionId: true, filesJson: true, skillName: true, workVersion: true },
+  });
+  if (!session?.optSessionId) return null;
+  const opt = await prismaRaw.skillOptSession.findFirst({
+    where: { id: session.optSessionId, user },
+    include: { plan: { include: { items: { orderBy: { rank: 'asc' } } } }, messages: { orderBy: { createdAt: 'asc' } }, iterations: { orderBy: { draftNumber: 'asc' } } },
+  });
+  return opt ? { ...opt, files: parseObject(opt.files), baselineFiles: parseObject(session.filesJson) } : null;
+}
+
+export async function syncWorkbenchOptimization(input: {
+  user: string;
+  sessionId: string;
+  sourceKind: 'user' | 'evaluation' | 'experiment' | 'diagnosis';
+  sourceRefs?: unknown[];
+  sourceExperimentId?: string;
+  recordId?: string;
+  taskId?: string;
+  signal?: AbortSignal;
+  previousQuality?: Awaited<ReturnType<typeof runSnapshotStaticEvaluation>>;
+  qualityConfigHash?: string;
+}) {
+  const session = await prismaRaw.skillWorkbenchSession.findFirst({
+    where: { id: input.sessionId, user: input.user, optSessionId: { not: null } },
+    select: { id: true, optSessionId: true, skillName: true, workVersion: true, source: true, filesJson: true },
+  });
+  if (!session?.optSessionId || !session.skillName || session.workVersion == null) return { kind: 'not_found' as const };
+  const opt = await prismaRaw.skillOptSession.findFirst({
+    where: { id: session.optSessionId, user: input.user },
+    include: { messages: { where: { role: 'agent' }, orderBy: { createdAt: 'desc' }, take: 1 } },
+  });
+  if (!opt) return { kind: 'not_found' as const };
+  const updatesWorkingSnapshot = session.source !== 'management';
+  const baseline = updatesWorkingSnapshot || input.sourceKind === 'diagnosis' ? null : await resolveRetestableExperimentBaseline({
+    user: input.user,
+    skillName: session.skillName,
+    skillVersion: session.workVersion,
+    sourceExperimentId: input.sourceExperimentId,
+  });
+  const diagnosisSource = input.sourceRefs?.find((ref): ref is { type: string; experimentId: string } => !!ref && typeof ref === 'object' && (ref as { type?: string }).type === 'diagnosis' && typeof (ref as { experimentId?: unknown }).experimentId === 'string');
+  const sourceExperimentId = input.sourceKind === 'diagnosis' ? diagnosisSource?.experimentId : baseline?.experiment.id;
+  const sourceRefs = [
+    ...(input.sourceRefs || []),
+    ...(baseline ? [{
+      type: 'experiment',
+      id: baseline.experiment.id,
+      name: baseline.experiment.name,
+      preset: baseline.experiment.preset,
+      score: baseline.score,
+    }] : []),
+  ];
+  const rawFiles = parseObject(opt.files) as PlaygroundFiles;
+  const skillMd = findSkillMd(rawFiles);
+  if (!skillMd) return { kind: 'incomplete' as const, reason: '优化结果没有 SKILL.md' };
+  const candidateFiles = normalizeOptimizationCandidate(rawFiles, skillMd.path);
+  input.signal?.throwIfAborted();
+  const proposedVersion = updatesWorkingSnapshot ? session.workVersion : session.workVersion + 1;
+  const previous = input.previousQuality;
+  const canReuse = previous?.status === 'ok' && previous.user === input.user && previous.sessionId === session.id
+    && previous.skillName === session.skillName && previous.proposedVersion === proposedVersion
+    && previous.contentHash === computeSkillSnapshotHash(candidateFiles) && previous.generator === STATIC_EVAL_GENERATOR_L1_L2
+    && input.qualityConfigHash === verificationHash(await getActiveConfig(input.user));
+  const quality = canReuse ? previous : await runSnapshotStaticEvaluation({
+    user: input.user,
+    sessionId: session.id,
+    skillName: session.skillName,
+    proposedVersion,
+    files: candidateFiles,
+    trigger: 'optimization',
+  });
+  const issues = JSON.parse(quality.issuesJson || '[]') as Array<{
+    severity?: string;
+    evidence?: string;
+    reasoning?: string;
+  }>;
+  input.signal?.throwIfAborted();
+  if (input.taskId) await claimOptimizationFinalization(input.taskId);
+  const qualityPassed = (quality.status === 'ok' || quality.status === 'partial')
+    && !issues.some(isBlockingStaticQualityIssue);
+  if (updatesWorkingSnapshot) {
+    await prismaRaw.skillWorkbenchSession.updateMany({
+      where: { id: session.id, user: input.user },
+      data: {
+        filesJson: JSON.stringify(candidateFiles),
+        stage: 'ready',
+      },
+    });
+    return {
+      kind: qualityPassed ? 'snapshot_updated' as const : 'snapshot_blocked' as const,
+      quality,
+      session: await getSkillWorkbenchSession(input.user, input.sessionId),
+    };
+  }
+  const recordInput = {
+    user: input.user,
+    candidateFiles,
+    summary: opt.messages[0]?.content || '优化 Agent 已生成候选快照',
+    diff: buildCandidateDiff(parseObject(session.filesJson) as Record<string, string>, candidateFiles),
+    sourceKind: input.sourceKind,
+    sourceRefs,
+    sourceExperimentId,
+    staticEvaluationId: quality.id,
+    status: qualityPassed ? 'pending_retest' as const : 'optimization_failed' as const,
+    errorMessage: qualityPassed ? undefined : quality.errorMessage || '候选静态质量门禁未通过',
+  };
+  const record = input.recordId
+    ? await completeSkillOptimizationRecord({ ...recordInput, recordId: input.recordId })
+    : await createSkillOptimizationCandidate({
+      ...recordInput,
+      sessionId: session.id,
+      skillName: session.skillName,
+      baseVersion: session.workVersion,
+      initialStatus: recordInput.status,
+    });
+  if (!record) return { kind: 'not_found' as const };
+  if (qualityPassed && (input.sourceKind !== 'diagnosis' || sourceExperimentId)) {
+    const evidence = await linkCandidateVerification({ user: input.user, recordId: record.id,
+      skillName: session.skillName, baseVersion: session.workVersion, files: candidateFiles, sourceExperimentId });
+    if (evidence) {
+      record.status = evidence.status;
+      record.errorMessage = evidence.errorMessage;
+      record.retestExperimentId = evidence.archived ? null : evidence.experimentId;
+      record.sourceExperimentId = evidence.sourceExperimentId;
+      record.sourceRefs = evidence.sourceRefs;
+    }
+  }
+  await prismaRaw.skillWorkbenchSession.updateMany({
+    where: { id: session.id, user: input.user }, data: { stage: 'ready' },
+  });
+  return {
+    kind: qualityPassed ? 'pending_retest' as const : 'optimization_failed' as const,
+    record,
+    quality,
+    session: await getSkillWorkbenchSession(input.user, input.sessionId),
+  };
+}
+
+export async function inspectWorkbenchOptimizationForRepair(input: {
+  user: string;
+  sessionId: string;
+}) {
+  const session = await prismaRaw.skillWorkbenchSession.findFirst({
+    where: { id: input.sessionId, user: input.user, optSessionId: { not: null }, skillName: { not: null }, workVersion: { not: null } },
+    select: { id: true, optSessionId: true, skillName: true, workVersion: true, source: true },
+  });
+  if (!session?.optSessionId || !session.skillName || session.workVersion == null) return null;
+  const opt = await prismaRaw.skillOptSession.findFirst({
+    where: { id: session.optSessionId, user: input.user },
+    select: { files: true },
+  });
+  if (!opt) return null;
+  const rawFiles = parseObject(opt.files) as PlaygroundFiles;
+  const skillMd = findSkillMd(rawFiles);
+  if (!skillMd) return null;
+  const candidateFiles = normalizeOptimizationCandidate(rawFiles, skillMd.path);
+  const quality = await runSnapshotStaticEvaluation({
+    user: input.user,
+    sessionId: session.id,
+    skillName: session.skillName,
+    proposedVersion: session.source === 'management' ? session.workVersion + 1 : session.workVersion,
+    files: candidateFiles,
+    trigger: 'optimization',
+  });
+  const issues = normalizeOptimizationIssues(quality.id, quality.issuesJson);
+  return {
+    quality,
+    candidateFiles,
+    blockingIssues: issues.filter(isBlockingStaticQualityIssue),
+  };
+}
+
+export async function beginWorkbenchOptimizationRun(input: {
+  user: string;
+  optSessionId: string;
+  runId: string;
+  sourceKind: 'user' | 'evaluation' | 'diagnosis';
+  sourceRefs: unknown[];
+}) {
+  const workbench = await prismaRaw.skillWorkbenchSession.findFirst({
+    where: { user: input.user, optSessionId: input.optSessionId },
+    select: { id: true, skillName: true, workVersion: true, source: true },
+  });
+  if (!workbench) return null;
+  const created = await createOrReuseSkillWorkbenchTask({
+    user: input.user,
+    sessionId: workbench.id,
+    type: 'optimization',
+    skillName: workbench.skillName,
+    version: workbench.workVersion,
+    targetRef: input.runId,
+  });
+  if (!created) throw new Error('无法为优化会话取得任务锁');
+  if (created.blocked || created.reused) {
+    return {
+      kind: 'busy' as const,
+      taskId: created.task.id,
+      workbenchSessionId: workbench.id,
+      recordId: created.task.resultId || undefined,
+    };
+  }
+  const record = created.reused || workbench.source !== 'management' || !workbench.skillName || workbench.workVersion == null
+    ? null
+    : await beginSkillOptimizationRecord({
+      user: input.user,
+      sessionId: workbench.id,
+      skillName: workbench.skillName,
+      baseVersion: workbench.workVersion,
+      sourceKind: input.sourceKind,
+      sourceRefs: input.sourceRefs,
+    });
+  await Promise.all([
+    updateSkillWorkbenchTask({
+      taskId: created.task.id,
+      status: 'running',
+      progress: { stage: '分析优化依据', activeStep: 1, percent: 10 },
+      resultType: record ? 'optimization-record' : created.task.resultType,
+      resultId: record?.id || created.task.resultId,
+      errorMessage: null,
+    }),
+    prismaRaw.skillWorkbenchSession.update({
+      where: { id: workbench.id },
+      data: { stage: 'busy' },
+    }),
+  ]);
+  return {
+    kind: 'started' as const,
+    taskId: created.task.id,
+    workbenchSessionId: workbench.id,
+    recordId: record?.id || created.task.resultId || undefined,
+  };
+}
+
+export async function updateWorkbenchOptimizationProgress(input: {
+  taskId: string;
+  stage: string;
+  activeStep: number;
+  percent: number;
+}) {
+  return prismaRaw.$transaction(async (tx) => {
+    const task = await tx.skillWorkbenchTask.findUnique({ where: { id: input.taskId } });
+    if (!task || !['pending', 'running'].includes(task.status)) return;
+    const progress = parseObject(task.progressJson || '{}');
+    if (progress.cancelRequested) return;
+    return tx.skillWorkbenchTask.update({
+      where: { id: task.id },
+      data: { status: 'running', progressJson: JSON.stringify({ ...progress, stage: input.stage, activeStep: input.activeStep, percent: input.percent }) },
+    });
+  });
+}
+
+const UNCONFIRMED_STOP_MESSAGE = '停止 OpenCode 执行未确认';
+
+function isUnconfirmedStopError(error: unknown) {
+  return error instanceof Error && error.message.includes(UNCONFIRMED_STOP_MESSAGE);
+}
+
+async function failOptimizationRecord(input: {
+  user: string;
+  recordId: string;
+  errorMessage: string;
+}) {
+  try {
+    const record = await prismaRaw.skillOptimizationRecord.findUnique({
+      where: { id: input.recordId },
+      select: { skillName: true, status: true },
+    });
+    if (!record || record.status !== 'optimizing') return;
+    await withBoundedFinalizationRetry(() => transitionSkillOptimizationRecord({
+      user: input.user,
+      skillName: record.skillName,
+      recordId: input.recordId,
+      to: 'optimization_failed',
+      errorMessage: input.errorMessage,
+    }));
+  } catch (error) {
+    console.error('[optimization finalization] failed to mark record failed:', error);
+  }
+}
+
+/**
+ * 失败收尾：先占用收尾权，再以有界重试写入失败终态。任务已被取消/终态时让位，
+ * 待处理取消优先；写入本身持续失败时保留原始错误与收尾错误两个原因上抛。
+ */
+async function finalizeOptimizationFailure(input: {
+  user: string;
+  workbenchSessionId: string;
+  taskId: string;
+  recordId?: string;
+  stage: string;
+  activeStep?: number;
+  message: string;
+  signal?: AbortSignal;
+}) {
+  let settlement: OptimizationTaskSettlement = 'already-settled';
+  try {
+    await withBoundedFinalizationRetry(() => claimOptimizationFinalization(input.taskId), input.signal);
+    settlement = await settleWorkbenchOptimizationTask({
+      taskId: input.taskId,
+      status: 'failed',
+      progress: {
+        stage: input.stage,
+        ...(input.activeStep !== undefined ? { activeStep: input.activeStep } : {}),
+        percent: 100,
+      },
+      errorMessage: input.message,
+      signal: input.signal,
+    });
+  } catch (error) {
+    if (error instanceof OptimizationCancelledError || isUnconfirmedStopError(error)) throw error;
+    console.error(
+      '[optimization finalization] failed state could not be written, original error preserved:',
+      { taskId: input.taskId, originalError: input.message, finalizationError: error },
+    );
+    throw new OptimizationFinalizationError(input.message, [describeFinalizationError(error)]);
+  }
+  if (settlement === 'cancelled') throw new OptimizationCancelledError();
+  // 'already-settled' 可能来自「写入已提交但响应超时」：会话和记录仍按终态收尾，
+  // 释放逻辑本身只在没有活跃任务时生效，不会覆盖新一轮。
+  try {
+    await releaseWorkbenchOptimizationSession(input.workbenchSessionId, input.signal);
+  } catch (error) {
+    console.error(
+      '[optimization finalization] session could not be released after failure:',
+      { taskId: input.taskId, originalError: input.message, finalizationError: error },
+    );
+    throw new OptimizationFinalizationError(input.message, [`会话状态恢复失败：${describeFinalizationError(error)}`]);
+  }
+  if (input.recordId) await failOptimizationRecord({
+    user: input.user,
+    recordId: input.recordId,
+    errorMessage: input.message,
+  });
+}
+
+export async function finishWorkbenchOptimizationRun(input: {
+  user: string;
+  workbenchSessionId: string;
+  taskId: string;
+  sourceKind: 'user' | 'evaluation' | 'diagnosis';
+  sourceRefs: unknown[];
+  recordId?: string;
+  error?: string | null;
+  signal?: AbortSignal;
+  repair?: (issues: WorkbenchOptimizationIssue[]) => Promise<void>;
+}) {
+  input.signal?.throwIfAborted();
+  if (input.error) {
+    const currentTask = await prismaRaw.skillWorkbenchTask.findUnique({
+      where: { id: input.taskId },
+      select: { progressJson: true },
+    }).catch(() => null);
+    const currentProgress = parseObject(currentTask?.progressJson || '{}');
+    const activeStep = Number(currentProgress.activeStep) || 1;
+    try {
+      await finalizeOptimizationFailure({
+        user: input.user,
+        workbenchSessionId: input.workbenchSessionId,
+        taskId: input.taskId,
+        recordId: input.recordId,
+        stage: '优化失败',
+        activeStep,
+        message: input.error,
+        signal: input.signal,
+      });
+    } finally {
+      if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })
+        .catch((error) => console.error('[optimization verification cleanup]', error));
+    }
+    return { kind: 'failed' as const };
+  }
+  try {
+    await updateWorkbenchOptimizationProgress({
+      taskId: input.taskId,
+      stage: '执行质量校验',
+      activeStep: 3,
+      percent: 70,
+    });
+    let sourceRefs = input.sourceRefs;
+    let previousQuality: Awaited<ReturnType<typeof runSnapshotStaticEvaluation>> | undefined;
+    const qualityConfigHash = verificationHash(await getActiveConfig(input.user));
+    if (input.repair) {
+      const inspection = await inspectWorkbenchOptimizationForRepair({
+        user: input.user,
+        sessionId: input.workbenchSessionId,
+      });
+      previousQuality = inspection?.quality;
+      input.signal?.throwIfAborted();
+      if (inspection?.blockingIssues.length) {
+        await updateWorkbenchOptimizationProgress({
+          taskId: input.taskId,
+          stage: `自动修复 ${inspection.blockingIssues.length} 个阻断问题（1/1）`,
+          activeStep: 3,
+          percent: 76,
+        });
+        let repairError: string | null = null;
+        try {
+          await input.repair(inspection.blockingIssues);
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('停止 OpenCode 执行未确认')) throw error;
+          input.signal?.throwIfAborted();
+          repairError = error instanceof Error ? error.message : String(error);
+        }
+        sourceRefs = [
+          ...sourceRefs,
+          {
+            type: 'static-quality-repair',
+            evaluationId: inspection.quality.id,
+            issueIds: inspection.blockingIssues.map((issue) => issue.id),
+            ...(repairError ? { error: repairError } : {}),
+          },
+        ];
+        await updateWorkbenchOptimizationProgress({
+          taskId: input.taskId,
+          stage: '自动修复后重新质量校验',
+          activeStep: 3,
+          percent: 82,
+        });
+      }
+    }
+    input.signal?.throwIfAborted();
+    const result = await syncWorkbenchOptimization({
+      user: input.user,
+      sessionId: input.workbenchSessionId,
+      sourceKind: input.sourceKind,
+      sourceRefs,
+      recordId: input.recordId,
+      taskId: input.taskId,
+      signal: input.signal,
+      previousQuality,
+      qualityConfigHash,
+    });
+    if (result.kind === 'not_found' || result.kind === 'incomplete') {
+      const reason = result.kind === 'incomplete' ? result.reason : '优化会话不存在';
+      await finalizeOptimizationFailure({
+        user: input.user,
+        workbenchSessionId: input.workbenchSessionId,
+        taskId: input.taskId,
+        recordId: input.recordId,
+        stage: '优化结果不完整',
+        message: reason,
+        signal: input.signal,
+      });
+      return result;
+    }
+    const optimizationRecord = 'record' in result && result.record ? result.record : null;
+    if (optimizationRecord && result.kind === 'pending_retest' && optimizationRecord.diff.length > 0) {
+      await applyCompletedOptimizationPlan({
+        user: input.user,
+        workbenchSessionId: input.workbenchSessionId,
+        sourceRefs,
+        staticEvaluationId: result.quality?.id,
+        verificationExperimentId: optimizationRecord.retestExperimentId || undefined,
+        resolvedRunId: optimizationRecord.id || input.taskId,
+      });
+    }
+    await updateWorkbenchOptimizationProgress({
+      taskId: input.taskId,
+      stage: '整理优化报告',
+      activeStep: 4,
+      percent: 90,
+    });
+    const settlement = await settleWorkbenchOptimizationTask({
+      taskId: input.taskId,
+      status: 'done',
+      progress: { stage: '优化完成', activeStep: 5, percent: 100 },
+      resultType: optimizationRecord ? 'optimization-record' : 'snapshot-evaluation',
+      resultId: optimizationRecord?.id || result.quality.id,
+      errorMessage: null,
+      signal: input.signal,
+    });
+    if (settlement === 'cancelled') throw new OptimizationCancelledError();
+    return result;
+  } catch (error) {
+    if (error instanceof OptimizationCancelledError || isUnconfirmedStopError(error)) throw error;
+    input.signal?.throwIfAborted();
+    // 已带两个原因上抛的收尾错误无需再次收尾，避免把收尾错误当成新的原始错误。
+    if (error instanceof OptimizationFinalizationError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    await finalizeOptimizationFailure({
+      user: input.user,
+      workbenchSessionId: input.workbenchSessionId,
+      taskId: input.taskId,
+      recordId: input.recordId,
+      stage: '保存失败',
+      message,
+      signal: input.signal,
+    });
+    return { kind: 'failed' as const, reason: message };
+  } finally {
+    if (input.recordId) await cleanupOptimizationVerificationExperiments({ user: input.user, recordId: input.recordId })
+      .catch((error) => console.error('[optimization verification cleanup]', error));
+  }
+}

@@ -1,0 +1,2922 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use client';
+
+import Link from 'next/link';
+import { traceRelationsPending } from '@/lib/trace/parent-agent';
+import { useRouter, useSearchParams } from 'next/navigation';
+import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
+import {
+    ArrowLeft,
+    Download,
+    Upload,
+    RefreshCw,
+    X as XIcon,
+    XCircle,
+    Wrench,
+    Users,
+    Layers,
+    Terminal,
+    RotateCcw,
+    SlidersHorizontal,
+    Columns3,
+    Plus,
+    Check,
+    ChevronDown,
+    Database,
+} from 'lucide-react';
+import { parseAsInteger, parseAsString, useQueryState, useQueryStates } from 'nuqs';
+import { toast } from 'sonner';
+
+import { AppTopBar } from '@/components/shell/AppTopBar';
+import { createOnceReporter } from '@/lib/usage-analytics/client-events';
+import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
+import AgentTraceView from '@/components/observe/AgentTraceView';
+import { CodexThreadTimeline, type TraceThreadView } from '@/components/observe/CodexThreadTimeline';
+import TraceFilterBar from '@/components/observe/TraceFilterBar';
+import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
+import TraceTimeFilter from '@/components/observe/TraceTimeFilter';
+import { TraceBackflowDialog } from '@/components/observe/TraceBackflowDialog';
+import type { FilterClause } from '@/lib/filters/types';
+import { useAuth } from '@/lib/auth/auth-context';
+import { useLocale } from '@/lib/client/locale-context';
+import { apiFetch } from '@/lib/client/api';
+import { TraceBatchImportDialog } from '@/components/trace/trace-batch-import-dialog';
+import { loadTraceFacetValues } from '@/lib/client/trace-facets';
+import { traceFilterParsers, useTraceFilterMemory } from '@/lib/client/use-trace-filter-memory';
+import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
+import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
+import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
+
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Select, type SelectOption } from '@/components/ui/select';
+import { Pagination } from '@/components/ui/pagination';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+    DropdownMenu,
+    DropdownMenuCheckboxItem,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+
+import { StatusBadge, type StatusKind } from '@/components/feedback/StatusBadge';
+import { EmptyState } from '@/components/feedback/EmptyState';
+import { IdChip } from '@/components/text/IdChip';
+import { TruncateText } from '@/components/text/TruncateText';
+import { RelativeTime } from '@/components/text/RelativeTime';
+import { Term } from '@/components/text/Term';
+import { cn } from '@/lib/utils';
+import { formatDurationMs } from '@/lib/latency-format';
+import { getAgentDisplayName } from '@/lib/engine/observability/agent-registration';
+
+const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+const MAX_TRACE_TAG_FILTERS = 20;
+
+interface InvokedSkill {
+    name: string;
+    version?: number | null;
+}
+
+interface TraceUserTag {
+    id: string;
+    name: string;
+    description?: string | null;
+    kind: 'version' | 'business';
+    color: string;
+    createdAt?: string;
+    usageCount?: number;
+}
+
+interface Execution {
+    timestamp: string;
+    framework?: string;
+    traceThreadId?: string;
+    trace_thread_id?: string;
+    sourceExecutionId?: string;
+    source_execution_id?: string;
+    sourceKind?: string;
+    source_kind?: string;
+    executionStatus?: string;
+    execution_status?: string;
+    agent?: string;
+    agentName?: string;
+    query?: string;
+    final_result?: string;
+    skill?: string;
+    /** Primary skill version from Execution.skillVersion. */
+    skill_version?: number | null;
+    skillVersion?: number | null;
+    skills?: string[];
+    invokedSkills?: InvokedSkill[];
+    invoked_skills?: InvokedSkill[];
+    agents?: string[];
+    is_answer_correct?: boolean;
+    is_skill_correct?: boolean;
+    answer_score?: number;
+    latency?: number;
+    tokens?: number;
+    cost?: number;
+    tool_call_count?: number;
+    tool_call_error_count?: number;
+    task_id?: string;
+    upload_id?: string;
+    model?: string;
+    label?: string;
+    is_evaluating?: boolean;
+    trace_status?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
+    traceStatus?: 'running' | 'success' | 'failed' | 'timed_out' | string | null;
+    trace_completed_at?: string | null;
+    traceCompletedAt?: string | null;
+    trace_status_reason?: string | null;
+    traceStatusReason?: string | null;
+    anomalyStatus?: 'normal' | 'abnormal' | 'detecting' | 'unknown' | string | null;
+    anomaly_status?: 'normal' | 'abnormal' | 'detecting' | 'unknown' | string | null;
+    anomalyCount?: number | null;
+    judgment_reason?: string;
+    failures?: any[];
+    agentOwnership?: string | null;
+    observedIp?: string | null;
+    user?: string | null;
+    userTags?: TraceUserTag[];
+}
+
+interface TraceListStats {
+    total: number;
+    failedCount: number;
+    avgLatencyMs: number;
+    toolErrorRate: number;
+}
+
+interface TracePageResponse {
+    records: Execution[];
+    canViewAllTraces?: boolean;
+    hasMore: boolean;
+    page: number;
+    pageSize: number;
+}
+
+interface FacetValueRow {
+    value?: string | null;
+    count?: number;
+}
+
+type SortKey = 'timestamp' | 'agent' | 'status' | 'latency' | 'tokens' | 'cost';
+type SortDir = 'asc' | 'desc';
+
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
+const TRACE_LIST_REFRESH_MS = 5_000;
+const TRACE_STATS_REFRESH_MS = 30_000;
+
+type TraceColumnKey = 'traceId' | 'user' | 'agent' | 'ip' | 'status' | 'anomaly' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
+type ResizableColKey = TraceColumnKey;
+
+const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'user', 'agent', 'ip', 'status', 'anomaly', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
+
+const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
+    traceId:    130,
+    user:       180,
+    task:       280,
+    agent:      170,
+    ip:         160,
+    status:     110,
+    anomaly:    110,
+    userTags:   220,
+    systemTags: 220,
+    tokens:     110,
+    time:       176,
+    actions:    220,
+};
+const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
+    traceId:    90,
+    user:       100,
+    task:       280,
+    agent:      100,
+    ip:         120,
+    status:     80,
+    anomaly:    80,
+    userTags:   150,
+    systemTags: 140,
+    tokens:     70,
+    time:       160,
+    actions:    160,
+};
+const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
+    traceId: true,
+    user: true,
+    agent: true,
+    ip: false,
+    status: true,
+    anomaly: true,
+    userTags: true,
+    systemTags: false,
+    task: true,
+    tokens: true,
+    time: true,
+    actions: true,
+};
+const MAX_COLUMN_WIDTH = 640;
+const MAX_TASK_COLUMN_WIDTH = 1600;
+const COL_WIDTHS_STORAGE_KEY = 'trace.columnWidths.v1';
+const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v2';
+function getInvokedSkillNames(execution: Execution): string[] {
+    const invoked = Array.isArray(execution.invoked_skills)
+        ? execution.invoked_skills
+        : (Array.isArray(execution.invokedSkills) ? execution.invokedSkills : []);
+    const names = new Set<string>();
+    invoked.forEach(skill => {
+        const name = skill?.name?.trim();
+        if (name) names.add(name);
+    });
+    return Array.from(names);
+}
+
+type ExecutionStatus = 'running' | 'success' | 'failed' | 'interrupted' | 'timed_out';
+
+function getExecStatus(e: Execution): ExecutionStatus {
+    const executionStatus = String(e.executionStatus ?? e.execution_status ?? '').trim().toLowerCase();
+    if (executionStatus === 'interrupted') return 'interrupted';
+    if (executionStatus === 'failed') return 'failed';
+    if (executionStatus === 'completed') return 'success';
+    if (executionStatus === 'in_progress') return 'running';
+    const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
+    if (status === 'interrupted') return 'interrupted';
+    if (status === 'running' || status === 'success' || status === 'failed' || status === 'timed_out') return status;
+    return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
+}
+
+function getExecutionSource(e: Execution): string {
+    return String(e.sourceKind ?? e.source_kind ?? '').trim().toLowerCase();
+}
+
+function getExecutionSourceLabel(sourceKind: string): string {
+    if (sourceKind === 'cli') return 'CLI';
+    if (sourceKind === 'desktop') return 'Desktop';
+    if (sourceKind === 'ide') return 'IDE';
+    if (sourceKind === 'app_server') return 'App Server';
+    return sourceKind || 'Unknown';
+}
+
+function ReliabilityAnomalyChip({
+    executionId,
+    locale,
+}: {
+    executionId: string
+    locale: 'zh' | 'en'
+}) {
+    const [status, setStatus] = useState<string | null>(null)
+    useEffect(() => {
+        const id = executionId.trim()
+        if (!id) return
+        let cancelled = false
+        void apiFetch(`/api/observe/executions/${encodeURIComponent(id)}/reliability`)
+            .then(async (res) => {
+                if (!res.ok) return null
+                return res.json()
+            })
+            .then((data) => {
+                if (cancelled || !data) return
+                setStatus(String(data.anomalyStatus || 'unknown'))
+            })
+            .catch(() => {
+                if (!cancelled) setStatus(null)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [executionId])
+    if (status !== 'abnormal' && status !== 'detecting') return null
+    return (
+        <StatusBadge
+            status={status === 'detecting' ? 'running' : 'error'}
+            label={
+                status === 'detecting'
+                    ? (locale === 'zh' ? '检测中' : 'Detecting')
+                    : (locale === 'zh' ? '有异常' : 'Abnormal')
+            }
+        />
+    )
+}
+
+function getFrameworkLabel(framework?: string | null): string {
+    const value = String(framework || '').trim();
+    switch (value.toLowerCase()) {
+        case 'langfuse-langgraph':
+            return 'Langfuse-Langgraph';
+        case 'opencode':
+            return 'OpenCode';
+        case 'claude':
+        case 'claudecode':
+            return 'Claude Code';
+        case 'hermes':
+            return 'Hermes';
+        case 'trae':
+            return 'Trae IDE';
+        case 'actrail':
+            return 'AcTrail';
+        case 'qwencode':
+        case 'qwen-code':
+        case 'qwen_code':
+            return 'Qwen Code';
+        default:
+            return value;
+    }
+}
+
+function safeFilenameSegment(value: string): string {
+    return value
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .replace(/\s+/g, '_')
+        .slice(0, 120) || 'trace';
+}
+
+function clampColumnWidth(key: ResizableColKey, width: number): number {
+    const maxWidth = key === 'task' ? MAX_TASK_COLUMN_WIDTH : MAX_COLUMN_WIDTH;
+    return Math.min(maxWidth, Math.max(MIN_COLUMN_WIDTH[key], Math.round(width)));
+}
+
+function useColumnWidths() {
+    const [widths, setWidths] = useState<Record<ResizableColKey, number>>(DEFAULT_COLUMN_WIDTHS);
+    const [tableWidth, setTableWidth] = useState<number | null>(null);
+    const [taskWidthCustomized, setTaskWidthCustomized] = useState(false);
+
+    // Hydrate from localStorage on mount (skipped on server).
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(COL_WIDTHS_STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as Partial<Record<ResizableColKey, number>> & {
+                tags?: number;
+                tableWidth?: number;
+            };
+            setWidths(prev => {
+                const next = { ...prev };
+                (Object.keys(prev) as ResizableColKey[]).forEach(k => {
+                    const v = parsed[k];
+                    if (typeof v === 'number' && Number.isFinite(v)) next[k] = clampColumnWidth(k, v);
+                });
+                if (typeof parsed.tags === 'number' && Number.isFinite(parsed.tags)) {
+                    next.systemTags = clampColumnWidth('systemTags', parsed.tags);
+                }
+                return next;
+            });
+            if (typeof parsed.task === 'number' && Number.isFinite(parsed.task)) {
+                setTaskWidthCustomized(true);
+            }
+            if (typeof parsed.tableWidth === 'number' && Number.isFinite(parsed.tableWidth)) {
+                setTableWidth(Math.max(0, Math.round(parsed.tableWidth)));
+            }
+        } catch { /* ignore */ }
+    }, []);
+
+    const setColumnWidth = useCallback((key: ResizableColKey, width: number, nextTableWidth?: number) => {
+        if (key === 'task') setTaskWidthCustomized(true);
+        setWidths(prev => {
+            const next = { ...prev, [key]: clampColumnWidth(key, width) };
+            const normalizedTableWidth = typeof nextTableWidth === 'number' && Number.isFinite(nextTableWidth)
+                ? Math.max(0, Math.round(nextTableWidth))
+                : tableWidth;
+            if (normalizedTableWidth != null) setTableWidth(normalizedTableWidth);
+            try {
+                window.localStorage.setItem(COL_WIDTHS_STORAGE_KEY, JSON.stringify({
+                    ...next,
+                    ...(normalizedTableWidth != null ? { tableWidth: normalizedTableWidth } : {}),
+                }));
+            } catch { /* ignore */ }
+            return next;
+        });
+    }, [tableWidth]);
+
+    const resetColumnWidths = useCallback(() => {
+        setWidths(DEFAULT_COLUMN_WIDTHS);
+        setTableWidth(null);
+        setTaskWidthCustomized(false);
+        try { window.localStorage.removeItem(COL_WIDTHS_STORAGE_KEY); } catch { /* ignore */ }
+    }, []);
+
+    const isCustomized = useMemo(
+        () => tableWidth != null
+            || taskWidthCustomized
+            || (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
+                .some(k => widths[k] !== DEFAULT_COLUMN_WIDTHS[k]),
+        [tableWidth, taskWidthCustomized, widths],
+    );
+
+    return { widths, tableWidth, taskWidthCustomized, setColumnWidth, resetColumnWidths, isCustomized };
+}
+
+function useColumnVisibility() {
+    const [columnVisibility, setColumnVisibility] = useState<Record<TraceColumnKey, boolean>>(DEFAULT_COLUMN_VISIBILITY);
+
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(COL_VISIBILITY_STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as Partial<Record<TraceColumnKey, boolean>>;
+            setColumnVisibility(prev => {
+                const next = { ...prev };
+                TRACE_COLUMN_ORDER.forEach(key => {
+                    if (typeof parsed[key] === 'boolean') next[key] = parsed[key] as boolean;
+                });
+                return next;
+            });
+        } catch { /* ignore */ }
+    }, []);
+
+    const setColumnVisible = useCallback((key: TraceColumnKey, visible: boolean) => {
+        setColumnVisibility(prev => {
+            const next = { ...prev, [key]: visible };
+            try { window.localStorage.setItem(COL_VISIBILITY_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+            return next;
+        });
+    }, []);
+
+    const resetColumnVisibility = useCallback(() => {
+        setColumnVisibility(DEFAULT_COLUMN_VISIBILITY);
+        try { window.localStorage.removeItem(COL_VISIBILITY_STORAGE_KEY); } catch { /* ignore */ }
+    }, []);
+
+    const isVisibilityCustomized = useMemo(
+        () => TRACE_COLUMN_ORDER.some(key => columnVisibility[key] !== DEFAULT_COLUMN_VISIBILITY[key]),
+        [columnVisibility],
+    );
+
+    return { columnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized };
+}
+
+function getExecutionRowKey(execution: Execution): string {
+    return execution.upload_id || execution.task_id || '';
+}
+
+function mergeTraceTags(prev: TraceUserTag[], tag: TraceUserTag): TraceUserTag[] {
+    const next = prev.some(item => item.id === tag.id)
+        ? prev.map(item => item.id === tag.id ? tag : item)
+        : [...prev, tag];
+    return next.slice().sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind.localeCompare(b.kind));
+}
+
+function ResizeHandle({
+    colKey,
+    currentWidth,
+    onResize,
+}: {
+    colKey: ResizableColKey;
+    currentWidth: number;
+    onResize: (key: ResizableColKey, width: number, tableWidth?: number) => void;
+}) {
+    const onMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startW = e.currentTarget.closest('th')?.getBoundingClientRect().width ?? currentWidth;
+        const startTableWidth = e.currentTarget.closest('table')?.getBoundingClientRect().width;
+        const handleMove = (ev: MouseEvent) => {
+            const nextColumnWidth = clampColumnWidth(colKey, startW + (ev.clientX - startX));
+            const appliedDelta = nextColumnWidth - startW;
+            onResize(
+                colKey,
+                nextColumnWidth,
+                startTableWidth == null ? undefined : startTableWidth + appliedDelta,
+            );
+        };
+        const handleUp = () => {
+            window.removeEventListener('mousemove', handleMove);
+            window.removeEventListener('mouseup', handleUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+    };
+
+    return (
+        <span
+            onMouseDown={onMouseDown}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => e.stopPropagation()}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={`Resize column ${colKey}`}
+            className="absolute right-0 top-0 z-10 flex h-full w-2 -mr-1 items-center justify-center cursor-col-resize group/handle"
+        >
+            <span className="h-4 w-px bg-border group-hover/handle:bg-primary group-hover/handle:w-0.5 transition-colors" aria-hidden />
+        </span>
+    );
+}
+
+export default function TracePage() {
+    return (
+        <Suspense
+            fallback={
+                <div className="flex flex-col gap-3 px-6 py-6">
+                    <Skeleton className="h-9 w-48" />
+                    <Skeleton className="h-24 w-full" />
+                    <Skeleton className="h-96 w-full" />
+                </div>
+            }
+        >
+            <TracePageContent />
+        </Suspense>
+    );
+}
+
+function TracePageContent() {
+    const { user, apiKey } = useAuth();
+    const [globalTraceViewer, setGlobalTraceViewer] = useState<string | null>(null);
+    const canViewAllTraces = !!user && globalTraceViewer === user;
+    const { t, locale } = useLocale();
+    const [data, setData] = useState<Execution[]>([]);
+    const [stats, setStats] = useState<TraceListStats | null>(null);
+    const [statsRequest, setStatsRequest] = useState<string | null>(null);
+    const [statsLoading, setStatsLoading] = useState(false);
+    const [statsError, setStatsError] = useState(false);
+    const [statsRetry, setStatsRetry] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
+    const [listError, setListError] = useState(false);
+    const total = stats?.total ?? null;
+    const [loading, setLoading] = useState(true);
+    const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
+    const [selectedTracesByKey, setSelectedTracesByKey] = useState<Map<string, Execution>>(() => new Map());
+    const [batchBackflowOpen, setBatchBackflowOpen] = useState(false);
+    const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
+    const [frameworks, setFrameworks] = useState<string[]>([]);
+    const [sourceKinds, setSourceKinds] = useState<string[]>([]);
+    const [agentNames, setAgentNames] = useState<string[]>([]);
+    const [batchImportOpen, setBatchImportOpen] = useState(false);
+    const [batchImportSession, setBatchImportSession] = useState(0);
+    const [traceUsers, setTraceUsers] = useState<string[]>([]);
+    const [reloadKey, setReloadKey] = useState(0);
+    const listRequestPendingRef = useRef(false);
+
+    useEffect(() => {
+        if (!user) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible' && !listRequestPendingRef.current) {
+                setReloadKey(value => value + 1);
+            }
+        };
+        const timer = window.setInterval(refreshWhenVisible, TRACE_LIST_REFRESH_MS);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [user]);
+
+    const handleExecutionRefresh = useCallback((latest: Execution) => {
+        setSelectedExecution(previous => previous?.task_id === latest.task_id ? latest : previous);
+        setData(previous => previous.map(item => item.upload_id === latest.upload_id ? latest : item));
+    }, []);
+
+    // URL-persisted filter / sort / paging state (design/patterns.md §1 + §11).
+    const [{ time: timeFilter, timeFrom, timeTo }, setTimeRange] = useQueryStates({
+        time: traceFilterParsers.time,
+        timeFrom: traceFilterParsers.timeFrom,
+        timeTo: traceFilterParsers.timeTo,
+    });
+    const customTimeRange = useMemo(() => timeFilter === 'custom' ? resolveTraceTimeRange(timeFrom, timeTo) : null,
+        [timeFilter, timeFrom, timeTo]);
+    const [anomalyFilter, setAnomalyFilter] = useQueryState('status', traceFilterParsers.status);
+    const [reliabilityAnomalyFilter, setReliabilityAnomalyFilter] = useQueryState('anomaly', traceFilterParsers.anomaly);
+    const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', traceFilterParsers.framework);
+    const [sourceFilter, setSourceFilter] = useQueryState('source', traceFilterParsers.source);
+    const [traceUserFilter, setTraceUserFilter] = useQueryState('traceUser', traceFilterParsers.traceUser);
+    const [agentFilter, setAgentFilter] = useQueryState('agent', traceFilterParsers.agent);
+    const [skillFilter] = useQueryState('skill', traceFilterParsers.skill);
+    const [userTagIdsRaw, setUserTagIdsRaw] = useQueryState('tagIds', traceFilterParsers.tagIds);
+    const [legacyBusinessTagFilter, setLegacyBusinessTagFilter] = useQueryState('bizTag', traceFilterParsers.bizTag);
+    const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', traceFilterParsers.ownership);
+    const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', traceFilterParsers.scope);
+    const [sortKey, setSortKey] = useQueryState('sort', parseAsString.withDefault('timestamp'));
+    const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
+    const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
+    const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
+    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString, workflowTaskId: parseAsString });
+    const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
+    const [showFilters, setShowFilters] = useState(false);
+    const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
+    const { filtersReady, clearFilterMemory } = useTraceFilterMemory(user);
+    const clauses = useMemo<FilterClause[]>(() => {
+        if (!clausesRaw) return [];
+        try {
+            const p = JSON.parse(clausesRaw);
+            return Array.isArray(p) ? (p as FilterClause[]) : [];
+        } catch {
+            return [];
+        }
+    }, [clausesRaw]);
+    const setClauses = useCallback(
+        (next: FilterClause[]) => setClausesRaw(next.length ? JSON.stringify(next) : null),
+        [setClausesRaw],
+    );
+    const handleSearchChange = useCallback((v: string) => setSearch(v || null), [setSearch]);
+
+    const loadAvailableTags = useCallback(() => {
+        if (!user) {
+            setAvailableTags([]);
+            return;
+        }
+        apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(rows => setAvailableTags(Array.isArray(rows) ? rows : []))
+            .catch(() => setAvailableTags([]));
+    }, [user]);
+
+    useEffect(() => {
+        loadAvailableTags();
+    }, [loadAvailableTags]);
+
+    useEffect(() => {
+        if (!user) {
+            setFrameworks([]);
+            setSourceKinds([]);
+            setAgentNames([]);
+            return;
+        }
+        Promise.all([
+            loadTraceFacetValues(user, 'framework').catch(() => []),
+            loadTraceFacetValues(user, 'sourceKind').catch(() => []),
+            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents&databasePagination=1`)
+                .then(r => r.ok ? r.json() : { agents: [] }),
+        ]).then(([frameworkRows, sourceRows, agentRows]) => {
+            setFrameworks(Array.isArray(frameworkRows)
+                ? (frameworkRows as FacetValueRow[]).map(item => String(item?.value || '')).filter(Boolean)
+                : []);
+            setSourceKinds(Array.isArray(sourceRows)
+                ? (sourceRows as FacetValueRow[]).map(item => String(item?.value || '')).filter(Boolean)
+                : []);
+            setAgentNames(Array.isArray(agentRows?.agents)
+                ? agentRows.agents.map((item: unknown) => String(item || '')).filter(Boolean)
+                : []);
+        }).catch(() => {
+            setFrameworks([]);
+            setSourceKinds([]);
+            setAgentNames([]);
+        });
+    }, [user]);
+
+    const handleTraceTagsChanged = useCallback((executionId: string, tags: TraceUserTag[]) => {
+        setData(prev => prev.map(item => (
+            item.upload_id === executionId || item.task_id === executionId
+                ? { ...item, userTags: tags }
+                : item
+        )));
+        setSelectedExecution(prev => prev && (prev.upload_id === executionId || prev.task_id === executionId)
+            ? { ...prev, userTags: tags }
+            : prev);
+    }, []);
+
+    useEffect(() => {
+        if (!canViewAllTraces || !user) return;
+        let cancelled = false;
+        loadTraceFacetValues(user, 'user')
+            .then(rows => {
+                if (!cancelled) setTraceUsers(rows.map(row => row.value).filter(Boolean).sort((a, b) => a.localeCompare(b)));
+            })
+            .catch(() => { if (!cancelled) setTraceUsers([]); });
+        return () => { cancelled = true; };
+    }, [canViewAllTraces, user]);
+
+    const handleTraceTagCreated = useCallback((tag: TraceUserTag) => {
+        setAvailableTags(prev => mergeTraceTags(prev, tag));
+    }, []);
+
+    const selectedUserTagIds = useMemo(() => {
+        const source = userTagIdsRaw || (
+            legacyBusinessTagFilter && legacyBusinessTagFilter !== 'all'
+                ? legacyBusinessTagFilter
+                : ''
+        );
+        return Array.from(new Set(source.split(',').map(value => value.trim()).filter(Boolean)))
+            .slice(0, MAX_TRACE_TAG_FILTERS);
+    }, [legacyBusinessTagFilter, userTagIdsRaw]);
+
+    const updateUserTagFilters = useCallback((tagIds: string[]) => {
+        const normalized = Array.from(new Set(tagIds.map(value => value.trim()).filter(Boolean)))
+            .slice(0, MAX_TRACE_TAG_FILTERS);
+        void setUserTagIdsRaw(normalized.length > 0 ? normalized.join(',') : null);
+        if (legacyBusinessTagFilter) void setLegacyBusinessTagFilter(null);
+    }, [legacyBusinessTagFilter, setLegacyBusinessTagFilter, setUserTagIdsRaw]);
+
+    const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
+        traceId: t('tracePage.columnTraceId'),
+        user: t('tracePage.columnUser'),
+        agent: t('tracePage.columnAgent'),
+        ip: t('tracePage.columnIp'),
+        status: t('tracePage.columnStatus'),
+        anomaly: t('tracePage.columnAnomaly'),
+        userTags: t('tracePage.columnUserTags'),
+        systemTags: t('tracePage.columnSystemTags'),
+        task: t('tracePage.columnTask'),
+        tokens: t('tracePage.columnTokens'),
+        time: t('tracePage.columnTime'),
+        actions: t('tracePage.columnActions'),
+    }), [t]);
+
+    const {
+        widths,
+        tableWidth,
+        taskWidthCustomized,
+        setColumnWidth,
+        resetColumnWidths,
+        isCustomized,
+    } = useColumnWidths();
+    const { columnVisibility: savedColumnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized } = useColumnVisibility();
+    const columnVisibility = useMemo(() => ({
+        ...savedColumnVisibility,
+        user: canViewAllTraces && savedColumnVisibility.user,
+    }), [savedColumnVisibility, canViewAllTraces]);
+    const tableMinWidth = useMemo(() => {
+        const fixedWidth = (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
+            .filter(key => columnVisibility[key])
+            .reduce((sum, key) => sum + widths[key], 0);
+        return 44 + fixedWidth;
+    }, [widths, columnVisibility]);
+
+    // 只在用户主动点开某条 Trace 时计一次有效使用；地址栏进入、刷新与列表轮询
+    // 走的是下面的 URL 解析 effect，不经过这里，因此不会计数。
+    const reportTraceDetailView = useMemo(
+        () => createOnceReporter('trace', 'trace.detail.view'),
+        [],
+    );
+
+    const handleSelectExecution = useCallback((e: Execution | null) => {
+        setSelectedExecution(e);
+        const id = e ? (e.task_id || e.upload_id || null) : null;
+        void setTraceTarget({ taskId: id, executionId: null, workflowTaskId: null }, { history: id ? 'push' : 'replace' });
+        if (id) reportTraceDetailView(id);
+    }, [setTraceTarget, reportTraceDetailView]);
+
+    // Resolve selectedExecution from URL on data load or URL change.
+    //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
+    const executionLookupRequestRef = useRef(0);
+    const [executionLookupError, setExecutionLookupError] = useState<string | null>(null);
+    const [executionLookupRetry, setExecutionLookupRetry] = useState(0);
+    const listRequestIdRef = useRef(0);
+    const listFilterKey = useMemo(() => JSON.stringify([
+        user,
+        apiKey,
+        reliabilityAnomalyFilter,
+        agentScopeFilter,
+        skillFilter,
+        selectedUserTagIds,
+        search,
+        clausesRaw,
+        frameworkFilter,
+        sourceFilter,
+        traceUserFilter,
+        agentFilter,
+        ownershipFilter,
+        anomalyFilter,
+        timeFilter,
+        timeFrom,
+        timeTo,
+        sortKey,
+        sortDir,
+        pageSize,
+    ]), [
+        user,
+        apiKey,
+        reliabilityAnomalyFilter,
+        agentScopeFilter,
+        skillFilter,
+        selectedUserTagIds,
+        search,
+        clausesRaw,
+        frameworkFilter,
+        sourceFilter,
+        traceUserFilter,
+        agentFilter,
+        ownershipFilter,
+        anomalyFilter,
+        timeFilter,
+        timeFrom,
+        timeTo,
+        sortKey,
+        sortDir,
+        pageSize,
+    ]);
+    const listRequestKey = useMemo(() => JSON.stringify([
+        user,
+        listFilterKey,
+        reliabilityAnomalyFilter,
+        page,
+    ]), [listFilterKey, page, reliabilityAnomalyFilter, user]);
+    const previousListFilterKeyRef = useRef(listFilterKey);
+    const previousListRequestKeyRef = useRef<string | null>(null);
+    useEffect(() => {
+        const requestId = ++executionLookupRequestRef.current;
+        setExecutionLookupError(null);
+        if (!taskIdParam && !executionIdParam) {
+            setSelectedExecution(null);
+            return;
+        }
+        const matchesTask = (item: Execution) => executionIdParam ? item.upload_id === executionIdParam : item.task_id === taskIdParam || item.upload_id === taskIdParam;
+        const exec = data.find(matchesTask);
+        if (exec) {
+            if (selectedExecution !== exec) setSelectedExecution(exec);
+            return;
+        }
+        if (selectedExecution && matchesTask(selectedExecution)) return;
+        const controller = new AbortController();
+        setSelectedExecution(null);
+        apiFetch(`/api/observe/data?${executionIdParam ? `executionId=${encodeURIComponent(executionIdParam)}` : `taskId=${encodeURIComponent(taskIdParam || '')}`}&includeEvaluations=0&skipAutoEvalReady=1`, { signal: controller.signal })
+            .then(async r => ({ ok: r.ok, status: r.status, body: await r.json() }))
+            .then(({ ok, status, body }) => {
+                if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
+                if (!ok && status !== 404) throw new Error('Trace lookup failed');
+                const target = ok && Array.isArray(body) ? body.find(matchesTask) : null;
+                if (target) {
+                    setSelectedExecution(target);
+                    return;
+                }
+                setExecutionLookupError(locale === 'zh' ? '未找到对应的 Agent Trace' : 'Agent Trace not found');
+            })
+            .catch(() => {
+                if (controller.signal.aborted || requestId !== executionLookupRequestRef.current) return;
+                setExecutionLookupError(locale === 'zh' ? 'Agent Trace 加载失败' : 'Failed to load Agent Trace');
+            });
+        return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [taskIdParam, executionIdParam, data, executionLookupRetry]);
+
+    useEffect(() => {
+        if (!filtersReady) return;
+        const requestId = ++listRequestIdRef.current;
+        const filtersChanged = previousListFilterKeyRef.current !== listFilterKey;
+        previousListFilterKeyRef.current = listFilterKey;
+        if (filtersChanged) setStatsRequest(null);
+        if (filtersChanged && page !== 1) {
+            void setPage(1);
+            return;
+        }
+        if (!user) return;
+        if (customTimeRange?.error) {
+            // Invalid deep links must clear stale results without issuing an unbounded query.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            setStatsRequest(null);
+            setData([]);
+            setHasMore(false);
+            setLoading(false);
+            setListError(true);
+            return;
+        }
+        const controller = new AbortController();
+        listRequestPendingRef.current = true;
+        const silentRefresh = previousListRequestKeyRef.current === listRequestKey;
+        previousListRequestKeyRef.current = listRequestKey;
+        if (!silentRefresh) {
+            setLoading(true);
+            setData([]);
+            setHasMore(false);
+            setListError(false);
+        }
+        const scopeParam = agentScopeFilter === 'subagent'
+            ? '&onlySubagents=1'
+            : agentScopeFilter === 'all'
+                ? '&includeSubagents=1'
+                : '';
+        const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
+        const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
+        const queryClauses = [...clauses, ...(customTimeRange?.clauses ?? [])];
+        const filtersParam = queryClauses.length ? `&filters=${encodeURIComponent(JSON.stringify(queryClauses))}` : '';
+        const tagIdsParam = selectedUserTagIds.length > 0
+            ? `&tagIds=${encodeURIComponent(selectedUserTagIds.join(','))}`
+            : '';
+        const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
+        const sourceParam = sourceFilter !== 'all' ? `&sourceKind=${encodeURIComponent(sourceFilter)}` : '';
+        const traceUserParam = traceUserFilter ? `&traceUser=${encodeURIComponent(traceUserFilter)}` : '';
+        const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
+        const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
+        const listUrl = `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&anomaly=${encodeURIComponent(reliabilityAnomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1&collapseGoalPlusWorkers=1${scopeParam}${skillParam}${searchParam}${filtersParam}${tagIdsParam}${frameworkParam}${sourceParam}${traceUserParam}${agentParam}${ownershipParam}`;
+        apiFetch(listUrl + '&listPart=records', { cache: 'no-store', signal: controller.signal, headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => {
+                if (!response.ok) throw new Error('Trace list request failed');
+                return response.json();
+            })
+            .then((response: TracePageResponse) => {
+                if (listRequestIdRef.current !== requestId) return;
+                if (!Array.isArray(response?.records)) throw new Error('Invalid Trace list response');
+                setGlobalTraceViewer(response.canViewAllTraces ? user : null);
+                setListError(false);
+                setData(response.records);
+                setHasMore(response.hasMore === true);
+                const params = new URLSearchParams(listUrl.split('?')[1]);
+                params.set('listPart', 'stats');
+                setStatsRequest('/api/observe/data?' + params.toString());
+            })
+            .catch(() => {
+                if (listRequestIdRef.current !== requestId) return;
+                setListError(true);
+            })
+            .finally(() => {
+                if (listRequestIdRef.current !== requestId) return;
+                listRequestPendingRef.current = false;
+                setLoading(false);
+            });
+        return () => {
+            controller.abort();
+            if (listRequestIdRef.current === requestId) {
+                listRequestIdRef.current += 1;
+                listRequestPendingRef.current = false;
+            }
+        };
+    }, [
+        user,
+        apiKey,
+        agentScopeFilter,
+        skillFilter,
+        selectedUserTagIds,
+        search,
+        clausesRaw,
+        frameworkFilter,
+        sourceFilter,
+        traceUserFilter,
+        agentFilter,
+        ownershipFilter,
+        anomalyFilter,
+        reliabilityAnomalyFilter,
+        timeFilter,
+        customTimeRange,
+        sortKey,
+        sortDir,
+        page,
+        pageSize,
+        reloadKey,
+        listFilterKey,
+        listRequestKey,
+        setPage,
+        filtersReady,
+    ]);
+
+    useEffect(() => {
+        setStats(null);
+        setStatsError(false);
+        setStatsLoading(false);
+        if (!statsRequest) return;
+        const controller = new AbortController();
+        let active = true;
+        let pending = false;
+        const refresh = async () => {
+            if (pending || document.visibilityState !== 'visible') return;
+            pending = true;
+            setStatsLoading(true);
+            try {
+                const response = await apiFetch(statsRequest, {
+                    cache: 'no-store', signal: controller.signal,
+                    headers: apiKey ? { 'x-witty-api-key': apiKey } : {},
+                });
+                if (!response.ok) throw new Error('Trace statistics request failed');
+                const payload = await response.json();
+                if (!payload?.stats || !['total', 'failedCount', 'avgLatencyMs', 'toolErrorRate']
+                    .every(key => typeof payload.stats[key] === 'number' && Number.isFinite(payload.stats[key]))) {
+                    throw new Error('Invalid Trace statistics response');
+                }
+                if (!active) return;
+                setStats(payload.stats);
+                setStatsError(false);
+            } catch {
+                if (active) setStatsError(true);
+            } finally {
+                pending = false;
+                if (active) setStatsLoading(false);
+            }
+        };
+        void refresh();
+        const timer = window.setInterval(refresh, TRACE_STATS_REFRESH_MS);
+        return () => {
+            active = false;
+            controller.abort();
+            window.clearInterval(timer);
+        };
+    }, [statsRequest, apiKey, statsRetry]);
+
+
+    const handleSort = (key: SortKey) => {
+        if (key === sortKey) {
+            setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortKey(key);
+            setSortDir(key === 'timestamp' || key === 'tokens' ? 'desc' : 'asc');
+        }
+    };
+
+    const totalPages = total === null ? null : Math.max(1, Math.ceil(total / pageSize));
+    const pageItems = data;
+
+    const selectedTraceKeys = useMemo(
+        () => new Set(selectedTracesByKey.keys()),
+        [selectedTracesByKey],
+    );
+    const selectedTraces = useMemo(
+        () => Array.from(selectedTracesByKey.values()),
+        [selectedTracesByKey],
+    );
+    const pageTraceKeys = useMemo(
+        () => pageItems.map(getExecutionRowKey).filter(Boolean),
+        [pageItems],
+    );
+    const selectedPageCount = pageTraceKeys.filter(key => selectedTraceKeys.has(key)).length;
+    const allPageSelected = pageTraceKeys.length > 0 && selectedPageCount === pageTraceKeys.length;
+    const somePageSelected = selectedPageCount > 0 && !allPageSelected;
+
+    const toggleTraceSelection = useCallback((execution: Execution) => {
+        const key = getExecutionRowKey(execution);
+        if (!key) return;
+        setSelectedTracesByKey(previous => {
+            const next = new Map(previous);
+            if (next.has(key)) next.delete(key);
+            else next.set(key, execution);
+            return next;
+        });
+    }, []);
+
+    const toggleCurrentPage = useCallback(() => {
+        setSelectedTracesByKey(previous => {
+            const next = new Map(previous);
+            const shouldSelect = pageTraceKeys.some(key => !next.has(key));
+            pageItems.forEach(execution => {
+                const key = getExecutionRowKey(execution);
+                if (!key) return;
+                if (shouldSelect) next.set(key, execution);
+                else next.delete(key);
+            });
+            return next;
+        });
+    }, [pageItems, pageTraceKeys]);
+
+    const clearTraceSelection = useCallback(() => setSelectedTracesByKey(new Map()), []);
+
+    useEffect(() => {
+        if (!loading && !listError && data.length === 0 && totalPages !== null && page > totalPages) setPage(totalPages);
+    }, [page, totalPages, setPage, loading, listError, data.length]);
+
+    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || selectedUserTagIds.length > 0
+        || anomalyFilter !== 'all' || reliabilityAnomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
+        || sourceFilter !== 'all'
+        || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0 || (canViewAllTraces && traceUserFilter !== '');
+
+    const resetFilters = () => {
+        clearFilterMemory();
+    };
+
+    // Filter dropdown option sets
+    const ownershipOptions: SelectOption[] = [
+        { value: 'all', label: t('nav.allOwnership') },
+        { value: 'user', label: t('nav.userAgent') },
+        { value: 'system', label: t('nav.systemAgent') },
+    ];
+    const statusOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        { value: 'running', label: t('tracePage.statusRunning') },
+        { value: 'success', label: t('tracePage.statusSuccess') },
+        { value: 'failed', label: t('tracePage.statusFailed') },
+        { value: 'interrupted', label: locale === 'zh' ? '已中断' : 'Interrupted' },
+        { value: 'timed_out', label: t('tracePage.statusTimedOut') },
+    ];
+    const reliabilityAnomalyOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        { value: 'abnormal', label: locale === 'zh' ? '有异常' : 'Abnormal' },
+        { value: 'detecting', label: locale === 'zh' ? '检测中' : 'Detecting' },
+        { value: 'normal', label: locale === 'zh' ? '无异常' : 'No anomaly' },
+    ];
+    const timeOptions: SelectOption[] = [
+        { value: 'all', label: t('common.allTime') },
+        { value: '7d', label: t('nav.last7Days') },
+        { value: '24h', label: t('topbar.last24h') },
+        { value: '1h', label: t('nav.last1Hour') },
+        { value: '30m', label: t('nav.last30Min') },
+    ];
+    const frameworkOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        ...frameworks.map(f => ({ value: f, label: f })),
+    ];
+    const sourceOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        ...sourceKinds.map(source => ({ value: source, label: getExecutionSourceLabel(source) })),
+    ];
+    const traceUserOptions: SelectOption[] = [
+        { value: '', label: t('tracePage.filterUserAll') },
+        ...traceUsers.map(username => ({ value: username, label: username })),
+    ];
+    // Agent 下拉包含根和子 Agent；“范围”决定查询哪一种独立执行。
+    const agentOptions: SelectOption[] = [
+        { value: 'all', label: t('tracePage.filterAgentAll') },
+        ...agentNames.map(a => ({ value: a, label: getAgentDisplayName(a) })),
+    ];
+    return (
+        <>
+            <AppTopBar
+                title={<Term id="trace" label={t('nav.trace')} />}
+                actions={!taskIdParam && !executionIdParam ? (
+                    <>
+                        <Button variant="outline" size="sm" asChild><Link href="/observe/collaborations">协作图</Link></Button>
+                        <Button variant="outline" size="sm" disabled={!user} onClick={() => { setBatchImportSession(v => v + 1); setBatchImportOpen(true); }}>
+                            <Download className="size-3.5" aria-hidden />
+                            {locale === 'zh' ? '导入 Trace' : 'Import Trace'}
+                        </Button>
+                    </>
+                ) : undefined}
+                showDefaultActions={false}
+            />
+            <PageContainer>
+                {(taskIdParam || executionIdParam) && (!selectedExecution || (executionIdParam ? selectedExecution.upload_id !== executionIdParam : selectedExecution.task_id !== taskIdParam && selectedExecution.upload_id !== taskIdParam)) ? (
+                    executionLookupError ? <div role="alert" className="rounded-md border border-border p-6 space-y-3">
+                        <p>{executionLookupError}</p>
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setExecutionLookupRetry(value => value + 1)}>{locale === 'zh' ? '重试' : 'Retry'}</Button>
+                            <Button variant="ghost" onClick={() => handleSelectExecution(null)}>{t('tracePage.backToList')}</Button>
+                        </div>
+                    </div> : <div role="status" className="space-y-4 p-6">
+                        <p className="text-sm text-foreground-muted">{locale === 'zh' ? '正在加载目标 Trace…' : 'Loading target Trace…'}</p>
+                        <Skeleton className="h-12 w-full" />
+                        <Skeleton className="h-64 w-full" />
+                    </div>
+                ) : selectedExecution ? (
+                    <TraceDetailView
+                        key={selectedExecution.upload_id || selectedExecution.task_id}
+                        execution={selectedExecution}
+                        onExecutionRefresh={handleExecutionRefresh}
+                        onBack={() => handleSelectExecution(null)}
+                        availableTags={availableTags}
+                        onTagsChanged={handleTraceTagsChanged}
+                        onTagCreated={handleTraceTagCreated}
+                    />
+                ) : (
+                    <>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                            <StatCard
+                                label={<Term id="trace" label={t('tracePage.statTotal')} />}
+                                value={stats ? stats.total.toLocaleString() : '—'}
+                            />
+                            <StatCard
+                                label={<Term id="fault-item" label={t('tracePage.statFailed')} />}
+                                value={stats ? String(stats.failedCount) : '—'}
+                                accent={stats && stats.failedCount > 0 ? 'error' : undefined}
+                            />
+                            <StatCard label={t('tracePage.statAvgLatency')} value={stats ? formatDurationMs(stats.avgLatencyMs) : '—'} />
+                            <StatCard
+                                label={<Term id="tool-error-rate" label={t('tracePage.statToolErrorRate')} align="end" />}
+                                value={stats ? `${stats.toolErrorRate}%` : '—'}
+                            />
+                        </div>
+
+                        {(statsLoading || statsError) && (
+                            <div role="status" className="mb-3 text-xs text-foreground-muted flex items-center gap-2">
+                                {t(statsError ? 'tracePage.statsError' : 'tracePage.statsLoading')}
+                                {statsError && <Button variant="ghost" size="sm" onClick={() => setStatsRetry(value => value + 1)}>{t('tracePage.retry')}</Button>}
+                            </div>
+                        )}
+
+                        {user && (
+                            <div className="mb-3">
+                                <TraceFilterBar
+                                    clauses={clauses}
+                                    onChange={setClauses}
+                                    search={search}
+                                    onSearchChange={handleSearchChange}
+                                    user={user}
+                                />
+                            </div>
+                        )}
+
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
+                                <SlidersHorizontal className="size-3.5" />
+                                {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '过滤' : 'Show filters')}
+                            </Button>
+                            {/* 固定高度竖分隔:不能用 <Separator orientation="vertical">——它带
+                                data-[orientation=vertical]:h-full 会拉伸满行高,在 flex-wrap 行里撑坏换行
+                                行盒(第二行下拉溢出、与下方列表标题重叠)。用定高 span 规避。 */}
+                            <span aria-hidden className="h-5 w-px shrink-0 self-center bg-border" />
+                            <Select
+                                label={t('nav.filterAgentOwnership')}
+                                value={ownershipFilter}
+                                onChange={setOwnershipFilter}
+                                options={ownershipOptions}
+                                active={ownershipFilter !== 'all'}
+                            />
+                            <Select
+                                label={t('tracePage.filterStatus')}
+                                value={anomalyFilter}
+                                onChange={setAnomalyFilter}
+                                options={statusOptions}
+                                active={anomalyFilter !== 'all'}
+                            />
+                            <Select
+                                label={locale === 'zh' ? '可靠性异常' : 'Reliability'}
+                                value={reliabilityAnomalyFilter}
+                                onChange={setReliabilityAnomalyFilter}
+                                options={reliabilityAnomalyOptions}
+                                active={reliabilityAnomalyFilter !== 'all'}
+                            />
+                            <TraceTimeFilter
+                                label={t('tracePage.filterTime')}
+                                value={timeFilter}
+                                from={timeFrom}
+                                to={timeTo}
+                                locale={locale}
+                                onChange={next => { void setTimeRange(next); }}
+                                options={timeOptions}
+                            />
+                            <Select
+                                label={t('tracePage.filterFramework')}
+                                value={frameworkFilter}
+                                onChange={setFrameworkFilter}
+                                options={frameworkOptions}
+                                active={frameworkFilter !== 'all'}
+                            />
+                            <Select
+                                label={locale === 'zh' ? '产品来源' : 'Product source'}
+                                value={sourceFilter}
+                                onChange={setSourceFilter}
+                                options={sourceOptions}
+                                active={sourceFilter !== 'all'}
+                            />
+                            <UserTagFilter
+                                tags={availableTags}
+                                selectedIds={selectedUserTagIds}
+                                onChange={updateUserTagFilters}
+                            />
+                            {canViewAllTraces && (
+                                <Select
+                                    label={t('tracePage.filterUser')}
+                                    value={traceUserFilter}
+                                    onChange={setTraceUserFilter}
+                                    options={traceUserOptions}
+                                    active={traceUserFilter !== ''}
+                                />
+                            )}
+                            <Select
+                                label={t('tracePage.filterAgent')}
+                                value={agentFilter}
+                                onChange={setAgentFilter}
+                                options={agentOptions}
+                                active={agentFilter !== 'all'}
+                            />
+                            <Select
+                                label={locale === 'zh' ? '范围' : 'Scope'}
+                                value={agentScopeFilter}
+                                onChange={setAgentScopeFilter}
+                                options={[
+                                    { value: 'root', label: locale === 'zh' ? '仅主 Agent' : 'Root only' },
+                                    { value: 'subagent', label: locale === 'zh' ? '仅子 Agent' : 'Sub-agents only' },
+                                    { value: 'all', label: locale === 'zh' ? '主 + 子 Agent' : 'Root + sub-agents' },
+                                ]}
+                                active={agentScopeFilter !== 'root'}
+                            />
+                            {hasActiveFilters && (
+                                <Button variant="ghost" size="sm" onClick={resetFilters} className="h-7 gap-1 text-xs text-foreground-muted">
+                                    <XIcon className="size-3" />
+                                    {t('tracePage.resetFilters')}
+                                </Button>
+                            )}
+                        </div>
+
+                        <div className="flex-1 min-h-0 flex gap-3">
+                            {showFilters && (
+                                <aside className="w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card">
+                                    <div className="px-3 py-2 border-b border-card-border">
+                                        <span className="text-sm font-semibold">{locale === 'zh' ? '过滤器' : 'Filters'}</span>
+                                    </div>
+                                    {user && (
+                                        <div className="p-3">
+                                            <TraceFilterSidebar clauses={clauses} onChange={setClauses} user={user} />
+                                        </div>
+                                    )}
+                                </aside>
+                            )}
+                            <div className="flex-1 min-w-0 flex flex-col">
+
+                        <div className={cn(
+                            'sticky top-0 z-20 flex min-h-9 flex-wrap items-center justify-between gap-3 mb-2 rounded-md',
+                            selectedTraces.length > 0 && 'border border-primary-border bg-primary-subtle px-3 py-1.5',
+                        )}>
+                            {selectedTraces.length > 0 ? (
+                                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                                    <span className="text-sm font-semibold text-primary">
+                                        {locale === 'zh' ? `已选择 ${selectedTraces.length} 条` : `${selectedTraces.length} selected`}
+                                    </span>
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={toggleCurrentPage}>
+                                        {allPageSelected
+                                            ? (locale === 'zh' ? '取消当前页' : 'Deselect page')
+                                            : (locale === 'zh' ? '全选当前页' : 'Select page')}
+                                    </Button>
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearTraceSelection}>
+                                        {locale === 'zh' ? '清空选择' : 'Clear'}
+                                    </Button>
+                                </div>
+                            ) : (
+                                <h2 className="text-sm font-semibold text-foreground">
+                                    {t('tracePage.listTitle')}
+                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{total ?? '—'}</span>
+                                </h2>
+                            )}
+                            <div className="flex items-center gap-3">
+                                {selectedTraces.length > 0 && (
+                                    <Button size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setBatchBackflowOpen(true)}>
+                                        <Database className="size-3.5" aria-hidden />
+                                        {locale === 'zh' ? '加入评测数据集' : 'Add to dataset'}
+                                    </Button>
+                                )}
+                                {(isCustomized || isVisibilityCustomized) && (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => { resetColumnWidths(); resetColumnVisibility(); }}
+                                        className="h-7 px-2 text-xs text-foreground-muted gap-1"
+                                    >
+                                        <RotateCcw className="size-3" aria-hidden />
+                                        {t('tracePage.resetColumns')}
+                                    </Button>
+                                )}
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs gap-1.5">
+                                            <Columns3 className="size-3.5" aria-hidden />
+                                            {t('tracePage.columnSettings')}
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-44">
+                                        <DropdownMenuLabel>{t('tracePage.columnSettings')}</DropdownMenuLabel>
+                                        {TRACE_COLUMN_ORDER.filter(key => key !== 'user' || canViewAllTraces).map(key => (
+                                            <DropdownMenuCheckboxItem
+                                                key={key}
+                                                checked={columnVisibility[key]}
+                                                onCheckedChange={checked => setColumnVisible(key, checked === true)}
+                                                onSelect={ev => ev.preventDefault()}
+                                            >
+                                                {columnLabels[key]}
+                                            </DropdownMenuCheckboxItem>
+                                        ))}
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem onSelect={() => { resetColumnWidths(); resetColumnVisibility(); }}>
+                                            <RotateCcw className="size-3.5" aria-hidden />
+                                            {t('tracePage.resetColumns')}
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                                <span className="text-xs text-foreground-muted">
+                                    {t('tracePage.listHint')}
+                                </span>
+                            </div>
+                        </div>
+
+                        <PageContent className="flex flex-col">
+                            {listError && (
+                                <div role="alert" className="mb-3 flex items-center gap-2 text-sm text-foreground-muted">
+                                    {t('tracePage.listError')}
+                                    <Button variant="outline" size="sm" onClick={() => setReloadKey(value => value + 1)}>{t('tracePage.retry')}</Button>
+                                </div>
+                            )}
+                            <div className="flex-1 min-h-0 rounded-md border border-card-border bg-card overflow-auto">
+                                {loading ? (
+                                    <div className="p-4 space-y-2">
+                                        {[0, 1, 2, 3, 4].map(i => <Skeleton key={i} className="h-8 w-full" />)}
+                                    </div>
+                                ) : pageItems.length === 0 ? (
+                                    <EmptyState
+                                        title={t(listError ? 'tracePage.listError' : 'tracePage.emptyTitle')}
+                                        description={!listError && hasActiveFilters ? t('tracePage.emptyDescription') : undefined}
+                                        action={!listError && hasActiveFilters ? (
+                                            <Button variant="outline" size="sm" onClick={resetFilters}>
+                                                {t('tracePage.resetFilters')}
+                                            </Button>
+                                        ) : undefined}
+                                    />
+                                ) : (
+                                    <table
+                                        className="w-full table-fixed text-sm"
+                                        style={{
+                                            minWidth: tableMinWidth,
+                                            width: tableWidth == null
+                                                ? undefined
+                                                : `max(100%, ${Math.max(tableWidth, tableMinWidth)}px)`,
+                                        }}
+                                    >
+                                        <colgroup>
+                                            <col style={{ width: 44 }} />
+                                            {columnVisibility.traceId && <col style={{ width: widths.traceId }} />}
+                                            {columnVisibility.user && <col style={{ width: widths.user }} />}
+                                            {/* 任务内容放第二列：用户最关心的信息 */}
+                                            {columnVisibility.task && (
+                                                <col style={{ width: taskWidthCustomized ? widths.task : undefined }} />
+                                            )}
+                                            {columnVisibility.agent && <col style={{ width: widths.agent }} />}
+                                            {columnVisibility.ip && <col style={{ width: widths.ip }} />}
+                                            {columnVisibility.status && <col style={{ width: widths.status }} />}
+                                            {columnVisibility.anomaly && <col style={{ width: widths.anomaly }} />}
+                                            {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
+                                            {columnVisibility.systemTags && <col style={{ width: widths.systemTags }} />}
+                                            {columnVisibility.tokens && <col style={{ width: widths.tokens }} />}
+                                            {columnVisibility.time && <col style={{ width: widths.time }} />}
+                                            {columnVisibility.actions && <col style={{ width: widths.actions }} />}
+                                        </colgroup>
+                                        <thead className="sticky top-0 z-10">
+                                            <tr className="bg-background-secondary text-left">
+                                                <Th>
+                                                    <SelectionCheckbox
+                                                        checked={allPageSelected}
+                                                        indeterminate={somePageSelected}
+                                                        onChange={toggleCurrentPage}
+                                                        ariaLabel={locale === 'zh' ? '选择当前页 Trace' : 'Select traces on this page'}
+                                                    />
+                                                </Th>
+                                                {columnVisibility.traceId && (
+                                                    <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>
+                                                        <Term id="trace" label={t('tracePage.columnTraceId')} />
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.user && (
+                                                    <Th colKey="user" currentWidth={widths.user} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnUser')}
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.task && (
+                                                    <Th colKey="task" currentWidth={widths.task} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnTask')}
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.agent && (
+                                                    <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
+                                                        <Term id="agent" label={t('tracePage.columnAgent')} />
+                                                    </SortableTh>
+                                                )}
+                                                {columnVisibility.ip && (
+                                                    <Th colKey="ip" currentWidth={widths.ip} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnIp')}
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.status && (
+                                                    <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
+                                                        <Term id="chain-status" label={t('tracePage.columnStatus')} />
+                                                    </SortableTh>
+                                                )}
+                                                {columnVisibility.anomaly && (
+                                                    <Th colKey="anomaly" currentWidth={widths.anomaly} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnAnomaly')}
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.userTags && <Th colKey="userTags" currentWidth={widths.userTags} onResize={setColumnWidth}>{t('tracePage.columnUserTags')}</Th>}
+                                                {columnVisibility.systemTags && <Th colKey="systemTags" currentWidth={widths.systemTags} onResize={setColumnWidth}>{t('tracePage.columnSystemTags')}</Th>}
+                                                {columnVisibility.tokens && (
+                                                    <SortableTh sortKey="tokens" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="tokens" currentWidth={widths.tokens} onResize={setColumnWidth}>
+                                                        <Term id="tokens" label={t('tracePage.columnTokens')} />
+                                                    </SortableTh>
+                                                )}
+                                                {columnVisibility.time && <SortableTh sortKey="timestamp" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="time" currentWidth={widths.time} onResize={setColumnWidth}>{t('tracePage.columnTime')}</SortableTh>}
+                                                {columnVisibility.actions && <Th align="right" colKey="actions" currentWidth={widths.actions} onResize={setColumnWidth}>{t('tracePage.columnActions')}</Th>}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {pageItems.map((e, i) => (
+                                                <Row
+                                                    key={getExecutionRowKey(e) || String(i)}
+                                                    execution={e}
+                                                    columnVisibility={columnVisibility}
+                                                    availableTags={availableTags}
+                                                    onTagsChanged={handleTraceTagsChanged}
+                                                    onTagCreated={handleTraceTagCreated}
+                                                    onClick={() => handleSelectExecution(e)}
+                                                    selected={selectedTraceKeys.has(getExecutionRowKey(e))}
+                                                    onSelectedChange={() => toggleTraceSelection(e)}
+                                                />
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        </PageContent>
+
+                        {(data.length > 0 || page > 1) && (
+                            <PageFooter className="border-0 mt-3 pt-0 shrink-0">
+                                <Pagination
+                                    className="w-full"
+                                    page={page}
+                                    pageSize={pageSize}
+                                    total={total}
+                                    hasMore={hasMore}
+                                    unknownTotalSummary={t('tracePage.pageUnknownTotal', { page: String(page) })}
+                                    onPageChange={setPage}
+                                    onPageSizeChange={setPageSize}
+                                    pageSizes={PAGE_SIZE_OPTIONS}
+                                    pageSizeLabel={n => t('tracePage.pageSize', { n: String(n) })}
+                                    summary={(start, end, total) => t('tracePage.pageSummary', {
+                                        start: String(start),
+                                        end: String(end),
+                                        total: String(total),
+                                    })}
+                                />
+                            </PageFooter>
+                        )}
+                        {user && (
+                            <TraceBackflowDialog
+                                open={batchBackflowOpen}
+                                onOpenChange={setBatchBackflowOpen}
+                                user={user}
+                                sources={selectedTraces.map(item => ({
+                                    taskId: item.task_id || item.upload_id || '',
+                                    executionId: item.upload_id,
+                                    label: item.query || item.task_id || item.upload_id || 'Trace',
+                                }))}
+                                onSaved={clearTraceSelection}
+                            />
+                        )}
+                            </div>
+                        </div>
+                    </>
+                )}
+            </PageContainer>
+            <TraceBatchImportDialog
+                key={batchImportSession}
+                open={batchImportOpen}
+                onOpenChange={setBatchImportOpen}
+                onImportSuccess={() => setReloadKey(value => value + 1)}
+            />
+        </>
+    );
+}
+
+function TraceDetailView({
+    execution,
+    onExecutionRefresh,
+    onBack,
+    availableTags,
+    onTagsChanged,
+    onTagCreated,
+}: {
+    execution: Execution;
+    onExecutionRefresh: (execution: Execution) => void;
+    onBack: () => void;
+    availableTags: TraceUserTag[];
+    onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
+    onTagCreated: (tag: TraceUserTag) => void;
+}) {
+    const { t, locale } = useLocale();
+    const { user, apiKey } = useAuth();
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const [session, setSession] = useState<any | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [exporting, setExporting] = useState(false);
+    const [backflowOpen, setBackflowOpen] = useState(false);
+    const taskId = execution.task_id || execution.upload_id || '';
+    const execAny = execution as any;
+    const isSubagentTrace: boolean = !!execAny.is_subagent;
+    const parentExecutionId: string | null = execAny.parent_execution_id || null;
+    const subagentType: string | null = execAny.subagent_type || null;
+    const subagentName: string | null = execAny.subagent_name || null;
+    const workflowOrigin = searchParams?.get('workflowTaskId');
+    const workflowReturnTaskId = execution.framework === 'dify' && workflowOrigin?.startsWith('dify:') && workflowOrigin !== taskId ? workflowOrigin : null;
+
+    const navigateToTaskId = useCallback((newTaskId: string) => {
+        if (!newTaskId) return;
+        const params = new URLSearchParams(searchParams?.toString() ?? '');
+        if (newTaskId === params.get('workflowTaskId')) params.delete('workflowTaskId');
+        else if (newTaskId !== taskId && execution.framework === 'dify'
+            && session?.taskId === taskId && session.difyProjection?.linkedTraces > 0 && !params.has('workflowTaskId')) {
+            params.set('workflowTaskId', taskId);
+        }
+        params.set('taskId', newTaskId);
+        params.delete('executionId');
+        router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+    }, [router, searchParams, taskId, execution.framework, session]);
+
+    const navigateToParent = useCallback(async () => {
+        if (!parentExecutionId) return;
+        try {
+            const res = await apiFetch(`/api/observe/data?executionId=${encodeURIComponent(parentExecutionId)}&includeEvaluations=0`);
+            if (!res.ok) return;
+            const arr = await res.json();
+            const parent = Array.isArray(arr) ? arr[0] : (arr?.data?.[0] || arr);
+            const parentTaskId = parent?.task_id || parent?.upload_id;
+            if (parentTaskId) navigateToTaskId(parentTaskId);
+        } catch { /* ignore */ }
+    }, [parentExecutionId, navigateToTaskId]);
+
+    const execStatus = getExecStatus(execution);
+    const [autoRefresh, setAutoRefresh] = useState(execStatus === 'running' || execStatus === 'timed_out');
+    const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
+    const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
+    const [rasMarkers, setRasMarkers] = useState<any[]>([]);
+
+    const sessionRef = useRef<any | null>(null);
+    const sessionRequestRef = useRef(0);
+    useEffect(() => { sessionRef.current = session; }, [session]);
+
+    useEffect(() => {
+        const executionId = String(execution.upload_id || '').trim();
+        if (!executionId) {
+            setRasMarkers([]);
+            return;
+        }
+        let cancelled = false;
+        apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/reliability?locale=${locale === 'zh' ? 'zh' : 'en'}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (cancelled) return;
+                setRasMarkers(Array.isArray(data?.markers) ? data.markers : []);
+            })
+            .catch(() => {
+                if (!cancelled) setRasMarkers([]);
+            });
+        return () => { cancelled = true; };
+    }, [execution.upload_id, locale]);
+
+    const fetchSession = useCallback((silent = false) => {
+        if (!taskId) return;
+        const requestId = ++sessionRequestRef.current;
+        const isInitial = !sessionRef.current;
+        if (!silent && isInitial) setLoading(true);
+        if (!user) return;
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskId)}&fields=light&includeTags=1&includeEvaluations=0&skipAutoEvalReady=1`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(response => response.ok ? response.json() : null)
+            .then(records => { if (requestId === sessionRequestRef.current && Array.isArray(records) && records[0]) onExecutionRefresh(records[0]); })
+            .catch(() => {});
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user)}&view=structure`, { cache: 'no-store', headers: apiKey ? { 'x-witty-api-key': apiKey } : {} })
+            .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
+            .then(j => {
+                if (requestId !== sessionRequestRef.current) return;
+                const wasWaiting = traceRelationsPending(sessionRef.current);
+                if (!wasWaiting && traceRelationsPending(j)) setAutoRefresh(true);
+                setSession(j);
+                setSecondsSinceRefresh(0);
+            })
+            .catch(() => { if (requestId === sessionRequestRef.current && !silent && isInitial) setSession({ error: 'Network error' }); })
+            .finally(() => { if (requestId === sessionRequestRef.current) setLoading(false); });
+    }, [taskId, user, apiKey, onExecutionRefresh]);
+
+    useEffect(() => () => { sessionRequestRef.current += 1; }, [taskId]);
+
+    useEffect(() => { fetchSession(false); }, [fetchSession]);
+
+    const waitingForRelations = traceRelationsPending(session);
+
+    useEffect(() => {
+        if (!autoRefresh || (!waitingForRelations && execStatus !== 'running' && execStatus !== 'timed_out')) return;
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === 'visible') fetchSession(true);
+        };
+        const id = window.setInterval(refreshWhenVisible, refreshIntervalSec * 1000);
+        document.addEventListener('visibilitychange', refreshWhenVisible);
+        return () => {
+            window.clearInterval(id);
+            document.removeEventListener('visibilitychange', refreshWhenVisible);
+        };
+    }, [autoRefresh, refreshIntervalSec, fetchSession, execStatus, waitingForRelations]);
+
+    useEffect(() => {
+        const id = setInterval(() => setSecondsSinceRefresh(s => s + 1), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    const loadInteraction = useCallback(async (index: number) => {
+        const source = sessionRef.current?.interactions?.[index]?._collaboration;
+        const sourceTaskId = source?.taskId ?? taskId;
+        const sourceIndex = source?.index ?? index;
+        const response = await apiFetch(
+            `/api/observe/session?taskId=${encodeURIComponent(sourceTaskId)}&user=${encodeURIComponent(user || '')}&view=interaction&index=${sourceIndex}${source ? "&source=raw" : ""}`,
+            { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} },
+        );
+        if (!response.ok) throw new Error(await readApiError(response));
+        const body = await response.json();
+        return body?.interaction;
+    }, [taskId, user, apiKey]);
+
+    const loadFullInteractions = useCallback(async () => {
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
+        if (!response.ok) throw new Error(await readApiError(response));
+        const body = await response.json();
+        return Array.isArray(body?.interactions) ? body.interactions : [];
+    }, [taskId, user, apiKey]);
+
+    const { framework } = execution;
+    // The list row may be a partial snapshot captured while a streaming trace is
+    // still uploading. The structure endpoint is refreshed from the latest
+    // Execution row, so prefer its metrics once available.
+    const latestExecution = session?.execution;
+    const latency = typeof latestExecution?.latency === 'number'
+        ? latestExecution.latency
+        : execution.latency;
+    const tokens = typeof latestExecution?.tokens === 'number'
+        ? latestExecution.tokens
+        : execution.tokens;
+    const cost = typeof latestExecution?.cost === 'number'
+        ? latestExecution.cost
+        : execution.cost;
+    const executionSource = getExecutionSource(execution);
+    const canAutoRefresh = waitingForRelations || execStatus === 'running' || execStatus === 'timed_out';
+    const canDownloadSession = !exporting && !!user && !!taskId;
+
+    const downloadSessionJson = async () => {
+        if (!canDownloadSession || !user) return;
+        setExporting(true);
+        try {
+            const query = new URLSearchParams({
+                executionId: execution.upload_id || execution.task_id || '',
+                user,
+            });
+            const response = await apiFetch('/api/observe/traces/export?' + query.toString());
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload?.error || (locale === 'zh' ? '导出 Trace 失败' : 'Failed to export trace'));
+            }
+            const blob = await response.blob();
+            const disposition = response.headers.get('Content-Disposition') || '';
+            const filenameMatch = /filename="?([^";]+)"?/i.exec(disposition);
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filenameMatch?.[1] || ('trace-' + safeFilenameSegment(taskId) + '.json');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+            toast.success(locale === 'zh' ? '完整 Trace 已开始下载' : 'Trace bundle download started');
+        } catch (error) {
+            console.error('[trace] export trace bundle failed:', error);
+            toast.error(error instanceof Error ? error.message : (locale === 'zh' ? '导出 Trace 失败' : 'Failed to export trace'));
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    return (
+        <div className="flex flex-col h-full min-h-0">
+            <div className="mb-3 flex min-w-0 shrink-0 flex-wrap items-start gap-2 rounded-md border border-border bg-card p-3 sm:items-center">
+                <Button variant="ghost" size="sm" onClick={onBack} className="text-foreground-muted h-7 px-2">
+                    <ArrowLeft className="size-3.5" aria-hidden />
+                    {t('tracePage.backToList')}
+                </Button>
+                {workflowReturnTaskId && (
+                    <Button variant="ghost" size="sm" onClick={() => navigateToTaskId(workflowReturnTaskId)} className="text-foreground-muted h-7 px-2">
+                        <ArrowLeft className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '返回 Workflow' : 'Back to Workflow'}
+                    </Button>
+                )}
+                {isSubagentTrace && parentExecutionId && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={navigateToParent}
+                        className="text-foreground-muted h-7 px-2"
+                        title={locale === 'zh' ? '返回父 Agent 执行' : 'Back to parent agent execution'}
+                    >
+                        <ArrowLeft className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '父执行' : 'Parent'}
+                    </Button>
+                )}
+                <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
+                {isSubagentTrace && (
+                    <span
+                        title={subagentName || ''}
+                        className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30 max-w-full shrink-0 truncate"
+                    >
+                        SUB-AGENT{subagentType ? ` · ${subagentType}` : ''}
+                    </span>
+                )}
+                <IdChip value={taskId} head={8} tail={6} />
+                <StatusBadge
+                    title={execStatus === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined}
+                    status={execStatus === 'running' ? 'running' : execStatus === 'failed' ? 'error' : execStatus === 'interrupted' ? 'cancelled' : execStatus === 'timed_out' ? 'warning' : 'success'}
+                    label={
+                        execStatus === 'running' ? t('tracePage.statusRunning')
+                        : execStatus === 'timed_out' ? t('tracePage.statusTimedOut')
+                        : execStatus === 'failed' ? t('tracePage.statusFailed')
+                        : execStatus === 'interrupted' ? (locale === 'zh' ? '已中断' : 'Interrupted')
+                        : t('tracePage.statusNormal')
+                    }
+                />
+                <ReliabilityAnomalyChip
+                    executionId={String(execution.upload_id || '')}
+                    locale={locale === 'zh' ? 'zh' : 'en'}
+                />
+                {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
+                {executionSource && <Tag variant="framework" icon={Layers}>{getExecutionSourceLabel(executionSource)}</Tag>}
+
+                {/* 用户标签：在详情页原地打标，不必退回列表 */}
+                <TraceTagCell
+                    execution={execution}
+                    availableTags={availableTags}
+                    onTagsChanged={onTagsChanged}
+                    onTagCreated={onTagCreated}
+                    mode="button"
+                />
+
+                {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
+                    <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
+                ) : null}
+                {typeof tokens === 'number' && tokens > 0 && (
+                    <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
+                )}
+                {typeof latency === 'number' && latency > 0 && (
+                    <MetricPill label={t('tracePage.metricDuration')} value={formatDurationMs(latency)} />
+                )}
+                {typeof cost === 'number' && cost > 0 && (
+                    <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
+                )}
+
+                <div className="flex w-full min-w-0 flex-wrap items-center gap-2 border-t border-border pt-2 sm:ml-auto sm:w-auto sm:border-t-0 sm:pt-0">
+                    <TooltipProvider delayDuration={250}>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant={autoRefresh && canAutoRefresh ? 'default' : 'outline'}
+                                    size="sm"
+                                    disabled={!canAutoRefresh}
+                                    onClick={() => canAutoRefresh && setAutoRefresh(v => !v)}
+                                    aria-pressed={autoRefresh && canAutoRefresh}
+                                    className="h-7 px-2.5 text-xs"
+                                >
+                                    <RefreshCw className={cn('size-3.5', autoRefresh && canAutoRefresh && 'animate-spin')} />
+                                    {autoRefresh && canAutoRefresh ? t('tracePage.autoRefresh') : t('tracePage.paused')}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="text-xs">
+                                {!canAutoRefresh ? t('tracePage.autoRefreshUnavailable') : t('tracePage.autoRefresh')}
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+
+                    {autoRefresh && canAutoRefresh && (
+                        <Select
+                            value={String(refreshIntervalSec)}
+                            onChange={v => setRefreshIntervalSec(Number(v))}
+                            options={REFRESH_INTERVAL_OPTIONS.map(s => ({ value: String(s), label: `${s}s` }))}
+                            aria-label={t('tracePage.refreshInterval')}
+                        />
+                    )}
+                    <span className="text-xs text-foreground-muted whitespace-nowrap tabular-nums min-w-[36px]">
+                        {secondsSinceRefresh === 0 ? t('tracePage.justNow') : t('tracePage.secondsAgo', { s: String(secondsSinceRefresh) })}
+                    </span>
+                    <Button variant="outline" size="icon" onClick={() => fetchSession(true)} aria-label={t('tracePage.refreshNow')} className="size-7">
+                        <RefreshCw className="size-3.5" />
+                    </Button>
+
+                    <Separator orientation="vertical" className="hidden data-[orientation=vertical]:h-5 sm:block" />
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setBackflowOpen(true)}
+                        disabled={!user || !taskId}
+                        className="h-7 text-xs"
+                    >
+                        <Database className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
+                    </Button>
+                    <Button variant="outline" size="sm" asChild className="h-7 text-xs"><Link href={`/observe/collaborations?traceTaskId=${encodeURIComponent(taskId)}`}>调用关系图</Link></Button>
+                    <Button variant="default" size="sm" asChild className="h-7 text-xs">
+                        <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={downloadSessionJson}
+                        disabled={!canDownloadSession}
+                        title={
+                            canDownloadSession
+                                ? (locale === 'zh' ? '下载完整 Trace Bundle' : 'Download complete trace bundle')
+                                : (locale === 'zh' ? 'Trace 暂不可导出' : 'Trace export is currently unavailable')
+                        }
+                        className="h-7 text-xs"
+                    >
+                        <Upload className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '导出 Trace' : 'Export Trace'}
+                    </Button>
+                </div>
+            </div>
+
+            {user && (
+                <TraceBackflowDialog
+                    open={backflowOpen}
+                    onOpenChange={setBackflowOpen}
+                    user={user}
+                    sources={[{
+                        taskId,
+                        executionId: execution.upload_id,
+                        label: execution.query || taskId,
+                    }]}
+                />
+            )}
+
+            {execStatus === 'failed' && execution.failures && execution.failures.length > 0 && (
+                <FailureCard failures={execution.failures} />
+            )}
+
+            <CodexThreadTimeline
+                thread={session?.thread as TraceThreadView | undefined}
+                locale={locale}
+                onNavigate={navigateToTaskId}
+            />
+
+            <h2 className="text-sm font-semibold text-foreground mb-2">{t('tracePage.executionTrace')}</h2>
+            <div className="min-h-[200px] flex-1 min-h-0">
+                {loading ? (
+                    <div className="rounded-md border border-card-border bg-card p-4 space-y-2">
+                        <Skeleton className="h-6 w-1/2" />
+                        <Skeleton className="h-6 w-3/4" />
+                        <Skeleton className="h-6 w-2/3" />
+                        <Skeleton className="h-6 w-1/2" />
+                    </div>
+                ) : session?.error ? (
+                    <div className="rounded-md border border-error-border bg-error-subtle text-error p-4 text-sm" role="alert">
+                        {session.error}
+                    </div>
+                ) : (session?.interactions?.length || 0) > 0 || (session?.langfuseTraceNodes?.length || 0) > 0 ? (
+                    <>
+                    {session?.difyProjection?.truncated && <div role="status" className="mb-3 rounded-md border border-card-border bg-card p-3 text-sm text-foreground-secondary">
+                        {locale === 'zh' ? '部分关联轨迹超过展示限制，请打开各自的 Trace 查看完整内容。' : 'Some linked traces exceed display limits. Open their individual traces to view the full content.'}
+                    </div>}
+                    <AgentTraceView
+                        interactions={session.interactions || []}
+                        framework={execution.framework}
+                        langfuseTraceNodes={session.langfuseTraceNodes}
+                        executionDurationMs={latency}
+                        loadInteraction={loadInteraction}
+                        loadAllInteractions={loadFullInteractions}
+                        onSubagentNavigate={navigateToTaskId}
+                        parentAgent={session?.taskId === taskId ? session.parentAgent : null}
+                        traceRelations={session?.taskId === taskId ? session.traceRelations : undefined}
+                        rootSessionId={taskId}
+                        traceIdentity={taskId}
+                        rootExecutionId={execution.upload_id || execution.task_id}
+                        rasMarkers={rasMarkers}
+                    />
+                    </>
+                ) : (
+                    <div className="rounded-md border border-card-border bg-card">
+                        <EmptyState title={t('tracePage.noTrace')} />
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function FailureCard({ failures }: { failures: any[] }) {
+    const { t } = useLocale();
+    return (
+        <div className="mb-3">
+            <h3 className="text-sm font-semibold text-foreground mb-2">{t('tracePage.failureDetails')}</h3>
+            <div className="rounded-md border-l-4 border-l-error border border-card-border bg-error-subtle/30 overflow-hidden">
+                {failures.map((f, i) => (
+                    <div
+                        key={i}
+                        className={cn('p-3 grid gap-1.5', i < failures.length - 1 && 'border-b border-card-border')}
+                    >
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-semibold text-error inline-flex items-center gap-1">
+                                <XCircle className="size-3.5" aria-hidden />
+                                {f.failure_type || t('tracePage.unknownError')}
+                            </span>
+                            {f.attribution && (
+                                <span className="inline-flex items-center rounded-sm border border-border bg-background-secondary text-foreground-muted px-1.5 py-0 text-xs font-medium uppercase tracking-wide">
+                                    {f.attribution}
+                                </span>
+                            )}
+                        </div>
+                        {f.description && <p className="text-sm text-foreground">{f.description}</p>}
+                        {f.context && (
+                            <p className="text-xs text-foreground-muted">
+                                <span className="font-medium">{t('tracePage.contextLabel')}</span>
+                                {f.context}
+                            </p>
+                        )}
+                        {f.recovery && (
+                            <p className="text-xs text-success">
+                                <span className="font-medium">{t('tracePage.recoveryLabel')}</span>
+                                {f.recovery}
+                            </p>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function MetricPill({ label, value }: { label: React.ReactNode; value: string }) {
+    return (
+        <span className="inline-flex items-baseline gap-1 text-xs">
+            <span className="text-foreground-muted">{label}</span>
+            <span className="font-semibold text-foreground tabular-nums">{value}</span>
+        </span>
+    );
+}
+
+function StatCard({ label, value, accent }: { label: React.ReactNode; value: string; accent?: 'error' }) {
+    return (
+        <div className="rounded-md border border-card-border bg-card p-3">
+            <div className="text-xs text-foreground-muted">{label}</div>
+            <div className={cn('mt-1 text-xl font-semibold tabular-nums', accent === 'error' ? 'text-error' : 'text-foreground')}>{value}</div>
+        </div>
+    );
+}
+
+function Th({
+    children,
+    align,
+    className,
+    colKey,
+    currentWidth,
+    onResize,
+}: {
+    children: React.ReactNode;
+    align?: 'left' | 'right' | 'center';
+    className?: string;
+    colKey?: ResizableColKey;
+    currentWidth?: number;
+    onResize?: (key: ResizableColKey, width: number, tableWidth?: number) => void;
+}) {
+    const resizable = !!(colKey && onResize && currentWidth != null);
+    return (
+        <th className={cn(
+            'relative px-3 py-2 text-xs font-medium text-foreground-muted border-b border-border whitespace-nowrap',
+            align === 'right' && 'text-right',
+            align === 'center' && 'text-center',
+            className,
+        )}>
+            {children}
+            {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
+        </th>
+    );
+}
+
+function SelectionCheckbox({
+    checked,
+    indeterminate = false,
+    onChange,
+    ariaLabel,
+}: {
+    checked: boolean;
+    indeterminate?: boolean;
+    onChange: () => void;
+    ariaLabel: string;
+}) {
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (inputRef.current) inputRef.current.indeterminate = indeterminate;
+    }, [indeterminate]);
+
+    return (
+        <input
+            ref={inputRef}
+            type="checkbox"
+            checked={checked}
+            onChange={onChange}
+            aria-label={ariaLabel}
+            className="size-4 cursor-pointer accent-primary"
+        />
+    );
+}
+
+function SortableTh({
+    children, sortKey, currentKey, dir, onSort,
+    colKey, currentWidth, onResize,
+}: {
+    children: React.ReactNode;
+    sortKey: SortKey;
+    currentKey: SortKey;
+    dir: SortDir;
+    onSort: (k: SortKey) => void;
+    colKey?: ResizableColKey;
+    currentWidth?: number;
+    onResize?: (key: ResizableColKey, width: number, tableWidth?: number) => void;
+}) {
+    const active = sortKey === currentKey;
+    const resizable = !!(colKey && onResize && currentWidth != null);
+    return (
+        <th
+            scope="col"
+            tabIndex={0}
+            role="columnheader"
+            aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+            onClick={() => onSort(sortKey)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSort(sortKey); } }}
+            className={cn(
+                'relative px-3 py-2 text-xs font-medium border-b border-border whitespace-nowrap cursor-pointer select-none',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                active ? 'text-primary' : 'text-foreground-muted',
+            )}
+        >
+            <span className="inline-flex items-center gap-1">
+                {children}
+                <svg aria-hidden="true" viewBox="0 0 12 16" className="h-4 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m3 6 3-3 3 3" className={active && dir === 'asc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                    <path d="m3 10 3 3 3-3" className={active && dir === 'desc' ? 'text-primary' : 'text-foreground-muted opacity-40'} />
+                </svg>
+            </span>
+            {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
+        </th>
+    );
+}
+
+function Row({
+    execution: e,
+    columnVisibility,
+    availableTags,
+    onTagsChanged,
+    onTagCreated,
+    onClick,
+    selected,
+    onSelectedChange,
+}: {
+    execution: Execution;
+    columnVisibility: Record<TraceColumnKey, boolean>;
+    availableTags: TraceUserTag[];
+    onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
+    onTagCreated: (tag: TraceUserTag) => void;
+    onClick: () => void;
+    selected: boolean;
+    onSelectedChange: () => void;
+}) {
+    const { t, locale } = useLocale();
+    const router = useRouter();
+    const { user } = useAuth();
+    const id = e.task_id || e.upload_id || '';
+    const status = getExecStatus(e);
+    const skillCount = getInvokedSkillNames(e).length;
+    const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
+    const isMultiAgent = agentCount > 1;
+    const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : status === 'interrupted' ? 'cancelled' : status === 'timed_out' ? 'warning' : 'success';
+    const statusLabel = status === 'running' ? t('tracePage.statusRunning')
+        : status === 'timed_out' ? t('tracePage.statusTimedOut')
+        : status === 'failed' ? t('tracePage.statusFailed')
+        : status === 'interrupted' ? (locale === 'zh' ? '已中断' : 'Interrupted')
+        : t('tracePage.statusSuccess');
+    const sourceKind = getExecutionSource(e);
+
+    return (
+        <tr
+            onClick={onClick}
+            onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); onClick(); } }}
+            tabIndex={0}
+            role="button"
+            aria-label={`${t('tracePage.columnTraceId')} ${id}`}
+            className={cn(
+                'border-b border-border hover:bg-background-secondary focus-visible:outline-none focus-visible:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer transition-colors',
+                selected && 'bg-primary-subtle',
+            )}
+        >
+            <Td>
+                <div onClick={ev => ev.stopPropagation()} onKeyDown={ev => ev.stopPropagation()}>
+                    <SelectionCheckbox
+                        checked={selected}
+                        onChange={onSelectedChange}
+                        ariaLabel={`${locale === 'zh' ? '选择' : 'Select'} Trace ${id}`}
+                    />
+                </div>
+            </Td>
+            {columnVisibility.traceId && (
+                <Td>
+                    <IdChip value={id} adaptive />
+                </Td>
+            )}
+            {columnVisibility.user && (
+                <Td>
+                    <TruncateText className="text-foreground-secondary text-sm">
+                        {e.user || '—'}
+                    </TruncateText>
+                </Td>
+            )}
+            {columnVisibility.task && (
+                <Td>
+                    <TruncateText className="text-foreground text-sm">
+                        {e.query || t('tracePage.noQuery')}
+                    </TruncateText>
+                </Td>
+            )}
+            {columnVisibility.agent && (
+                <Td>
+                    <TruncateText className="text-foreground text-sm">
+                        {getAgentDisplayName(e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-')}
+                    </TruncateText>
+                    {sourceKind && (
+                        <span className="mt-0.5 block text-[11px] text-foreground-muted">
+                            {getExecutionSourceLabel(sourceKind)}
+                        </span>
+                    )}
+                </Td>
+            )}
+            {columnVisibility.ip && (
+                <Td>
+                    <span className="text-xs text-foreground-secondary font-mono whitespace-nowrap" title={e.observedIp || undefined}>
+                        {e.observedIp || '—'}
+                    </span>
+                </Td>
+            )}
+            {columnVisibility.status && (
+                <Td>
+                    <StatusBadge status={statusKind} label={statusLabel} title={status === 'timed_out' ? t('tracePage.statusTimedOutHint') : undefined} />
+                </Td>
+            )}
+            {columnVisibility.anomaly && (
+                <Td>
+                    {(() => {
+                        const anomaly = String(e.anomalyStatus ?? e.anomaly_status ?? '');
+                        if (anomaly === 'abnormal') {
+                            return <StatusBadge status="error" label={locale === 'zh' ? '有异常' : 'Abnormal'} />;
+                        }
+                        if (anomaly === 'detecting') {
+                            return <StatusBadge status="running" label={locale === 'zh' ? '检测中' : 'Detecting'} />;
+                        }
+                        if (anomaly === 'normal') {
+                            return <StatusBadge status="success" label={locale === 'zh' ? '无异常' : 'No anomaly'} />;
+                        }
+                        return <span className="text-xs text-foreground-muted">—</span>;
+                    })()}
+                </Td>
+            )}
+            {columnVisibility.userTags && (
+                <Td>
+                    <TraceTagCell
+                        execution={e}
+                        availableTags={availableTags}
+                        onTagsChanged={onTagsChanged}
+                        onTagCreated={onTagCreated}
+                    />
+                </Td>
+            )}
+            {columnVisibility.systemTags && (
+                <Td>
+                    <div className="flex gap-1 flex-wrap">
+                        {(e as any).is_subagent ? (
+                            <span
+                                title={(e as any).subagent_name || (e as any).subagent_type || ''}
+                                className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30"
+                            >
+                                SUB
+                            </span>
+                        ) : isMultiAgent && (
+                            <Tag variant="agent" icon={Users}>Multi-Agent</Tag>
+                        )}
+                        {skillCount > 0 && (
+                            <Tag variant="skill" icon={Layers}>Skills</Tag>
+                        )}
+                        {e.framework && (
+                            <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(e.framework)}</Tag>
+                        )}
+                    </div>
+                </Td>
+            )}
+            {columnVisibility.tokens && (
+                <Td>
+                    <span className="text-xs text-foreground-secondary font-mono tabular-nums whitespace-nowrap">
+                        {e.tokens != null ? e.tokens.toLocaleString() : '-'}
+                    </span>
+                </Td>
+            )}
+            {columnVisibility.time && (
+                <Td>
+                    <RelativeTime value={e.timestamp} display="absolute" className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
+                </Td>
+            )}
+            {columnVisibility.actions && (
+                <Td align="right">
+                    <div className="inline-flex gap-1 group" onClick={ev => ev.stopPropagation()}>
+
+
+                        <Button variant="ghost" size="sm" onClick={onClick} className="h-7 px-2 text-xs">
+                            {t('tracePage.rowDetail')}
+                        </Button>
+                        <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
+                            <Link href={`${basePath}/fault?taskId=${id}`}>
+                                {t('tracePage.rowAnalysis')}
+                            </Link>
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            title={t('tracePage.rowEval')}
+                            onClick={() => { void drillTraceEvalUrl(user || '', id).then(url => router.push(url)); }}
+                        >
+                            <Wrench className="size-3" />
+                            {t('tracePage.rowEval')}
+                        </Button>
+                    </div>
+                </Td>
+            )}
+        </tr>
+    );
+}
+
+async function readApiError(response: Response): Promise<string> {
+    try {
+        const body = await response.json();
+        return String(body?.error || response.statusText || 'Request failed');
+    } catch {
+        return response.statusText || 'Request failed';
+    }
+}
+
+function tagKindLabel(kind: TraceUserTag['kind'], locale: string): string {
+    if (kind === 'version') return locale === 'zh' ? '版本' : 'Version';
+    return locale === 'zh' ? '业务' : 'Business';
+}
+
+function UserTagChip({
+    tag,
+    removable,
+    className,
+}: {
+    tag: TraceUserTag;
+    removable?: boolean;
+    className?: string;
+}) {
+    return (
+        <span
+            title={tag.name}
+            className={cn(
+                'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-foreground leading-none',
+                className,
+            )}
+            // 标签色只用于描边/淡底，文字保持前景色：用户可自选任意颜色，
+            // 直接拿它当文字色在深浅主题下都可能读不清。
+            style={{
+                borderColor: `color-mix(in srgb, ${tag.color} 40%, transparent)`,
+                backgroundColor: `color-mix(in srgb, ${tag.color} 12%, transparent)`,
+            }}
+        >
+            <span className="size-1.5 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden />
+            <span className="truncate">{tag.name}</span>
+            {removable && <XIcon className="size-3 shrink-0 text-foreground-muted" aria-hidden />}
+        </span>
+    );
+}
+
+function TraceTagCell({
+    execution,
+    availableTags,
+    onTagsChanged,
+    onTagCreated,
+    mode = 'cell',
+}: {
+    execution: Execution;
+    availableTags: TraceUserTag[];
+    onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
+    onTagCreated: (tag: TraceUserTag) => void;
+    mode?: 'cell' | 'button';
+}) {
+    const { user } = useAuth();
+    const { t, locale } = useLocale();
+    const executionId = getExecutionRowKey(execution);
+    const selectedTags = useMemo(
+        () => execution.userTags ?? [],
+        [execution.userTags],
+    );
+    const selectedIds = useMemo(
+        () => new Set(selectedTags.map(tag => tag.id)),
+        [selectedTags],
+    );
+    const [open, setOpen] = useState(false);
+    const [savingId, setSavingId] = useState<string | null>(null);
+    const [creating, setCreating] = useState(false);
+    const [newName, setNewName] = useState('');
+    const [newKind, setNewKind] = useState<TraceUserTag['kind']>('business');
+    const [newColor, setNewColor] = useState('#6366f1');
+    const tagAreaRef = useRef<HTMLSpanElement>(null);
+    const tagMeasureRef = useRef<HTMLSpanElement>(null);
+    const [visibleTagCount, setVisibleTagCount] = useState(selectedTags.length);
+
+    const applyTagsResponse = useCallback(async (response: Response) => {
+        if (!response.ok) throw new Error(await readApiError(response));
+        const body = await response.json();
+        const tags = Array.isArray(body?.tags) ? body.tags : [];
+        onTagsChanged(executionId, tags);
+        return tags as TraceUserTag[];
+    }, [executionId, onTagsChanged]);
+
+    const toggleTag = useCallback(async (tag: TraceUserTag) => {
+        if (!user || !executionId) return;
+        setSavingId(tag.id);
+        try {
+            const selected = selectedIds.has(tag.id);
+            const response = selected
+                ? await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/tags?user=${encodeURIComponent(user)}&tagId=${encodeURIComponent(tag.id)}`, { method: 'DELETE' })
+                : await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/tags`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user, tagIds: [tag.id] }),
+                });
+            await applyTagsResponse(response);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : t('tracePage.tagSaveFailed'));
+        } finally {
+            setSavingId(null);
+        }
+    }, [applyTagsResponse, executionId, selectedIds, t, user]);
+
+    const createAndAttachTag = useCallback(async () => {
+        if (!user || !executionId || !newName.trim()) return;
+        setCreating(true);
+        try {
+            const createResponse = await apiFetch('/api/tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user, name: newName.trim(), kind: newKind, color: newColor }),
+            });
+            if (!createResponse.ok) throw new Error(await readApiError(createResponse));
+            const tag = await createResponse.json() as TraceUserTag;
+            onTagCreated(tag);
+            const attachResponse = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user, tagIds: [tag.id] }),
+            });
+            await applyTagsResponse(attachResponse);
+            setNewName('');
+            setNewKind('business');
+            setNewColor('#6366f1');
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : t('tracePage.tagCreateFailed'));
+        } finally {
+            setCreating(false);
+        }
+    }, [applyTagsResponse, executionId, newColor, newKind, newName, onTagCreated, t, user]);
+
+    const versionTags = availableTags.filter(tag => tag.kind === 'version');
+    const businessTags = availableTags.filter(tag => tag.kind === 'business');
+
+    useEffect(() => {
+        if (mode !== 'cell' || selectedTags.length === 0) return;
+        const area = tagAreaRef.current;
+        const measurements = tagMeasureRef.current;
+        if (!area || !measurements) return;
+
+        const measure = () => {
+            const tagWidths = Array.from(
+                measurements.querySelectorAll<HTMLElement>('[data-trace-tag-measure]'),
+                element => element.getBoundingClientRect().width,
+            );
+            const overflowWidths = Array(selectedTags.length + 1).fill(0);
+            measurements
+                .querySelectorAll<HTMLElement>('[data-trace-tag-overflow]')
+                .forEach(element => {
+                    const count = Number(element.dataset.traceTagOverflow);
+                    if (Number.isInteger(count) && count > 0) {
+                        overflowWidths[count] = element.getBoundingClientRect().width;
+                    }
+                });
+            const nextCount = fitTraceTagCount({
+                availableWidth: area.clientWidth,
+                tagWidths,
+                overflowWidths,
+            });
+            setVisibleTagCount(previous => previous === nextCount ? previous : nextCount);
+        };
+
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(measure);
+        observer.observe(area);
+        return () => observer.disconnect();
+    }, [mode, selectedTags]);
+
+    const visibleTags = selectedTags.slice(0, visibleTagCount);
+    const overflowCount = selectedTags.length - visibleTags.length;
+    const allTagNames = selectedTags.map(tag => tag.name).join(locale === 'zh' ? '、' : ', ');
+
+    const trigger = mode === 'button' ? (
+        <button
+            type="button"
+            title={selectedTags.length > 0 ? allTagNames : t('tracePage.editTags')}
+            onClick={ev => ev.stopPropagation()}
+            className="group/tag inline-flex min-h-7 items-center gap-1.5 rounded-md border border-border-dark bg-card px-2 py-0.5 text-xs hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+            {selectedTags.length > 0 && (
+                <span className="flex flex-wrap items-center gap-1">
+                    {selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
+                </span>
+            )}
+            <span className="inline-flex items-center gap-1 text-foreground-muted group-hover/tag:text-primary">
+                <Plus className="size-3.5" aria-hidden />
+                {selectedTags.length === 0 && t('tracePage.addTag')}
+            </span>
+        </button>
+    ) : (
+        <button
+            type="button"
+            className="group/tag relative flex min-h-7 w-full min-w-0 items-center gap-1 overflow-hidden rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title={selectedTags.length > 0 ? allTagNames : t('tracePage.editTags')}
+            onClick={ev => ev.stopPropagation()}
+        >
+            {selectedTags.length === 0 ? (
+                // 空态给一个虚线占位，而不是让一个孤立的 + 图标浮在列宽最右侧
+                <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-border-dark px-2 py-0.5 text-xs text-foreground-muted group-hover/tag:border-primary group-hover/tag:text-primary">
+                    <Plus className="size-3" aria-hidden />
+                    {t('tracePage.addTag')}
+                </span>
+            ) : (
+                <>
+                    <span ref={tagAreaRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                        {visibleTags.map(tag => (
+                            <UserTagChip key={tag.id} tag={tag} className="min-w-12 shrink" />
+                        ))}
+                        {overflowCount > 0 && (
+                            <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-xs tabular-nums text-foreground-muted">
+                                +{overflowCount}
+                            </span>
+                        )}
+                    </span>
+                    <span className="ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-full text-foreground-muted transition-colors group-hover/tag:bg-primary-subtle group-hover/tag:text-primary">
+                        <Plus className="size-3.5" aria-hidden />
+                    </span>
+                    <span
+                        ref={tagMeasureRef}
+                        className="pointer-events-none absolute invisible left-0 top-0 flex items-center gap-1 whitespace-nowrap"
+                        aria-hidden
+                    >
+                        {selectedTags.map(tag => (
+                            <span key={tag.id} data-trace-tag-measure>
+                                <UserTagChip tag={tag} />
+                            </span>
+                        ))}
+                        {selectedTags.map((_, index) => {
+                            const hiddenCount = index + 1;
+                            return (
+                                <span
+                                    key={hiddenCount}
+                                    data-trace-tag-overflow={hiddenCount}
+                                    className="rounded-full border border-border px-1.5 py-0.5 text-xs tabular-nums text-foreground-muted"
+                                >
+                                    +{hiddenCount}
+                                </span>
+                            );
+                        })}
+                    </span>
+                </>
+            )}
+        </button>
+    );
+
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+            <PopoverContent
+                align="start"
+                className="w-[30rem] max-w-[calc(100vw-2rem)] p-3"
+                onClick={ev => ev.stopPropagation()}
+            >
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-foreground">{t('tracePage.editTags')}</span>
+                        <div className="flex items-center gap-1">
+                            <span className="text-xs text-foreground-muted tabular-nums">{selectedTags.length}</span>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-7"
+                                aria-label={locale === 'zh' ? '关闭' : 'Close'}
+                                onClick={() => setOpen(false)}
+                            >
+                                <XIcon className="size-3.5" aria-hidden />
+                            </Button>
+                        </div>
+                    </div>
+                    <TagPickerGroup
+                        title={tagKindLabel('version', locale)}
+                        tags={versionTags}
+                        selectedIds={selectedIds}
+                        savingId={savingId}
+                        onToggle={toggleTag}
+                    />
+                    <TagPickerGroup
+                        title={tagKindLabel('business', locale)}
+                        tags={businessTags}
+                        selectedIds={selectedIds}
+                        savingId={savingId}
+                        onToggle={toggleTag}
+                    />
+                    <div className="border-t border-border pt-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={newKind}
+                                onChange={ev => setNewKind(ev.target.value as TraceUserTag['kind'])}
+                                className="h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+                            >
+                                <option value="business">{tagKindLabel('business', locale)}</option>
+                                <option value="version">{tagKindLabel('version', locale)}</option>
+                            </select>
+                            <input
+                                type="color"
+                                value={newColor}
+                                onChange={ev => setNewColor(ev.target.value)}
+                                className="size-8 rounded border border-input bg-background p-0.5"
+                                aria-label={t('tracePage.tagColor')}
+                            />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Input
+                                value={newName}
+                                onChange={ev => setNewName(ev.target.value)}
+                                onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); void createAndAttachTag(); } }}
+                                placeholder={t('tracePage.newTagPlaceholder')}
+                                className="h-8 text-sm"
+                            />
+                            <Button
+                                type="button"
+                                size="sm"
+                                className="h-8 px-2"
+                                disabled={creating || !newName.trim()}
+                                onClick={() => void createAndAttachTag()}
+                            >
+                                <Plus className="size-3.5" aria-hidden />
+                                {t('tracePage.createTag')}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+function UserTagFilter({
+    tags,
+    selectedIds,
+    onChange,
+}: {
+    tags: TraceUserTag[];
+    selectedIds: string[];
+    onChange: (tagIds: string[]) => void;
+}) {
+    const { t, locale } = useLocale();
+    const [search, setSearch] = useState('');
+    const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+    const selectedTags = useMemo(
+        () => selectedIds.map(id => tags.find(tag => tag.id === id)).filter((tag): tag is TraceUserTag => Boolean(tag)),
+        [selectedIds, tags],
+    );
+    const normalizedSearch = search.trim().toLocaleLowerCase(locale);
+    const visibleTags = useMemo(() => (
+        normalizedSearch
+            ? tags.filter(tag => tag.name.toLocaleLowerCase(locale).includes(normalizedSearch))
+            : tags
+    ), [locale, normalizedSearch, tags]);
+    const versionClusters = useMemo(
+        () => clusterTraceTagsByPrefix(visibleTags.filter(tag => tag.kind === 'version'), locale),
+        [locale, visibleTags],
+    );
+    const businessClusters = useMemo(
+        () => clusterTraceTagsByPrefix(visibleTags.filter(tag => tag.kind === 'business'), locale),
+        [locale, visibleTags],
+    );
+
+    const summary = selectedIds.length === 0
+        ? (locale === 'zh' ? '全部用户标签' : 'All user tags')
+        : selectedTags.length > 0
+            ? `${selectedTags[0].name}${selectedIds.length > 1 ? ` +${selectedIds.length - 1}` : ''}`
+            : (locale === 'zh' ? `已选 ${selectedIds.length} 个` : `${selectedIds.length} selected`);
+
+    const toggleTag = (tagId: string) => {
+        if (selectedIdSet.has(tagId)) {
+            onChange(selectedIds.filter(id => id !== tagId));
+            return;
+        }
+        if (selectedIds.length < MAX_TRACE_TAG_FILTERS) onChange([...selectedIds, tagId]);
+    };
+
+    const renderClusters = (clusters: ReturnType<typeof clusterTraceTagsByPrefix<TraceUserTag>>) => {
+        const ungroupedLabel = locale === 'zh' ? '未分组' : 'Ungrouped';
+        return clusters.map(cluster => (
+            <div key={cluster.key} className="flex items-start gap-3 px-2 py-1.5">
+                <div
+                    className="w-16 shrink-0 truncate pt-1.5 text-xs font-medium text-foreground-muted"
+                    title={cluster.prefix || ungroupedLabel}
+                >
+                    {cluster.prefix || ungroupedLabel}
+                </div>
+                <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                    {cluster.tags.map(tag => {
+                        const selected = selectedIdSet.has(tag.id);
+                        return (
+                            <button
+                                key={tag.id}
+                                type="button"
+                                aria-pressed={selected}
+                                disabled={!selected && selectedIds.length >= MAX_TRACE_TAG_FILTERS}
+                                onClick={() => toggleTag(tag.id)}
+                                className={cn(
+                                    'inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground transition-colors',
+                                    'hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
+                                    selected && 'border-primary-border bg-primary-subtle text-primary',
+                                )}
+                                title={tag.name}
+                            >
+                                {selected ? (
+                                    <Check className="size-3.5 shrink-0" aria-hidden />
+                                ) : (
+                                    <span
+                                        className="size-1.5 shrink-0 rounded-[2px]"
+                                        style={{ backgroundColor: tag.color }}
+                                        aria-hidden
+                                    />
+                                )}
+                                <span className="max-w-44 truncate">{tag.name}</span>
+                                <span className="shrink-0 tabular-nums text-foreground-muted">{tag.usageCount || 0}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        ));
+    };
+
+    return (
+        <DropdownMenu onOpenChange={open => { if (!open) setSearch(''); }}>
+            <DropdownMenuTrigger
+                aria-label={t('tracePage.filterUserTag')}
+                className={cn(
+                    'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    selectedIds.length > 0
+                        ? 'border-primary-border bg-primary-subtle text-primary'
+                        : 'border-border bg-card text-foreground hover:bg-background-secondary',
+                )}
+            >
+                <span className={cn('font-medium', selectedIds.length > 0 ? 'text-primary' : 'text-foreground-muted')}>
+                    {t('tracePage.filterUserTag')}
+                </span>
+                <span className="max-w-[14rem] truncate">{summary}</span>
+                <ChevronDown className="size-3 shrink-0 text-foreground-muted" aria-hidden />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+                align="start"
+                sideOffset={4}
+                className="w-[32rem] max-w-[calc(100vw-2rem)] p-0"
+            >
+                <div className="border-b border-border p-2">
+                    <div className="mb-2 flex items-center justify-between gap-2 px-1 text-xs text-foreground-muted">
+                        <span>
+                            {locale === 'zh'
+                                ? `同时包含全部所选标签（AND，最多 ${MAX_TRACE_TAG_FILTERS} 个）`
+                                : `Contains all selected tags (AND, up to ${MAX_TRACE_TAG_FILTERS})`}
+                        </span>
+                        {selectedIds.length > 0 && (
+                            <button
+                                type="button"
+                                className="shrink-0 text-primary hover:underline"
+                                onClick={() => onChange([])}
+                            >
+                                {locale === 'zh' ? '清空' : 'Clear'}
+                            </button>
+                        )}
+                    </div>
+                    <Input
+                        value={search}
+                        onChange={event => setSearch(event.target.value)}
+                        onKeyDown={event => event.stopPropagation()}
+                        placeholder={locale === 'zh' ? '搜索标签名称或前缀…' : 'Search tag name or prefix…'}
+                        className="h-8 text-xs"
+                    />
+                </div>
+                <div className="max-h-80 overflow-y-auto p-1">
+                    <DropdownMenuLabel className="px-2 py-1.5 text-xs font-semibold text-foreground">
+                        {locale === 'zh' ? '版本标签' : 'Version tags'}
+                    </DropdownMenuLabel>
+                    {versionClusters.length > 0
+                        ? renderClusters(versionClusters)
+                        : <div className="px-2 py-2 text-xs text-foreground-muted">{locale === 'zh' ? '暂无匹配的版本标签' : 'No matching version tags'}</div>}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="px-2 py-1.5 text-xs font-semibold text-foreground">
+                        {locale === 'zh' ? '业务标签' : 'Business tags'}
+                    </DropdownMenuLabel>
+                    {businessClusters.length > 0
+                        ? renderClusters(businessClusters)
+                        : <div className="px-2 py-2 text-xs text-foreground-muted">{locale === 'zh' ? '暂无匹配的业务标签' : 'No matching business tags'}</div>}
+                </div>
+            </DropdownMenuContent>
+        </DropdownMenu>
+    );
+}
+
+function TagPickerGroup({
+    title,
+    tags,
+    selectedIds,
+    savingId,
+    onToggle,
+}: {
+    title: string;
+    tags: TraceUserTag[];
+    selectedIds: Set<string>;
+    savingId: string | null;
+    onToggle: (tag: TraceUserTag) => void;
+}) {
+    const { t, locale } = useLocale();
+    const clusters = clusterTraceTagsByPrefix(tags, locale);
+    const ungroupedLabel = locale === 'zh' ? '未分组' : 'Ungrouped';
+    return (
+        <div className="space-y-1.5">
+            <div className="text-xs font-medium text-foreground-muted">{title}</div>
+            {tags.length === 0 ? (
+                <p className="text-xs text-foreground-muted">{t('tracePage.noTagsAvailable')}</p>
+            ) : (
+                <div className="max-h-48 space-y-2 overflow-auto pr-1">
+                    {clusters.map(cluster => (
+                        <div
+                            key={cluster.key}
+                            className="flex items-start gap-2"
+                        >
+                            <div
+                                className="w-fit max-w-[40%] shrink-0 truncate rounded-sm bg-background-secondary px-2 py-1.5 text-xs font-medium text-foreground-secondary"
+                                title={cluster.prefix || ungroupedLabel}
+                            >
+                                {cluster.prefix || ungroupedLabel}
+                            </div>
+                            <div className="flex min-w-0 flex-wrap gap-1.5">
+                                {cluster.tags.map(tag => {
+                                    const selected = selectedIds.has(tag.id);
+                                    return (
+                                        <button
+                                            key={tag.id}
+                                            type="button"
+                                            aria-pressed={selected}
+                                            disabled={savingId === tag.id}
+                                            onClick={() => onToggle(tag)}
+                                            className={cn(
+                                                'inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-full border border-border px-2 py-1 text-left text-xs text-foreground transition-colors hover:bg-background-secondary disabled:opacity-60',
+                                                selected && 'border-primary-border bg-primary-subtle text-primary',
+                                            )}
+                                            title={tag.name}
+                                        >
+                                            <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} aria-hidden />
+                                            <span className="max-w-44 truncate">{tag.name}</span>
+                                            {selected && <Check className="size-3.5 shrink-0" aria-hidden />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+type TagVariant = 'agent' | 'skill' | 'framework';
+
+const TAG_VARIANT_CLASSES: Record<TagVariant, string> = {
+    agent:     'bg-primary-subtle text-primary border-primary-border',
+    skill:     'bg-primary-subtle text-primary border-primary-border',
+    framework: 'bg-background-secondary text-foreground-secondary border-border',
+};
+
+function Tag({
+    children,
+    variant = 'framework',
+    icon: Icon,
+}: {
+    children: React.ReactNode;
+    variant?: TagVariant;
+    icon?: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+}) {
+    return (
+        <span className={cn(
+            'inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap leading-none',
+            TAG_VARIANT_CLASSES[variant],
+        )}>
+            {Icon && <Icon className="size-3 shrink-0" aria-hidden />}
+            {children}
+        </span>
+    );
+}
+
+function Td({ children, align, className }: { children: React.ReactNode; align?: 'left' | 'right' | 'center'; className?: string }) {
+    return (
+        <td className={cn(
+            'px-3 py-2 text-sm text-foreground',
+            align === 'right' && 'text-right',
+            align === 'center' && 'text-center',
+            className,
+        )}>
+            {children}
+        </td>
+    );
+}

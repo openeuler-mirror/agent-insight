@@ -1,0 +1,198 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { GET } from '@/app/api/ingest/setup/route';
+import { prismaRaw } from '@/lib/storage/prisma';
+
+const ALL_FRAMEWORKS = 'opencode,openclaw,claude,codeagent,hermes,jiuwen,qoder,trae,actrail,qwencode,deepseek-harness,qwenpaw';
+
+async function getScript(query: string, platform: 'unix' | 'windows'): Promise<string> {
+  const response = await GET(new Request(`http://localhost/api/ingest/setup?${query}`, {
+    headers: { 'x-platform': platform, host: 'localhost:3000' },
+  }));
+  assert.equal(response.status, 200);
+  return response.text();
+}
+
+test('Bash 恢复 URL、CLI 和环境变量非交互入口，并保留全部框架', async () => {
+  const script = await getScript(`yes=1&nokey=1&frameworks=${ALL_FRAMEWORKS}`, 'unix');
+
+  assert.match(script, /^NONINTERACTIVE=true$/m);
+  assert.ok(script.includes(`NONINTERACTIVE_FRAMEWORKS="${ALL_FRAMEWORKS}"`));
+  assert.match(script, /^FORCE_NO_KEY=true$/m);
+  assert.match(script, /-y\|--yes\|--non-interactive\|--noninteractive\) NONINTERACTIVE=true/);
+  assert.match(script, /--no-key\|--nokey\) FORCE_NO_KEY=true/);
+  assert.match(script, /--frameworks=\*\) NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS=/);
+  assert.match(script, /AGENT_INSIGHT_NONINTERACTIVE/);
+  assert.match(script, /AGENT_INSIGHT_FRAMEWORKS/);
+  assert.match(script, /AGENT_INSIGHT_NO_KEY/);
+  assert.match(script, /if \[ "\$FORCE_NO_KEY" = "true" \]; then/);
+  assert.match(script, /if \[ "\$NONINTERACTIVE" = "true" \]; then/);
+
+  assert.match(script, /QwenPaw/);
+  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE', 'DEEPSEEK_HARNESS', 'QWENPAW']) {
+    assert.match(script, new RegExp(`INSTALL_${flag}=true`));
+  }
+});
+
+test('PowerShell 恢复 URL 与环境变量非交互入口并可强制清空 key', async () => {
+  const script = await getScript(`noninteractive=true&no-key=true&frameworks=${ALL_FRAMEWORKS}`, 'windows');
+
+  assert.match(script, /^\$NONINTERACTIVE = \$true$/m);
+  assert.ok(script.includes(`$NONINTERACTIVE_FRAMEWORKS = "${ALL_FRAMEWORKS}"`));
+  assert.match(script, /^\$FORCE_NO_KEY = \$true$/m);
+  assert.match(script, /\$env:AGENT_INSIGHT_NONINTERACTIVE/);
+  assert.match(script, /\$env:AGENT_INSIGHT_FRAMEWORKS/);
+  assert.match(script, /\$env:AGENT_INSIGHT_NO_KEY/);
+  assert.match(script, /if \(\$FORCE_NO_KEY\) \{/);
+  assert.match(script, /if \(\$NONINTERACTIVE\) \{/);
+
+  assert.match(script, /QwenPaw/);
+  for (const flag of ['OPENCODE', 'OPENCLAW', 'CLAUDE', 'CODEAGENT', 'HERMES', 'JIUWEN', 'QODER', 'TRAE', 'ACTRAIL', 'QWENCODE', 'DEEPSEEK_HARNESS', 'QWENPAW']) {
+    assert.match(script, new RegExp(`\\$INSTALL_${flag} = \\$true`));
+  }
+});
+
+test('false/no/0 不会误开启非交互或无 key 模式，framework 单数别名仍可用', async () => {
+  const script = await getScript('y=0&nokey=no&framework=claude', 'unix');
+  assert.match(script, /^NONINTERACTIVE=false$/m);
+  assert.match(script, /^FORCE_NO_KEY=false$/m);
+  assert.match(script, /^SELECTED_FRAMEWORKS="claude"$/m);
+});
+
+test('常驻客户端默认使用服务端 bundle，本地 checkout 只能显式启用', async () => {
+  const script = await getScript('yes=1&frameworks=opencode', 'unix');
+  const start = script.indexOf('install_agent_insight_client() {');
+  const end = script.indexOf('echo "🖥️  Registering resident client..."', start);
+  assert.ok(start >= 0 && end > start);
+  const clientBlock = script.slice(start, end);
+
+  assert.match(clientBlock, /if \[ "\$\{AGENT_INSIGHT_CLIENT_SOURCE:-server\}" = "local" \]; then/);
+  assert.match(clientBlock, /if \[ ! -f "\.\/scripts\/install-ras-client\.js" \]; then/);
+  assert.doesNotMatch(clientBlock, /if \[ -f "\.\/scripts\/install-ras-client\.js" \]; then/);
+  assert.ok(
+    clientBlock.indexOf('/api/ingest/setup/bundle?name=client') < clientBlock.indexOf('npm pack'),
+    '服务端 bundle 应先于 npm 兜底',
+  );
+  assert.match(clientBlock, /pkg_tmp_root="\$AGENT_INSIGHT_HOME\/client\/tmp"/);
+  assert.match(clientBlock, /mktemp -d "\$pkg_tmp_root\/install\.XXXXXX"/);
+  assert.doesNotMatch(clientBlock, /mktemp -d "\$\{TMPDIR:-\/tmp\}\/agent-insight-client/);
+  assert.match(clientBlock, /\{"type":"commonjs"\}.*> "\$pkg_tmp\/x\/scripts\/package\.json"/);
+  assert.match(clientBlock, /\{"type":"commonjs"\}.*> "\$pkg_tmp\/x\/package\/scripts\/package\.json"/);
+  assert.ok(
+    clientBlock.indexOf('> "$pkg_tmp/x/scripts/package.json"') <
+      clientBlock.indexOf('node "$pkg_tmp/x/scripts/install-ras-client.js"'),
+    '服务端 bundle 的安装器必须先建立 CommonJS 包边界',
+  );
+});
+
+test('客户端安装器的 CommonJS 边界覆盖上层 .agent-insight ESM 配置', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-commonjs-boundary-'));
+  try {
+    const scriptsDir = path.join(root, '.agent-insight', 'client', 'tmp', 'install.test', 'x', 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(root, '.agent-insight', 'package.json'), '{"type":"module"}\n');
+    fs.writeFileSync(path.join(scriptsDir, 'package.json'), '{"type":"commonjs"}\n');
+    fs.writeFileSync(
+      path.join(scriptsDir, 'install-ras-client.js'),
+      'const fs = require("node:fs"); process.stdout.write(typeof fs.readFileSync);\n',
+    );
+
+    const result = spawnSync(process.execPath, [path.join(scriptsDir, 'install-ras-client.js')], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'function');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('安装页为已选框架生成 yes=1，并单独保留 LlamaIndex Python 选择', () => {
+  const page = fs.readFileSync(path.resolve(__dirname, '../src/app/(main)/accessconfig/install/page.tsx'), 'utf8');
+  assert.match(page, /frameworks\.length \? `yes=1` : ''/);
+  assert.doesNotMatch(page, /goalPlusHosts=/);
+  assert.doesNotMatch(page, /Goal Plus Pi Trace|goal-plus-collector attach/);
+  assert.doesNotMatch(page, /\.\/install\.sh --(?:pi|codex)/);
+  assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
+  assert.match(page, /apiKey, authReady/);
+  assert.match(page, /if \(!authReady \|\| !apiKey\)/);
+  assert.doesNotMatch(page, /localStorage/);
+});
+
+test('历史浏览器登录态会刷新服务端 API Key，安装脚本拒绝无效 Key', async () => {
+  const auth = fs.readFileSync(path.resolve(__dirname, '../src/lib/auth/auth-context.tsx'), 'utf8');
+  assert.match(auth, /apiFetch\('\/api\/auth\/apikey'/);
+  assert.match(auth, /localStorage\.setItem\('api_key', nextApiKey\)/);
+  assert.match(auth, /authReady/);
+
+  const username = `setup-auth-${process.pid}-${Date.now()}`;
+  const apiKey = `wi_setup_auth_${process.pid}_${Date.now()}`;
+  try {
+    await prismaRaw.user.create({ data: { username, apiKey } });
+
+    const accepted = await GET(new Request(
+      `http://localhost/api/ingest/setup?yes=1&frameworks=opencode&key=${encodeURIComponent(apiKey)}`,
+      { headers: { host: 'localhost:3000', 'x-platform': 'unix' } },
+    ));
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.headers.get('cache-control'), 'no-store');
+
+    const rejected = await GET(new Request(
+      'http://localhost/api/ingest/setup?yes=1&frameworks=opencode&key=wi_stale_key',
+      { headers: { host: 'localhost:3000', 'x-platform': 'unix' } },
+    ));
+    assert.equal(rejected.status, 401);
+    assert.match(await rejected.text(), /Invalid API key/);
+  } finally {
+    await prismaRaw.user.deleteMany({ where: { username } });
+  }
+});
+
+test('OpenClaw 纯配置输出与已安装 wrapper 使用相同的 JSON logs/traces 端点', async () => {
+  for (const platform of ['unix', 'windows'] as const) {
+    const script = await getScript('yes=1&frameworks=openclaw', platform);
+    const start = script.indexOf('OpenClaw OTel --');
+    const end = script.indexOf('OTel 纯配置方式 与 Watcher 模式互斥', start);
+    assert.ok(start >= 0 && end > start, `${platform} should print the OpenClaw config block`);
+    const configBlock = script.slice(start, end);
+
+    assert.match(configBlock, /OTEL_EXPORTER_OTLP_LOGS_PROTOCOL[^\n]*http\/json/);
+    assert.match(configBlock, /OTEL_EXPORTER_OTLP_LOGS_ENDPOINT[^\n]*\/api\/ingest\/otel\/v1\/logs/);
+    assert.match(configBlock, /OTEL_EXPORTER_OTLP_TRACES_PROTOCOL[^\n]*http\/json/);
+    assert.match(configBlock, /OTEL_EXPORTER_OTLP_TRACES_ENDPOINT[^\n]*\/api\/ingest\/otel\/v1\/traces/);
+    assert.doesNotMatch(configBlock, /http\/protobuf/);
+  }
+});
+
+test('Pi/xiaoO selections reach every client installation source and auto setup registers the same installer', async () => {
+  const { GET: autoSetup } = await import('@/app/api/ingest/setup/auto/route');
+  const normal = await getScript('yes=1&frameworks=pi-agent,xiaoo', 'unix');
+  const auto = await (await autoSetup(new Request('http://localhost/api/ingest/setup/auto?apiKey=fixture&host=http://localhost&frameworks=pi-agent,xiaoo', { headers: { 'x-platform': 'unix', host: 'localhost' } }))).text();
+  for (const script of [normal, auto]) {
+    assert.equal((script.match(/--frameworks "\$SELECTED_FRAMEWORKS"/g) || []).length, 3);
+    const parsed = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr);
+    assert.match(script, /install_agent_insight_client "\$(?:FINAL_HOST|AGENT_INSIGHT_HOST)"/);
+  }
+});

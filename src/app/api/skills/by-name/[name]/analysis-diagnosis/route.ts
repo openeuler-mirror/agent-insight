@@ -1,0 +1,117 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { getModelClientConfig } from '@/lib/server/model-client';
+
+import { NextResponse } from 'next/server';
+import { OpenAI } from 'openai';
+import { z } from 'zod';
+
+import { getJsonResponseFormat } from '@/lib/server/model-fetch';
+import {
+  buildDiagnosisPrompt,
+  buildFallbackDiagnosis,
+  parseDiagnosisResponse,
+  type SkillDiagnosisSnapshot,
+} from '@/lib/skill-analysis/diagnosis';
+import { getActiveConfig } from '@/lib/storage/server-config';
+
+export const dynamic = 'force-dynamic';
+
+const diagnosisSchema = z.object({ problem: z.string(), suggestion: z.string() });
+
+function isSnapshot(value: unknown): value is SkillDiagnosisSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const root = value as Record<string, unknown>;
+  return typeof root.skillName === 'string' && 'overall' in root && 'ab' in root && 'trace' in root && 'recall' in root && 'static' in root;
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ name: string }> },
+) {
+  try {
+    const { name } = await params;
+    const body = await request.json().catch(() => ({}));
+    const user = typeof body?.user === 'string' ? body.user.trim() : '';
+    const snapshot = body?.snapshot;
+
+    if (!user) {
+      return NextResponse.json({ error: 'user is required' }, { status: 400 });
+    }
+    if (!isSnapshot(snapshot)) {
+      return NextResponse.json({ error: 'snapshot is required' }, { status: 400 });
+    }
+
+    const skillName = decodeURIComponent(name);
+    const safeSnapshot: SkillDiagnosisSnapshot = {
+      ...snapshot,
+      skillName,
+    };
+
+    const fallback = buildFallbackDiagnosis(safeSnapshot);
+    const activeConfig = await getActiveConfig(user);
+    if (!activeConfig) {
+      return NextResponse.json({
+        diagnosis: {
+          ...fallback,
+          errorMessage: '当前未配置可用的评测模型，已回退为基础诊断。',
+          modelLabel: null,
+        },
+      });
+    }
+
+    try {
+      const client = new OpenAI({
+        ...getModelClientConfig({ ...activeConfig, baseUrl: activeConfig.baseUrl || 'https://api.deepseek.com' }),
+      });
+      const model = activeConfig.model || 'deepseek-chat';
+      const prompt = buildDiagnosisPrompt(safeSnapshot);
+      const completion = await client.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        response_format: getJsonResponseFormat(client.baseURL, 'skill_diagnosis', diagnosisSchema),
+      });
+      const content = completion.choices?.[0]?.message?.content || '';
+      const parsed = parseDiagnosisResponse(content);
+      if (!parsed) {
+        throw new Error('诊断响应解析失败');
+      }
+      return NextResponse.json({
+        diagnosis: {
+          ...parsed,
+          mode: 'llm',
+          modelLabel: activeConfig.name || activeConfig.model || model,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'LLM diagnosis failed';
+      return NextResponse.json({
+        diagnosis: {
+          ...fallback,
+          errorMessage: message,
+          modelLabel: activeConfig.name || activeConfig.model || null,
+        },
+      });
+    }
+  } catch (error) {
+    console.error('analysis-diagnosis POST error:', error);
+    return NextResponse.json({ error: 'failed to generate diagnosis' }, { status: 500 });
+  }
+}

@@ -1,4 +1,25 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import chokidar from 'chokidar';
+function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
+}
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -40,7 +61,7 @@ class OpenClawParser {
       if (!line.trim()) continue;
       try {
         entries.push(JSON.parse(line));
-      } catch (e) {
+      } catch {
         // syntax error for the JSON line, ignore safely
       }
     }
@@ -224,11 +245,11 @@ class OpenClawParser {
 function loadSkillInsightConfig(): { apiKey: string; host: string } {
     const config: { apiKey: string; host: string } = { apiKey: '', host: '' };
     try {
-        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
-        if (fs.existsSync(envPath)) {
+        for (const envPath of [path.join(getAgentInsightHome(), '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
+            if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf-8');
-            const apiKeyMatch = content.match(/SKILL_INSIGHT_API_KEY=(.*)/);
-            const hostMatch = content.match(/SKILL_INSIGHT_HOST=(.*)/);
+            const apiKeyMatch = content.match(/AGENT_INSIGHT_API_KEY=(.*)/);
+            const hostMatch = content.match(/AGENT_INSIGHT_HOST=(.*)/);
             if (apiKeyMatch && apiKeyMatch[1]) {
                 config.apiKey = apiKeyMatch[1].trim();
             }
@@ -237,7 +258,7 @@ function loadSkillInsightConfig(): { apiKey: string; host: string } {
             }
         }
     } catch (e) {
-        console.error('[OpenClawWatcher] Error reading skill-insight config:', e);
+        console.error('[OpenClawWatcher] Error reading agent-insight config:', e);
     }
     return config;
 }
@@ -265,7 +286,7 @@ async function uploadExecutionRecord(record: any): Promise<void> {
     const options: http.RequestOptions = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: `${basePath}/api/upload`,
+        path: `${basePath}/api/ingest/upload`,
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

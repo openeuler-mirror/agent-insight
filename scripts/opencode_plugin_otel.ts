@@ -1,0 +1,1346 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import fs from "node:fs"
+import path from "node:path"
+import os from "node:os"
+import crypto from "node:crypto"
+import { spawn } from "node:child_process"
+import { pathToFileURL } from "node:url"
+import { once } from "node:events"
+import { finished } from "node:stream/promises"
+
+function getPreferredInsightDir() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => os.homedir()))
+}
+
+function getLegacyInsightDir() {
+  return path.join(os.homedir(), ".skill-insight")
+}
+
+function getExistingInsightDir() {
+  const preferred = getPreferredInsightDir()
+  if (process.env.AGENT_INSIGHT_HOME) return preferred
+  const legacy = getLegacyInsightDir()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
+
+function getInsightEnvCandidates() {
+  return [
+    path.join(getPreferredInsightDir(), ".env"),
+    path.join(getLegacyInsightDir(), ".env"),
+  ]
+}
+
+function sha256Hex(text: any): string {
+  try {
+    return crypto.createHash("sha256").update(String(text)).digest("hex")
+  } catch {
+    return ""
+  }
+}
+
+const SECRET_KEYS = new Set(
+  [
+    "apiKey",
+    "api_key",
+    "apikey",
+    "authorization",
+    "Authorization",
+    "token",
+    "accessToken",
+    "refreshToken",
+    "secret",
+    "clientSecret",
+    "privateKey",
+    "password",
+  ].map((s) => String(s).toLowerCase()),
+)
+
+function isSecretKey(key: any): boolean {
+  const k = String(key || "").toLowerCase()
+  if (SECRET_KEYS.has(k)) return true
+  if (k.endsWith("_key") || k.endsWith("_token") || k.endsWith("_secret")) return true
+  return false
+}
+
+function redactJson(value: any): any {
+  if (value === null) return value
+  const t = typeof value
+  if (t === "string" || t === "number" || t === "boolean") return value
+  if (Array.isArray(value)) return value.map(redactJson)
+  if (t !== "object") return null
+  const out: any = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (isSecretKey(k)) out[k] = "***"
+    else out[k] = redactJson(v)
+  }
+  return out
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function safeMkdirp(dir: string): void {
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch {}
+}
+
+function appendLogLine(file: string, message: string): void {
+  try {
+    safeMkdirp(path.dirname(file))
+    fs.appendFileSync(file, `[${nowIso()}] ${message}\n`)
+  } catch {}
+}
+
+function parseDotEnvText(text: any): Record<string, string> {
+  const out: any = {}
+  const lines = String(text || "").split(/\r?\n/)
+  for (const line of lines) {
+    const s = line.trim()
+    if (!s || s.startsWith("#")) continue
+    const idx = s.indexOf("=")
+    if (idx <= 0) continue
+    const k = s.slice(0, idx).trim()
+    let v = s.slice(idx + 1).trim()
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+    out[k] = v
+  }
+  return out
+}
+
+function loadSkillInsightEnv(): Record<string, string | undefined> {
+  const env = { ...process.env }
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const txt = fs.readFileSync(file, "utf8")
+      const parsed = parseDotEnvText(txt)
+      for (const [k, v] of Object.entries(parsed)) {
+        if (env[k] === undefined) env[k] = v
+      }
+    }
+  } catch {}
+  return env
+}
+
+/**
+ * .env 里写了、却被进程环境里的同名变量压住的键（值不同才算）。
+ *
+ * 上面那句 `if (env[k] === undefined)` 是「环境变量优先」——保留它是为了让一次性覆盖
+ * （`AGENT_INSIGHT_HOST=... opencode`）继续可用。代价是重跑 setup 把 .env 指向新平台后，
+ * 旧终端里残留的 export 会让上报**继续发往老地址**，而且此前全程无任何提示：日志里的
+ * host 与 .env 明明不一致也没人吭声，只能靠翻日志倒推。这里把它显式喊出来。
+ */
+export function findShadowedEnvKeys(): Array<{ key: string; fromFile: string; actual: string }> {
+  const out: Array<{ key: string; fromFile: string; actual: string }> = []
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const parsed = parseDotEnvText(fs.readFileSync(file, "utf8"))
+      for (const [k, v] of Object.entries(parsed)) {
+        const actual = process.env[k]
+        if (actual === undefined || actual === v) continue
+        if (out.some((x) => x.key === k)) continue
+        out.push({ key: k, fromFile: v, actual })
+      }
+    }
+  } catch {}
+  return out
+}
+
+/** 拼成一行日志。含 KEY/TOKEN/SECRET 的键只报键名，不打值。 */
+export function describeShadowedEnv(entries: Array<{ key: string; fromFile: string; actual: string }>): string {
+  return entries
+    .map(({ key, fromFile, actual }) =>
+      /KEY|TOKEN|SECRET|PASSWORD/i.test(key)
+        ? `${key}(值不同,已隐藏)`
+        : `${key}(.env=${fromFile} 实际=${actual})`,
+    )
+    .join(" ")
+}
+
+function asBool(v: any): boolean {
+  const s = String(v ?? "").toLowerCase().trim()
+  return s === "1" || s === "true" || s === "yes" || s === "on"
+}
+
+function asInt(v: any, fallback: number): number {
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.trunc(n) : fallback
+}
+
+function truncateString(s: any, max: number): string {
+  if (typeof s !== "string") return s
+  if (!Number.isFinite(max) || max <= 0) return ""
+  if (s.length <= max) return s
+  return s.slice(0, max)
+}
+
+function truncateJson(value: any, maxString: number): any {
+  if (value === null) return value
+  const t = typeof value
+  if (t === "string") return truncateString(value, maxString)
+  if (t === "number" || t === "boolean") return value
+  if (Array.isArray(value)) return value.map((x) => truncateJson(x, maxString))
+  const out: any = {}
+  for (const [k, v] of Object.entries(value)) out[k] = truncateJson(v, maxString)
+  return out
+}
+
+function buildOutFile(spoolDir: string): string {
+  const d = new Date()
+  const yyyy = String(d.getFullYear())
+  const mm = String(d.getMonth() + 1).padStart(2, "0")
+  const dd = String(d.getDate()).padStart(2, "0")
+  const dayDir = path.join(spoolDir, `${yyyy}-${mm}-${dd}`)
+  safeMkdirp(dayDir)
+  const runId = `${nowIso().replace(/[:.]/g, "-")}-${process.pid}`
+  return path.join(dayDir, `opencode-otel-${runId}.jsonl`)
+}
+
+export function createWriter(outFile: string, synchronous = false): { enqueue: (obj: any) => void; close: () => Promise<void>; outFile: string; flush: () => Promise<void> } {
+  safeMkdirp(path.dirname(outFile))
+  if (synchronous) {
+    let closed = false
+    return {
+      enqueue: (obj: any) => {
+        if (closed) return
+        try { fs.appendFileSync(outFile, JSON.stringify(obj) + "\n") } catch {}
+      },
+      flush: async () => {},
+      close: async () => { closed = true },
+      outFile,
+    }
+  }
+  const stream = fs.createWriteStream(outFile, { flags: "a" })
+  const queue: any[] = []
+  let flushing: Promise<void> | undefined
+  let closing: Promise<void> | undefined
+  let stopped = false
+  let pending: NodeJS.Timeout | null = null
+  const completion = finished(stream, { cleanup: true }).catch(() => {
+    stopped = true
+    queue.length = 0
+  })
+
+  const flush = (): Promise<void> => {
+    if (flushing) return flushing
+    if (stopped) return Promise.resolve()
+    flushing = (async () => {
+      try {
+        while (queue.length > 0 && !stopped) {
+          if (!stream.write(queue.shift())) await once(stream, "drain")
+        }
+        // 等待底层写回调，避免 uploader 或立即退出读到尚未落盘的流尾部。
+        await new Promise<void>((resolve, reject) => {
+          stream.write("", error => error ? reject(error) : resolve())
+        })
+      } catch {}
+    })().finally(() => { flushing = undefined })
+    return flushing
+  }
+
+  const enqueue = (obj: any): void => {
+    if (stopped || closing) return
+    try { queue.push(JSON.stringify(obj) + "\n") } catch { return }
+    if (!pending) {
+      pending = setTimeout(() => { pending = null; void flush() }, 0)
+      pending.unref?.()
+    }
+  }
+
+  const close = (): Promise<void> => {
+    if (closing) return closing
+    closing = (async () => {
+      if (pending) clearTimeout(pending)
+      do {
+        await flush()
+      } while (queue.length > 0 && !stopped)
+      stopped = true
+      stream.end()
+      await completion
+    })()
+    return closing
+  }
+
+  return { enqueue, flush, close, outFile }
+}
+
+function extractTextFromParts(parts: any): string {
+  try {
+    if (!Array.isArray(parts)) return ""
+    const buf = []
+    for (const p of parts) {
+      if (!p) continue
+      if (typeof p === "string") buf.push(p)
+      else if (typeof p.text === "string") buf.push(p.text)
+      else if (typeof p.content === "string") buf.push(p.content)
+      else if (typeof p.value === "string") buf.push(p.value)
+    }
+    return buf.join("")
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * 心跳决策（纯函数，便于单测）。
+ *
+ * 返回 "start-clock" 时**只能**写心跳自己的时钟，绝不能写 kickUploader 的节流表
+ * (lastUploadKickBySession)。曾经为图省事复用了节流表当计时起点，等于伪造一次
+ * "刚上报过"，导致紧随其后的 session.idle 上报落进冷却期被吞掉 —— 15 秒内做完的
+ * 短任务因此一次都不上报。test/opencode-plugin-heartbeat.test.ts 有回归护栏。
+ */
+export function computeHeartbeatDecision(args: {
+  now: number
+  heartbeatMs: number
+  /** 真实发生过的上一次 kick 时间（idle 或心跳触发），没有则 0/undefined */
+  lastKickAt?: number
+  /** 心跳自己的计时起点 */
+  heartbeatClockAt?: number
+}): "none" | "start-clock" | "kick" {
+  if (!(args.heartbeatMs > 0)) return "none"
+  const since = args.lastKickAt || args.heartbeatClockAt || 0
+  if (since <= 0) return "start-clock"
+  return args.now - since >= args.heartbeatMs ? "kick" : "none"
+}
+
+export function getSessionEventUploadMode(
+  type: string,
+  status: string,
+): "force" | "none" {
+  return type === "session.idle" || (["session.updated", "session.status"].includes(type) && status === "idle")
+    ? "force"
+    : "none"
+}
+
+export type UploaderRuntime = {
+  cmd: string
+  argsPrefix: string[]
+}
+
+const COMMON_UPLOADER_RUNTIMES = [
+  "/usr/local/bin/node",
+  "/usr/bin/node",
+  "/bin/node",
+  "/opt/homebrew/bin/node",
+  "/usr/local/bin/bun",
+  "/usr/bin/bun",
+  "/opt/homebrew/bin/bun",
+]
+
+function runtimeFromExecutable(executable: string, platform: NodeJS.Platform): UploaderRuntime | null {
+  const pathApi = platform === "win32" ? path.win32 : path.posix
+  const name = pathApi.basename(executable).toLowerCase().replace(/\.exe$/, "")
+  if (name === "node") return { cmd: executable, argsPrefix: [] }
+  if (name === "bun") return { cmd: executable, argsPrefix: ["run"] }
+  return null
+}
+
+export function resolveUploaderRuntime(options: {
+  platform?: NodeJS.Platform
+  pathEnv?: string
+  execPath?: string
+  commonPaths?: string[]
+  exists?: (candidate: string) => boolean
+} = {}): UploaderRuntime | null {
+  const platform = options.platform ?? process.platform
+  const pathApi = platform === "win32" ? path.win32 : path.posix
+  const delimiter = platform === "win32" ? ";" : ":"
+  const extensions = platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  const exists = options.exists ?? fs.existsSync
+  const pathEnv = options.pathEnv ?? process.env.PATH ?? ""
+
+  const findInPath = (name: string): string | null => {
+    for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+      for (const extension of extensions) {
+        const candidate = pathApi.join(dir, name + extension)
+        try {
+          if (exists(candidate)) return candidate
+        } catch {}
+      }
+    }
+    return null
+  }
+
+  const nodePath = findInPath("node")
+  if (nodePath) return { cmd: nodePath, argsPrefix: [] }
+
+  const bunPath = findInPath("bun")
+  if (bunPath) return { cmd: bunPath, argsPrefix: ["run"] }
+
+  for (const candidate of options.commonPaths ?? COMMON_UPLOADER_RUNTIMES) {
+    try {
+      if (!exists(candidate)) continue
+    } catch {
+      continue
+    }
+    const runtime = runtimeFromExecutable(candidate, platform)
+    if (runtime) return runtime
+  }
+
+  return runtimeFromExecutable(options.execPath ?? process.execPath ?? "", platform)
+}
+
+export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
+  command: string
+  argsPrefix: string
+} {
+  if (!runtime) return { command: "(unavailable)", argsPrefix: "(none)" }
+  return {
+    command: runtime.cmd,
+    argsPrefix: runtime.argsPrefix.join(" ") || "(none)",
+  }
+}
+
+const UPSTREAM_REQUEST_HEADER = "x-agent-insight-upstream-request-id"
+
+function boundedRequestId(value: unknown): string | undefined {
+  const id = typeof value === "string" ? value.trim() : ""
+  return id && id.length <= 512 && !/[\u0000-\u001f\u007f]/.test(id) ? id : undefined
+}
+
+/**
+ * The gateway relays the model service's own response header separately from
+ * its local call ID. Direct (non-gateway) requests have no local alias, so
+ * their `x-request-id` is the service header.
+ */
+function upstreamRequestIdFromHeaders(headers: any): string | undefined {
+  try {
+    const relayed = boundedRequestId(headers?.get?.(UPSTREAM_REQUEST_HEADER))
+    if (relayed) return relayed
+    if (headers?.get?.("x-agent-insight-call-id") != null) return undefined
+    return boundedRequestId(headers?.get?.("x-request-id"))
+  } catch { return undefined }
+}
+
+export function createInferenceCorrelation(context: any, record: (event: any) => void, transport: any = globalThis, options: any = {}) {
+  const emit = (sessionID: string, kind: string, payload: any) => {
+    try { record({ t: nowIso(), kind, sessionID, payload }) } catch {}
+  }
+  const blockedRequest = (url: string) => !options.allowsRequest || options.allowsRequest(url)
+  const observeFetch = () => {
+    const key = Symbol.for("agent-insight.opencode.inference-fetch.v1")
+    try {
+      if (transport[key]) { transport[key].scopes.add(options); return transport[key] }
+      if (typeof transport.fetch !== "function") return undefined
+      const state = { scopes: new Set<any>([options]), blockers: new Set<(url: string) => boolean>(), requests: new Map<string, { sessionID: string, messageID: string, emit: typeof emit, allowsRequest: (url: string) => boolean }>() }
+      const wrapped = new Proxy(transport.fetch, {
+        apply(target, receiver, args) {
+          if (state.blockers.size) {
+            try {
+              const [request, init] = args
+              const method = String(init?.method ?? (request instanceof Request ? request.method : "GET")).toUpperCase()
+              const pathname = new URL(request instanceof Request ? request.url : String(request)).pathname
+              if (([...state.blockers].some(blocks => blocks(request instanceof Request ? request.url : String(request)))) && method === "POST" && /\/(?:chat\/completions|responses|messages)\/?$/.test(pathname)) {
+                return Promise.reject(new Error("Agent Insight OpenCode inference proxy: model requests are blocked after configuration failed. Check the inference proxy configuration or reinstall it, then retry."))
+              }
+            } catch {}
+          }
+          let attempt: { headers: Headers, binding: any, payload: any } | undefined
+          try {
+            const [request, init] = args
+            const headers = new Headers(init?.headers ?? (request instanceof Request ? request.headers : undefined))
+            const requestId = headers.get("x-agent-insight-request-id")
+            const binding = requestId ? state.requests.get(requestId) : undefined
+            if (binding && binding.allowsRequest(request instanceof Request ? request.url : String(request)) && headers.get("x-agent-insight-session-id") === binding.sessionID
+              && headers.get("x-agent-insight-message-id") === binding.messageID) {
+              const attemptId = crypto.randomUUID()
+              headers.set("x-agent-insight-attempt-id", attemptId)
+              attempt = { headers, binding, payload: {
+                messageID: binding.messageID, request_id: requestId, attempt_id: attemptId, started_at: nowIso(),
+              } }
+            }
+          } catch {}
+          const invoke = (callArgs: any[]) => {
+            const url = callArgs[0] instanceof Request ? callArgs[0].url : String(callArgs[0])
+            const scopes = [...state.scopes].filter(scope => scope.prepareRequest && scope.allowsRequest?.(url))
+            if (!scopes.length) return Reflect.apply(target, receiver, callArgs)
+            return Promise.all(scopes.map(scope => scope.prepareRequest(url))).then(() => Reflect.apply(target, receiver, callArgs))
+          }
+          if (!attempt) return invoke(args)
+          const { headers, binding, payload } = attempt
+          binding.emit(binding.sessionID, "llm.attempt", payload)
+          return (async () => {
+            try {
+              const response = await invoke([args[0], { ...args[1], headers }]) as Response
+              const callId = response.headers.get("x-request-id") ?? response.headers.get("x-agent-insight-call-id")
+              const upstreamRequestId = upstreamRequestIdFromHeaders(response.headers)
+              binding.emit(binding.sessionID, "llm.attempt", { ...payload, status_code: response.status,
+                ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || "") ? { call_id: callId } : {}),
+                ...(upstreamRequestId ? { upstream_request_id: upstreamRequestId, upstream_request_id_source: "model-response-header" } : {}),
+              })
+              return response
+            } catch (error) {
+              binding.emit(binding.sessionID, "llm.attempt", { ...payload, error_type: error instanceof Error ? error.name : "Error" })
+              throw error
+            }
+          })()
+        },
+      })
+      // Leave provider options intact: OpenCode loads auth and provider fetches after config hooks.
+      transport.fetch = wrapped
+      Object.defineProperty(transport, key, { value: state })
+      return state
+    } catch { return undefined }
+  }
+  return {
+    headers: async (input: any, output: any) => {
+      const sessionID = input?.sessionID
+      if ((options.allowsInput && !options.allowsInput(input)) || !sessionID) return
+      output.headers ??= {}
+      output.headers["x-agent-insight-session-id"] = sessionID
+      if (!input?.message?.id || !context?.client?.session?.messages) return
+      try {
+        const result = await context.client.session.messages({
+          path: { id: sessionID }, query: { limit: 20 }, signal: AbortSignal.timeout(1000),
+        })
+        const candidates = (Array.isArray(result?.data) ? result.data : []).map((row: any) => row.info).filter((info: any) =>
+          info?.role === "assistant" && info.sessionID === sessionID && info.parentID === input.message.id
+          && info.agent === input.agent && info.providerID === input.model?.providerID
+          && info.modelID === (input.model?.id ?? input.model?.modelID) && !info.time?.completed)
+        if (candidates.length !== 1 || !candidates[0].id) {
+          emit(sessionID, "llm.correlation.unbound", { reason: "no-unique-assistant" })
+          return
+        }
+        const messageID = candidates[0].id
+        // Processor retries reuse the assistant message; transport attempts get their own ID.
+        const requestId = `oc_${sha256Hex(JSON.stringify([sessionID, messageID])).slice(0, 32)}`
+        output.headers ??= {}
+        output.headers["x-agent-insight-session-id"] = sessionID
+        output.headers["x-agent-insight-message-id"] = messageID
+        output.headers["x-agent-insight-request-id"] = requestId
+        const observer = observeFetch()
+        if (observer) {
+          observer.requests.delete(requestId)
+          observer.requests.set(requestId, { sessionID, messageID, emit, allowsRequest: blockedRequest })
+          if (observer.requests.size > 4096) observer.requests.delete(observer.requests.keys().next().value)
+        }
+        emit(sessionID, "llm.request", { messageID, request_id: requestId })
+      } catch {
+        emit(sessionID, "llm.correlation.unbound", { reason: "message-lookup-failed" })
+      }
+    },
+    configure: observeFetch,
+    setBlocked: (blocked: boolean) => {
+      const observer = observeFetch()
+      if (observer) { if (blocked) observer.blockers.add(blockedRequest); else observer.blockers.delete(blockedRequest) }
+    },
+  }
+}
+
+export default async function WittySkillInsightOtelPlugin(context: any = {}) {
+  return createOpenCodeCollector(context)
+}
+
+/**
+ * CLI (`opencode run`) may exit before the deferred `message.updated` /
+ * `message.part.updated` sync events reach the plugin, while streaming
+ * `message.part.delta` events arrive synchronously. After a session goes idle
+ * the collector asks the in-process OpenCode server for the final messages so
+ * usage and the complete assistant text are not lost.
+ */
+function hasUsageTokens(tokens: any): boolean {
+  if (!tokens || typeof tokens !== "object") return false
+  return [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+    .some((value) => Number(value) > 0)
+}
+
+export function extractFinalUsageRecords(messages: any[] | null | undefined): Array<{ info: any; parts: any[] }> {
+  const out: Array<{ info: any; parts: any[] }> = []
+  for (const item of Array.isArray(messages) ? messages : []) {
+    const info = item?.info ?? item
+    if (!info || typeof info !== "object" || info.role !== "assistant" || !info.id) continue
+    if (!hasUsageTokens(info.tokens)) continue
+    const picked: any = { id: info.id, sessionID: info.sessionID, role: "assistant", tokens: info.tokens }
+    if (info.time) picked.time = info.time
+    if (info.cost !== undefined) picked.cost = info.cost
+    for (const key of ["modelID", "providerID", "agent", "mode", "finish", "variant", "parentID"]) {
+      if (info[key] !== undefined) picked[key] = info[key]
+    }
+    if (info.summary === true) picked.summary = true
+    const parts = (Array.isArray(item?.parts) ? item.parts : [])
+      .filter((part: any) => part && typeof part.id === "string" && part.id
+        && typeof part.text === "string" && part.text
+        && (part.type === "text" || part.type === "reasoning"))
+      .map((part: any) => ({
+        id: part.id,
+        messageID: part.messageID || info.id,
+        sessionID: part.sessionID || info.sessionID,
+        type: part.type,
+        text: part.text,
+      }))
+    out.push({ info: picked, parts })
+  }
+  return out
+}
+
+async function createOpenCodeCollector(context: any = {}, lifecycle?: { emit?: (record: any) => void, close?: () => Promise<void> }) {
+  const env = loadSkillInsightEnv()
+  const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
+  if (!enabled) return {}
+
+  const apiKey = env.AGENT_INSIGHT_API_KEY
+  const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const maxToolIo = asInt(env.AGENT_INSIGHT_MAX_TOOL_IO, 4000)
+  const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
+  const outFile = buildOutFile(spoolDir)
+  // v1 may exit without awaiting event hooks; persist before yielding or scheduling upload.
+  const writer = createWriter(outFile, !lifecycle)
+  const managedProviders = new Set<string>()
+  const managedEndpoints = new Set<string>()
+  let prepareManagedRequest: ((url: string) => Promise<unknown>) | undefined
+  const inference = createInferenceCorrelation(context, writer.enqueue, globalThis, {
+    prepareRequest: (url: string) => prepareManagedRequest?.(url),
+    allowsInput: (input: any) => managedProviders.has(input.model?.providerID),
+    allowsRequest: (url: string) => [...managedEndpoints].some(base => url.startsWith(base + '/')),
+  })
+  if (lifecycle) lifecycle.emit = writer.enqueue
+
+  const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
+  const uploaderCooldownMs = asInt(env.AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
+  // 进行中会话的心跳上报间隔。之前只有 session.idle 会触发上报，一个长时间不 idle 的
+  // 任务（典型是工具死循环）整个执行期间零上报，只能等 CLI 退出才第一次落库。
+  // 0 或负数 = 关闭心跳，回到"仅 idle 触发"的旧行为。
+  const heartbeatMs = asInt(env.AGENT_INSIGHT_OPENCODE_HEARTBEAT_MS, 60000)
+  const lastUploadKickBySession = new Map<string, number>()
+  // 心跳的计时起点，必须与 lastUploadKickBySession 分开。
+  // 后者是 kickUploader 的节流依据，往里写"还没真正 kick 过"的时间戳会把紧随其后的
+  // session.idle 上报误判成冷却期内而吞掉 —— 短任务（15s 内做完）会因此一次都不上报。
+  const heartbeatClockBySession = new Map<string, number>()
+  const activeSessionIds = new Set<string>()
+
+  const logDir = path.join(getPreferredInsightDir(), "logs")
+  const pluginLogPath = path.join(logDir, "opencode_plugin.log")
+  const uploaderLogPath = path.join(logDir, "opencode_uploader.log")
+
+  const runtime = resolveUploaderRuntime()
+  const runtimeLog = formatUploaderRuntimeForLog(runtime)
+
+  appendLogLine(
+    pluginLogPath,
+    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtimeLog.command} argsPrefix=${runtimeLog.argsPrefix} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+  )
+
+  const shadowed = findShadowedEnvKeys()
+  if (shadowed.length) {
+    appendLogLine(
+      pluginLogPath,
+      `plugin.env.shadowed 进程环境里的同名变量压过了 .env,重跑 setup 改的配置在本进程不生效: ${describeShadowedEnv(shadowed)}` +
+      ` → 在启动 opencode 的终端里 unset 这些变量(或新开终端)后重启 opencode`,
+    )
+  }
+
+  const kickUploader = (sessionID: string, force = false, reason = "unspecified"): void => {
+    try {
+      if (!fs.existsSync(uploaderPath)) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} uploaderMissing=${uploaderPath}`,
+        )
+        return
+      }
+      if (!runtime) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} runtimeUnavailable=1 hostExecPath=${process.execPath || "(empty)"}`,
+        )
+        return
+      }
+      const now = Date.now()
+      const prev = lastUploadKickBySession.get(sessionID || "") || 0
+      const sinceLast = prev > 0 ? now - prev : -1
+      if (!force && sinceLast >= 0 && sinceLast < uploaderCooldownMs) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.throttled reason=${reason} sessionID=${sessionID || "(none)"} sinceLastMs=${sinceLast} cooldownMs=${uploaderCooldownMs}`,
+        )
+        return
+      }
+      lastUploadKickBySession.set(sessionID || "", now)
+      appendLogLine(
+        pluginLogPath,
+        `kickUploader.start reason=${reason} sessionID=${sessionID || "(none)"} force=${force ? "1" : "0"} runtime=${runtime.cmd} args=${[...runtime.argsPrefix, uploaderPath].join(" ")}`,
+      )
+
+      try {
+        fs.mkdirSync(logDir, { recursive: true })
+      } catch {}
+      let logFd: number = -1
+      try {
+        logFd = fs.openSync(uploaderLogPath, "a")
+        const header = `\n[${nowIso()}] kickUploader sessionID=${sessionID || "(none)"} runtime=${runtime.cmd}\n`
+        try { fs.writeSync(logFd, header) } catch {}
+      } catch {}
+
+      const stdio: import("child_process").StdioOptions = logFd >= 0 ? ["ignore", logFd, logFd] : "ignore"
+      const child = spawn(runtime.cmd, [...runtime.argsPrefix, uploaderPath], {
+        detached: true,
+        stdio,
+        windowsHide: true,
+        env: {
+          ...process.env,
+          AGENT_INSIGHT_UPLOADER_SPOOL_FILE: outFile,
+          ...(force ? { AGENT_INSIGHT_UPLOADER_FORCE: "1" } : {}),
+          // 强推限定到本 session：FORCE 是进程级开关，不限定的话 uploader 会把
+          // spool 里保留期内的所有历史会话一并重传。
+          ...(force && sessionID ? { AGENT_INSIGHT_UPLOADER_FORCE_SESSION: sessionID } : {}),
+        },
+      })
+      child.unref()
+      appendLogLine(
+        pluginLogPath,
+        `kickUploader.spawned reason=${reason} sessionID=${sessionID || "(none)"} childPid=${child.pid || "(unknown)"}`,
+      )
+      // The fd is dup'd to the child by spawn(); safe to close here.
+      if (logFd >= 0) { try { fs.closeSync(logFd) } catch {} }
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `kickUploader.error reason=${reason} sessionID=${sessionID || "(none)"} error=${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  // OpenCode ≥ 0.15 plugin API exposes an in-process SDK client. `opencode run`
+  // exits right after the final step, before SyncEvent publishes the last
+  // message.updated/message.part.updated, so deltas are the only stream we see.
+  // Pulling the session's final messages here is what recovers usage (and the
+  // complete text) after the CLI session ends.
+  const pluginClient = context?.client
+  const pluginDirectory = typeof context?.directory === "string" ? context.directory : undefined
+  const finalUsageFingerprints = new Map<string, string>()
+
+  const hydrateFinalUsage = async (sessionID: string, timeoutMs = 1500): Promise<number> => {
+    if (!pluginClient || typeof pluginClient?.session?.messages !== "function" || !sessionID) return 0
+    let timer: any
+    try {
+      const request: any = { path: { id: sessionID } }
+      if (pluginDirectory) request.query = { directory: pluginDirectory }
+      const response: any = await Promise.race([
+        pluginClient.session.messages(request),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("usage-hydrate timeout")), timeoutMs)
+          try { timer.unref?.() } catch {}
+        }),
+      ])
+      const messages = response?.data ?? response
+      let emitted = 0
+      for (const record of extractFinalUsageRecords(messages)) {
+        const fingerprint = sha256Hex(JSON.stringify([
+          record.info.tokens,
+          record.parts.map((part: any) => `${part.id}:${part.text.length}`),
+        ]))
+        if (finalUsageFingerprints.get(record.info.id) === fingerprint) continue
+        finalUsageFingerprints.set(record.info.id, fingerprint)
+        writer.enqueue({
+          t: nowIso(),
+          kind: "event",
+          sessionID,
+          trace_id: sessionID,
+          payload: { type: "message.updated", event: { properties: { info: record.info } } },
+        })
+        for (const part of record.parts) {
+          writer.enqueue({
+            t: nowIso(),
+            kind: "event",
+            sessionID,
+            trace_id: sessionID,
+            payload: { type: "message.part.updated", event: { properties: { part } } },
+          })
+        }
+        emitted++
+      }
+      appendLogLine(
+        pluginLogPath,
+        `usage.hydrate sessionID=${sessionID} emitted=${emitted}${emitted ? "" : " (no new usage)"}`,
+      )
+      return emitted
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `usage.hydrate.error sessionID=${sessionID} error=${error instanceof Error ? error.message : String(error)}`,
+      )
+      return 0
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  // Best-effort: the first upload still goes out immediately with the streamed
+  // deltas; if hydration recovers usage we force one more upload for this session.
+  const scheduleFinalUsage = (sessionID: string, reason: string): void => {
+    if (!pluginClient || !sessionID) return
+    void hydrateFinalUsage(sessionID).then((emitted) => {
+      if (!emitted) return
+      void writer.flush().then(() => kickUploader(sessionID, true, `usage:${reason}`)).catch(() => {})
+    }).catch(() => {})
+  }
+
+  const markSessionComplete = async (sessionID: string, completedAt: string): Promise<void> => {
+    if (!sessionID || !apiKey || !env.AGENT_INSIGHT_HOST) {
+      appendLogLine(
+        pluginLogPath,
+        `sessionComplete.skip sessionID=${sessionID || "(none)"} hostPresent=${env.AGENT_INSIGHT_HOST ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+      )
+      return
+    }
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000)
+    try {
+      const base = String(env.AGENT_INSIGHT_HOST).replace(/\/+$/, "")
+      const url = base.endsWith("/api")
+        ? `${base}/ingest/opencode/session-complete`
+        : `${base}/api/ingest/opencode/session-complete`
+      appendLogLine(pluginLogPath, `sessionComplete.request sessionID=${sessionID} url=${url} completedAt=${completedAt}`)
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-witty-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          task_id: sessionID,
+          completed_at: completedAt,
+        }),
+        signal: controller.signal,
+      })
+      let body = ""
+      try {
+        body = truncateString(await res.text(), 1000)
+      } catch {}
+      appendLogLine(
+        pluginLogPath,
+        `sessionComplete.response sessionID=${sessionID} status=${res.status} ok=${res.ok ? "1" : "0"} body=${body || "(empty)"}`,
+      )
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `sessionComplete.error sessionID=${sessionID} error=${error instanceof Error ? error.message : String(error)}`,
+      )
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  writer.enqueue({
+    t: nowIso(),
+    kind: "plugin.start",
+    payload: { outFile, cwd: process.cwd(), pid: process.pid, node: process.version, platform: process.platform, arch: process.arch },
+  })
+
+  const recordSession = (sessionID: any): void => {
+    if (typeof sessionID === "string" && sessionID.startsWith("ses")) {
+      activeSessionIds.add(sessionID)
+    }
+  }
+
+  const shutdown = async () => {
+    const endedAt = nowIso()
+    const sessions = Array.from(activeSessionIds)
+    appendLogLine(pluginLogPath, `plugin.shutdown.start sessionCount=${sessions.length} endedAt=${endedAt}`)
+    // Last chance to recover final usage before the spool is closed; bounded so
+    // a dead in-process server cannot hang process exit.
+    try {
+      if (pluginClient && sessions.length > 0) {
+        await Promise.all(sessions.map((sessionID) => hydrateFinalUsage(sessionID, 800)))
+        await writer.flush()
+      }
+    } catch {}
+    try {
+      for (const sessionID of sessions) {
+        fs.appendFileSync(outFile, JSON.stringify({
+          t: endedAt,
+          kind: "plugin.shutdown",
+          sessionID,
+          trace_id: sessionID,
+          payload: { reason: "opencode-cli-exit", pid: process.pid },
+        }) + "\n")
+      }
+    } catch {}
+    await writer.close()
+    try {
+      if (sessions.length > 0) {
+        await Promise.all(sessions.map((sessionID) => markSessionComplete(sessionID, endedAt)))
+        for (const sessionID of sessions) kickUploader(sessionID, true, "shutdown")
+      } else {
+        kickUploader("", true, "shutdown-empty-session")
+      }
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `plugin.shutdown.error error=${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+  try {
+    if (lifecycle) lifecycle.close = shutdown
+    else {
+      process.once("beforeExit", shutdown)
+      process.once("SIGINT", shutdown)
+      process.once("SIGTERM", shutdown)
+    }
+  } catch {}
+
+  try {
+    kickUploader("", false, "plugin-init")
+  } catch (error) {
+    appendLogLine(
+      pluginLogPath,
+      `plugin.initKick.error error=${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+
+  const safeEventPayload = (payload: any): any => {
+    const redacted = redactJson(payload)
+    const truncated = truncateJson(redacted, maxEventString)
+    return truncated
+  }
+
+  const safeToolIoPayload = (payload: any): any => {
+    const redacted = redactJson(payload)
+    const truncated = truncateJson(redacted, maxToolIo)
+    return truncated
+  }
+
+  return {
+    config: async (cfg: any) => {
+      const insightDir = getExistingInsightDir()
+      const proxyRuntime = path.join(insightDir, "inference-runtime", "inference_proxy.mjs")
+      try {
+        let installation: { enabled?: boolean, explicitEnabled?: boolean, agents?: string[] } | undefined
+        try {
+          installation = JSON.parse(fs.readFileSync(path.join(insightDir, "inference-proxy", "installation.json"), "utf8"))
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+        }
+        if ((installation?.explicitEnabled ?? installation?.enabled) && installation?.agents?.includes("opencode")) {
+          managedProviders.clear()
+          managedEndpoints.clear()
+          for (const [id, provider] of Object.entries(cfg.provider || {}) as [string, any][]) {
+            const url = provider.options?.baseURL
+            // Only explicitly enrolled loopback routes may be intercepted.
+            if (typeof url === 'string' && /^http:\/\/127\.0\.0\.1:\d+\/managed\//.test(url)) {
+              managedProviders.add(id)
+              managedEndpoints.add(url.replace(/\/+$/, ''))
+            }
+          }
+          if (managedEndpoints.size) inference.setBlocked(true)
+          const { prepareOpenCodeConfig, prepareOpenCodeRequest } = await import(pathToFileURL(proxyRuntime).href)
+          const options = { insightDir, cwd: context.directory || process.cwd() }
+          await prepareOpenCodeConfig(cfg, options)
+          prepareManagedRequest = (url: string) => prepareOpenCodeRequest(url, options)
+        }
+        if (managedEndpoints.size) inference.setBlocked(false)
+      } catch {
+        if (managedEndpoints.size) inference.setBlocked(true)
+        throw new Error("Agent Insight OpenCode inference proxy configuration failed; model requests are blocked. Check the inference proxy configuration or reinstall it, then retry.")
+      }
+      try {
+        const redacted = redactJson(cfg || {})
+        writer.enqueue({ t: nowIso(), kind: "event", payload: { type: "config.redacted", config: truncateJson(redacted, 2000) } })
+      } catch {}
+    },
+    "chat.headers": inference.headers,
+    "experimental.chat.system.transform": async (input: any, output: any) => {
+      try {
+        recordSession(input?.sessionID)
+        const system = Array.isArray(output?.system) ? output.system.map((x: any) => String(x)) : []
+        const joined = system.join("\n")
+        writer.enqueue({
+          t: nowIso(),
+          kind: "system.prompt",
+          sessionID: input?.sessionID,
+          providerID: input?.model?.providerID,
+          modelID: input?.model?.modelID,
+          trace_id: input?.sessionID,
+          payload: { system, length: joined.length, sha256: sha256Hex(joined) },
+        })
+      } catch {}
+    },
+    "chat.message": async (input: any, output: any) => {
+      try {
+        recordSession(input?.sessionID)
+        const text = output?.message?.content || extractTextFromParts(output?.parts) || ""
+        writer.enqueue({
+          t: nowIso(),
+          kind: "chat.message",
+          sessionID: input?.sessionID,
+          agent: input?.agent,
+          providerID: input?.model?.providerID,
+          modelID: input?.model?.modelID,
+          trace_id: input?.sessionID,
+          // input.messageID is OPTIONAL in the opencode plugin API and newer
+          // builds often omit it; output.message.id (UserMessage.id) is always
+          // present. Prefer it so the uploader can key user text to the message.
+          payload: {
+            messageID: output?.message?.id ?? input?.messageID,
+            length: String(text).length,
+            text: String(text),
+          },
+        })
+      } catch {}
+    },
+    "experimental.text.complete": async (input: any, output: any) => {
+      try {
+        recordSession(input?.sessionID)
+        const text = output?.text ?? ""
+        writer.enqueue({
+          t: nowIso(),
+          kind: "text.complete",
+          sessionID: input?.sessionID,
+          trace_id: input?.sessionID,
+          payload: { messageID: input?.messageID, partID: input?.partID, length: String(text).length, text: String(text) },
+        })
+      } catch {}
+    },
+    event: async ({ event }: any) => {
+      try {
+        if (!event) return
+        const type = String(event.type || "unknown")
+        const sessionID = event.properties?.sessionID || event.sessionID || event.session?.id || event.session?.sessionID
+        recordSession(sessionID)
+        const base = {
+          t: nowIso(),
+          kind: "event",
+          sessionID: sessionID ? String(sessionID) : undefined,
+          trace_id: sessionID ? String(sessionID) : undefined,
+        }
+
+        writer.enqueue({
+          ...base,
+          payload: {
+            type,
+            event: type.startsWith("tool") || type.includes("tool")
+              ? safeToolIoPayload(event) : safeEventPayload(event),
+          },
+        })
+
+        try {
+          // Trigger uploader on idle signal:
+          //   - `session.idle` is the idle signal itself; it doesn't carry a status field
+          //   - `session.updated` may fire many times during a session — only kick when
+          //     properties.info.status === "idle" so we don't spam mid-conversation
+          const status = String(
+            event?.properties?.info?.status || event?.properties?.status?.type || event?.properties?.status || ""
+          ).toLowerCase()
+          const sessionEventUploadMode = getSessionEventUploadMode(type, status)
+          if (sessionEventUploadMode === "force") {
+            const sid = sessionID ? String(sessionID) : ""
+            appendLogLine(
+              pluginLogPath,
+              `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
+            )
+            if (lifecycle) await writer.flush()
+            else void writer.flush()
+            kickUploader(sid, true, `event:${type}`)
+            // CLI 模式退出前不会等 SyncEvent 的异步发布，这里主动补齐最终
+            // usage；拿到后强制再传一次（首次上传已经保证回答文本不丢）。
+            scheduleFinalUsage(sid, type)
+          } else if (heartbeatMs > 0 && sessionID) {
+            // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
+            // 只在有事件流入时才评估，会话真正空闲下来不会白跑。
+            //
+            // 计时起点走独立的 heartbeatClockBySession，绝不能写 lastUploadKickBySession
+            // —— 那是 kickUploader 的节流依据，写进去等于伪造"刚上报过"，会让紧随其后的
+            // session.idle 上报落进冷却期被吞掉，短任务因此一次都不上报。
+            const sid = String(sessionID)
+            const now = Date.now()
+            const lastKickAt = lastUploadKickBySession.get(sid) || 0
+            const heartbeatClockAt = heartbeatClockBySession.get(sid) || 0
+            const decision = computeHeartbeatDecision({ now, heartbeatMs, lastKickAt, heartbeatClockAt })
+            if (decision === "start-clock") {
+              heartbeatClockBySession.set(sid, now)
+            } else if (decision === "kick") {
+              appendLogLine(
+                pluginLogPath,
+                `event.heartbeat type=${type} sessionID=${sid} sinceLastMs=${now - (lastKickAt || heartbeatClockAt)} heartbeatMs=${heartbeatMs}`,
+              )
+              heartbeatClockBySession.set(sid, now)
+              kickUploader(sid, false, "heartbeat")
+            }
+          }
+        } catch {}
+
+      } catch {}
+    },
+  }
+}
+
+export function createOpenCodeV2Adapter(context: any, record: (value: any) => void, forward: (event: any) => Promise<void>, options: any = {}) {
+  const pendingRequests = new Map<string, any[]>()
+  const requests = new Map<string, any>()
+  const messages = new Map<string, any>()
+  const tools = new Map<string, any>()
+  const streamedParts = new Set<string>()
+  const pendingSnapshots = new Map<string, Promise<void>>()
+  let disposed = false
+  const lateTerminalUploads = new Set<string>()
+  const fingerprints = new Map<string, string>()
+  const seen = new Set<string>()
+  const emit = (sessionID: string, kind: string, payload: any) => record({ t: nowIso(), sessionID, kind, payload })
+  const event = (type: string, sessionID: string, properties: any, id?: string) => forward({ type, id, properties: { sessionID, ...properties } })
+  const message = async (sessionID: string, info: any) => {
+    const value = { ...info, sessionID, ...(['assistant', 'user'].includes(info.role) ? { trace_kind: info.role === 'assistant' ? 'llm' : 'user' } : {}) }
+    messages.set(info.id, value)
+    await event('message.updated', sessionID, { info: value })
+  }
+  const part = (sessionID: string, messageID: string, value: any) => event('message.part.updated', sessionID, { part: { ...value, sessionID, messageID } })
+  const toolPart = (sessionID: string, messageID: string, value: any) => {
+    const state = value.state || {}
+    return part(sessionID, messageID, {
+      id: `${messageID}:tool:${value.id}`, type: 'tool', callID: value.id,
+      tool: value.name === 'subagent' ? 'task' : value.name,
+      state: { ...state, input: { ...state.input, ...(value.name === 'subagent' ? { subagent_type: state.input?.agent } : {}) },
+        output: (state.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'),
+        sessionID: state.metadata?.sessionID,
+        time: { start: value.time?.ran || value.time?.created, end: value.time?.completed } },
+    })
+  }
+  const snapshot = async (sessionID: string, values: any[]) => {
+    for (const value of values) {
+      if (disposed) return
+      if (!['user', 'assistant'].includes(value.type)) continue
+      const key = `${sessionID}:${value.id}`, fingerprint = sha256Hex(JSON.stringify(value))
+      if (fingerprints.get(key) === fingerprint) continue
+      fingerprints.set(key, fingerprint)
+      if (fingerprints.size > 4096) fingerprints.delete(fingerprints.keys().next().value!)
+      await message(sessionID, { ...value, role: value.type, agent: value.agent, modelID: value.model?.id, providerID: value.model?.providerID })
+      if (value.type === 'user') await part(sessionID, value.id, { id: `${value.id}:text`, type: 'text', text: value.text || '', time: value.time })
+      const ordinals: Record<string, number> = {}
+      for (const content of value.content || []) {
+        const i = ordinals[content.type] || 0
+        ordinals[content.type] = i + 1
+        if (content.type === 'tool') await toolPart(sessionID, value.id, content)
+        else if (['text', 'reasoning'].includes(content.type)) await part(sessionID, value.id, { ...content, id: `${value.id}:${content.type}:${i}`, time: value.time })
+      }
+    }
+  }
+  const startSnapshot = (sessionID: string) => {
+    let pending = pendingSnapshots.get(sessionID)
+    if (!pending) {
+      pending = Promise.resolve().then(() => context.session.context({ sessionID })).then(values => snapshot(sessionID, values))
+        .catch(error => { if (!disposed) emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) })
+      pendingSnapshots.set(sessionID, pending)
+      void pending.then(() => pendingSnapshots.delete(sessionID))
+    }
+    return pending
+  }
+  const refresh = async (sessionID: string) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        startSnapshot(sessionID),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Snapshot timed out')), 250) }),
+      ])
+    } catch (error) { emit(sessionID, 'collector.error', { phase: 'snapshot', message: String(error) }) }
+    finally { clearTimeout(timer) }
+  }
+  const publish = (request: any, attempt: any) => {
+    if (!request.messageID) return
+    const requestId = `oc_${sha256Hex(JSON.stringify([request.sessionID, request.messageID])).slice(0, 32)}`
+    emit(request.sessionID, 'llm.request', { messageID: request.messageID, request_id: requestId })
+    emit(request.sessionID, 'llm.attempt', { ...attempt, messageID: request.messageID, request_id: requestId, transport_request_id: request.requestId })
+  }
+  return {
+    close: () => { disposed = true; pendingSnapshots.clear(); pendingRequests.clear(); requests.clear() },
+    event: async (input: any) => {
+      if (disposed) return
+      const d = input?.data, sid = d?.sessionID, mid = d?.assistantMessageID, type = input?.type
+      if (!sid) return
+      if (input.id && seen.has(input.id)) return
+      if (input.id) { seen.add(input.id); if (seen.size > 8192) seen.delete(seen.values().next().value!) }
+      if (type === 'session.created') {
+        await event('session.created', sid, { info: { ...d, id: sid, time: { created: input.created } } })
+      } else if (type === 'session.step.started') {
+        // Native V2 publishes this event after the model-request hook, once per runner attempt.
+        const queue = pendingRequests.get(sid) || []
+        pendingRequests.delete(sid)
+        const request = queue.length === 1 ? queue[0] : undefined
+        if (request && request.attempts.size && request.agent === d.agent && request.model.providerID === d.model.providerID && request.model.id === d.model.id) {
+          request.messageID = mid
+          for (const attempt of request.attempts.values()) publish(request, attempt)
+        } else if (queue.length) {
+          emit(sid, 'llm.correlation.unbound', { reason: 'native-step-sequence-mismatch' })
+        }
+        const previous = messages.get(mid)
+        await message(sid, { id: mid, role: 'assistant', agent: d.agent, modelID: d.model?.id, providerID: d.model?.providerID, time: { created: previous?.time?.created ?? d.started } })
+      } else if (type === 'session.step.ended' || type === 'session.step.failed') {
+        const previous = messages.get(mid)
+        if (previous) await message(sid, { ...previous, finish: d.finish || 'error', error: d.error, tokens: d.tokens, cost: d.cost, time: { ...previous.time, completed: input.created } })
+        for (const [id, request] of requests) if (request.sessionID === sid && request.messageID === mid) requests.delete(id)
+      } else if (/^session\.(text|reasoning)\.(delta|ended)$/.test(type)) {
+        const kind = type.split('.')[1], id = `${mid}:${kind}:${d.ordinal}`
+        if (type.endsWith('.delta')) {
+          const key = `${sid}:${id}`
+          if (!streamedParts.has(key)) {
+            streamedParts.add(key)
+            await part(sid, mid, { id, type: kind, text: '' })
+          }
+          await event('message.part.delta', sid, { messageID: mid, partID: id, field: 'text', delta: d.delta }, input.id)
+        }
+        else await part(sid, mid, { id, type: kind, text: d.text, time: { end: input.created } })
+      } else if (type === 'session.tool.input.started') {
+        tools.set(`${sid}:${mid}:${d.id}`, { id: d.id, name: d.name, state: { status: 'pending' }, time: { created: input.created } })
+      } else if (['session.tool.called', 'session.tool.success', 'session.tool.failed'].includes(type)) {
+        const value = tools.get(`${sid}:${mid}:${d.id}`)
+        if (!value) return
+        if (type.endsWith('.called')) { value.state = { ...value.state, status: 'running', input: d.input }; value.time.ran = input.created }
+        else { value.state = { ...value.state, status: d.error ? 'error' : 'completed', content: d.content, metadata: d.metadata, error: d.error }; value.time.completed = input.created }
+        await toolPart(sid, mid, value)
+      } else if (['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted', 'session.idle'].includes(type)) {
+        await refresh(sid)
+        await event('session.idle', sid, {})
+        const pending = pendingSnapshots.get(sid)
+        if (pending && !lateTerminalUploads.has(sid)) {
+          lateTerminalUploads.add(sid)
+          void pending.then(async () => {
+            if (!disposed) await event('session.idle', sid, {})
+          }).catch(() => {}).finally(() => lateTerminalUploads.delete(sid))
+        }
+        pendingRequests.delete(sid)
+        for (const [id, request] of requests) if (request.sessionID === sid) requests.delete(id)
+        for (const [key, value] of messages) if (value.sessionID === sid) messages.delete(key)
+        for (const key of tools.keys()) if (key.startsWith(sid + ':')) tools.delete(key)
+        for (const key of streamedParts) if (key.startsWith(sid + ':')) streamedParts.delete(key)
+      }
+    },
+    context: async (input: any) => {
+      if (disposed) return
+      void startSnapshot(input.sessionID)
+      const system = (input.system || []).map((value: any) => typeof value === 'string' ? value : value.text).filter((value: any) => typeof value === 'string')
+      const joined = system.join('\n')
+      record({ t: nowIso(), kind: 'system.prompt', sessionID: input.sessionID, providerID: input.model?.providerID,
+        modelID: input.model?.id, trace_id: input.sessionID, payload: { system, length: joined.length, sha256: sha256Hex(joined) } })
+    },
+    modelRequest: async (input: any) => {
+      input.headers ??= {}
+      const request = { sessionID: input.sessionID, agent: input.agent, model: input.model, kind: input.kind, requestId: `oc_v2_${crypto.randomUUID()}`, attempts: new Map() }
+      requests.set(request.requestId, request)
+      input.headers['x-agent-insight-request-id'] = request.requestId
+      if (input.kind === 'primary') {
+        if (!pendingRequests.has(input.sessionID)) pendingRequests.set(input.sessionID, [])
+        pendingRequests.get(input.sessionID)!.push(request)
+      }
+    },
+    request: async (input: any) => {
+      const sid = input.sessionID
+      const request = requests.get(input.request.headers.get('x-agent-insight-request-id'))
+      if (!request || request.sessionID !== sid || request.kind !== input.kind || request.agent !== input.agent || request.model.providerID !== input.model.providerID || request.model.id !== input.model.id) {
+        throw new Error('Agent Insight OpenCode V2 request identity unavailable; model request blocked')
+      }
+      void startSnapshot(sid)
+      const attemptId = crypto.randomUUID()
+      const headers = new Headers(input.request.headers)
+      for (const key of [...headers.keys()]) if (key.startsWith('x-agent-insight-')) headers.delete(key)
+      headers.set('x-agent-insight-session-id', sid)
+      headers.set('x-agent-insight-request-id', request.requestId)
+      headers.set('x-agent-insight-attempt-id', attemptId)
+      const address = options.prepareRequest ? await options.prepareRequest(input.request.url) : input.request.url
+      input.request = new Request(address, new Request(input.request, { headers }))
+      const attempt = { attempt_id: attemptId, started_at: nowIso() }
+      request.attempts.set(attemptId, attempt)
+      publish(request, attempt)
+    },
+    response: async (input: any) => {
+      const headers = input.request.headers
+      const request = requests.get(headers.get('x-agent-insight-request-id'))
+      if (!request || request.sessionID !== input.sessionID) return
+      const attempt = request.attempts.get(headers.get('x-agent-insight-attempt-id'))
+      if (!attempt) return
+      const callId = input.response.headers.get('x-request-id') ?? input.response.headers.get('x-agent-insight-call-id')
+      const upstreamRequestId = upstreamRequestIdFromHeaders(input.response.headers)
+      Object.assign(attempt, { status_code: input.response.status,
+        ...(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(callId || '') ? { call_id: callId } : {}),
+        ...(upstreamRequestId ? { upstream_request_id: upstreamRequestId, upstream_request_id_source: 'model-response-header' } : {}) })
+      publish(request, attempt)
+    },
+  }
+}
+
+export async function setupOpenCodeV2(context: any) {
+  const lifecycle: { emit?: (record: any) => void, close?: () => Promise<void> } = {}
+  const hooks = await createOpenCodeCollector({ directory: context.location.directory }, lifecycle)
+  if (!lifecycle.emit || !hooks.event) return
+  const insightDir = getExistingInsightDir()
+  const managedProviders = new Set<string>()
+  let proxyApi: any
+  const options = { insightDir, cwd: context.location.directory, env: loadSkillInsightEnv() }
+  const adapter = createOpenCodeV2Adapter(context, lifecycle.emit, event => hooks.event!({ event }), {
+    prepareRequest: (address: string) => proxyApi.prepareOpenCodeRequest(address, options),
+  })
+  const abort = new AbortController()
+  let streamError: unknown
+  const report = (error: unknown) => appendLogLine(path.join(getPreferredInsightDir(), 'logs/opencode_plugin.log'), `v2.collector.error ${String(error)}`)
+  const events = (async () => {
+    try {
+      for await (const event of context.event.subscribe({ signal: abort.signal })) {
+        try { await adapter.event(event) } catch (error) { streamError = error; report(error) }
+      }
+      if (!abort.signal.aborted) { streamError = new Error('Event stream ended'); report(streamError) }
+    } catch (error) { if (!abort.signal.aborted) { streamError = error; report(error) } }
+  })()
+  let closed = false
+  const close = async () => {
+    if (closed) return
+    closed = true
+    adapter.close()
+    abort.abort()
+    await events
+    await lifecycle.close?.()
+  }
+  try {
+    for (const kind of ['context', 'compaction', 'generate', 'title']) {
+      await context.session.hook(kind, async (input: any) => {
+        try { await adapter.context(input) } catch (error) { report(error) }
+      })
+    }
+    let installation: any
+    try { installation = JSON.parse(fs.readFileSync(path.join(insightDir, 'inference-proxy/installation.json'), 'utf8')) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') report(error) }
+    if ((installation?.explicitEnabled ?? installation?.enabled) && installation?.agents?.includes('opencode')) {
+      proxyApi = await import(pathToFileURL(path.join(insightDir, 'inference-runtime/inference_proxy.mjs')).href)
+      await context.provider.transform(async (editor: any) => {
+        managedProviders.clear()
+        for (const item of editor.list()) {
+          if (!proxyApi.isManagedOpenCodeEndpoint(item.provider.settings?.baseURL, options)) continue
+          managedProviders.add(item.provider.id)
+          editor.update(item.provider.id, (provider: any) => { provider.settings = { ...provider.settings, transport: 'http' } })
+        }
+      })
+      await context.session.hook('model.request', async (input: any) => {
+        // Native transforms may precede config-defined provider registration.
+        if (managedProviders.has(input.model?.providerID) || proxyApi.isManagedOpenCodeEndpoint(input.baseURL, options)) await adapter.modelRequest(input)
+      })
+      await context.session.hook('http.request', async (input: any) => {
+        if (!proxyApi.isManagedOpenCodeEndpoint(input.request.url, options)) return
+        if (streamError) throw new Error('Agent Insight OpenCode V2 event stream unavailable; managed model request blocked')
+        await adapter.request(input)
+      })
+      await context.session.hook('http.response', async (input: any) => {
+        if (proxyApi.isManagedOpenCodeEndpoint(input.request.url, options)) await adapter.response(input)
+      })
+    }
+  } catch (error) { await close(); throw error }
+  return close
+}

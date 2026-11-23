@@ -1,0 +1,392 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { Prisma } from '@prisma/client'
+/**
+ * 控制指令总线（IF-N05/N07/N08）。
+ *
+ * 送达语义：连接在线 ≠ 指令送达。只有客户端回 RECEIVED 才算送达；
+ * ACK 窗口内没收到就是 DELIVERY_FAILED。指令不在重连后自动补发。
+ */
+import { randomBytes } from 'node:crypto'
+import { mergeTraceFacts, traceIdFromFacts } from '@/lib/trace-reference'
+
+import { prisma } from '@/lib/storage/prisma'
+import { ReliabilityError } from '@/lib/reliability/client-registry'
+import { ACTION as ENVIRONMENT_ACTION, validateContext, contextDigest } from '../../../packages/benchmark-protocol/environment.cjs'
+
+export const WHITELISTED_ACTIONS = [
+  'APPLY_CLIENT_CONFIG',
+  'PREPARE_EXPERIMENT_CASE',
+  'RUN_EXPERIMENT_CASE',
+  'RUN_BENCHMARK_CASE',
+  'CANCEL_EXPERIMENT_RUN',
+  'REFRESH_CAPABILITIES',
+  'PREPARE_EXECUTION_ENVIRONMENT',
+  'PRECHECK_SKILL_DEPLOYMENT',
+  'DEPLOY_SKILL_ARTIFACT',
+] as const
+
+export type CommandAction = (typeof WHITELISTED_ACTIONS)[number]
+
+export type CommandStatus =
+  | 'CREATED'
+  | 'SENT'
+  | 'RECEIVED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'EXPIRED'
+  | 'DELIVERY_FAILED'
+
+/** 配置类 action 只能携带引用，绝不能携带下载地址、文件路径或完整配置。 */
+const CONFIG_FORBIDDEN_KEYS = ['url', 'config', 'path', 'downloadUrl', 'file']
+/** 运行类 action 绝不能携带自由执行字段。 */
+const RUN_FORBIDDEN_KEYS = ['command', 'shell', 'args', 'cwd', 'executable', 'script']
+const DEPLOYMENT_FORBIDDEN_KEYS = [...CONFIG_FORBIDDEN_KEYS, ...RUN_FORBIDDEN_KEYS]
+
+function assertNoForbiddenNestedKeys(value: unknown, forbidden: readonly string[], prefix = 'payload'): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoForbiddenNestedKeys(item, forbidden, `${prefix}[${index}]`))
+    return
+  }
+  if (!value || typeof value !== 'object') return
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (forbidden.some((item) => item.toLowerCase() === key.toLowerCase())) {
+      throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', `${prefix} 不允许字段 ${key}`, 400)
+    }
+    assertNoForbiddenNestedKeys(nested, forbidden, `${prefix}.${key}`)
+  }
+}
+
+function assertSkillDeploymentPayload(action: CommandAction, payload: Record<string, unknown>): void {
+  assertNoForbiddenNestedKeys(payload, DEPLOYMENT_FORBIDDEN_KEYS)
+  const target = payload.target && typeof payload.target === 'object'
+    ? payload.target as Record<string, unknown> : {}
+  const mode = String(target.mode || '')
+  if (!['execution_origin', 'framework_global'].includes(mode)) {
+    throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发目标模式不合法', 400)
+  }
+  if (mode === 'execution_origin' && !/^origin_[a-f0-9]{24}$/.test(String(target.originRef || ''))) {
+    throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发缺少合法 originRef', 400)
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(String(payload.skillName || ''))) {
+    throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发名称不合法', 400)
+  }
+  if (action === 'DEPLOY_SKILL_ARTIFACT') {
+    if (!/^deploy_[A-Za-z0-9_]+$/.test(String(payload.deploymentId || ''))
+      || !/^skillart_[A-Za-z0-9_]+$/.test(String(payload.artifactRef || ''))
+      || !Number.isInteger(payload.skillVersion)
+      || !/^[a-f0-9]{16}$/.test(String(payload.contentHash || ''))) {
+      throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', 'Skill 下发制品身份不合法', 400)
+    }
+  }
+}
+
+export function isWhitelistedAction(value: unknown): value is CommandAction {
+  return typeof value === 'string' && (WHITELISTED_ACTIONS as readonly string[]).includes(value)
+}
+
+export function assertPayloadSafe(action: CommandAction, payload: Record<string, unknown>): void {
+  if (action === 'PRECHECK_SKILL_DEPLOYMENT' || action === 'DEPLOY_SKILL_ARTIFACT') {
+    assertSkillDeploymentPayload(action, payload)
+    return
+  }
+  if (action === ENVIRONMENT_ACTION) {
+    const context = validateContext(payload.context)
+    if (Object.keys(payload).some(key => !['context', 'contextDigest'].includes(key)) || contextDigest(context) !== payload.contextDigest) {
+      throw new ReliabilityError('COMMAND_PAYLOAD_FORBIDDEN', '执行环境请求摘要或字段不合法', 400)
+    }
+  }
+  const forbidden =
+    action === 'RUN_EXPERIMENT_CASE' || action === 'RUN_BENCHMARK_CASE' || action === ENVIRONMENT_ACTION
+      ? RUN_FORBIDDEN_KEYS
+      : CONFIG_FORBIDDEN_KEYS
+  for (const key of Object.keys(payload || {})) {
+    if (forbidden.includes(key)) {
+      throw new ReliabilityError(
+        'COMMAND_PAYLOAD_FORBIDDEN',
+        `action ${action} 的 payload 不允许字段 ${key}`,
+        400,
+      )
+    }
+  }
+}
+
+export function ackTimeoutMs(): number {
+  const sec = Number(process.env.AGENT_INSIGHT_RAS_ACK_TIMEOUT_SEC || 5)
+  return Math.max(1, Number.isFinite(sec) ? sec : 5) * 1000
+}
+
+export function commandTtlMs(): number {
+  const sec = Number(process.env.AGENT_INSIGHT_RAS_COMMAND_TTL_SEC || 30)
+  return Math.max(5, Number.isFinite(sec) ? sec : 30) * 1000
+}
+
+function newCommandId(): string {
+  return `cmd_${Date.now().toString(36)}_${randomBytes(5).toString('hex')}`
+}
+
+export type CommandFrame = {
+  type: 'COMMAND'
+  commandId: string
+  action: CommandAction
+  createdAt: string
+  expiresAt: string
+  payload: Record<string, unknown>
+}
+
+export async function createCommand(input: {
+  user: string
+  clientId: string
+  action: CommandAction
+  payload?: Record<string, unknown>
+  ttlMs?: number
+}, store = prisma): Promise<CommandFrame> {
+  if (!isWhitelistedAction(input.action)) {
+    throw new ReliabilityError('COMMAND_ACTION_UNKNOWN', `未知 action: ${input.action}`, 400)
+  }
+  const payload = input.payload || {}
+  assertPayloadSafe(input.action, payload)
+
+  const commandId = newCommandId()
+  const now = new Date()
+  const expiresAt = new Date(now.getTime() + (input.ttlMs ?? commandTtlMs()))
+  await store.reliabilityCommand.create({
+    data: {
+      commandId,
+      clientId: input.clientId,
+      user: input.user,
+      action: input.action,
+      payloadJson: JSON.stringify(payload),
+      status: 'CREATED',
+      expiresAt,
+    },
+  })
+  return {
+    type: 'COMMAND',
+    commandId,
+    action: input.action,
+    createdAt: now.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    payload,
+  }
+}
+
+export async function markSent(commandId: string, channel: 'wss' | 'poll'): Promise<void> {
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId, status: 'CREATED' },
+    data: { status: 'SENT', sentAt: new Date(), channel },
+  })
+}
+
+export async function markCommandDeliveryFailed(
+  commandId: string,
+  code: string,
+  message: string,
+): Promise<void> {
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId, status: { in: ['CREATED', 'SENT', 'RECEIVED'] } },
+    data: {
+      status: 'DELIVERY_FAILED',
+      errorCode: code,
+      errorMessage: message,
+      completedAt: new Date(),
+    },
+  })
+}
+
+/**
+ * 未在 ACK 窗口内收到 RECEIVED 的 SENT 指令标为 DELIVERY_FAILED。
+ * 调用点：配置保存后回读 delivery、以及列表查询前。
+ */
+export async function sweepUnackedCommands(user?: string): Promise<number> {
+  const cutoff = new Date(Date.now() - ackTimeoutMs())
+  const result = await prisma.reliabilityCommand.updateMany({
+    where: {
+      ...(user ? { user } : {}),
+      status: 'SENT',
+      sentAt: { lt: cutoff },
+    },
+    data: {
+      status: 'DELIVERY_FAILED',
+      errorCode: 'ACK_TIMEOUT',
+      errorMessage: '指令已发送但未在 ACK 窗口内收到 RECEIVED',
+      completedAt: new Date(),
+    },
+  })
+  const expired = await prisma.reliabilityCommand.updateMany({
+    where: {
+      ...(user ? { user } : {}),
+      status: { in: ['CREATED', 'RECEIVED', 'RUNNING'] },
+      expiresAt: { lt: new Date() },
+    },
+    data: {
+      status: 'EXPIRED',
+      errorCode: 'COMMAND_EXPIRED',
+      completedAt: new Date(),
+    },
+  })
+  return result.count + expired.count
+}
+
+const TERMINAL: CommandStatus[] = ['SUCCEEDED', 'FAILED', 'EXPIRED', 'DELIVERY_FAILED']
+
+export async function applyCommandStatus(input: {
+  clientId: string
+  commandId: string
+  status: 'RECEIVED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  occurredAt?: string
+  result?: Record<string, unknown>
+  error?: { code?: string; message?: string }
+}): Promise<{ action: CommandAction; payload: Record<string, unknown>; applied: boolean }> {
+  const snapshot = await prisma.reliabilityCommand.findUnique({ where: { commandId: input.commandId } })
+  const result = snapshot?.action === 'RUN_EXPERIMENT_CASE'
+    ? await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.reliabilityCommand.updateMany({ where: { commandId: input.commandId, clientId: input.clientId, status: { notIn: TERMINAL } }, data: { commandId: input.commandId } })
+      return applyCommandStatusRow(input, tx)
+    })
+    : await applyCommandStatusRow(input, prisma, snapshot)
+  // 事务外抛错，保留刚写入的过期状态。
+  if ('expired' in result) throw new ReliabilityError('COMMAND_EXPIRED', '指令已过期', 410)
+  return result
+}
+
+async function applyCommandStatusRow(
+  input: Parameters<typeof applyCommandStatus>[0], tx: Prisma.TransactionClient,
+  snapshot?: Awaited<ReturnType<typeof tx.reliabilityCommand.findUnique>>,
+) {
+  const command = snapshot || await tx.reliabilityCommand.findUnique({
+    where: { commandId: input.commandId },
+  })
+  if (!command || command.clientId !== input.clientId) {
+    throw new ReliabilityError('COMMAND_NOT_FOUND', '指令不存在', 404)
+  }
+  if (command.expiresAt.getTime() < Date.now() && !TERMINAL.includes(command.status as CommandStatus)) {
+    const expired = await tx.reliabilityCommand.updateMany({
+      where: { commandId: input.commandId, status: { notIn: TERMINAL } },
+      data: { status: 'EXPIRED', errorCode: 'COMMAND_EXPIRED', completedAt: new Date() },
+    })
+    if (expired.count) return { expired: true, action: command.action as CommandAction, payload: safeParse(command.payloadJson) }
+    if (input.status === 'RECEIVED') throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令已结束，不接受开始执行确认', 409)
+    return { action: command.action as CommandAction, payload: safeParse(command.payloadJson), applied: false }
+  }
+  // 幂等：已到终态的指令不再被回执改写。
+  if (TERMINAL.includes(command.status as CommandStatus)) {
+    if (input.status === 'RECEIVED') throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令已结束，不接受开始执行确认', 409)
+    return {
+      action: command.action as CommandAction,
+      payload: safeParse(command.payloadJson),
+      applied: false,
+    }
+  }
+
+  const now = input.occurredAt ? new Date(input.occurredAt) : new Date()
+  const data: Record<string, unknown> = { status: input.status }
+  if (input.status === 'RECEIVED') data.receivedAt = now
+  if (input.status === 'RUNNING') data.startedAt = now
+  if (input.status === 'SUCCEEDED' || input.status === 'FAILED') data.completedAt = now
+  if (input.result) {
+    const result = command.action === 'RUN_EXPERIMENT_CASE'
+      ? mergeTraceFacts(safeParse(command.resultJson), input.result, (code, message) => new ReliabilityError(code, message, 409))
+      : input.result
+    const traceId = traceIdFromFacts(result)
+    if (command.action === 'RUN_EXPERIMENT_CASE' && traceId) {
+      const payload = safeParse(command.payloadJson)
+      const correlation = payload.correlation as Record<string, unknown> | undefined
+      const attempt = await tx.experimentTraceAttempt.findFirst({ where: {
+        id: String(correlation?.traceAttemptId || ''), commandId: input.commandId, workerId: input.clientId,
+        caseId: String(correlation?.caseRunId || ''), experimentId: String(correlation?.experimentId || ''),
+      } })
+      if (attempt) {
+        const reused = await tx.experimentTraceAttempt.count({ where: { caseId: attempt.caseId, id: { not: attempt.id }, traceId } })
+        if (reused) throw new ReliabilityError('TRACE_ID_REUSED', '客户端返回了其他执行的主链路 ID', 409)
+        if (attempt.traceId && attempt.traceId !== traceId) throw new ReliabilityError('TRACE_ID_CONFLICT', '本次执行已绑定其他主链路，拒绝覆盖', 409)
+        await tx.experimentTraceAttempt.updateMany({ where: {
+          id: attempt.id, commandId: input.commandId, traceId: attempt.traceId,
+          case: { deletedAt: null, experiment: { deletedAt: null, status: { not: 'cancelled' } } },
+        }, data: { traceId } })
+      }
+    }
+    data.resultJson = JSON.stringify(result)
+  }
+  if (input.error) {
+    data.errorCode = input.error.code || 'CLIENT_ERROR'
+    data.errorMessage = input.error.message || null
+  }
+
+  const allowed = input.status === 'RECEIVED' ? ['CREATED', 'SENT', 'RECEIVED']
+    : ['CREATED', 'SENT', 'RECEIVED', 'RUNNING']
+  const updated = await tx.reliabilityCommand.updateMany({
+    where: { commandId: input.commandId, status: { in: allowed } },
+    data,
+  })
+  if (input.status === 'RECEIVED' && !updated.count) {
+    throw new ReliabilityError('COMMAND_NOT_ACCEPTED', '指令状态已变化，不接受开始执行确认', 409)
+  }
+  return {
+    action: command.action as CommandAction,
+    payload: safeParse(command.payloadJson),
+    applied: updated.count > 0,
+  }
+}
+
+function safeParse(json: string | null | undefined): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(json || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 长轮询取下一条待投递指令（IF-N07）。 */
+export async function claimNextCommand(clientId: string, options: { signal?: AbortSignal } = {}): Promise<CommandFrame | null> {
+  if (options.signal?.aborted) return null
+  const command = await prisma.reliabilityCommand.findFirst({
+    where: {
+      clientId,
+      status: 'CREATED',
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: 'asc' },
+  })
+  if (!command || options.signal?.aborted) return null
+  const claimed = await prisma.reliabilityCommand.updateMany({
+    where: { commandId: command.commandId, clientId, status: 'CREATED', expiresAt: { gt: new Date() } },
+    data: { status: 'SENT', sentAt: new Date(), channel: 'poll' },
+  })
+  if (!claimed.count || options.signal?.aborted) return null
+  return {
+    type: 'COMMAND',
+    commandId: command.commandId,
+    action: command.action as CommandAction,
+    createdAt: command.createdAt.toISOString(),
+    expiresAt: command.expiresAt.toISOString(),
+    payload: safeParse(command.payloadJson),
+  }
+}
+
+export async function getCommand(commandId: string) {
+  const command = await prisma.reliabilityCommand.findUnique({ where: { commandId } })
+  const cutoff = new Date(Date.now() - ackTimeoutMs())
+  if (command?.status !== 'SENT' || !command.sentAt || command.sentAt >= cutoff) return command
+  await prisma.reliabilityCommand.updateMany({
+    where: { commandId, status: 'SENT', sentAt: { lt: cutoff }, receivedAt: null },
+    data: { status: 'DELIVERY_FAILED', errorCode: 'ACK_TIMEOUT', errorMessage: '指令已发送但未在 ACK 窗口内收到 RECEIVED', completedAt: new Date() },
+  })
+  return prisma.reliabilityCommand.findUnique({ where: { commandId } })
+}

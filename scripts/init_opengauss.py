@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import sys
 import logging
@@ -19,6 +33,7 @@ TABLE_DEFINITIONS = {
         "columns": [
             ("id", "TEXT PRIMARY KEY"),
             ("username", "TEXT UNIQUE NOT NULL"),
+            ("externalAccount", "TEXT UNIQUE"),
             ("apiKey", "TEXT UNIQUE NOT NULL"),
             ("createdAt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
         ],
@@ -61,10 +76,16 @@ TABLE_DEFINITIONS = {
             ("taskId", "TEXT"),
             ("query", "TEXT"),
             ("framework", "TEXT"),
-            ("tokens", "INTEGER"),
+            # 下面几列（tokens/inputTokens/outputTokens/cacheRead*/cacheCreation*）是整个
+            # session 累计求和，长命 session 会突破 int4 的 2,147,483,647，故用 BIGINT，
+            # 与 prisma/schema.prisma 的 BigInt 保持一致。
+            # 注意：本脚本只建新表 / 给缺失列做 ADD COLUMN，不会改已存在列的类型。已经建过库的
+            # openGauss 实例需要手动 ALTER TABLE "Execution" ALTER COLUMN "<列>" TYPE BIGINT。
+            ("tokens", "BIGINT"),
             ("cost", "FLOAT"),
             ("latency", "FLOAT"),
             ("timestamp", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ("lastIngestedAt", "TIMESTAMP"),
             ("model", "TEXT"),
             ("finalResult", "TEXT"),
             ("skill", "TEXT"),
@@ -81,11 +102,12 @@ TABLE_DEFINITIONS = {
             ("user", "TEXT"),
             ("toolCallCount", "INTEGER"),
             ("llmCallCount", "INTEGER"),
-            ("inputTokens", "INTEGER"),
-            ("outputTokens", "INTEGER"),
+            ("inputTokens", "BIGINT"),
+            ("outputTokens", "BIGINT"),
             ("toolCallErrorCount", "INTEGER"),
-            ("cacheReadInputTokens", "INTEGER"),
-            ("cacheCreationInputTokens", "INTEGER"),
+            ("cacheReadInputTokens", "BIGINT"),
+            ("cacheCreationInputTokens", "BIGINT"),
+            # 单次调用取 max、不累计，到不了 int4 上限，保持 INTEGER。
             ("maxSingleCallTokens", "INTEGER"),
         ],
         "unique_constraints": []
@@ -112,6 +134,7 @@ TABLE_DEFINITIONS = {
             ("startTime", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ("endTime", "TIMESTAMP"),
             ("interactions", "TEXT"),
+            ("langfuseTraceNodes", "TEXT"),
             ("user", "TEXT"),
             ("model", "TEXT"),
         ],
@@ -171,6 +194,45 @@ TABLE_DEFINITIONS = {
         "unique_constraints": []
     }
 }
+
+TABLE_DEFINITIONS.update({
+    "Collaboration": {
+        "columns": [
+            ("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"),
+            ("sourceType", "TEXT NOT NULL DEFAULT 'reported'"), ("sourceRef", "TEXT"),
+            ("diagnosticsJson", "TEXT NOT NULL DEFAULT '[]'"), ("createdAt", "TEXT NOT NULL"),
+            ("updatedAt", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+        ],
+        "unique_constraints": ['UNIQUE ("user", "collaborationId")', 'UNIQUE ("user", "sourceType", "sourceRef")'],
+    },
+    "CollaborationEvent": {
+        "columns": [
+            ("id", "TEXT PRIMARY KEY"), ("collaborationDbId", "TEXT"), ("user", "TEXT NOT NULL"),
+            ("collaborationId", "TEXT NOT NULL"), ("eventId", "TEXT NOT NULL"), ("fromSessionId", "TEXT"),
+            ("toSessionId", "TEXT"), ("description", "TEXT"), ("observedAt", "TEXT"), ("content", "TEXT"),
+            ("fromLocatorJson", "TEXT"), ("sourceType", "TEXT NOT NULL DEFAULT 'reported'"),
+            ("sourceRef", "TEXT"), ("relationKind", "TEXT"), ("role", "TEXT"),
+            ("bodyJson", "TEXT NOT NULL"), ("bodyHash", "TEXT NOT NULL"), ("receivedAt", "TEXT NOT NULL"),
+        ],
+        "unique_constraints": [
+            'UNIQUE ("collaborationDbId", "eventId")',
+            'UNIQUE ("user", "collaborationId", "eventId")',
+        ],
+    },
+    "CollaborationSessionBinding": {
+        "columns": [("id", "TEXT PRIMARY KEY"), ("user", "TEXT NOT NULL"), ("collaborationId", "TEXT NOT NULL"), ("sessionId", "TEXT NOT NULL"), ("traceSessionId", "TEXT NOT NULL"), ("eventClock", "TEXT NOT NULL"), ("createdAt", "TEXT NOT NULL")],
+        "unique_constraints": ['UNIQUE ("user", "collaborationId", "sessionId")'],
+    },
+    "CollaborationEndpointResolution": {
+        "columns": [
+            ("id", "TEXT PRIMARY KEY"), ("eventDbId", "TEXT NOT NULL"), ("side", "TEXT NOT NULL"),
+            ("executionId", "TEXT"), ("linkState", "TEXT NOT NULL DEFAULT 'pending'"), ("linkMethod", "TEXT"),
+            ("evidenceJson", "TEXT NOT NULL DEFAULT '{}'"), ("anchorState", "TEXT"), ("anchorJson", "TEXT"),
+            ("resolvedAt", "TEXT"), ("updatedAt", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+        ],
+        "unique_constraints": ['UNIQUE ("eventDbId", "side")'],
+    },
+})
 
 def get_existing_columns(cursor, table_name):
     cursor.execute("""
@@ -246,6 +308,9 @@ def init_opengauss_db():
                 else:
                     print(f"  ✓ 表结构完整，无需修改")
 
+        cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEvent_page_idx" ON "CollaborationEvent" ("user", "collaborationId", "receivedAt", "id")')
+        cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEvent_parent_idx" ON "CollaborationEvent" ("collaborationDbId", "receivedAt")')
+        cursor.execute('CREATE INDEX IF NOT EXISTS "CollaborationEndpointResolution_execution_idx" ON "CollaborationEndpointResolution" ("executionId")')
         print("\nOpenGauss 数据库表结构同步完成。")
 
         test_user_id = str(uuid.uuid4())

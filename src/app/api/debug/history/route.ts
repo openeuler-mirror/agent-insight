@@ -1,0 +1,90 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/storage/prisma';
+
+export async function GET(req: NextRequest) {
+    const { searchParams } = new URL(req.url);
+    const user = searchParams.get('user');
+
+    if (!user) {
+        return NextResponse.json({ error: 'User is required' }, { status: 400 });
+    }
+
+    try {
+        const history = await (prisma as any).debugHistory.findMany({
+            where: { user },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // Parse resultsJson back to object
+        const formattedHistory = history.map((h: any) => ({
+            ...h,
+            results: JSON.parse(h.resultsJson)
+        }));
+
+        return NextResponse.json(formattedHistory);
+    } catch (err) {
+        console.error('Failed to fetch history:', err);
+        return NextResponse.json({ error: 'Failed to fetch history' }, { status: 500 });
+    }
+}
+
+export async function POST(req: NextRequest) {
+    try {
+        const body = await req.json();
+        const { user, skillId, skillName, versionA, versionB, query, temperature, results } = body;
+
+        console.debug('[DEBUG_HISTORY_POST] Received', { user, skillId, versionA, versionB, resultCount: Array.isArray(results) ? results.length : undefined });
+
+        if (!user) {
+            console.error('[DEBUG_HISTORY_POST] Missing user');
+            return NextResponse.json({ error: 'User is required' }, { status: 400 });
+        }
+
+        console.log('[DEBUG_HISTORY_POST] Creating record in DB...');
+        const newRecord = await (prisma as any).debugHistory.create({
+            data: {
+                user,
+                skillId,
+                skillName,
+                versionA,
+                versionB,
+                query,
+                temperature,
+                resultsJson: JSON.stringify(results)
+            }
+        });
+
+        return NextResponse.json({
+            ...newRecord,
+            results: JSON.parse(newRecord.resultsJson)
+        });
+    } catch (err) {
+        console.error('Failed to save history:', err);
+        return NextResponse.json({ error: 'Failed to save history' }, { status: 500 });
+    }
+}
+
+export async function DELETE(req: NextRequest) {
+    // Note: Next.js 13+ dynamic routes handle params differently. 
+    // But since this is a simple implementation, I'll extract it from the URL if needed 
+    // or use a segment if I name it [id]/route.ts.
+    // I'll use the URL path for simplicity here if I name it differently, 
+    // but the standard is [id]/route.ts.
+    return NextResponse.json({ error: 'Not implemented' }, { status: 501 });
+}

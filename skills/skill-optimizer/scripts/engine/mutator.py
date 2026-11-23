@@ -1,3 +1,17 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 import os
 from typing import List, Optional
@@ -109,10 +123,116 @@ class DiagnosticMutator:
             changelog=list(parent.changelog),
         )
 
-        # Define Tools as Closures to capture new_genome state
-        # The update_skill_content tool has been removed.
-        # Massive strings inside JSON tool calls (like a 6KB SKILL.md) cause frequent token errors and infinite agent retry loops (resulting in the 300000ms bash timeout).
-        # We now instruct the model to output the updated SKILL.md in plain markdown block in its response.
+        file_chunks: dict[str, dict[int, str]] = {}
+        file_totals: dict[str, int] = {}
+        file_summaries: dict[str, str] = {}
+
+        def normalize_path(path: str) -> str:
+            p = (path or "").strip()
+            if p.startswith("./"):
+                p = p[2:]
+            return p
+
+        def reset_round_files() -> None:
+            file_chunks.clear()
+            file_totals.clear()
+            file_summaries.clear()
+
+        def get_missing_chunks(path: str) -> list[int] | None:
+            p = normalize_path(path)
+            total = file_totals.get(p)
+            if total is None:
+                return None
+            have = file_chunks.get(p, {})
+            return [i for i in range(1, total + 1) if i not in have]
+
+        def assemble_file(path: str) -> str | None:
+            p = normalize_path(path)
+            total = file_totals.get(p)
+            if not total:
+                return None
+            missing = get_missing_chunks(p)
+            if missing is None or missing:
+                return None
+            return "".join(file_chunks[p][i] for i in range(1, total + 1))
+
+        def apply_assembled_files() -> None:
+            for p in list(file_totals.keys()):
+                content = assemble_file(p)
+                if content is None:
+                    continue
+                if p == "SKILL.md":
+                    new_genome.raw_text = content
+                    try:
+                        parsed = SkillGenome.from_markdown(content)
+                        new_genome.name = parsed.name
+                    except Exception:
+                        pass
+                    continue
+                new_genome.files[p] = content
+                summary = file_summaries.get(p)
+                if summary:
+                    new_genome.file_meta[p] = summary
+
+        def validate_writable_path(path: str) -> str | None:
+            p = normalize_path(path)
+            if p == "SKILL.md":
+                return None
+            if p.startswith("scripts/") or p.startswith("references/"):
+                return None
+            return "Only SKILL.md, scripts/*, and references/* are allowed."
+
+        @tool
+        def write_file_chunk(
+            path: str,
+            index: int,
+            total: int,
+            content: str,
+            summary: str = "",
+        ):
+            """
+            Write a chunk of a file. Supports large files via (index, total) chunks.
+            - path="SKILL.md" updates the main skill definition.
+            - path starts with scripts/ or references/ updates auxiliary files.
+
+            Args:
+                path: Target relative path (SKILL.md, scripts/..., references/...).
+                index: 1-based chunk index.
+                total: Total number of chunks (must be consistent across calls for the same path).
+                content: Raw file content for this chunk (no markdown fences).
+                summary: Required for scripts/* and references/* (one-line purpose/usage or doc summary).
+            """
+            p = normalize_path(path)
+            err = validate_writable_path(p)
+            if err:
+                return f"Error: {err}"
+            if total < 1:
+                return "Error: total must be >= 1"
+            if index < 1 or index > total:
+                return f"Error: index must be between 1 and {total}"
+
+            if (p.startswith("scripts/") or p.startswith("references/")) and p not in file_summaries:
+                if not (summary or "").strip():
+                    return "Error: summary is required for scripts/* and references/*."
+                file_summaries[p] = summary.strip()
+            elif (summary or "").strip() and p not in file_summaries and p != "SKILL.md":
+                file_summaries[p] = summary.strip()
+
+            existing_total = file_totals.get(p)
+            if existing_total is None:
+                file_totals[p] = total
+            elif existing_total != total:
+                return f"Error: total changed for {p} (was {existing_total}, now {total})."
+
+            if p not in file_chunks:
+                file_chunks[p] = {}
+            if index in file_chunks[p]:
+                logger.warning(f"Chunk overwrite rejected for {p} index={index}.")
+                return f"Warning: chunk {index}/{total} for {p} already received. Skip it."
+
+            file_chunks[p][index] = content
+            received = sorted(file_chunks[p].keys())
+            return f"Saved {p} chunk {index}/{total}. Received: {received}"
 
         @tool
         def record_fix(diagnosis_index: int, description: str, changed_sections: str):
@@ -135,28 +255,21 @@ class DiagnosticMutator:
             return f"Recorded fix for Diagnosis #{diagnosis_index}."
 
         @tool
-        def write_auxiliary_file(
-            path: str,
-            content: str,
-            summary: str = "",
-        ):
-            """Create or update a script or reference file (e.g., scripts/monitor.sh)."""
-            new_genome.files[path] = content
-            if summary:
-                new_genome.file_meta[path] = summary
-            return f"Successfully wrote {path}."
-
-        @tool
-        def delete_auxiliary_file(path: str):
-            """Delete an auxiliary file."""
-            if path in new_genome.files:
-                del new_genome.files[path]
-                return f"Successfully deleted {path}."
-            return f"File {path} not found."
+        def delete_file(path: str):
+            """Delete an auxiliary file (scripts/* or references/*)."""
+            p = normalize_path(path)
+            if p == "SKILL.md":
+                return "Error: SKILL.md cannot be deleted."
+            if p in new_genome.files:
+                del new_genome.files[p]
+                if p in new_genome.file_meta:
+                    del new_genome.file_meta[p]
+                return f"Successfully deleted {p}."
+            return f"File {p} not found."
 
         tools = [
-            write_auxiliary_file,
-            delete_auxiliary_file,
+            write_file_chunk,
+            delete_file,
             record_fix,
         ]
 
@@ -166,21 +279,12 @@ class DiagnosticMutator:
             if not skill_md:
                 return set()
             matches = re.findall(
-                r"\b(?:scripts|references)/[A-Za-z0-9._/\-]+\b", skill_md
+                r"\b(?:scripts|references)/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+\b", skill_md
             )
             return set(matches)
 
-        def apply_skill_md_from_text(text: str) -> bool:
-            extracted = self._extract_markdown(text)
-            if len(extracted) > 100 and ("# Role" in extracted or "name:" in extracted):
-                new_genome.raw_text = extracted
-                try:
-                    parsed = SkillGenome.from_markdown(extracted)
-                    new_genome.name = parsed.name
-                except Exception:
-                    pass
-                return True
-            return False
+        # Remove apply_skill_md_from_text as it is no longer used in Agent mode
+
 
         def run_agent_round(round_prompt: str) -> tuple[str, object | None]:
             callbacks = []
@@ -261,37 +365,7 @@ class DiagnosticMutator:
             return False
 
         def retry_for_completeness(previous_extracted: str) -> bool:
-            retries = int(os.getenv("SKILL_OPT_MUTATOR_TRUNCATION_RETRY", "1") or "1")
-            if retries <= 0:
-                return False
-            if not looks_truncated(previous_extracted):
-                return False
-            parent_headings = extract_headings(parent.raw_text)
-            required = [h for h in parent_headings if "步骤" in h] or [
-                h for h in parent_headings if h.startswith("## ")
-            ]
-            required = [h for h in required if h not in {"## File references"}]
-            required_str = os.linesep.join(f"- {h}" for h in required[:60])
-            for _ in range(retries):
-                round_prompt = (
-                    "Your previous SKILL.md output was incomplete.\n"
-                    "Output the COMPLETE updated SKILL.md as a single ```markdown``` code block.\n"
-                    "Do not summarize, do not truncate, do not use placeholders.\n"
-                    "Keep the original structure and include the following headings:\n"
-                    f"{required_str}\n\n"
-                    "Use the following as the source of truth:\n\n"
-                    f"{prompt}\n"
-                )
-                agent_text, agent_msg = run_agent_round(round_prompt)
-                if not agent_text:
-                    continue
-                self._log_skill_md_extraction_diagnostics(
-                    extracted=self._extract_markdown(agent_text),
-                    raw_text=agent_text,
-                    last_msg=agent_msg,
-                )
-                if apply_skill_md_from_text(agent_text) and not looks_truncated(new_genome.raw_text):
-                    return True
+            # Removed in favor of chunk missing retry logic
             return False
 
         try:
@@ -311,39 +385,61 @@ class DiagnosticMutator:
                 round_prompt = prompt if round_index == 0 else (
                     "You MUST fix the missing auxiliary files referenced by SKILL.md.\n"
                     "Requirements:\n"
-                    "- For EACH missing file, call write_auxiliary_file(path, content, summary).\n"
+                    "- For EACH missing file, call write_file_chunk(path, index, total, content, summary).\n"
+                    "  - If the file is small, use index=1 and total=1.\n"
                     "- Keep SKILL.md content consistent; only adjust references if necessary.\n"
-                    "- Output the COMPLETE updated SKILL.md as a ```markdown``` code block.\n\n"
+                    "- Write the COMPLETE updated SKILL.md using write_file_chunk(path='SKILL.md', index, total, content).\n\n"
                     f"# Missing files:\n{os.linesep.join(f'- {p}' for p in missing)}\n\n"
                     f"# Current SKILL.md:\n```markdown\n{new_genome.raw_text}\n```\n"
                 )
 
+                reset_round_files()
                 last_agent_text, last_agent_msg = run_agent_round(round_prompt)
-                if not last_agent_text:
-                    logger.warning("Mutator agent produced no textual output.")
-                    break
-                self._log_skill_md_extraction_diagnostics(
-                    extracted=self._extract_markdown(last_agent_text),
-                    raw_text=last_agent_text,
-                    last_msg=last_agent_msg,
-                )
 
-                if apply_skill_md_from_text(last_agent_text):
-                    retry_for_completeness(new_genome.raw_text)
-                    referenced = extract_referenced_paths(new_genome.raw_text)
-                    missing = sorted(
-                        [p for p in referenced if p not in new_genome.files]
-                    )
-                    if not missing:
+                chunk_retries = int(os.getenv("SKILL_OPT_MUTATOR_CHUNK_RETRY", "2") or "2")
+                for _ in range(chunk_retries):
+                    if "SKILL.md" not in file_totals:
+                        followup_prompt = (
+                            "You did not write SKILL.md.\n"
+                            "Write the COMPLETE updated SKILL.md using write_file_chunk(path='SKILL.md', index, total, content).\n"
+                            "Do NOT output any part of SKILL.md in your message.\n"
+                            "Use the following as the source of truth:\n\n"
+                            f"{prompt}\n"
+                        )
+                        run_agent_round(followup_prompt)
+                        continue
+                    missing_chunks = get_missing_chunks("SKILL.md")
+                    if missing_chunks is None:
                         break
-                    logger.warning(
-                        f"Mutator agent referenced missing auxiliary files: {missing}"
+                    if not missing_chunks:
+                        break
+                    missing_str = ", ".join(str(i) for i in missing_chunks[:100])
+                    followup_prompt = (
+                        "The SKILL.md update is incomplete.\n"
+                        f"Missing chunk indices: {missing_str}\n"
+                        f"Total chunks: {file_totals.get('SKILL.md')}\n"
+                        "Write ONLY the missing SKILL.md chunks using write_file_chunk(path='SKILL.md', index, total, content).\n"
+                        "Do NOT rewrite chunks that were already received.\n"
+                        "Do NOT output any part of SKILL.md in your message.\n"
+                        "Use the following as the source of truth:\n\n"
+                        f"{prompt}\n"
                     )
-                else:
-                    logger.warning(
-                        "Mutator agent did not provide a valid SKILL.md markdown block."
+                    run_agent_round(followup_prompt)
+
+                apply_assembled_files()
+                assembled_skill = new_genome.raw_text
+                if not assembled_skill or "SKILL.md" not in file_totals or assemble_file("SKILL.md") is None:
+                    logger.error(
+                        f"Mutator agent failed to provide all SKILL.md chunks. Missing: {get_missing_chunks('SKILL.md')}"
                     )
+                    logger.info(f"Raw agent output for failed chunks: {last_agent_text}")
+                    return [parent]
+
+                referenced = extract_referenced_paths(new_genome.raw_text)
+                missing = sorted([p for p in referenced if p not in new_genome.files])
+                if not missing:
                     break
+                logger.warning(f"Mutator agent referenced missing auxiliary files: {missing}")
 
             if missing:
                 logger.warning(
@@ -389,13 +485,12 @@ class DiagnosticMutator:
     def _extract_markdown(self, text: str) -> str:
         """
         Extract content from markdown code blocks if present anywhere in the text.
-        Handles nested code blocks by extracting the first matching block.
+        Handles nested code blocks by extracting the best matching block using a line-by-line state machine.
         """
-        import re
-
         text = text.strip()
 
         def looks_like_skill_md(body: str) -> bool:
+            import re
             b = body.lstrip()
             if b.startswith("---") and re.search(r"(?m)^name:\s*\S+", b):
                 return True
@@ -414,14 +509,40 @@ class DiagnosticMutator:
             return False
 
         blocks: list[tuple[str, str]] = []
-        for m in re.finditer(
-            r"```(?P<lang>[A-Za-z0-9_-]+)?\s*\n(?P<body>.*?)(?:\n)?```",
-            text,
-            re.DOTALL,
-        ):
-            lang = (m.group("lang") or "").strip().lower()
-            body = (m.group("body") or "").strip()
-            blocks.append((lang, body))
+        
+        # State machine parsing
+        in_block = False
+        fence_char = ""
+        fence_len = 0
+        lang_tag = ""
+        current_lines: list[str] = []
+        
+        import re
+        lines = text.splitlines()
+        for line in lines:
+            if not in_block:
+                m = re.match(r"^\s*(?P<fence>`{3,}|~{3,})(?:\s*(?P<lang>[a-zA-Z0-9_-]+))?\s*$", line)
+                if m:
+                    in_block = True
+                    fence_str = m.group("fence")
+                    fence_char = fence_str[0]
+                    fence_len = len(fence_str)
+                    lang_tag = (m.group("lang") or "").strip().lower()
+                    current_lines = []
+            else:
+                m = re.match(r"^\s*(?P<fence>`{3,}|~{3,})\s*$", line)
+                if m:
+                    fence_str = m.group("fence")
+                    # Closing fence must use the same character and be AT LEAST as long as opening fence
+                    if fence_str[0] == fence_char and len(fence_str) >= fence_len:
+                        blocks.append((lang_tag, "\n".join(current_lines)))
+                        in_block = False
+                        continue
+                current_lines.append(line)
+        
+        # If text ends while still in_block, save it as truncated block
+        if in_block:
+            blocks.append((lang_tag, "\n".join(current_lines)))
 
         best_body = ""
         best_score = -10_000
@@ -445,10 +566,7 @@ class DiagnosticMutator:
         if best_body and looks_like_skill_md(best_body):
             return best_body.strip()
 
-        match = re.search(r"```markdown\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-
+        # Fallback: if no valid blocks found, just return text (might be plain text response)
         return text.strip()
 
     def _log_skill_md_extraction_diagnostics(
@@ -507,15 +625,27 @@ class DiagnosticMutator:
 
         if not raw_text:
             return False
-        if raw_text.count("```") % 2 == 1:
-            return True
-        if re.search(r"```markdown\b", raw_text, re.IGNORECASE) and not re.search(
-            r"```markdown\b[\s\S]*?```",
-            raw_text,
-            re.IGNORECASE,
-        ):
-            return True
-        return False
+            
+        in_block = False
+        fence_char = ""
+        fence_len = 0
+        
+        for line in raw_text.splitlines():
+            if not in_block:
+                m = re.match(r"^\s*(?P<fence>`{3,}|~{3,})(?:\s*[a-zA-Z0-9_-]+)?\s*$", line)
+                if m:
+                    in_block = True
+                    fence_str = m.group("fence")
+                    fence_char = fence_str[0]
+                    fence_len = len(fence_str)
+            else:
+                m = re.match(r"^\s*(?P<fence>`{3,}|~{3,})\s*$", line)
+                if m:
+                    fence_str = m.group("fence")
+                    if fence_str[0] == fence_char and len(fence_str) >= fence_len:
+                        in_block = False
+        
+        return in_block
 
     @staticmethod
     def _has_suspicious_colon_leadin(md: str) -> bool:

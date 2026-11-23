@@ -1,0 +1,13 @@
+{
+  "agent_ras": {
+    "enabled": true,
+    "service": {
+      "transport": "inproc",
+      "python": "/path/to/python3",
+      "libpython": "/path/to/libpython3.X.so",
+      "python_home": "/path/to/python-prefix",
+      "repo_root": "~/.agent-insight/ras/runtime/<fingerprint>",
+      "python_packages": "~/.agent-insight/ras/runtime/<fingerprint>/.python-packages"
+    }
+  }
+}

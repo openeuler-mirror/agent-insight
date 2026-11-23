@@ -1,0 +1,27 @@
+{
+  "_readme": "内置模型单价默认值（USD / 百万 token）。作为兜底；自定义单价（custom-models.json / 「模型注册→模型单价」界面）按前缀覆盖此处。键为模型名前缀（最长前缀优先匹配）。",
+  "_source": "官方定价页核对于 2026-07：Anthropic(platform.claude.com/docs pricing) / DeepSeek(api-docs.deepseek.com) / OpenAI(developers.openai.com) / Google Gemini(ai.google.dev) / MiniMax(minimaxi.com)。价格会变，请以官方为准、必要时在界面覆盖。",
+
+  "claude-opus-4-8": { "inputTokenPrice": 5, "outputTokenPrice": 25, "cacheReadInputTokenPrice": 0.5, "cacheCreationInputTokenPrice": 6.25, "contextWindow": 1000000 },
+  "claude-opus-4-7": { "inputTokenPrice": 5, "outputTokenPrice": 25, "cacheReadInputTokenPrice": 0.5, "cacheCreationInputTokenPrice": 6.25, "contextWindow": 1000000 },
+  "claude-opus-4-6": { "inputTokenPrice": 5, "outputTokenPrice": 25, "cacheReadInputTokenPrice": 0.5, "cacheCreationInputTokenPrice": 6.25, "contextWindow": 1000000 },
+  "claude-opus-4-5": { "inputTokenPrice": 5, "outputTokenPrice": 25, "cacheReadInputTokenPrice": 0.5, "cacheCreationInputTokenPrice": 6.25, "contextWindow": 200000 },
+  "claude-sonnet-5": { "inputTokenPrice": 2, "outputTokenPrice": 10, "cacheReadInputTokenPrice": 0.2, "cacheCreationInputTokenPrice": 2.5, "contextWindow": 1000000 },
+  "claude-sonnet-4-5": { "inputTokenPrice": 3, "outputTokenPrice": 15, "cacheReadInputTokenPrice": 0.3, "cacheCreationInputTokenPrice": 3.75, "contextWindow": 200000 },
+  "claude-haiku-4-5": { "inputTokenPrice": 1, "outputTokenPrice": 5, "cacheReadInputTokenPrice": 0.1, "cacheCreationInputTokenPrice": 1.25, "contextWindow": 200000 },
+  "claude-fable-5": { "inputTokenPrice": 10, "outputTokenPrice": 50, "cacheReadInputTokenPrice": 1, "cacheCreationInputTokenPrice": 12.5, "contextWindow": 200000 },
+
+  "deepseek-v4-flash": { "inputTokenPrice": 0.14, "outputTokenPrice": 0.28, "cacheReadInputTokenPrice": 0.0028, "contextWindow": 128000 },
+  "deepseek-v4-pro": { "inputTokenPrice": 0.435, "outputTokenPrice": 0.87, "cacheReadInputTokenPrice": 0.003625, "contextWindow": 128000 },
+  "deepseek-reasoner": { "inputTokenPrice": 0.14, "outputTokenPrice": 0.28, "cacheReadInputTokenPrice": 0.0028, "contextWindow": 128000 },
+  "deepseek-chat": { "inputTokenPrice": 0.14, "outputTokenPrice": 0.28, "cacheReadInputTokenPrice": 0.0028, "contextWindow": 128000 },
+
+  "gpt-4.1-mini": { "inputTokenPrice": 0.4, "outputTokenPrice": 1.6, "cacheReadInputTokenPrice": 0.1, "contextWindow": 1000000 },
+  "gpt-4.1": { "inputTokenPrice": 2, "outputTokenPrice": 8, "cacheReadInputTokenPrice": 0.5, "contextWindow": 1000000 },
+  "gpt-4o": { "inputTokenPrice": 2.5, "outputTokenPrice": 10, "cacheReadInputTokenPrice": 1.25, "contextWindow": 128000 },
+
+  "gemini-2.5-pro": { "inputTokenPrice": 1.25, "outputTokenPrice": 10, "cacheReadInputTokenPrice": 0.125, "contextWindow": 1000000 },
+  "gemini-2.5-flash": { "inputTokenPrice": 0.3, "outputTokenPrice": 2.5, "cacheReadInputTokenPrice": 0.03, "contextWindow": 1000000 },
+
+  "minimax-m2": { "inputTokenPrice": 0.3, "outputTokenPrice": 1.2, "cacheReadInputTokenPrice": 0.03, "contextWindow": 200000 }
+}

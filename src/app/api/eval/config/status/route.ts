@@ -1,0 +1,77 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { db } from '@/lib/storage/prisma';
+import { normalizeConfigDatasetType } from '@/lib/engine/evaluation/config-dataset';
+import { resolveLoginMode } from '@/lib/auth/login-mode';
+import { NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
+
+export async function GET(request: Request) {
+    try {
+        const { searchParams } = new URL(request.url);
+        
+        if (searchParams.get('check_login') === 'true' || searchParams.get('check_org') === 'true') {
+            const loginMode = resolveLoginMode();
+            return NextResponse.json({
+                login_mode: loginMode,
+                org_mode: loginMode === 'organization',
+                org_login_redirect_url: process.env.ORG_LOGIN_REDIRECT_URL || ''
+            });
+        }
+
+        const id = searchParams.get('id');
+        if (!id) {
+            return NextResponse.json({ error: 'Missing id parameter' }, { status: 400 });
+        }
+
+        const config = await db.findConfigById(id);
+
+        if (!config) {
+            return NextResponse.json({ error: 'Config not found' }, { status: 404 });
+        }
+
+        let rootCauses = [];
+        let keyActions = [];
+        let routingAnchors = [];
+        let extractedKeyActions = null;
+        try {
+            if (config.rootCauses) rootCauses = JSON.parse(config.rootCauses);
+            if (config.keyActions) keyActions = JSON.parse(config.keyActions);
+            if (config.routingAnchors) routingAnchors = JSON.parse(config.routingAnchors);
+            if (config.extractedKeyActions) extractedKeyActions = JSON.parse(config.extractedKeyActions);
+        } catch {}
+
+        return NextResponse.json({
+            id: config.id,
+            query: config.query ?? null,
+            dataset_type: normalizeConfigDatasetType(config.datasetType),
+            skill: config.skill,
+            skillVersion: config.skillVersion ?? null,
+            routing_intent: config.routingIntent || null,
+            routing_anchors: routingAnchors,
+            standard_answer: config.standardAnswer || '',
+            root_causes: rootCauses,
+            key_actions: keyActions,
+            extractedKeyActions: extractedKeyActions,
+            parse_status: config.parseStatus || 'completed'
+        });
+    } catch (error: any) {
+        console.error('Config Status Error:', error);
+        return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    }
+}

@@ -1,5 +1,25 @@
-import { resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
+import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
+import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
@@ -89,7 +109,7 @@ export async function POST(request: NextRequest) {
 
             if (skill) {
                 return NextResponse.json({
-                    error: `Skill '${extractedName}' already exists. Please use the 'Version Management' (版本管理) -> 'Upload New Version' feature to update it.`
+                    error: `Skill '${extractedName}' 已经存在，请使用 版本管理 -> 上传新版本 功能更新。`
                 }, { status: 400 });
             }
 
@@ -106,7 +126,7 @@ export async function POST(request: NextRequest) {
 
         const nextVersionNum = lastVersion ? (lastVersion.version + 1) : 0;
 
-        const storageBase = path.join(process.cwd(), 'data', 'storage', 'skills', skill.id, `v${nextVersionNum}`);
+        const storageBase = getSkillVersionStorageDir(skill.id, nextVersionNum);
         ensureDir(storageBase);
 
         const savedFilesList: string[] = [];
@@ -131,13 +151,45 @@ export async function POST(request: NextRequest) {
             skillId: skill.id,
             version: nextVersionNum,
             content: skillContent,
-            assetPath: `data/storage/skills/${skill.id}/v${nextVersionNum}`,
+            assetPath: getSkillVersionAssetPath(skill.id, nextVersionNum),
             files: JSON.stringify(savedFilesList),
             changeLog: `Uploaded version ${nextVersionNum}`
         });
 
         await db.updateSkill(skill.id, { activeVersion: nextVersionNum });
         console.log(`[Upload] Set activeVersion to ${nextVersionNum} for skill ${skill.name}`);
+
+        parseSkillFlow(skillContent, skill.id, nextVersionNum, user || null)
+            .then(result => {
+                if (result.success) {
+                    console.log(`[Upload] Auto-parsed flow for skill ${skill.name} v${nextVersionNum}`);
+                } else {
+                    console.warn(`[Upload] Auto-parse flow failed for skill ${skill.name} v${nextVersionNum}: ${result.error}`);
+                }
+            })
+            .catch(e => console.warn(`[Upload] Auto-parse flow error for skill ${skill.name} v${nextVersionNum}:`, e));
+
+        runStaticEvaluation({
+            skillId: skill.id,
+            version: nextVersionNum,
+            user: user || null,
+            trigger: 'auto-upload',
+        })
+            .then(r => {
+                if (r.status === 'skipped') {
+                    console.log(`[Upload] Static eval skipped for skill ${skill.name} v${nextVersionNum}: ${r.skipReason}`);
+                } else {
+                    console.log(`[Upload] Static eval ${r.status} for skill ${skill.name} v${nextVersionNum}: ${r.issuesCount} issues`);
+                }
+            })
+            .catch(e => console.warn(`[Upload] Static eval error for skill ${skill.name} v${nextVersionNum}:`, e));
+
+        recordUsageEvent({
+            user: authResult.username,
+            featureKey: 'skill',
+            eventKey: 'skill.upload',
+            route: request.nextUrl.pathname,
+        });
 
         return NextResponse.json({ success: true, skill, version: skillVersion });
 

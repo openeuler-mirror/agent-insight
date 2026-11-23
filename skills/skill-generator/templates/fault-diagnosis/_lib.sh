@@ -1,0 +1,89 @@
+#!/bin/bash
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# _lib.sh — 排查型 Skill 辅助函数目录
+# 本文件不会被复制到生成的 Skill 中，而是作为函数目录供生成器参考。
+# 生成脚本时，按需选取下列函数内联到每个脚本头部（仅内联实际调用的函数）。
+#
+# 常见内联组合：
+#   collect.sh:     record + dump_json
+#   check_*.sh:     run_cmd + record + hit + miss + dump_json
+#   需要时间线时追加: timeline
+#   需要命令检测时追加: has_cmd
+
+set -uo pipefail
+
+DIAG_RESULTS=()
+
+# 带超时执行命令，捕获 stdout+stderr
+run_cmd() {
+    local desc="$1"; shift
+    local output rc
+    output=$(timeout 10 "$@" 2>&1); rc=$?
+    echo "$output"
+    return $rc
+}
+
+# 记录检查结果
+record() {
+    local check="$1" status="$2" detail="$3" ts
+    ts=$(date -Iseconds 2>/dev/null || date "+%Y-%m-%dT%H:%M:%S")
+    # 截断detail防止JSON过大
+    detail=$(printf '%s' "$detail" | head -20 | tr '\n' '|' | tr -d '\r\t')
+    detail=$(printf '%s' "$detail" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    check=$(printf '%s' "$check" | tr -d '\r\t' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    status=$(printf '%s' "$status" | tr -d '\r\t' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    ts=$(printf '%s' "$ts" | tr -d '\r\t' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    DIAG_RESULTS+=("{\"check\":\"$check\",\"status\":\"$status\",\"detail\":\"$detail\",\"time\":\"$ts\"}")
+}
+
+hit()  { record "$1" "HIT"  "$2"; }
+miss() { record "$1" "MISS" "$2"; }
+warn() { record "$1" "WARN" "$2"; }
+
+# 输出所有结果为 JSON 数组
+dump_json() {
+    echo "["
+    local first=true
+    for r in "${DIAG_RESULTS[@]}"; do
+        $first && first=false || echo ","
+        echo "  $r"
+    done
+    echo "]"
+}
+
+# 时间线提取 — 苏格拉底追问的工具
+# 用法: timeline "关键词" [回溯小时数，默认1]
+# 从 journalctl/dmesg/var-log 多源提取，按时间排序去重
+timeline() {
+    local keyword="$1" hours="${2:-1}"
+    local since
+    # 兼容 GNU date 和 BSD date
+    since=$(date -d "$hours hours ago" "+%Y-%m-%d %H:%M:%S" 2>/dev/null) || \
+    since=$(date -v-${hours}H "+%Y-%m-%d %H:%M:%S" 2>/dev/null) || \
+    since=""
+    {
+        if [ -n "$since" ]; then
+            journalctl --since "$since" --no-pager 2>/dev/null | grep -i "$keyword"
+        else
+            journalctl -n 500 --no-pager 2>/dev/null | grep -i "$keyword"
+        fi
+        dmesg -T 2>/dev/null | grep -i "$keyword"
+        grep -rh "$keyword" /var/log/messages /var/log/secure /var/log/syslog /var/log/audit/audit.log 2>/dev/null | tail -50
+    } | sort -t' ' -k1,2 2>/dev/null | uniq
+}
+
+# 辅助：检查命令是否可用
+has_cmd() { command -v "$1" &>/dev/null; }

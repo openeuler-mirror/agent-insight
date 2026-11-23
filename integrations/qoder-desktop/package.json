@@ -1,0 +1,77 @@
+{
+  "name": "agent-insight-qoder-desktop",
+  "displayName": "Agent Insight Qoder CN Collector",
+  "description": "Collect Qoder CN Desktop Agent, Quest, Expert, Skill, Tool, MCP, connector, Subagent, and LLM traces for Agent Insight.",
+  "version": "0.1.12",
+  "publisher": "openeuler",
+  "license": "MulanPSL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://atomgit.com/openeuler/agent-insight.git"
+  },
+  "engines": {
+    "vscode": ">=1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:agentInsightQoder.configure",
+    "onCommand:agentInsightQoder.uninstallCollector"
+  ],
+  "files": [
+    "extension.js",
+    "uninstall-watcher.mjs",
+    "collector/**",
+    "LICENSE"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentInsightQoder.configure",
+        "title": "Agent Insight: Configure Qoder CN Collector"
+      },
+      {
+        "command": "agentInsightQoder.uninstallCollector",
+        "title": "Agent Insight: Uninstall Qoder CN Collector Data"
+      }
+    ],
+    "configuration": {
+      "title": "Agent Insight Qoder CN Collector",
+      "properties": {
+        "agentInsightQoder.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Qoder CN Desktop Trace collection."
+        },
+        "agentInsightQoder.host": {
+          "type": "string",
+          "default": "",
+          "description": "Agent Insight server URL. When empty, use ~/.agent-insight/config."
+        },
+        "agentInsightQoder.maxContentChars": {
+          "type": "integer",
+          "default": 2000,
+          "minimum": 256,
+          "maximum": 20000,
+          "description": "Maximum captured characters for prompt, result, and tool content."
+        },
+        "agentInsightQoder.purgeOnUninstall": {
+          "type": "boolean",
+          "default": true,
+          "description": "Delete only the Qoder CN Desktop account-isolated spool after this extension is uninstalled."
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  }
+}

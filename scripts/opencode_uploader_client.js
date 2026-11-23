@@ -1,0 +1,1875 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import http from "node:http"
+import https from "node:https"
+import { randomUUID, createHash } from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
+import os from "node:os"
+import { URL, fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
+
+const require = createRequire(import.meta.url)
+
+function getPreferredInsightDir() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error("AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR.")
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), ".agent-insight")
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, () => os.homedir()))
+}
+
+function getLegacyInsightDir() {
+  return path.join(os.homedir(), ".skill-insight")
+}
+
+function getExistingInsightDir() {
+  const preferred = getPreferredInsightDir()
+  if (process.env.AGENT_INSIGHT_HOME) return preferred
+  const legacy = getLegacyInsightDir()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
+
+function getInsightEnvCandidates() {
+  return [
+    path.join(getPreferredInsightDir(), ".env"),
+    path.join(getLegacyInsightDir(), ".env"),
+  ]
+}
+
+function parseDotEnvText(text) {
+  const out = {}
+  const lines = String(text || "").split(/\r?\n/)
+  for (const line of lines) {
+    const s = line.trim()
+    if (!s || s.startsWith("#")) continue
+    const idx = s.indexOf("=")
+    if (idx <= 0) continue
+    const k = s.slice(0, idx).trim()
+    let v = s.slice(idx + 1).trim()
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+    out[k] = v
+  }
+  return out
+}
+
+function loadSkillInsightEnv() {
+  const env = { ...process.env }
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const txt = fs.readFileSync(file, "utf8")
+      const parsed = parseDotEnvText(txt)
+      for (const [k, v] of Object.entries(parsed)) {
+        if (env[k] === undefined) env[k] = v
+      }
+    }
+  } catch {}
+  return env
+}
+
+/**
+ * .env 里写了、却被进程环境里的同名变量压住的键（值不同才算）。
+ *
+ * 上面那句 `if (env[k] === undefined)` 是「环境变量优先」——保留它是为了让一次性覆盖继续
+ * 可用。代价是重跑 setup 把 .env 指向新平台后，旧终端里残留的 export 会让上报**继续发往
+ * 老地址**，而且此前全程无任何提示：日志里的 host 与 .env 明明不一致也没人吭声。
+ */
+function findShadowedEnvKeys() {
+  const out = []
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const parsed = parseDotEnvText(fs.readFileSync(file, "utf8"))
+      for (const [k, v] of Object.entries(parsed)) {
+        const actual = process.env[k]
+        if (actual === undefined || actual === v) continue
+        if (out.some((x) => x.key === k)) continue
+        out.push({ key: k, fromFile: v, actual })
+      }
+    }
+  } catch {}
+  return out
+}
+
+/** 拼成一行日志。含 KEY/TOKEN/SECRET 的键只报键名，不打值。 */
+function describeShadowedEnv(entries) {
+  return entries
+    .map(({ key, fromFile, actual }) =>
+      /KEY|TOKEN|SECRET|PASSWORD/i.test(key)
+        ? `${key}(值不同,已隐藏)`
+        : `${key}(.env=${fromFile} 实际=${actual})`,
+    )
+    .join(" ")
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function safeMkdirp(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch {}
+}
+
+function isValidClientId(value) {
+  return typeof value === "string" && /^cli_[A-Za-z0-9][A-Za-z0-9._-]{7,123}$/.test(value)
+}
+
+function readClientIdentity(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"))
+    return isValidClientId(value?.clientId) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function ensureClientIdentity(options = {}) {
+  const dataDir = options.dataDir || getPreferredInsightDir()
+  const registeredFile = options.registeredClientFile || path.join(dataDir, "client", "config.json")
+  const registered = readClientIdentity(registeredFile)
+  if (registered) return registered
+  const file = path.join(dataDir, "client.json")
+  if (fs.existsSync(file)) return readClientIdentity(file)
+
+  safeMkdirp(dataDir)
+  const identity = {
+    schemaVersion: 1,
+    clientId: `cli_${(options.randomUUID || randomUUID)()}`,
+    hostname: String(options.hostname || os.hostname() || "").trim() || null,
+    createdAt: (options.now || (() => new Date()))().toISOString(),
+  }
+  try {
+    fs.writeFileSync(file, `${JSON.stringify(identity, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    })
+    return identity
+  } catch (error) {
+    if (error?.code === "EEXIST") return readClientIdentity(file)
+    return null
+  }
+}
+
+function normalizeServiceBaseUrl(value) {
+  try {
+    const raw = String(value || "").trim()
+    if (!raw) return null
+    const url = new URL(raw.match(/^https?:\/\//i) ? raw : `http://${raw}`)
+    const pathname = url.pathname.replace(/\/+$/, "")
+    return `${url.origin.toLowerCase()}${pathname}`
+  } catch {
+    return null
+  }
+}
+
+function clientIdentityForHost(clientIdentity, host) {
+  if (!clientIdentity?.deviceCredential) return clientIdentity
+  const registeredBaseUrl = normalizeServiceBaseUrl(clientIdentity.insightBaseUrl)
+  const targetBaseUrl = normalizeServiceBaseUrl(host)
+  if (registeredBaseUrl && targetBaseUrl && registeredBaseUrl === targetBaseUrl) return clientIdentity
+  return { ...clientIdentity, deviceCredential: null }
+}
+
+function pickReportedIp(networkInterfaces = os.networkInterfaces()) {
+  for (const entries of Object.values(networkInterfaces || {})) {
+    for (const entry of entries || []) {
+      const isV4 = entry.family === "IPv4" || entry.family === 4
+      const address = String(entry.address || "").trim()
+      if (isV4 && !entry.internal && address && !address.startsWith("127.")) return address
+    }
+  }
+  return null
+}
+
+function appendUploaderLog(message) {
+  try {
+    const file = path.join(getPreferredInsightDir(), "logs", "opencode_uploader.log")
+    safeMkdirp(path.dirname(file))
+    fs.appendFileSync(file, `[${nowIso()}] ${message}\n`)
+  } catch {}
+}
+
+function toMsTimestamp(v) {
+  if (v == null) return null
+  if (typeof v === "number" && Number.isFinite(v)) return v
+  if (typeof v === "string") {
+    const s = v.trim()
+    if (!s) return null
+    if (/^\d+$/.test(s)) {
+      const n = Number(s)
+      return Number.isFinite(n) ? n : null
+    }
+    const t = Date.parse(s)
+    return Number.isFinite(t) ? t : null
+  }
+  return null
+}
+
+function usageTotalsFromTokens(tokens) {
+  const input = Number(tokens?.input ?? 0) || 0
+  const rawOutput = Number(tokens?.output ?? 0) || 0
+  const reasoning = Number(tokens?.reasoning ?? 0) || 0
+  const cacheRead = Number(tokens?.cache?.read ?? 0) || 0
+  const cacheWrite = Number(tokens?.cache?.write ?? 0) || 0
+  const output = reasoning > 0 && rawOutput < reasoning ? rawOutput + reasoning : rawOutput
+  return { input, output, reasoning, cacheRead, cacheWrite, total: input + output + reasoning + cacheRead + cacheWrite }
+}
+
+function safeJsonParse(line) {
+  try {
+    return JSON.parse(line)
+  } catch {
+    return null
+  }
+}
+
+function loadDeletedSessionIds(env) {
+  const file = env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS || path.join(getExistingInsightDir(), "opencode_deleted_sessions.json")
+  try {
+    if (!fs.existsSync(file)) return new Set()
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"))
+    const rawIds = Array.isArray(parsed) ? parsed : parsed?.sessionIds
+    if (!Array.isArray(rawIds)) return new Set()
+    return new Set(rawIds.map((id) => String(id || "").trim()).filter(Boolean))
+  } catch {
+    return new Set()
+  }
+}
+
+function pickFirstString(...values) {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim()) return v.trim()
+  }
+  return ""
+}
+
+function extractSessionIdFromText(text) {
+  if (typeof text !== "string" || !text) return ""
+  const patterns = [
+    /<task_metadata>[\s\S]*?session_id:\s*(ses_[A-Za-z0-9_-]+)/i,
+    /session_id:\s*(ses_[A-Za-z0-9_-]+)/i,
+    /sessionID:\s*(ses_[A-Za-z0-9_-]+)/i,
+    /sessionId:\s*(ses_[A-Za-z0-9_-]+)/i,
+    /task\(\s*session_id\s*=\s*["'](ses_[A-Za-z0-9_-]+)["']/i,
+    /task_id:\s*(ses_[A-Za-z0-9_-]+)/i,
+  ]
+  for (const re of patterns) {
+    const m = text.match(re)
+    if (m?.[1]) return m[1]
+  }
+  return ""
+}
+
+function partIdentity(part) {
+  if (!part) return ""
+  const type = String(part.type || "").toLowerCase()
+  if (type === "tool") {
+    const callId = pickFirstString(part.callID, part.callId, part.call_id, part.state?.callID, part.state?.callId, part.state?.call_id)
+    if (callId) return `tool-call:${callId}`
+    const tool = pickFirstString(part.tool, part.name)
+    const input = stableStringify(part.state?.input || part.input || {})
+    if (tool) return `tool:${tool}:${input}`
+  }
+  return pickFirstString(part.id) || stableStringify(part)
+}
+
+function stableStringify(value) {
+  if (value == null) return ""
+  if (typeof value === "string") return value
+  try {
+    const seen = new WeakSet()
+    return JSON.stringify(value, (_key, v) => {
+      if (v && typeof v === "object") {
+        if (seen.has(v)) return "[Circular]"
+        seen.add(v)
+        if (!Array.isArray(v)) {
+          const out = {}
+          for (const k of Object.keys(v).sort()) out[k] = v[k]
+          return out
+        }
+      }
+      return v
+    })
+  } catch {
+    return String(value)
+  }
+}
+
+function extractTaskChildSessionId(part) {
+  if (!part || part.tool !== "task") return ""
+  const state = part.state || {}
+  const direct = pickFirstString(
+    state.sessionID,
+    state.sessionId,
+    state.session_id,
+    state.output?.sessionID,
+    state.output?.sessionId,
+    state.output?.session_id,
+  )
+  if (direct.startsWith("ses_")) return direct
+
+  const candidates = [
+    state.output,
+    state.result,
+    state.text,
+    part.output,
+    part.result,
+    part.text,
+  ]
+  for (const c of candidates) {
+    if (typeof c === "string") {
+      const sid = extractSessionIdFromText(c)
+      if (sid) return sid
+    } else if (c && typeof c === "object") {
+      const sid = pickFirstString(c.sessionID, c.sessionId, c.session_id)
+      if (sid.startsWith("ses_")) return sid
+      const fromJson = extractSessionIdFromText(JSON.stringify(c))
+      if (fromJson) return fromJson
+    }
+  }
+  return ""
+}
+
+function getSessionInfoFromEvent(record, event) {
+  const props = event?.properties || {}
+  const payload = event?.payload || {}
+  const info = props.info || props.session || payload.info || payload.session || event?.info || event?.session || {}
+  const sid = pickFirstString(
+    info.id,
+    info.sessionID,
+    info.sessionId,
+    info.session_id,
+    props.sessionID,
+    props.sessionId,
+    props.session_id,
+    payload.sessionID,
+    payload.sessionId,
+    payload.session_id,
+    record?.sessionID,
+  )
+  const pid = pickFirstString(
+    info.parentID,
+    info.parentId,
+    info.parent_id,
+    props.parentID,
+    props.parentId,
+    props.parent_id,
+    payload.parentID,
+    payload.parentId,
+    payload.parent_id,
+  )
+  const agent = pickFirstString(info.agent, info.name, props.agent, props.name, payload.agent, payload.name)
+  return { sid, pid, agent }
+}
+
+function listJsonlFiles(spoolDir) {
+  const out = []
+  try {
+    const days = fs.readdirSync(spoolDir, { withFileTypes: true }).filter((d) => d.isDirectory())
+    for (const d of days) {
+      const dir = path.join(spoolDir, d.name)
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+      for (const f of files) out.push(path.join(dir, f))
+    }
+  } catch {}
+  out.sort()
+  return out
+}
+
+function selectJsonlFiles(spoolDir, spoolFile) {
+  const candidate = String(spoolFile || "").trim()
+  if (!candidate) return listJsonlFiles(spoolDir)
+  const resolvedDir = path.resolve(spoolDir)
+  const resolvedFile = path.resolve(candidate)
+  if (
+    !resolvedFile.startsWith(`${resolvedDir}${path.sep}`)
+    || !resolvedFile.endsWith(".jsonl")
+    || !fs.existsSync(resolvedFile)
+  ) return listJsonlFiles(spoolDir)
+  return [resolvedFile]
+}
+
+function selectedSpoolMtime(spoolDir, spoolFile) {
+  const files = selectJsonlFiles(spoolDir, spoolFile)
+  if (files.length === 1 && String(spoolFile || "").trim()) {
+    try { return fs.statSync(files[0]).mtimeMs } catch { return 0 }
+  }
+  return newestSpoolMtime(spoolDir)
+}
+
+const SESSION_RECORD_MARKERS = [
+  '"sessionID":"ses_',
+  '"sessionId":"ses_',
+  '"session_id":"ses_',
+  '"trace_id":"ses_',
+]
+
+function fileContainsAnyText(file, needles) {
+  const terms = needles
+    .filter((needle) => typeof needle === "string" && needle.length > 0)
+    .map((needle) => Buffer.from(needle))
+  if (!terms.length) return false
+
+  const maxNeedleBytes = Math.max(...terms.map((needle) => needle.length))
+  const chunk = Buffer.allocUnsafe(64 * 1024)
+  let carry = Buffer.alloc(0)
+  let fd
+  try {
+    fd = fs.openSync(file, "r")
+    while (true) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null)
+      if (bytesRead <= 0) break
+      const haystack = carry.length
+        ? Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+        : chunk.subarray(0, bytesRead)
+      if (terms.some((needle) => haystack.indexOf(needle) >= 0)) return true
+      const carryBytes = Math.min(Math.max(maxNeedleBytes - 1, 0), haystack.length)
+      carry = carryBytes > 0 ? Buffer.from(haystack.subarray(haystack.length - carryBytes)) : Buffer.alloc(0)
+    }
+  } catch {
+    return false
+  } finally {
+    if (typeof fd === "number") {
+      try { fs.closeSync(fd) } catch {}
+    }
+  }
+  return false
+}
+
+function selectJsonlFilesForUpload(files, options = {}) {
+  const forceSessions = Array.from(options.forceSessions || []).filter(Boolean)
+  const pendingFiles = new Set(options.pendingFiles || [])
+  const lastScanMtime = Number(options.lastScanMtime) || 0
+  const needles = forceSessions.length
+    ? forceSessions.map((sessionId) => JSON.stringify(sessionId))
+    : SESSION_RECORD_MARKERS
+
+  return files.filter((file) => {
+    if (!forceSessions.length && !pendingFiles.has(file) && lastScanMtime > 0) {
+      try {
+        if (fs.statSync(file).mtimeMs <= lastScanMtime) return false
+      } catch {
+        return false
+      }
+    }
+    return fileContainsAnyText(file, needles)
+  })
+}
+
+// Returns the newest mtime (ms) across all .jsonl files in the spool dir, or 0 if none.
+// Used as a fast-skip gate: if no file has been touched since the last scan, the
+// uploader can exit immediately without parsing any data.
+function newestSpoolMtime(spoolDir) {
+  let newest = 0
+  try {
+    const days = fs.readdirSync(spoolDir, { withFileTypes: true }).filter((d) => d.isDirectory())
+    for (const d of days) {
+      const dir = path.join(spoolDir, d.name)
+      let files
+      try {
+        files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+      } catch {
+        continue
+      }
+      for (const f of files) {
+        try {
+          const st = fs.statSync(path.join(dir, f))
+          if (st.mtimeMs > newest) newest = st.mtimeMs
+        } catch {}
+      }
+    }
+  } catch {}
+  return newest
+}
+
+function readJsonl(file) {
+  const records = []
+  try {
+    const text = fs.readFileSync(file, "utf8")
+    const lines = text.split("\n")
+    let pluginPid = null
+    let pluginCwd = null
+    for (const line of lines) {
+      if (!line || !line.trim()) continue
+      const obj = safeJsonParse(line)
+      if (!obj) continue
+      if (obj.kind === "plugin.start") {
+        const pid = Number(obj?.payload?.pid)
+        if (Number.isFinite(pid) && pid > 0) pluginPid = pid
+        if (typeof obj?.payload?.cwd === "string" && obj.payload.cwd.trim()) pluginCwd = path.resolve(obj.payload.cwd)
+      }
+      obj.__sourceFile = file
+      if (pluginPid) obj.__pluginPid = pluginPid
+      if (pluginCwd) obj.__pluginCwd = pluginCwd
+      records.push(obj)
+    }
+  } catch {}
+  return records
+}
+
+function isPidAlive(pid) {
+  const n = Number(pid)
+  if (!Number.isFinite(n) || n <= 0) return false
+  try {
+    process.kill(n, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function shouldSkipProxy(targetHostname) {
+  const noProxy = process.env.no_proxy || process.env.NO_PROXY
+  if (!noProxy) return false
+  const segments = noProxy.split(",").map((s) => s.trim().toLowerCase())
+  return segments.some((s) => s === "*" || targetHostname.toLowerCase().endsWith(s))
+}
+
+/**
+ * @param {URL} targetUrl
+ * @param {string | null | undefined} apiKey
+ * @param {number} bodyLength
+ * @param {{clientId?: string, deviceCredential?: string} | null} clientIdentity
+ */
+function getRequestOptions(targetUrl, apiKey, bodyLength, clientIdentity = null) {
+  const protocol = targetUrl.protocol
+  const proxy =
+    (protocol === "https:"
+      ? process.env.https_proxy || process.env.HTTPS_PROXY
+      : process.env.http_proxy || process.env.HTTP_PROXY) ||
+    process.env.all_proxy ||
+    process.env.ALL_PROXY
+
+  /** @type {Record<string, string | number>} */
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": bodyLength,
+  }
+  // keyless 共享账号模式：apiKey 为空时【不带】x-witty-api-key，让服务端按
+  // AGENT_INSIGHT_DEFAULT_INGEST_USER 归属。若强行带上空/undefined 值，服务端会把它
+  // 当成一把无效 key → 401，反而上不去。
+  if (apiKey) headers["x-witty-api-key"] = apiKey
+  if (clientIdentity?.deviceCredential && isValidClientId(clientIdentity?.clientId)) {
+    headers.Authorization = `Bearer ${clientIdentity.deviceCredential}`
+    headers["x-agent-insight-client-id"] = clientIdentity.clientId
+  }
+  const options = {
+    hostname: targetUrl.hostname,
+    port: targetUrl.port || (protocol === "https:" ? 443 : 80),
+    path: (() => {
+      const base = targetUrl.pathname === "/" ? "" : targetUrl.pathname.replace(/\/$/, "")
+      if (base.endsWith("/api")) return base + "/ingest/upload"
+      return base + "/api/ingest/upload"
+    })(),
+    method: "POST",
+    headers,
+  }
+
+  if (proxy && !shouldSkipProxy(targetUrl.hostname)) {
+    try {
+      const proxyUrl = new URL(proxy)
+      if (protocol === "http:") {
+        options.hostname = proxyUrl.hostname
+        options.port = proxyUrl.port || 80
+        options.path = targetUrl.origin + options.path
+        if (proxyUrl.username) {
+          const auth = Buffer.from(`${proxyUrl.username}:${proxyUrl.password}`).toString("base64")
+          options.headers["Proxy-Authorization"] = `Basic ${auth}`
+        }
+      }
+    } catch {}
+  }
+
+  return options
+}
+
+function postJson(host, apiKey, payload, clientIdentity = null) {
+  return new Promise((resolve) => {
+    let targetUrl
+    try {
+      targetUrl = new URL(host.match(/^https?:\/\//) ? host : `http://${host}`)
+    } catch {
+      resolve({ ok: false, status: 0, body: "bad host" })
+      return
+    }
+
+    const body = Buffer.from(JSON.stringify(payload))
+    const options = getRequestOptions(targetUrl, apiKey, body.length, clientIdentity)
+    const reqModule = targetUrl.protocol === "https:" ? https : http
+    appendUploaderLog(
+      `postJson.request host=${targetUrl.origin} path=${options.path} task_id=${payload?.task_id || "(none)"} bodyBytes=${body.length}`,
+    )
+
+    const req = reqModule.request(options, (res) => {
+      let resBody = ""
+      res.on("data", (chunk) => {
+        resBody += chunk
+      })
+      res.on("end", () => {
+        appendUploaderLog(
+          `postJson.response task_id=${payload?.task_id || "(none)"} status=${res.statusCode || 0} ok=${res.statusCode >= 200 && res.statusCode < 300 ? "1" : "0"} body=${String(resBody || "").slice(0, 1000) || "(empty)"}`,
+        )
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: resBody })
+      })
+    })
+    req.on("error", (err) => {
+      appendUploaderLog(`postJson.error task_id=${payload?.task_id || "(none)"} error=${err.message}`)
+      resolve({ ok: false, status: 0, body: err.message })
+    })
+    req.setTimeout(15000, () => {
+      try {
+        req.destroy()
+      } catch {}
+      appendUploaderLog(`postJson.timeout task_id=${payload?.task_id || "(none)"}`)
+      resolve({ ok: false, status: 0, body: "timeout" })
+    })
+    req.end(body)
+  })
+}
+
+function loadCheckpoint(file) {
+  try {
+    if (!fs.existsSync(file)) return {}
+    const txt = fs.readFileSync(file, "utf8")
+    if (!txt || !txt.trim()) return {}
+    const obj = JSON.parse(txt)
+    return obj && typeof obj === "object" ? obj : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveCheckpoint(file, obj) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(obj, null, 2))
+  } catch {}
+}
+
+function buildState(records) {
+  const sessions = new Map()
+  const sessionParent = new Map()
+  const sessionAgent = new Map()
+  const children = new Map()
+
+  const msgInfo = new Map()
+  const msgParts = new Map()
+  const partText = new Map()
+  const partDeltas = new Map()
+  const seenDeltaEventIds = new Set()
+  const userTextByMsg = new Map()
+  const sysPrompts = new Map()
+  const inferenceByMessage = new Map()
+  const inferenceErrors = new Map()
+  const cliCompletedSessions = new Set()
+  const sessionPids = new Map()
+  const sessionFiles = new Map()
+  const sessionWorkspaces = new Map()
+  const sessionIdleAt = new Map()
+  // 每个 session 落到 spool 的原始记录条数。只增不减，是"这个会话还在干活"的唯一
+  // 可靠信号——工具死循环时消息条数/终稿文本/时间戳全都不变，只有它会涨。
+  const sessionRecordCounts = new Map()
+
+  const ensureSession = (sid) => {
+    if (!sessions.has(sid)) sessions.set(sid, { sessionID: sid, messageIDs: new Set() })
+    return sessions.get(sid)
+  }
+
+  const recordSessionPid = (sid, r) => {
+    if (!sid) return
+    if (r.__sourceFile) {
+      if (!sessionFiles.has(sid)) sessionFiles.set(sid, new Set())
+      sessionFiles.get(sid).add(r.__sourceFile)
+    }
+    if (typeof r.__pluginCwd === "string" && r.__pluginCwd) sessionWorkspaces.set(sid, r.__pluginCwd)
+    const pid = Number(r?.__pluginPid)
+    if (!Number.isFinite(pid) || pid <= 0) return
+    if (!sessionPids.has(sid)) sessionPids.set(sid, new Set())
+    sessionPids.get(sid).add(pid)
+  }
+
+  const addChild = (pid, cid) => {
+    if (!pid || !cid) return
+    if (!children.has(pid)) children.set(pid, new Set())
+    children.get(pid).add(cid)
+  }
+
+  const recordSessionIdle = (sid, r) => {
+    if (!sid) return
+    const ms = toMsTimestamp(r?.t) || Date.now()
+    const prev = sessionIdleAt.get(sid) || 0
+    if (ms > prev) sessionIdleAt.set(sid, ms)
+  }
+
+  for (const r of records) {
+    const kind = r?.kind
+    const recordSid = typeof r?.sessionID === "string" ? r.sessionID : ""
+    if (recordSid) sessionRecordCounts.set(recordSid, (sessionRecordCounts.get(recordSid) || 0) + 1)
+    if (kind === "llm.request" || kind === "llm.attempt") {
+      const payload = r.payload || {}
+      if (!recordSid || !payload.messageID || !payload.request_id) continue
+      const key = JSON.stringify([recordSid, payload.messageID])
+      const current = inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
+      current.requestIds.add(payload.request_id)
+      if (kind === "llm.attempt" && payload.attempt_id) {
+        const previous = current.attempts.get(payload.attempt_id) || {}
+        current.attempts.set(payload.attempt_id, {
+          ...previous,
+          attempt_id: payload.attempt_id,
+          request_id: payload.request_id,
+          ...(payload.transport_request_id ? { transport_request_id: payload.transport_request_id } : {}),
+          ...(payload.started_at ? { started_at: payload.started_at } : {}),
+          ...(payload.status_code ? { status_code: payload.status_code } : {}),
+          ...(payload.error_type ? { error_type: payload.error_type } : {}),
+          ...(payload.call_id ? { call_id: payload.call_id } : {}),
+          ...(payload.upstream_request_id ? { upstream_request_id: payload.upstream_request_id,
+            upstream_request_id_source: payload.upstream_request_id_source || 'model-response-header' } : {}),
+        })
+      }
+      inferenceByMessage.set(key, current)
+      continue
+    }
+    if (kind === "plugin.shutdown") {
+      const sid = r.sessionID
+      if (sid) {
+        ensureSession(sid)
+        recordSessionPid(sid, r)
+        cliCompletedSessions.add(sid)
+      }
+      continue
+    }
+
+    if (kind === "system.prompt") {
+      const sid = r.sessionID
+      if (!sid) continue
+      recordSessionPid(sid, r)
+      if (!sysPrompts.has(sid)) sysPrompts.set(sid, [])
+      const arr = sysPrompts.get(sid)
+      const sha = r?.payload?.sha256 || ""
+      if (sha && arr.some((x) => x.sha256 === sha)) continue
+      arr.push({ ...r.payload, providerID: r.providerID, modelID: r.modelID })
+      continue
+    }
+
+    if (kind === "chat.message") {
+      const sid = r.sessionID
+      if (!sid) continue
+      recordSessionPid(sid, r)
+      const mid = r?.payload?.messageID
+      if (mid) userTextByMsg.set(mid, r?.payload?.text || "")
+      ensureSession(sid)
+      continue
+    }
+
+    if (kind === "text.complete") {
+      const sid = r.sessionID
+      if (!sid) continue
+      recordSessionPid(sid, r)
+      const mid = r?.payload?.messageID
+      const pid = r?.payload?.partID
+      if (mid && pid) partText.set(`${mid}:${pid}`, r?.payload?.text || "")
+      ensureSession(sid)
+      continue
+    }
+
+    if (kind !== "event") continue
+    const t = r?.payload?.type
+    const ev = r?.payload?.event
+    if (!t || !ev) continue
+
+    if (t === "session.error") {
+      const sid = ev.properties?.sessionID || recordSid
+      const error = ev.properties?.error
+      const headers = error?.data?.responseHeaders || {}
+      const responseHeaders = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]))
+      const id = responseHeaders.get('x-request-id') ?? responseHeaders.get('x-agent-insight-call-id')
+      if (sid && /^[a-f0-9-]{36}$/.test(id || '')) inferenceErrors.set(JSON.stringify([sid, id]), error.data.message || 'Model request failed')
+      continue
+    }
+
+    const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
+    if (t === "session.idle" || (t === "session.status" && statusType === "idle")) {
+      const sid = r.sessionID || ev?.properties?.sessionID
+      if (sid) {
+        ensureSession(sid)
+        recordSessionPid(sid, r)
+        recordSessionIdle(sid, r)
+      }
+      continue
+    }
+
+    if (t === "session.created" || t === "session.updated") {
+      const { sid, pid, agent } = getSessionInfoFromEvent(r, ev)
+      if (sid) {
+        ensureSession(sid)
+        recordSessionPid(sid, r)
+        if (pid && pid !== sid) {
+          sessionParent.set(sid, pid)
+          addChild(pid, sid)
+        }
+        if (agent) sessionAgent.set(sid, agent)
+      }
+      continue
+    }
+
+    if (t === "message.updated") {
+      const info = ev?.properties?.info
+      const sid = info?.sessionID || ev?.properties?.sessionID || r.sessionID
+      const mid = info?.id
+      if (!sid || !mid) continue
+      ensureSession(sid).messageIDs.add(mid)
+      recordSessionPid(sid, r)
+      msgInfo.set(mid, info)
+      continue
+    }
+
+    if (t === "message.part.updated") {
+      const p = ev?.properties?.part
+      // opencode actually nests messageID/sessionID INSIDE the part object,
+      // not at the top-level properties. Fall back to the nested form so we
+      // don't drop assistant text parts.
+      const mid = ev?.properties?.messageID || p?.messageID
+      const sid = ev?.properties?.sessionID || p?.sessionID || r.sessionID
+      const pid = p?.id || ev?.properties?.partID
+      if (!sid || !mid || !pid) continue
+      ensureSession(sid).messageIDs.add(mid)
+      recordSessionPid(sid, r)
+      if (!msgParts.has(mid)) msgParts.set(mid, [])
+      const arr = msgParts.get(mid)
+      const nextPart = { ...p, id: pid }
+      const nextKey = partIdentity(nextPart)
+      const idx = arr.findIndex((x) => partIdentity(x) === nextKey)
+      if (idx >= 0) arr[idx] = { ...arr[idx], ...nextPart }
+      else arr.push(nextPart)
+
+      const childSid = extractTaskChildSessionId(p)
+      if (childSid && childSid !== sid) {
+        ensureSession(childSid)
+        sessionParent.set(childSid, sid)
+        addChild(sid, childSid)
+        const subagentType = p?.state?.input?.subagent_type || p?.state?.input?.subagentType
+        if (typeof subagentType === "string" && subagentType.trim() && !sessionAgent.has(childSid)) {
+          sessionAgent.set(childSid, subagentType.trim())
+        }
+      }
+      continue
+    }
+
+    if (t === "message.part.delta") {
+      const props = ev?.properties || {}
+      const mid = props.messageID
+      const sid = props.sessionID || r.sessionID
+      // `partID` is optional on the wire. Keep a per-message bucket when it is
+      // absent so a CLI stream is still reconstructable.
+      const pid = typeof props.partID === "string" && props.partID ? props.partID : ""
+      const field = typeof props.field === "string" && props.field ? props.field : "text"
+      const delta = typeof props.delta === "string" ? props.delta : ""
+      if (!sid || !mid || !delta) continue
+      const eventId = typeof ev?.id === "string" ? ev.id : ""
+      if (eventId && seenDeltaEventIds.has(eventId)) continue
+      if (eventId) seenDeltaEventIds.add(eventId)
+      ensureSession(sid).messageIDs.add(mid)
+      recordSessionPid(sid, r)
+      const bucketId = pid || `delta-${field}`
+      const key = `${mid}:${bucketId}:${field}`
+      partDeltas.set(key, `${partDeltas.get(key) || ""}${delta}`)
+
+      // CLI mode (`opencode run`) can exit before the deferred
+      // `message.updated` / `message.part.updated` sync events are published,
+      // while `message.part.delta` is emitted synchronously. Without these
+      // synthetic shells the streamed answer (and its message) would be
+      // dropped entirely by buildMessagesForSession(). A later real
+      // part.updated/message.updated with the same ids merges/overrides them.
+      if (!msgInfo.has(mid)) {
+        msgInfo.set(mid, {
+          id: mid,
+          sessionID: sid,
+          role: "assistant",
+          time: { created: toMsTimestamp(r?.t) ?? Date.now() },
+        })
+      }
+      if (!msgParts.has(mid)) msgParts.set(mid, [])
+      const parts = msgParts.get(mid)
+      if (!parts.some((part) => part?.id === bucketId)) {
+        parts.push({
+          id: bucketId,
+          messageID: mid,
+          sessionID: sid,
+          // The delta protocol does not carry the part type (reasoning deltas
+          // also use field="text"); default to text and let a real snapshot
+          // correct it.
+          type: "text",
+          text: "",
+        })
+      }
+      continue
+    }
+  }
+
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+}
+
+function extractInvokedSkillsForOrigin(interactions) {
+  const seen = new Set()
+  const out = []
+  const visit = (message) => {
+    for (const call of message?.tool_calls || message?.toolCalls || []) {
+      const tool = String(call?.function?.name ?? call?.name ?? "").toLowerCase()
+      if (tool !== "skill" && tool !== "load_skill") continue
+      const raw = call?.function?.arguments ?? call?.arguments ?? {}
+      let args = raw
+      try { if (typeof raw === "string") args = JSON.parse(raw) } catch { continue }
+      const value = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill ?? args?.id
+      const name = String(value || "").trim().replace(/^["']+|["']+$/g, "")
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || seen.has(name)) continue
+      seen.add(name)
+      const rawVersion = args?.version
+      const version = rawVersion == null ? null : Number(rawVersion)
+      out.push({ name, version: Number.isInteger(version) ? version : null })
+    }
+  }
+  for (const interaction of interactions || []) {
+    visit(interaction)
+    visit(interaction?.responseMessage)
+    for (const message of interaction?.requestMessages || []) visit(message)
+  }
+  return out
+}
+
+function skillDeploymentRuntime() {
+  const insightRoot = getPreferredInsightDir()
+  const candidates = [
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "skill-deployment-runtime.cjs"),
+    path.join(insightRoot, "client", "runtime", "skill-deployment-runtime.cjs"),
+  ]
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate)) return require(candidate) } catch {}
+  }
+  return null
+}
+
+function registerOpenCodeSkillOrigins(state, rootSid, interactions) {
+  const runtime = skillDeploymentRuntime()
+  const workspace = state.sessionWorkspaces.get(rootSid)
+    || collectSessionSubtree(state, rootSid).map(sid => state.sessionWorkspaces.get(sid)).find(Boolean)
+  if (!runtime || !workspace) return []
+  const frameworkRoot = path.join(path.resolve(workspace), ".opencode")
+  const origins = []
+  for (const skill of extractInvokedSkillsForOrigin(interactions)) {
+    const targetDir = path.join(frameworkRoot, "skills", skill.name)
+    if (!fs.existsSync(path.join(targetDir, "SKILL.md"))) continue
+    try {
+      const files = runtime.collectDirectoryFiles(targetDir)
+      const origin = runtime.registerSkillOrigin(path.join(getPreferredInsightDir(), "client"), {
+        platform: "opencode",
+        skillName: skill.name,
+        frameworkRoot,
+        targetDir,
+        observedSkillVersion: skill.version,
+        observedContentHash: runtime.snapshotHash(files),
+      })
+      origins.push({
+        skillName: skill.name,
+        skillVersion: skill.version,
+        platform: "opencode",
+        targetMode: "execution_origin",
+        originRef: origin.originRef,
+        displayPath: origin.displayPath,
+        observedContentHash: origin.observedContentHash,
+      })
+    } catch {}
+  }
+  return origins
+}
+
+// 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
+// 树求和，否则子 agent 里的工具循环不会体现在 root 的指纹上。
+function collectSessionSubtree(state, rootSid) {
+  const out = []
+  const stack = [rootSid]
+  const seen = new Set()
+  while (stack.length) {
+    const sid = stack.pop()
+    if (!sid || seen.has(sid)) continue
+    seen.add(sid)
+    out.push(sid)
+    const next = state.children?.get(sid)
+    if (next) for (const c of Array.from(next)) stack.push(c)
+  }
+  return out
+}
+
+function subtreeRecordCount(state, rootSid) {
+  let total = 0
+  for (const sid of collectSessionSubtree(state, rootSid)) {
+    total += state.sessionRecordCounts?.get(sid) || 0
+  }
+  return total
+}
+
+// sig = 内容指纹，checkpoint 用它判断"跟上次上报比有没有变化"。
+//
+// 前 5 位是历史格式，后 3 位是本次新增的单调量。新增的原因：工具死循环发生在
+// 「同一条 assistant message 内部反复更新 tool part」，前 5 位一个都不会变
+// （消息条数不涨 / 无新终稿文本 / message 时间戳不动），导致整个循环期间
+// 每轮都命中 checkpoint 被 skip，数据要等 CLI 退出才第一次上报。
+function buildSignature({ interactionCount, finalResultLength, lastTs, traceCompletedAt, cliCompleted, toolCallCount, tokens, recordCount, completed }) {
+  const base = [
+    interactionCount,
+    finalResultLength,
+    lastTs,
+    traceCompletedAt || "",
+    cliCompleted ? 1 : 0,
+  ]
+  // 会话已结束就不再附加单调量：它们的作用是识别"还在推进"，对已完成的 trace 只会
+  // 因为 spool 里的杂事件而无谓地翻新指纹，触发重传 + 重跑 LLM 分析。
+  if (completed) return base.join("|")
+  return [...base, toolCallCount || 0, tokens || 0, recordCount || 0].join("|")
+}
+
+// 本轮对话是否已经跑完：有终稿输出，且这次 idle 发生在最后一次活动之后。
+//
+// 只判「有终稿 && 有过 idle」是不够的 —— 多轮会话里第 1 轮答完就有终稿和 idle，
+// 第 2 轮陷入工具循环时这两个条件依然成立，会把进行中的快照误判成已结束，
+// 让服务端对每一次心跳快照都跑一整轮 LLM 分析。
+const ROUND_IDLE_TOLERANCE_MS = 2000
+function isRoundCompleted({ finalResult, idleMs, lastTs }) {
+  if (!finalResult) return false
+  if (!(idleMs > 0)) return false
+  // 容差吸收 idle 事件与消息完成时间之间的顺序抖动；循环场景里两者相差远大于容差。
+  return idleMs + ROUND_IDLE_TOLERANCE_MS >= (lastTs || 0)
+}
+
+// 升级兼容：老 checkpoint 里存的是 5 段式 sig。若直接跟 8 段式比对必然失配，
+// 会把 spool 里保留期内（默认 3 天）的所有历史会话重传一遍，并在服务端触发
+// 一整轮 LLM 分析风暴。所以老格式只比对公共的前 5 段，相等就视为未变化。
+//
+// 注意配套逻辑：命中这条兼容分支时，main() 会把 checkpoint 原地升级成新格式再 skip。
+// 否则一个正处在工具循环中的会话（前 5 段恒定不变）会被这条兼容规则永久压住 ——
+// 而它恰恰是本次要救的对象。升级后下一轮扫描 recordCount/toolCallCount 已推进，
+// 立即放行，代价只有一个心跳周期。
+function isSignatureUnchanged(prevSig, nextSig) {
+  if (!prevSig) return false
+  if (prevSig === nextSig) return true
+  if (String(prevSig).includes('|inference=') || String(nextSig).includes('|inference=')) return false
+  const prev = String(prevSig).split("|")
+  if (prev.length >= 8) return false
+  const next = String(nextSig).split("|")
+  return prev.length === 5 && prev.join("|") === next.slice(0, 5).join("|")
+}
+
+// Join all text-type parts of a message into one string. Prefers the
+// streamed-complete text (text.complete hook) over the partial captured on
+// message.part.updated. Shared by user and assistant message rendering.
+function resolvePartField(part, mid, partText, partDeltas, field = "text") {
+  const key = `${mid}:${part.id}`
+  const completed = field === "text" ? partText.get(key) : undefined
+  if (typeof completed === "string" && completed) return completed
+
+  const snapshot = typeof part?.[field] === "string" ? part[field] : ""
+  const streamed = partDeltas.get(`${key}:${field}`) || ""
+  if (!streamed) return snapshot
+  if (!snapshot) return streamed
+  if (snapshot === streamed || snapshot.includes(streamed)) return snapshot
+  if (streamed.includes(snapshot)) return streamed
+  return streamed.length >= snapshot.length ? streamed : snapshot
+}
+
+function collectTextPartContent(parts, mid, partText, partDeltas) {
+  const buf = []
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "text") continue
+    const out = resolvePartField(p, mid, partText, partDeltas)
+    if (out) buf.push(out)
+  }
+  return buf.join("")
+}
+
+// Deltas without `partID` are accumulated in a synthetic `delta-<field>` part.
+// When OpenCode later flushes the real part snapshot, it carries the same text
+// already completed; keeping both would duplicate the answer in the transcript.
+function isSyntheticDeltaPart(part) {
+  return typeof part?.id === "string" && part.id.startsWith("delta-")
+}
+
+// Compare the streamed bucket with real `text` snapshots by content instead of
+// assuming a snapshot always supersedes it: a partially published snapshot (or
+// a reasoning-only snapshot, which cannot carry the answer) must not truncate
+// the streamed answer.
+function preferRealParts(parts, mid, partText, partDeltas) {
+  const list = parts || []
+  const syntheticParts = list.filter(isSyntheticDeltaPart)
+  if (!syntheticParts.length) return list
+  const realTextParts = list.filter((part) => !isSyntheticDeltaPart(part)
+    && (part?.type || "").toLowerCase() === "text")
+  if (!realTextParts.length) return list
+
+  const dropped = new Set()
+  for (const synthetic of syntheticParts) {
+    const streamed = resolvePartField(synthetic, mid, partText, partDeltas)
+    if (!streamed) { dropped.add(synthetic); continue }
+    for (const real of realTextParts) {
+      const snapshot = resolvePartField(real, mid, partText, partDeltas)
+      if (!snapshot) continue
+      // Snapshot already completed (or contains) the stream: the bucket is a
+      // duplicate. Stream longer than the snapshot: the snapshot is stale, so
+      // drop it and keep the complete stream.
+      if (snapshot.includes(streamed)) dropped.add(synthetic)
+      else if (streamed.includes(snapshot)) dropped.add(real)
+    }
+  }
+  return dropped.size ? list.filter((part) => !dropped.has(part)) : list
+}
+
+// 上游是否真的给了 usage。全 0 的 token 对象（TUI 之外的部分版本、以及 CLI
+// 退出时丢失 message.updated 后由占位逻辑补出来的空对象）不能当成"用量为 0"，
+// 否则界面会把"未提供"显示成有效的 0。
+function hasReportedTokenUsage(tokens) {
+  if (!tokens || typeof tokens !== "object") return false
+  const values = [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+  return values.some((value) => Number(value) > 0)
+}
+
+// CLI 模式可能丢掉带 tokens 的 message.updated，但 step-finish part 里带着同一份
+// usage。把它作为 message 级 usage 的兜底来源。
+function usageFromStepFinishParts(parts) {
+  let found = false
+  const sum = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "step-finish") continue
+    const t = p?.tokens
+    if (!t || typeof t !== "object") continue
+    found = true
+    sum.input += Number(t.input || 0) || 0
+    sum.output += Number(t.output || 0) || 0
+    sum.reasoning += Number(t.reasoning || 0) || 0
+    sum.cache.read += Number(t.cache?.read || 0) || 0
+    sum.cache.write += Number(t.cache?.write || 0) || 0
+  }
+  if (!found || !hasReportedTokenUsage(sum)) return undefined
+  return sum
+}
+
+function buildMessagesForSession(state, sid) {
+  const { msgInfo, msgParts, partText, partDeltas, userTextByMsg } = state
+  const messages = []
+
+  for (const [mid, info] of msgInfo.entries()) {
+    if (info?.sessionID !== sid) continue
+    const role = info?.role
+    const created = info?.time?.created
+    const completed = info?.time?.completed
+    const rawParts = preferRealParts(msgParts.get(mid) || [], mid, partText, partDeltas)
+
+    let content = ""
+    if (role === "user") {
+      // chat.message runs before slash-command expansion, while the later text
+      // part may contain the expanded routing prompt instead of what the user
+      // typed. Its message id comes from output.message.id on current OpenCode.
+      content = userTextByMsg.get(mid) || ""
+      if (!content) content = collectTextPartContent(rawParts, mid, partText, partDeltas)
+      if (!content && typeof info?.system === "string") content = info.system
+    } else {
+      content = collectTextPartContent(rawParts, mid, partText, partDeltas)
+    }
+
+    const tool_calls = []
+    for (const p of rawParts) {
+      if ((p?.type || "").toLowerCase() !== "tool") continue
+      const callID = p?.callID || p?.callId || p?.id
+      const tool = p?.tool
+      const st = p?.state || {}
+      const state = st?.status || st?.state || ""
+      const args = st?.input
+      tool_calls.push({
+        id: callID,
+        type: "function",
+        function: { name: tool, arguments: typeof args === "string" ? args : JSON.stringify(args || {}) },
+        state,
+        ...(st.time ? { timing: { started_at: toMsTimestamp(st.time.start), completed_at: toMsTimestamp(st.time.end) } } : {}),
+        output: st?.output,
+      })
+    }
+
+    const tokens = hasReportedTokenUsage(info?.tokens)
+      ? info.tokens
+      : usageFromStepFinishParts(rawParts)
+    const u = tokens
+      ? {
+          input: tokens.input,
+          output: tokens.output,
+          reasoning: tokens.reasoning,
+          cache: tokens.cache,
+          total: usageTotalsFromTokens(tokens).total,
+        }
+      : undefined
+
+    // Preserve the raw part structure so downstream can distinguish
+    //   text / reasoning / tool / patch / step-start / step-finish / compaction
+    // and so compaction-trigger user messages (which carry only a "compaction"
+    // part with no text) are not silently dropped. messageID/sessionID on each
+    // part are redundant with the enclosing message — strip them.
+    const partsOut = rawParts.length
+      ? rawParts.map((p) => {
+          const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
+          // For text and reasoning parts, preserve deltas when interruption
+          // prevents OpenCode from emitting a final part snapshot.
+          const partType = (rest?.type || "").toLowerCase()
+          if (partType === "text" || partType === "reasoning") {
+            const resolvedText = resolvePartField(rest, mid, partText, partDeltas)
+            if (resolvedText) rest.text = resolvedText
+          }
+          return rest
+        })
+      : undefined
+
+    const m = {
+      role,
+      content,
+      messageID: mid,
+      parts: partsOut,
+      tool_calls: tool_calls.length ? tool_calls : undefined,
+      usage: u,
+      timestamp: created != null ? new Date(created).toISOString() : undefined,
+      timeInfo: { created, completed },
+      agent: info?.agent,
+      modelID: info?.modelID,
+      providerID: info?.providerID,
+      cost: info?.cost,
+      // Compaction signal lives here:
+      //   mode === "compaction" + summary === true  →  this is a compaction-summary
+      //   message and the prior context should be folded behind it.
+      mode: info?.mode,
+      // opencode overloads `info.summary`:
+      //   - boolean `true`  → compaction marker we want
+      //   - object `{diffs: [...]}` → per-turn file-diff summary (can be ~80KB);
+      //     not needed for prompt rendering, and shipping it would balloon the
+      //     upload payload, so drop it. If we ever want a diff-aware trace view
+      //     it should go through its own channel.
+      summary: info?.summary === true ? true : undefined,
+      finish: info?.finish,
+      ...(['llm', 'user'].includes(info?.trace_kind) ? { trace_kind: info.trace_kind } : {}),
+      ...(info?.error ? { status: 'error', error_summary: typeof info.error === 'string' ? info.error : info.error.message || info.error.data?.message || 'Model request failed' } : {}),
+      variant: info?.variant,
+    }
+    const inference = state.inferenceByMessage?.get(JSON.stringify([sid, mid]))
+    if (role === "assistant" && inference?.requestIds.size === 1) {
+      m.trace_kind = "llm"
+      m.inference_request_id = [...inference.requestIds][0]
+      m.inference_session_id = sid
+      m.inference_attempts = [...inference.attempts.values()]
+      const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
+      if (callIds.length) m.inference_call_ids = callIds
+      const upstreamIds = [...new Map(m.inference_attempts
+        .filter(attempt => attempt.call_id && attempt.upstream_request_id)
+        .map(attempt => [`${attempt.call_id}\u0000${attempt.upstream_request_id}`, {
+          call_id: attempt.call_id,
+          request_id: attempt.upstream_request_id,
+          source: attempt.upstream_request_id_source || 'model-response-header',
+        }])).values()]
+      if (upstreamIds.length) m.inference_upstream_request_ids = upstreamIds
+      if (!m.error_summary && !m.content && !m.toolCalls?.length) {
+        const errors = callIds.map(id => state.inferenceErrors?.get(JSON.stringify([sid, id]))).filter(Boolean)
+        if (errors.length === 1) { m.status = 'error'; m.error_summary = errors[0] }
+      }
+    }
+    messages.push(m)
+  }
+
+  messages.sort((a, b) => (toMsTimestamp(a.timeInfo?.created) || 0) - (toMsTimestamp(b.timeInfo?.created) || 0))
+  return messages
+}
+
+function inferenceGatewayDirectory(insightDir, apiKey) {
+  const account = createHash('sha256').update(apiKey || 'anonymous').digest('hex').slice(0, 16)
+  return path.join(insightDir, 'inference-gateway', account, 'opencode')
+}
+
+function applyInferenceGatewayRecords(state, insightDir, apiKey) {
+  const root = inferenceGatewayDirectory(insightDir, apiKey)
+  state.inferenceUnassigned = new Map()
+  const transportProofs = new Map()
+  for (const [key, inference] of state.inferenceByMessage) {
+    const [sid, mid] = JSON.parse(key)
+    const info = state.msgInfo.get(mid)
+    const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, mid])).digest('hex').slice(0, 32)
+    if (info?.role !== 'assistant' || info.sessionID !== sid || inference.requestIds.size !== 1 || !inference.requestIds.has(expected)) continue
+    for (const attempt of inference.attempts.values()) {
+      if (!attempt.transport_request_id || !attempt.attempt_id || attempt.request_id !== expected) continue
+      const proofKey = JSON.stringify([sid, attempt.transport_request_id, attempt.attempt_id])
+      const owners = transportProofs.get(proofKey) || new Set()
+      owners.add(mid)
+      transportProofs.set(proofKey, owners)
+    }
+  }
+  for (const sid of state.sessions.keys()) {
+    const dir = path.join(root, createHash('sha256').update(sid).digest('hex'))
+    let files
+    try { files = fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort() } catch { continue }
+    for (const file of files) {
+      let call
+      try { call = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) } catch { continue }
+      if (call.agent !== 'opencode' || call.session_id !== sid || !/^[a-f0-9-]{36}$/.test(call.call_id || '')) continue
+      const owners = !call.message_id && transportProofs.get(JSON.stringify([sid, call.request_id, call.attempt_id]))
+      const lateMessageId = owners?.size === 1 ? [...owners][0] : undefined
+      const messageId = call.message_id || lateMessageId
+      const info = state.msgInfo.get(messageId)
+      const expected = 'oc_' + createHash('sha256').update(JSON.stringify([sid, messageId])).digest('hex').slice(0, 32)
+      if (info?.role === 'assistant' && info.sessionID === sid && (call.request_id === expected || lateMessageId) && call.attempt_id) {
+        const key = JSON.stringify([sid, messageId])
+        const current = state.inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
+        current.requestIds.add(expected)
+        const previous = current.attempts.get(call.attempt_id)
+        const attemptKey = previous?.call_id && previous.call_id !== call.call_id ? `${call.attempt_id}:${call.call_id}` : call.attempt_id
+        current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: expected,
+          ...(lateMessageId ? { transport_request_id: call.request_id } : {}),
+          attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
+          status_code: call.status_code, error_type: call.error_type, state: call.state,
+          ...(call.upstream_request_id ? { upstream_request_id: call.upstream_request_id,
+            upstream_request_id_source: 'model-response-header' } : {}) })
+        state.inferenceByMessage.set(key, current)
+      } else {
+        const unassigned = state.inferenceUnassigned.get(sid) || []
+        unassigned.push({ call_id: call.call_id, state: call.state, status_code: call.status_code, reason: 'missing_message_anchor' })
+        state.inferenceUnassigned.set(sid, unassigned)
+      }
+    }
+  }
+}
+
+function mergeGraph(state, rootSid) {
+  const { children, sessionAgent, sysPrompts } = state
+  const merged = []
+  const stack = [rootSid]
+  const seen = new Set()
+  while (stack.length) {
+    const sid = stack.pop()
+    if (!sid || seen.has(sid)) continue
+    seen.add(sid)
+    const unassigned = state.inferenceUnassigned?.get(sid)
+    if (unassigned?.length) merged.push({ role: 'system', content: '', inference_session_id: sid,
+      inference_unassigned_calls: unassigned, ...(sid !== rootSid ? { subagent_session_id: sid } : {}) })
+
+    // Build per-session system prompt entries (one entry per distinct sha256).
+    // Each becomes a synthetic role="system" message at the head of the session's
+    // slice, tagged with subagent_session_id so the UI can group it under the
+    // right agent node. The frontend renders these as a collapsed card on the
+    // selected agent, separate from the event flow.
+    const sysEntries = sysPrompts.get(sid) || []
+    const sysMessages = []
+    for (const entry of sysEntries) {
+      const text = Array.isArray(entry?.system) ? entry.system.join("\n") : ""
+      if (!text) continue
+      const base = {
+        role: "system",
+        content: text,
+        trace_id: rootSid,
+        system_prompt_sha256: entry?.sha256,
+        system_prompt_length: entry?.length,
+        system_prompt_modelID: entry?.modelID,
+        system_prompt_providerID: entry?.providerID,
+      }
+      sysMessages.push(
+        sid === rootSid
+          ? base
+          : { ...base, subagent_name: sessionAgent.get(sid) || sid, subagent_session_id: sid },
+      )
+    }
+
+    const msgs = buildMessagesForSession(state, sid).map((m) => ({ ...m, trace_id: rootSid }))
+    if (sid === rootSid) {
+      merged.push(...sysMessages, ...msgs)
+    } else {
+      const name = sessionAgent.get(sid) || sid
+      merged.push(...sysMessages)
+      for (const m of msgs) {
+        if (m.role === "user") merged.push({ ...m, role: "opencode", subagent_name: name, subagent_session_id: sid })
+        else merged.push({ ...m, role: "subagent", subagent_name: name, subagent_session_id: sid })
+      }
+    }
+
+    const next = children.get(sid)
+    if (next) for (const c of Array.from(next)) stack.push(c)
+  }
+  return merged
+}
+
+function deriveFields(interactions) {
+  let totalTokens = 0
+  let totalLatencyMs = 0
+  let model = ""
+  let finalResult = ""
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+  let totalCacheReadInputTokens = 0
+  let totalCacheCreationInputTokens = 0
+  let totalReasoningTokens = 0
+  let llmCallCount = 0
+  let toolCallCount = 0
+  let toolCallErrorCount = 0
+  let maxSingleCallTokens = 0
+  // 至少有一条 completion 消息带真实 usage 时才认为上游提供了用量。否则 token
+  // 字段留空（undefined），让服务端/界面区分「未提供」和「确实为 0」。
+  let usageReported = false
+
+  for (const m of interactions || []) {
+    if (!m) continue
+    const role = m.role
+    const isCompletion = role === "assistant" || role === "subagent"
+    if (role === "assistant") {
+      const c = typeof m.content === "string" ? m.content : ""
+      if (c && c.trim()) finalResult = c
+      if (typeof m.modelID === "string" && m.modelID) model = m.modelID
+    }
+    if (!isCompletion) continue
+    llmCallCount++
+    const u = m.usage
+    if (u) {
+      // 与 server 端 deriveOpencodeExecutionFields / buildAgentCallTree 保持同一判定：
+      // 全 0 的 usage 对象视为「未上报」，不能因此把 tokens 标成有效的 0。
+      if (hasReportedTokenUsage(u)) usageReported = true
+      const input = Number(u.input || 0) || 0
+      const rawOutput = Number(u.output || 0) || 0
+      const cacheRead = Number(u.cache?.read || 0) || 0
+      const cacheWrite = Number(u.cache?.write || 0) || 0
+      const reasoning = Number(u.reasoning || 0) || 0
+      const output = reasoning > 0 && rawOutput < reasoning ? rawOutput + reasoning : rawOutput
+      const total = Number(u.total) || input + output + cacheRead + cacheWrite
+      totalTokens += total
+      totalInputTokens += input
+      totalOutputTokens += output
+      totalCacheReadInputTokens += cacheRead
+      totalCacheCreationInputTokens += cacheWrite
+      totalReasoningTokens += reasoning
+      const callTotal = input + output + cacheRead + cacheWrite
+      if (callTotal > maxSingleCallTokens) maxSingleCallTokens = callTotal
+    }
+
+    const created = toMsTimestamp(m.timeInfo?.created)
+    const completed = toMsTimestamp(m.timeInfo?.completed)
+    if (created != null && completed != null) {
+      const d = completed - created
+      if (d > 0 && d < 3600000) totalLatencyMs += d
+    }
+
+    if (Array.isArray(m.tool_calls)) {
+      toolCallCount += m.tool_calls.length
+      for (const tc of m.tool_calls) {
+        if (tc?.state === "error" || tc?.state === "failed") toolCallErrorCount++
+      }
+    }
+  }
+
+  return {
+    model: model || undefined,
+    final_result: finalResult || undefined,
+    usageReported,
+    tokens: usageReported ? Math.round(totalTokens) : undefined,
+    latency: totalLatencyMs / 1000,
+    input_tokens: usageReported ? Math.round(totalInputTokens) : undefined,
+    output_tokens: usageReported ? Math.round(totalOutputTokens) : undefined,
+    tool_call_count: toolCallCount,
+    tool_call_error_count: toolCallErrorCount,
+    llm_call_count: llmCallCount,
+    cache_read_input_tokens: usageReported ? Math.round(totalCacheReadInputTokens) : undefined,
+    cache_creation_input_tokens: usageReported ? Math.round(totalCacheCreationInputTokens) : undefined,
+    max_single_call_tokens: usageReported ? Math.round(maxSingleCallTokens) : undefined,
+    reasoning_tokens: usageReported ? Math.round(totalReasoningTokens) : undefined,
+  }
+}
+
+function cleanupOldFiles(spoolDir, retentionDays) {
+  const days = Number(retentionDays) || 3
+  const cutoff = Date.now() - days * 24 * 3600 * 1000
+  try {
+    const entries = fs.readdirSync(spoolDir, { withFileTypes: true })
+    for (const e of entries) {
+      if (!e.isDirectory()) continue
+      const dir = path.join(spoolDir, e.name)
+      const stat = fs.statSync(dir)
+      if (stat.mtimeMs < cutoff) {
+        try {
+          fs.rmSync(dir, { recursive: true, force: true })
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+/** Serialize upload/checkpoint updates; contention must not discard another CLI's spool. */
+async function acquireUploaderLock(lockFile) {
+  safeMkdirp(path.dirname(lockFile))
+  let reportedWait = false
+  while (true) {
+    try {
+      const fd = fs.openSync(lockFile, "wx", 0o600)
+      try { fs.writeFileSync(fd, String(process.pid)) } finally { fs.closeSync(fd) }
+      const release = () => {
+        try {
+          if (Number(fs.readFileSync(lockFile, "utf8").trim()) === process.pid) {
+            fs.unlinkSync(lockFile)
+          }
+        } catch {}
+      }
+      process.once("exit", release)
+      return () => { process.off("exit", release); release() }
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error
+      try {
+        const owner = Number(fs.readFileSync(lockFile, "utf8").trim())
+        // Allow a newly created lock to publish its PID before considering it stale.
+        if ((owner > 0 && !isPidAlive(owner))
+          || (!(owner > 0) && Date.now() - fs.statSync(lockFile).mtimeMs > 5000)) {
+          fs.unlinkSync(lockFile)
+          continue
+        }
+      } catch (readError) {
+        if (readError?.code === "ENOENT") continue
+        throw readError
+      }
+      if (!reportedWait) {
+        appendUploaderLog("main.wait uploader lock busy; keeping spool request pending")
+        reportedWait = true
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+}
+
+async function main() {
+  const env = loadSkillInsightEnv()
+  const apiKey = env.AGENT_INSIGHT_API_KEY
+  const host = env.AGENT_INSIGHT_HOST
+  appendUploaderLog(
+    `main.start host=${host || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"} force=${process.env.AGENT_INSIGHT_UPLOADER_FORCE === "1" ? "1" : "0"}`,
+  )
+  const shadowed = findShadowedEnvKeys()
+  if (shadowed.length) {
+    appendUploaderLog(
+      `main.env.shadowed 进程环境里的同名变量压过了 .env,重跑 setup 改的配置在本进程不生效: ${describeShadowedEnv(shadowed)}` +
+      ` → 在启动 opencode 的终端里 unset 这些变量(或新开终端)后重启 opencode`,
+    )
+  }
+  if (!host) {
+    appendUploaderLog(`main.skip missingConfig hostPresent=no apiKeyPresent=${apiKey ? "yes" : "no"}`)
+    process.exit(0)
+  }
+  if (!apiKey) {
+    // keyless 共享账号模式：无 key 也照常上报（不带 x-witty-api-key），由服务端
+    // AGENT_INSIGHT_DEFAULT_INGEST_USER 归属。以前这里 `!apiKey` 直接 skip，导致无 key 上不去。
+    appendUploaderLog(`main.keyless no api key — uploading anyway (server attributes via AGENT_INSIGHT_DEFAULT_INGEST_USER)`)
+  }
+
+  const registeredClientIdentity = ensureClientIdentity()
+  const clientIdentity = clientIdentityForHost(registeredClientIdentity, host)
+  if (registeredClientIdentity?.deviceCredential && !clientIdentity?.deviceCredential) {
+    appendUploaderLog(
+      `main.clientCredentialSkipped registeredHost=${registeredClientIdentity.insightBaseUrl || "(missing)"} targetHost=${host}`,
+    )
+  }
+  const reportedIp = pickReportedIp()
+  appendUploaderLog(
+    `main.client clientId=${clientIdentity?.clientId || "(missing)"} ` +
+    `hostname=${os.hostname() || "(missing)"} reportedIp=${reportedIp || "(missing)"}`,
+  )
+
+  const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const spoolFile = process.env.AGENT_INSIGHT_UPLOADER_SPOOL_FILE || ""
+  // 账号级隔离: spool / checkpoint 都按 API key 分目录(setup 写入 per-account 路径),
+  // 否则同一台机器切账号会复用机器级 spool/checkpoint, 把历史 trace 错误归到当前 key。
+  // 旧 .env 没有这两个变量时回退到机器级路径, 保持向后兼容。
+  const checkpointFile = env.AGENT_INSIGHT_OPENCODE_CHECKPOINT || path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
+  // 时间门: 只上传本次账号安装(setup)之后才有活动的 session。早于安装时间的历史会话一律
+  // skip, 这样即使 spool 里残留别的账号/本机历史, 也不会被当前 key 回放上去(展示成“最近上传”)。
+  const uploadSinceMs = Number(env.AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS || 0) || 0
+  // 保留天数:默认 3 天(原来 10 天 + 上传量大时 spool 堆到 GB 级,是 OOM 诱因之一)。
+  // 同时兼容旧前缀 SKILL_INSIGHT_RETENTION_DAYS(部署的 .env 里用的是这个,旧版只读 AGENT_INSIGHT_ → 没生效)。
+  const retentionDays = env.AGENT_INSIGHT_RETENTION_DAYS || env.SKILL_INSIGHT_RETENTION_DAYS || "3"
+  const deletedSessionIds = loadDeletedSessionIds(env)
+  // 需要无视 checkpoint 强推的 session（plugin shutdown / 人工排障时按 id 指定）。
+  const forceSessions = new Set(
+    String(process.env.AGENT_INSIGHT_UPLOADER_FORCE_SESSION || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
+  appendUploaderLog(
+    `main.config spoolDir=${spoolDir} checkpoint=${checkpointFile} retentionDays=${retentionDays} deletedSessions=${deletedSessionIds.size}`,
+  )
+
+  cleanupOldFiles(spoolDir, retentionDays)
+
+  const lockFile = path.join(getPreferredInsightDir(), ".uploader.lock")
+  const releaseLock = await acquireUploaderLock(lockFile)
+  try {
+    const ckpt = loadCheckpoint(checkpointFile)
+    const fileScanMtimes = ckpt.__fileScanMtimes || {}
+    const scopedFile = spoolFile ? path.resolve(spoolFile) : ""
+    const pendingSessions = ckpt.__pendingSessions && typeof ckpt.__pendingSessions === "object"
+      && !Array.isArray(ckpt.__pendingSessions) ? ckpt.__pendingSessions : {}
+    const spoolRoot = `${path.resolve(spoolDir)}${path.sep}`
+    for (const [sid, sources] of Object.entries(pendingSessions)) {
+      const valid = Array.isArray(sources) ? sources.filter(file => typeof file === "string"
+        && path.resolve(file).startsWith(spoolRoot) && file.endsWith(".jsonl") && fs.existsSync(file)) : []
+      if (deletedSessionIds.has(sid) || !valid.length) delete pendingSessions[sid]
+      else pendingSessions[sid] = valid
+    }
+    ckpt.__pendingSessions = pendingSessions
+    const pendingFiles = new Set(Object.values(pendingSessions).flat())
+    let gatewayRevision = ''
+    try { gatewayRevision = fs.readFileSync(path.join(inferenceGatewayDirectory(getPreferredInsightDir(), apiKey), 'updated'), 'utf8') } catch {}
+    const gatewayChanged = Boolean(gatewayRevision && gatewayRevision !== ckpt.__inferenceGatewayRevision)
+    const newestMtime = selectedSpoolMtime(spoolDir, spoolFile)
+    const lastScanMtime = scopedFile
+      ? Number(fileScanMtimes[scopedFile] || 0)
+      : Number(ckpt.__lastScanMtime || 0)
+    // 进程退出不会改变 spool mtime，未完成上报的会话必须重新检查。
+    if (!gatewayChanged && !pendingFiles.size && !forceSessions.size && newestMtime > 0 && newestMtime <= lastScanMtime
+      && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
+      saveCheckpoint(checkpointFile, ckpt)
+      appendUploaderLog(`main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`)
+      return
+    }
+    const candidateFiles = selectJsonlFiles(spoolDir, gatewayChanged ? '' : spoolFile)
+    const candidates = !spoolFile && !forceSessions.size ? [...new Set([...candidateFiles, ...pendingFiles])] : candidateFiles
+    const files = gatewayChanged ? candidateFiles : selectJsonlFilesForUpload(candidates, { forceSessions, lastScanMtime, pendingFiles })
+    const scannedMtimes = new Map(files.map(file => {
+      try { return [file, fs.statSync(file).mtimeMs] } catch { return [file, 0] }
+    }))
+    let uploadFailed = false
+    appendUploaderLog(
+      `main.scan files=${files.length}/${candidateFiles.length} ` +
+      `mode=${spoolFile ? "spool-file" : forceSessions.size ? "force-session" : "changed-session-files"} ` +
+      `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
+    )
+
+    // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
+    // "Maximum call stack size exceeded"——args 数量受调用栈限制。
+    // playground 一次会话经常落 30K+ 条事件到 jsonl，必须逐条 push。
+    const allRecords = []
+    for (const f of files) {
+      const records = readJsonl(f)
+      appendUploaderLog(`main.read file=${f} records=${records.length}`)
+      for (const r of records) allRecords.push(r)
+    }
+    appendUploaderLog(`main.records total=${allRecords.length}`)
+
+    const state = buildState(allRecords)
+    applyInferenceGatewayRecords(state, getPreferredInsightDir(), apiKey)
+
+    const roots = []
+    for (const sid of state.sessions.keys()) {
+      if (!state.sessionParent.get(sid)) roots.push(sid)
+    }
+    appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
+
+    for (const rootSid of roots) {
+      if (!gatewayChanged && forceSessions.size && !forceSessions.has(rootSid)) continue
+      if (deletedSessionIds.has(rootSid)) {
+        appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
+        continue
+      }
+      const interactions = mergeGraph(state, rootSid)
+      if (!interactions.length) {
+        appendUploaderLog(`session.skip emptyInteractions task_id=${rootSid}`)
+        continue
+      }
+      const query = interactions.find((m) => m.role === "user" && m.content)?.content || `OpenCode Session ${rootSid}`
+      const derived = deriveFields(interactions)
+      const skillOrigins = registerOpenCodeSkillOrigins(state, rootSid, interactions)
+
+      // System prompts are now unshifted inside mergeGraph() per session
+      // (root + sub-agents), so no extra unshift needed here. Keep `sys` for
+      // backward-compatibility on payload.system_prompts metadata.
+      const sys = state.sysPrompts.get(rootSid) || []
+      const pids = Array.from(state.sessionPids.get(rootSid) || [])
+      const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
+        || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
+      const sourceFiles = [...new Set(collectSessionSubtree(state, rootSid)
+        .flatMap(sid => [...(state.sessionFiles.get(sid) || [])]))]
+      pendingSessions[rootSid] = sourceFiles
+      saveCheckpoint(checkpointFile, ckpt)
+      const idleMs = state.sessionIdleAt.get(rootSid) || 0
+      let lastTs = 0
+      for (const m of interactions) {
+        const t1 = toMsTimestamp(m.timestamp) || 0
+        const t2 = toMsTimestamp(m.timeInfo?.completed) || 0
+        const t3 = toMsTimestamp(m.timeInfo?.created) || 0
+        lastTs = Math.max(lastTs, t1, t2, t3)
+      }
+      const traceCompletedAt = isRoundCompleted({ finalResult: derived.final_result, idleMs, lastTs })
+        ? new Date(idleMs).toISOString()
+        : undefined
+      const payload = {
+        task_id: rootSid,
+        query,
+        framework: "opencode",
+        ...(skillOrigins.length ? { skill_origins: skillOrigins } : {}),
+        ...(clientIdentity?.clientId ? { client_id: clientIdentity.clientId } : {}),
+        host: {
+          hostname: os.hostname() || clientIdentity?.hostname || undefined,
+          ...(reportedIp ? { reported_ip: reportedIp } : {}),
+        },
+        model: derived.model,
+        tokens: derived.tokens,
+        latency: derived.latency,
+        input_tokens: derived.input_tokens,
+        output_tokens: derived.output_tokens,
+        tool_call_count: derived.tool_call_count,
+        tool_call_error_count: derived.tool_call_error_count,
+        llm_call_count: derived.llm_call_count,
+        cache_read_input_tokens: derived.cache_read_input_tokens,
+        cache_creation_input_tokens: derived.cache_creation_input_tokens,
+        max_single_call_tokens: derived.max_single_call_tokens,
+        reasoning_tokens: derived.reasoning_tokens,
+        final_result: derived.final_result,
+        interactions,
+        system_prompts: sys,
+        trace: { trace_id: rootSid },
+        trace_completed_at: traceCompletedAt,
+        opencode_cli_completed: opencodeCliCompleted,
+        timestamp: new Date().toISOString(),
+      }
+
+      const lastAssistant = String(payload.final_result || "")
+      let sig = buildSignature({
+        interactionCount: interactions.length,
+        finalResultLength: lastAssistant.length,
+        lastTs,
+        traceCompletedAt: payload.trace_completed_at,
+        cliCompleted: payload.opencode_cli_completed,
+        toolCallCount: derived.tool_call_count,
+        tokens: derived.tokens,
+        recordCount: subtreeRecordCount(state, rootSid),
+        // 已结束的会话回到旧的 5 段式指纹：单调量只在"进行中"才需要。否则一条已完成的
+        // trace 只要 spool 里再落进任何杂事件（recordCount+1）就会重传，而它带着
+        // trace_completed_at，服务端会再跑一整轮 LLM 分析。
+        completed: Boolean(payload.trace_completed_at) || Boolean(payload.opencode_cli_completed),
+      })
+      const inferenceSnapshot = interactions.filter(m => m.inference_call_ids?.length || m.inference_unassigned_calls?.length)
+        .map(m => ({ session: m.inference_session_id, message: m.messageID, calls: m.inference_call_ids,
+          attempts: m.inference_attempts, unassigned: m.inference_unassigned_calls }))
+      if (inferenceSnapshot.length) sig += '|inference=' + createHash('sha256').update(stableStringify(inferenceSnapshot)).digest('hex')
+      appendUploaderLog(
+        `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
+        `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
+      )
+
+      // 账号级时间门: session 最后活动时间早于本账号安装时间(uploadSinceMs)就 skip,
+      // 防止切账号后历史 trace 被当前 key 回放。写入 checkpoint 以免每次扫描重复评估。
+      // 仅在能解析出活动时间(activityMs>0)时启用门, 解析不到时不拦截、走正常上传, 避免误杀。
+      const activityMs = Math.max(lastTs, idleMs)
+      if (uploadSinceMs > 0 && activityMs > 0 && activityMs < uploadSinceMs) {
+        appendUploaderLog(
+          `session.skip before-upload-since task_id=${rootSid} activityMs=${activityMs} sinceMs=${uploadSinceMs} sig=${sig}`,
+        )
+        ckpt[rootSid] = sig
+        delete pendingSessions[rootSid]
+        saveCheckpoint(checkpointFile, ckpt)
+        continue
+      }
+
+      // 强推信号之前只绕过 fastSkip，到这里照样被 checkpoint 拦掉，Ctrl+C 兜底和手动
+      // 排障都推不上去。这里放行，但**只对指定 session**——FORCE=1 是进程级的，如果让它
+      // 绕过所有 session 的 checkpoint，shutdown 那一次强推会把 spool 里保留期内的所有
+      // 历史会话重传一遍，并在服务端触发一整轮 LLM 分析。
+      if ((!forceSessions.has(rootSid) || process.env.AGENT_INSIGHT_UPLOADER_RECHECK_ONLY === "1")
+        && isSignatureUnchanged(ckpt[rootSid], sig)) {
+        if (opencodeCliCompleted) {
+          delete pendingSessions[rootSid]
+          saveCheckpoint(checkpointFile, ckpt)
+        }
+        appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig} prevSig=${ckpt[rootSid]}`)
+        // 老格式 checkpoint 原地升级成新格式（见 isSignatureUnchanged 的注释）。
+        if (ckpt[rootSid] !== sig) {
+          ckpt[rootSid] = sig
+          saveCheckpoint(checkpointFile, ckpt)
+          appendUploaderLog(`session.checkpointUpgraded task_id=${rootSid} sig=${sig}`)
+        }
+        continue
+      }
+
+      const res = await postJson(host, apiKey, payload, clientIdentity)
+      if (res.ok) {
+        ckpt[rootSid] = sig
+        if (opencodeCliCompleted) delete pendingSessions[rootSid]
+        saveCheckpoint(checkpointFile, ckpt)
+        appendUploaderLog(`session.uploaded task_id=${rootSid} status=${res.status} sig=${sig}`)
+      } else {
+        uploadFailed = true
+        appendUploaderLog(
+          `session.uploadFailed task_id=${rootSid} status=${res.status} body=${String(res.body || "").slice(0, 1000) || "(empty)"}`,
+        )
+      }
+    }
+
+    if (!uploadFailed && newestMtime > 0) {
+      for (const [file, mtime] of scannedMtimes) fileScanMtimes[path.resolve(file)] = mtime
+      ckpt.__fileScanMtimes = fileScanMtimes
+      if (!scopedFile) ckpt.__lastScanMtime = newestMtime
+      if (gatewayRevision) ckpt.__inferenceGatewayRevision = gatewayRevision
+      saveCheckpoint(checkpointFile, ckpt)
+      appendUploaderLog("main.checkpointUpdated lastScanMtime=" + newestMtime)
+    }
+  } finally {
+    releaseLock()
+  }
+}
+
+export {
+  applyInferenceGatewayRecords,
+  buildMessagesForSession,
+  buildSignature,
+  buildState,
+  ensureClientIdentity,
+  clientIdentityForHost,
+  isValidClientId,
+  pickReportedIp,
+  getRequestOptions,
+  findShadowedEnvKeys,
+  describeShadowedEnv,
+  collectSessionSubtree,
+  isRoundCompleted,
+  isSignatureUnchanged,
+  subtreeRecordCount,
+  deriveFields,
+  extractSessionIdFromText,
+  extractTaskChildSessionId,
+  getSessionInfoFromEvent,
+  mergeGraph,
+  selectJsonlFiles,
+  selectJsonlFilesForUpload,
+}
+
+if (process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN !== "1") {
+  main().catch((err) => {
+    // 不能 silent exit——之前 spread 大数组爆栈导致整条 trace 链路停摆几小时，
+    // 日志里只有 plugin 写的 kickUploader 头，看不到任何 uploader 自身报错。
+    // stderr 会被 plugin 那边 dup 到 ~/.agent-insight/logs/opencode_uploader.log，
+    // 失败也好让运维一眼看到。仍然 exit(0)：失败的 batch 下次轮询继续，无需 retry。
+    try {
+      const msg = err && err.stack ? err.stack : String(err)
+      appendUploaderLog(`main.error ${msg}`)
+      process.stderr.write(`[uploader main err] ${msg}\n`)
+    } catch {}
+    process.exit(0)
+  })
+}

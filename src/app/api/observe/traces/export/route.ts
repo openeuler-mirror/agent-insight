@@ -1,0 +1,50 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { NextResponse } from 'next/server';
+import { resolveTraceReadScope } from '@/lib/auth/admin';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { exportTraceBundle } from '@/lib/trace-transfer-service';
+
+export const dynamic = 'force-dynamic';
+
+function safeFileSegment(value: string): string {
+    return value.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'trace';
+}
+export async function GET(request: Request) {
+    const url = new URL(request.url);
+    const executionId = (url.searchParams.get('executionId') || '').trim();
+    const { username, canViewAllTraces } = await resolveTraceReadScope(request);
+    if (!username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+    if (!executionId) return NextResponse.json({ error: 'executionId is required' }, { status: 400 });
+
+    try {
+        const bundle = await exportTraceBundle(executionId, username, { allUsers: canViewAllTraces });
+
+        recordUsageEvent({ user: username, featureKey: 'trace', eventKey: 'trace.export' });
+
+        return NextResponse.json(bundle, {
+            headers: {
+                'Content-Disposition': `attachment; filename="trace-${safeFileSegment(bundle.rootExecutionId)}.json"`,
+                'Cache-Control': 'no-store',
+            },
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to export trace';
+        const status = message.includes('not found') ? 404 : 500;
+        return NextResponse.json({ error: message }, { status });
+    }
+}

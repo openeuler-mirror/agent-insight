@@ -1,0 +1,2668 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use client';
+
+/**
+ * Skill 触发评价集 (TriggerTestSet) 编辑器。
+ *
+ * 路由：/skill-eval/trigger/<skillName>
+ * 来源：skill 分析页"触发分析"卡的"前往配置 TriggerTestSet"按钮。
+ *
+ * UI 形态借鉴 DatasetItemsPage，但 case 形态是 {query, shouldTrigger}，不是 ideal_output。
+ * 复测对话框走 opencode-live 模式——见 design.md 「评测变量空间」章节。
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { apiFetch } from '@/lib/client/api';
+import { useAuth } from '@/lib/auth/auth-context';
+import { safeUUID } from '@/lib/safe-uuid';
+import { AppTopBar } from '@/components/shell/AppTopBar';
+import { FindingsGrouped, SectionShell } from '@/components/evaluation';
+import type { FindingItem, FindingGroup } from '@/components/evaluation';
+import '../../skill-analysis.css';
+import '../../debug.css';
+import '@/components/evaluation/evaluation-content.css';
+import './trigger-overview.css';
+
+// 复用 server 的类型；为避免拉 server 依赖到 client，这里手写一份对齐结构。
+type TriggerItemSource = 'llm-draft' | 'user-added' | 'user-edited' | 'trace-mined';
+interface TriggerItem {
+  id: string;
+  query: string;
+  shouldTrigger: boolean;
+  rationale?: string;
+  source: TriggerItemSource;
+}
+type TriggerSetVersionSource = 'llm-draft' | 'user-upload' | 'manual';
+interface TriggerSet {
+  id: string;
+  skillName: string;
+  /** 数据集版本号；最大值即「latest / 可编辑版本」 */
+  version: number;
+  /** 这个版本怎么来 */
+  versionSource: TriggerSetVersionSource;
+  /** 可选备注（上传文件名 / 起草模型） */
+  versionNote: string | null;
+  description: string;
+  items: TriggerItem[];
+  /** 'drafting'/'failed' 是异步 AI 起草的占位版本；'ready' 才是真正可编辑 / 可评测的版本 */
+  status: 'drafting' | 'ready' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+}
+interface RunResultItem {
+  itemId: string;
+  query: string;
+  shouldTrigger: boolean;
+  runsTriggered: number;
+  runsTotal: number;
+  triggerRate: number;
+  pass: boolean;
+  latencyMsAvg: number;
+  competingSkill?: string;
+  // 跑完/没跑完拆分（旧 run 记录没有 → optional，渲染处要兼容缺失）
+  runsCompleted?: number;
+  runsTimedOut?: number;
+  runsErrored?: number;
+  errorMessage?: string;
+}
+interface RunRecord {
+  id: string;
+  skillName: string;
+  skillVersion: number;
+  results: RunResultItem[];
+  passRate: number;
+  truePositiveRate: number;
+  falsePositiveRate: number;
+  runsPerQuery: number;
+  triggerThreshold: number;
+  durationMs: number | null;
+  modelId: string | null;
+  status: 'running' | 'done' | 'failed' | 'cancelled';
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+function uuid() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return safeUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const SOURCE_LABEL: Record<TriggerItemSource, { label: string; tone: string }> = {
+  'llm-draft': { label: 'AI 起草', tone: '#6366f1' },
+  'user-added': { label: '手填', tone: '#10b981' },
+  'user-edited': { label: '编辑过', tone: '#0891b2' },
+  'trace-mined': { label: '采自轨迹', tone: '#a16207' },
+};
+
+const VERSION_SOURCE_LABEL: Record<TriggerSetVersionSource, string> = {
+  'llm-draft': 'AI 起草',
+  'user-upload': '上传',
+  manual: '手编',
+};
+
+/**
+ * 编辑器该绑定哪个版本：
+ *  - 用户显式选了某历史版本（selectedSetId）→ 直接用 GET 返回的那一个。
+ *  - 否则 GET 返回的是 latest；若它是异步起草的 drafting/failed 占位（不可编辑），
+ *    退回 versions 里最新的 ready 版本。都没有 ready 时返回 null（编辑器空态），绝不绑定占位：
+ *    占位保存不改 status，且下一次 AI 起草会整行删除占位，手工数据会静默丢失。
+ */
+function pickEditableSet(
+  incoming: TriggerSet | null,
+  versions: TriggerSet[],
+  selectedSetId: string | null,
+): TriggerSet | null {
+  if (selectedSetId) return incoming;
+  if (incoming && incoming.status !== 'ready') {
+    return versions.find(v => v.status === 'ready') ?? null;
+  }
+  return incoming;
+}
+
+export default function SkillEvalTriggerPage() {
+  const params = useParams<{ skillName: string }>();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { user } = useAuth();
+  const skillName = decodeURIComponent(params.skillName);
+  // 外侧 SkillAnalysisHeader 选中的版本通过 ?version= 透进来；
+  // 初始化时优先用它，对齐 StaticCompliancePanel 用 prop 直传 version 的语义。
+  const initialVersionFromQuery = (() => {
+    const raw = searchParams?.get('version');
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  })();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [set, setSet] = useState<TriggerSet | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  // 历次评测 run，最新在前。latestRun = runs[0]（filter done），其余进「历史评测」面板。
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  // 当前在「执行概览」+ 行内评分里展示的 run id；null 表示跟随最新。
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // 数据集版本列表（version desc）+ 当前编辑器在看哪个版本的 id。
+  // null 表示跟随 latest（versions[0]）。
+  const [versions, setVersions] = useState<TriggerSet[]>([]);
+  const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
+  const [datasetVersionsOpen, setDatasetVersionsOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadFormatDialogOpen, setUploadFormatDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 三段式 section 折叠态。固定默认：① ② 折叠 / ③ 展开——不再根据数据状态自动改写
+  // （用户明确要求：永远是 ③ 默认展开，不论有没有评测过；空状态由 ③ block 内部空态承担）。
+  const [configSecOpen, setConfigSecOpen] = useState(false);
+  const [execSecOpen, setExecSecOpen] = useState(false);
+  const [resultSecOpen, setResultSecOpen] = useState(true);
+
+  // 用户在 /modelconfig 注册的所有模型 + 当前选用哪个起草
+  const [modelConfigs, setModelConfigs] = useState<Array<{ id: string; name: string; model?: string }>>([]);
+  const [activeConfigId, setActiveConfigId] = useState<string>('');
+  const [draftConfigId, setDraftConfigId] = useState<string>('');
+
+  // 该用户的所有 skill —— 顶部 Skill 切换器的数据源 + 当前 skill 的 versions
+  interface SkillEntry {
+    id: string;
+    name: string;
+    activeVersion?: number;
+    versions?: Array<{ version: number; createdAt?: string }>;
+  }
+  const [skillsList, setSkillsList] = useState<SkillEntry[]>([]);
+  useEffect(() => {
+    if (!user) return;
+    apiFetch(`/api/skills?user=${encodeURIComponent(user)}`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => {
+        if (!Array.isArray(data)) return;
+        setSkillsList(
+          data.map((s: SkillEntry) => ({
+            id: s.id,
+            name: s.name,
+            activeVersion: s.activeVersion,
+            versions: Array.isArray(s.versions) ? s.versions : [],
+          })),
+        );
+      })
+      .catch(() => setSkillsList([]));
+  }, [user]);
+
+  // 当前 skill 选哪个版本展示 latest run（数据集本身跨版本共享，但 run 是按版本归档的）
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(initialVersionFromQuery);
+  useEffect(() => {
+    // skill 切换 or 列表加载完成时：
+    //   1) 优先尊重 URL 上 ?version=（外侧分析页带进来的版本），只要它在该 skill 的版本里存在
+    //   2) 否则保留用户在子页里手动切过的当前值（如果还合法）
+    //   3) 否则落到 active version
+    const current = skillsList.find(s => s.name === skillName);
+    if (current) {
+      const fallback = current.activeVersion ?? current.versions?.[0]?.version ?? null;
+      const queryVersion =
+        initialVersionFromQuery != null && current.versions?.some(v => v.version === initialVersionFromQuery)
+          ? initialVersionFromQuery
+          : null;
+      setSelectedVersion(prev => {
+        if (queryVersion != null) return queryVersion;
+        if (prev != null && current.versions?.some(v => v.version === prev)) return prev;
+        return fallback;
+      });
+    }
+  }, [skillsList, skillName, initialVersionFromQuery]);
+
+  // 拉触发集（+ 全部版本）+ run 历史 + 用户注册的模型配置；run 按选中 skill 版本过滤
+  const reload = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const runParams = new URLSearchParams({ user, limit: '50' });
+      if (selectedVersion != null) runParams.set('skillVersion', String(selectedVersion));
+      const setUrl = new URLSearchParams({ user });
+      if (selectedSetId) setUrl.set('versionId', selectedSetId);
+      const [setRes, runRes, settingsRes] = await Promise.all([
+        apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}?${setUrl.toString()}`),
+        apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}/runs?${runParams.toString()}`),
+        apiFetch(`/api/eval/settings?user=${encodeURIComponent(user)}`),
+      ]);
+      const setData = await setRes.json();
+      const runData = await runRes.json();
+      const settings = await settingsRes.json().catch(() => ({}));
+      const vList: TriggerSet[] = Array.isArray(setData.versions) ? setData.versions : [];
+      setVersions(vList);
+      // 编辑器只绑定**可编辑（ready）**版本：GET 返回的 latest 可能是异步起草的 drafting/failed
+      // 占位（version 最大但不可编辑），这时退回最新的 ready 版本，让编辑器始终拿到真内容；
+      // 用户显式选了某历史版本（selectedSetId）则直接用它。
+      setSet(pickEditableSet(setData.set ?? null, vList, selectedSetId));
+      // selectedSetId 已不在新列表里就清掉，避免悬空选择
+      if (selectedSetId && !vList.some(v => v.id === selectedSetId)) {
+        setSelectedSetId(null);
+      }
+      const runList: RunRecord[] = Array.isArray(runData.runs) ? runData.runs : [];
+      setRuns(runList);
+      // 重新加载（切版本 / 复测完成）时把视图拉回最新，避免指着一个不在新列表里的旧 id。
+      setSelectedRunId(null);
+      const configs = Array.isArray(settings?.configs) ? settings.configs : [];
+      setModelConfigs(
+        configs.map((c: { id: string; name?: string; model?: string }) => ({
+          id: c.id,
+          name: c.name ?? c.id,
+          model: c.model,
+        })),
+      );
+      const active = String(settings?.activeConfigId ?? '');
+      setActiveConfigId(active);
+      // draft 默认选 active；用户切换后不被后续 reload 覆盖
+      setDraftConfigId(prev => prev || active);
+    } catch (err) {
+      setErrorMsg((err as Error)?.message ?? '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [user, skillName, selectedVersion, selectedSetId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  // 只刷新 run 列表（不动 set / settings、不触发整页 loading），供后台评测进行中轮询用。
+  const refreshRuns = useCallback(async () => {
+    if (!user) return;
+    const runParams = new URLSearchParams({ user, limit: '50' });
+    if (selectedVersion != null) runParams.set('skillVersion', String(selectedVersion));
+    try {
+      const res = await apiFetch(
+        `/api/skill-eval/trigger/${encodeURIComponent(skillName)}/runs?${runParams.toString()}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const runList: RunRecord[] = Array.isArray(data.runs) ? data.runs : [];
+      setRuns(runList);
+    } catch {
+      // 轮询期间的瞬时网络错误吞掉——下一拍重试即可，不打扰用户。
+    }
+  }, [user, skillName, selectedVersion]);
+
+  // 只刷新触发集 + 版本列表（不动 runs / settings、不触发整页 loading），供后台起草进行中轮询用。
+  // 起草完成时占位版本会从 drafting → ready（新 id），pickEditableSet 随之把编辑器切到新版本。
+  const refreshSet = useCallback(async () => {
+    if (!user) return;
+    const setUrl = new URLSearchParams({ user });
+    if (selectedSetId) setUrl.set('versionId', selectedSetId);
+    try {
+      const res = await apiFetch(
+        `/api/skill-eval/trigger/${encodeURIComponent(skillName)}?${setUrl.toString()}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const vList: TriggerSet[] = Array.isArray(data.versions) ? data.versions : [];
+      setVersions(vList);
+      const editable = pickEditableSet(data.set ?? null, vList, selectedSetId);
+      // 只在可编辑版本真的变了（起草完成 → 新版本 id）时替换，避免轮询每拍都把当前 set 换成
+      // 同内容的新对象、白白触发列重渲染。
+      setSet(prev => (prev && editable && prev.id === editable.id ? prev : editable));
+    } catch {
+      // 轮询期间的瞬时网络错误吞掉——下一拍重试即可。
+    }
+  }, [user, skillName, selectedSetId]);
+
+  // 评测改异步后，后端建好 run（status=running）即返回；真正跑完是后台行为。
+  // 只要列表里还有 running 的 run，就每 3s 轮询一次 /runs 把最新状态拉回来——跑完后
+  // running 消失，effect cleanup 自动停。用户关掉页面再回来时 reload 会重新拉到 running，
+  // 轮询照常接上。MAX 拍兜底，避免后台进程异常残留 running 时无限空轮询。
+  const runningRun = useMemo(() => runs.find(r => r.status === 'running') ?? null, [runs]);
+  const hasRunningRun = runningRun != null;
+  useEffect(() => {
+    if (!hasRunningRun) return;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 200; // 200 × 3s ≈ 10min 上限
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (attempts > MAX_ATTEMPTS) {
+        clearInterval(timer);
+        return;
+      }
+      void refreshRuns();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [hasRunningRun, refreshRuns]);
+
+  // ── 异步 AI 起草状态（drafting/failed 占位版本）────────────────────────────
+  // ready 版本 = 真正可编辑 / 可评测的版本；drafting/failed 是后台起草的占位，单独用 banner 呈现。
+  const readyVersions = useMemo(() => versions.filter(v => v.status === 'ready'), [versions]);
+  // 「latest 可编辑版本」= 最新的 ready 版本（versions 已 version desc，filter 后第一条即最新 ready）。
+  const latestReadySet = useMemo<TriggerSet | null>(() => readyVersions[0] ?? null, [readyVersions]);
+  // 正在后台起草的占位（防重入后最多一条新鲜的）；存在即「起草中」。
+  const draftingSet = useMemo(() => versions.find(v => v.status === 'drafting') ?? null, [versions]);
+  const hasDrafting = draftingSet != null;
+  // 上次起草失败的占位——失败占位不一定顶在 versions[0]：无 ready 时保存会新建 version 更大的
+  // manual 版本（上传同理），所以全列表找第一条 failed。
+  const failedDraftSet = useMemo(
+    () => versions.find(v => v.status === 'failed') ?? null,
+    [versions],
+  );
+
+  // 起草改异步后，POST 建好 drafting 占位即返回，真正跑完是后台行为。只要还有 drafting 占位，
+  // 就每 3s 轮询一次 /trigger 把最新状态拉回来——跑完后占位 flip 成 ready（或 failed），
+  // hasDrafting 转 false，effect cleanup 自动停。用户关页面再回来时 reload 会重新拉到 drafting，
+  // 轮询照常接上。MAX 拍兜底，避免后台进程异常残留 drafting 时无限空轮询。
+  useEffect(() => {
+    if (!hasDrafting) return;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 120; // 120 × 3s ≈ 6min 上限（起草典型 5-15s）
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (attempts > MAX_ATTEMPTS) {
+        clearInterval(timer);
+        return;
+      }
+      void refreshSet();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [hasDrafting, refreshSet]);
+
+  // 终止正在跑的评测：打 /run/<id>/cancel，后端 abort 后台 runner + 把这条 run 置 cancelled。
+  // 成功后立刻 refreshRuns 把 cancelled 状态拉回来（不等下一拍轮询），banner 随即消失。
+  const cancelRun = useCallback(async () => {
+    if (!user || !runningRun) return;
+    if (!confirm('终止这次评测？已经跑出来的部分结果不会保留。')) return;
+    setCancelling(true);
+    try {
+      const res = await apiFetch(
+        `/api/skill-eval/trigger/${encodeURIComponent(skillName)}/run/${encodeURIComponent(runningRun.id)}/cancel`,
+        { method: 'POST', body: JSON.stringify({ user }) },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `cancel failed: ${res.status}`);
+      }
+      await refreshRuns();
+    } catch (err) {
+      setErrorMsg((err as Error)?.message ?? '终止失败');
+    } finally {
+      setCancelling(false);
+    }
+  }, [user, runningRun, skillName, refreshRuns]);
+
+  // 编辑：单项更新
+  const updateItem = useCallback((id: string, patch: Partial<TriggerItem>) => {
+    setSet(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map(item =>
+          item.id === id
+            ? {
+                ...item,
+                ...patch,
+                // 用户编辑过 → 标 source 为 user-edited（除非本来就是 user-added）
+                source:
+                  item.source === 'user-added' ? 'user-added' : (patch.source ?? 'user-edited'),
+              }
+            : item,
+        ),
+      };
+    });
+  }, []);
+
+  const addItem = useCallback((shouldTrigger: boolean) => {
+    setSet(prev => {
+      const base: TriggerSet = prev ?? {
+        id: '',
+        skillName,
+        version: 1,
+        versionSource: 'manual',
+        versionNote: null,
+        description: '',
+        items: [],
+        status: 'ready',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return {
+        ...base,
+        items: [
+          ...base.items,
+          {
+            id: uuid(),
+            query: '',
+            shouldTrigger,
+            source: 'user-added',
+          },
+        ],
+      };
+    });
+  }, [skillName]);
+
+  const deleteItem = useCallback((id: string) => {
+    setSet(prev => (prev ? { ...prev, items: prev.items.filter(item => item.id !== id) } : prev));
+  }, []);
+
+  // latest 可编辑版本 = 最新的 ready 版本（drafting/failed 占位不算）；编辑器只允许在它上面保存。
+  const isViewingLatestSet = !set || !latestReadySet || set.id === latestReadySet.id;
+  // 起草进行中时也锁编辑——正在新建版本，此刻改旧版没意义（起草完会切到新版本），免得白改一通。
+  const readOnly = !isViewingLatestSet || hasDrafting;
+
+  const saveAll = useCallback(async () => {
+    if (!set || !user) return;
+    setSaving(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          user,
+          // 后端会再校验「必须等于最新 ready 的 id」，前端 disable 已经挡住非 latest 的保存
+          versionId: set.id || undefined,
+          description: set.description,
+          items: set.items,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `save failed: ${res.status}`);
+      }
+      const data = await res.json();
+      setSet(data.set);
+      // 保存后刷新版本列表（latest 的 updatedAt 会变；新建空集场景下也需要把 id 灌回来）
+      void reload();
+    } catch (err) {
+      setErrorMsg((err as Error)?.message ?? '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  }, [set, user, skillName, reload]);
+
+  // 历史里取最新的 done run 作为"最新一次评测"（其它状态如 running/failed 不进概览）
+  const latestRun = useMemo(() => runs.find(r => r.status === 'done') ?? null, [runs]);
+  // 最近一次 run（含 running/failed）——异步后后台失败不再走请求返回，要靠它把
+  // errorMessage 浮出来；否则用户只看到历史里一个「失败」小标，不知道为什么。
+  const mostRecentRun = useMemo(() => runs[0] ?? null, [runs]);
+  // 「执行概览」+ 行内评分实际展示的 run：用户选中的优先；没选就跟随最新。
+  const displayedRun = useMemo(
+    () => (selectedRunId ? runs.find(r => r.id === selectedRunId) ?? null : latestRun),
+    [runs, selectedRunId, latestRun],
+  );
+  const viewingHistory = selectedRunId != null && displayedRun?.id !== latestRun?.id;
+
+  // 是否已经有过任意 ready 数据集版本 —— 用于按钮文案（占位版本不算）
+  const hasAnyVersion = readyVersions.length > 0;
+  // 是否跑过评测 —— 决定"立即复测"还是"立即评测"
+  const hasRun = latestRun != null;
+  // 起草进行中：local drafting（POST 往返窗口的即时反馈）或已落 DB 的 drafting 占位（刷新后仍在）。
+  const draftBusy = drafting || hasDrafting;
+
+  const draftRedo = useCallback(async () => {
+    if (!user || hasDrafting) return; // 已在起草，按钮本应 disabled，这里双保险防连点
+    // 新语义：起草 = 新建一个版本。不再覆盖旧数据，所以只有当已经存在版本时才二次确认。
+    // failed 占位不会保留为历史：/draft 会按状态整行删除占位（deletePlaceholderDraftingSets），
+    // 无论占位是否还是最新版本。占位里有数据（如旧逻辑把手工编辑存进了占位）时必须显式确认，
+    // 避免静默删除，所以这里全量扫描而不是只看 failedDraftSet 一条。
+    const placeholderHasData = versions.some(v => v.status === 'failed' && v.items.length > 0);
+    if (hasAnyVersion || placeholderHasData) {
+      const message = placeholderHasData
+        ? '将基于当前 SKILL.md 生成一个新的 AI 起草版本。注意：上次起草失败的占位版本及其中的数据会被删除，其余历史版本保留。确认？'
+        : '将基于当前 SKILL.md 生成一个新的 AI 起草版本，旧版本会保留为历史。确认？';
+      if (!confirm(message)) return;
+    }
+    setDrafting(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}/draft`, {
+        method: 'POST',
+        body: JSON.stringify({
+          user,
+          modelConfigId: draftConfigId || undefined,
+        }),
+      });
+      // 409 = 该 skill 已有一次起草在跑（防重入）。不是错误：当成"已发起"，reload 把 drafting
+      // 占位拉回来，由轮询接管进度即可。
+      if (res.status !== 409 && !res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `draft failed: ${res.status}`);
+      }
+      // 异步起草：POST 只建好 drafting 占位（status=drafting）就返回，真正跑完是后台行为。
+      // 切回 latest 并 reload，让占位进入 versions → 触发「起草中」banner + 轮询接管；不要把
+      // 编辑器直接绑到占位（pickEditableSet 会自动退回最新 ready 版本）。
+      setSelectedSetId(null);
+      await reload();
+    } catch (err) {
+      setErrorMsg((err as Error)?.message ?? '起草失败');
+    } finally {
+      setDrafting(false);
+    }
+  }, [user, skillName, draftConfigId, hasAnyVersion, hasDrafting, versions, reload]);
+
+  // 上传数据集 —— 选 JSON 文件 → 解析 → POST → 新建版本
+  const onUploadFile = useCallback(async (file: File) => {
+    if (!user) return;
+    setUploading(true);
+    setErrorMsg(null);
+    try {
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error('JSON 解析失败：请确认文件是合法的 JSON 数组');
+      }
+      // 支持两种顶层结构：直接是数组，或 { items: [...] }
+      const itemsRaw = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray((parsed as { items?: unknown })?.items)
+        ? (parsed as { items: unknown[] }).items
+        : null;
+      if (!itemsRaw) {
+        throw new Error('格式不符：顶层应是数组，或 { items: [...] }');
+      }
+      const res = await apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}/upload`, {
+        method: 'POST',
+        body: JSON.stringify({ user, items: itemsRaw, note: file.name }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `upload failed: ${res.status}`);
+      }
+      const data = await res.json();
+      setSelectedSetId(null);
+      setSet(data.set);
+      void reload();
+    } catch (err) {
+      setErrorMsg((err as Error)?.message ?? '上传失败');
+    } finally {
+      setUploading(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = '';
+    }
+  }, [user, skillName, reload]);
+
+  // 从评测中心的「评测数据集」导入 query 当正例。
+  // mode='new-version'：和上传走同一条 /upload 接口，新建版本。
+  // mode='append'：往当前编辑器里的 set 末尾追加（用户还需手动「保存」才落库）。
+  // 任一模式都按 query 字符串去重——不重复添加已有的 query。
+  const onImportFromDataset = useCallback(
+    async (queries: Array<{ query: string; rationale?: string }>, mode: 'append' | 'new-version') => {
+      if (!user) return;
+      const existingQueries = new Set((set?.items ?? []).map(i => i.query.trim()).filter(Boolean));
+      const seen = new Set<string>();
+      const dedupedNew: Array<{ query: string; rationale?: string }> = [];
+      for (const q of queries) {
+        const trimmed = q.query.trim();
+        if (!trimmed) continue;
+        if (existingQueries.has(trimmed)) continue;
+        if (seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        dedupedNew.push({ query: trimmed, rationale: q.rationale });
+      }
+      const skipped = queries.length - dedupedNew.length;
+      if (dedupedNew.length === 0) {
+        setErrorMsg(`没有可导入的新 query —— ${queries.length} 条全部已存在或为空`);
+        setImportDialogOpen(false);
+        return;
+      }
+
+      setImporting(true);
+      setErrorMsg(null);
+      try {
+        if (mode === 'new-version') {
+          // 走 upload —— 后端 normalizeItems 校验后新建一个 user-upload 版本。
+          const items = dedupedNew.map(q => ({
+            query: q.query,
+            shouldTrigger: true,
+            rationale: q.rationale,
+          }));
+          const res = await apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}/upload`, {
+            method: 'POST',
+            body: JSON.stringify({ user, items, note: '从评测数据集导入' }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `import failed: ${res.status}`);
+          }
+          const data = await res.json();
+          setSelectedSetId(null);
+          setSet(data.set);
+          void reload();
+        } else {
+          // append —— 仅更新本地 state；用户随后点「保存」才入库。
+          setSet(prev => {
+            const base: TriggerSet = prev ?? {
+              id: '',
+              skillName,
+              version: 1,
+              versionSource: 'manual',
+              versionNote: null,
+              description: '',
+              items: [],
+              status: 'ready',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            return {
+              ...base,
+              items: [
+                ...base.items,
+                ...dedupedNew.map(q => ({
+                  id: uuid(),
+                  query: q.query,
+                  shouldTrigger: true,
+                  rationale: q.rationale,
+                  source: 'user-added' as TriggerItemSource,
+                })),
+              ],
+            };
+          });
+        }
+        setImportDialogOpen(false);
+        if (skipped > 0) {
+          setErrorMsg(`导入 ${dedupedNew.length} 条，跳过 ${skipped} 条已存在/重复的 query`);
+        }
+      } catch (err) {
+        setErrorMsg((err as Error)?.message ?? '导入失败');
+      } finally {
+        setImporting(false);
+      }
+    },
+    [user, skillName, set, reload],
+  );
+
+  // 拆成正例 / 反例两列
+  const positiveItems = useMemo(() => set?.items.filter(i => i.shouldTrigger) ?? [], [set]);
+  const negativeItems = useMemo(() => set?.items.filter(i => !i.shouldTrigger) ?? [], [set]);
+
+  // 命中结果 by itemId（用于行内显示分数）—— 跟随「执行概览」里展示的 run
+  const resultByItemId = useMemo(() => {
+    if (!displayedRun) return new Map<string, RunResultItem>();
+    return new Map(displayedRun.results.map(r => [r.itemId, r]));
+  }, [displayedRun]);
+
+  const currentSkill = skillsList.find(s => s.name === skillName);
+
+  // 版本下拉项：按 version desc 排序
+  const sortedVersions = useMemo(() => {
+    const list = currentSkill?.versions ?? [];
+    return [...list].sort((a, b) => b.version - a.version);
+  }, [currentSkill]);
+
+  // 触发评价集是跨版本共享的；只有 latest-run 跟版本绑定 —— 用户选别的版本，看到的是
+  // 那个版本最近一次跑过的结果（不存在则为空）。"立即复测" 仍然跑后端定义的 active 版本。
+  return (
+    <div className="sa-root">
+      <AppTopBar
+        title={
+          <span className="sa-top-title">
+            <button onClick={() => {
+              // 把当前选中的 skill+version 带回父页，父页 mount 时会读 ?skill=&version=
+              // 重新初始化它自己的 selectedSkillId / selectedVersion——实现「里改→外同步」。
+              const qs = new URLSearchParams();
+              qs.set('skill', skillName);
+              if (selectedVersion != null) qs.set('version', String(selectedVersion));
+              router.push(`/skill-eval?${qs.toString()}`);
+            }}>
+              Skills 评测
+            </button>
+            <span>/</span>
+            <b>触发分析</b>
+            <span className="sa-top-dot">·</span>
+            <select
+              className="sa-top-select"
+              value={skillName}
+              onChange={e => {
+                const nextName = e.target.value;
+                if (nextName && nextName !== skillName) {
+                  router.push(`/skill-eval/trigger/${encodeURIComponent(nextName)}`);
+                }
+              }}
+              aria-label="切换 Skill"
+            >
+              {!currentSkill && <option value={skillName}>{skillName}（当前）</option>}
+              {skillsList.map(s => (
+                <option key={s.id} value={s.name}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="sa-top-select sa-top-select-version"
+              value={selectedVersion ?? ''}
+              onChange={e => {
+                const next = Number(e.target.value);
+                setSelectedVersion(next);
+                // 把版本同步进 URL，浏览器后退 / 刷新能落回同一版本；
+                // 同时也是「返回父页时把当前版本带回」那一步的真相源——
+                // 父页 onClick 回跳时直接读 selectedVersion 的最新值。
+                const params = new URLSearchParams(Array.from(searchParams?.entries() ?? []));
+                if (Number.isFinite(next)) params.set('version', String(next));
+                else params.delete('version');
+                const qs = params.toString();
+                router.replace(qs ? `?${qs}` : '?', { scroll: false });
+              }}
+              disabled={!currentSkill || sortedVersions.length === 0}
+              aria-label="切换版本"
+            >
+              {sortedVersions.length === 0 && selectedVersion != null && (
+                <option value={selectedVersion}>v{selectedVersion}</option>
+              )}
+              {sortedVersions.map(v => (
+                <option key={v.version} value={v.version}>
+                  v{v.version}
+                  {v.version === currentSkill?.activeVersion ? '（当前）' : ''}
+                </option>
+              ))}
+            </select>
+          </span>
+        }
+        showDefaultActions={false}
+      />
+
+      <main className="sa-main">
+        {/* 触发分析的 hero 卡 —— 跟静态合规分析的 DetailHeader 一一对应：标题 + badge + 元信息 +
+           所有当前分析相关的操作按钮（模型选择 / 重新起草 / 保存 / 立即复测）。 */}
+        <header className="sa-detail-head">
+          <div className="sa-detail-hero">
+            <div>
+              <h1>
+                触发分析 <span className="sa-pill primary">opencode-live</span>
+              </h1>
+              <p>
+                {skillName}
+                {selectedVersion != null ? ` · v${selectedVersion}` : ''}
+                {' · 触发评价集 + opencode-live 路由评测'}
+              </p>
+              <div className="sa-detail-meta">
+                {set ? (
+                  <>
+                    <span>
+                      数据集 v{set.version}（{VERSION_SOURCE_LABEL[set.versionSource] ?? set.versionSource}
+                      {set.versionNote ? ` · ${set.versionNote}` : ''}）
+                    </span>
+                    <span>
+                      {set.items.length} 条 query · 正例{' '}
+                      {set.items.filter(i => i.shouldTrigger).length} · 反例{' '}
+                      {set.items.filter(i => !i.shouldTrigger).length}
+                    </span>
+                    {!isViewingLatestSet && (
+                      <span style={{ color: '#a16207' }}>
+                        正在查看历史版本（只读）
+                      </span>
+                    )}
+                    {!latestRun && (
+                      <span style={{ color: 'var(--sa-muted, #71717a)' }}>
+                        {selectedVersion != null ? `skill v${selectedVersion} 还没跑过评测` : '还没跑过评测'}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ color: 'var(--sa-muted, #71717a)' }}>
+                    {loading ? '加载中...' : '尚未配置数据集'}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="sa-detail-actions">
+              <select
+                value={draftConfigId}
+                onChange={e => setDraftConfigId(e.target.value)}
+                title="起草用的模型 (来自 /modelconfig)"
+                aria-label="起草模型"
+                style={{ maxWidth: 200 }}
+              >
+                {modelConfigs.length === 0 ? (
+                  <option value="">（未注册模型，将用 env 兜底）</option>
+                ) : (
+                  modelConfigs.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                      {c.id === activeConfigId ? ' · 默认' : ''}
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                className="sa-btn"
+                onClick={draftRedo}
+                disabled={draftBusy}
+                title={hasDrafting ? 'AI 起草正在后台运行，完成后再起草下一版' : undefined}
+              >
+                {draftBusy ? '起草中...' : hasAnyVersion ? 'AI 起草新版本' : 'AI 起草'}
+              </button>
+              <button
+                className="sa-btn"
+                onClick={() => setUploadFormatDialogOpen(true)}
+                disabled={uploading}
+                title="查看数据集 JSON 格式要求，然后选择文件"
+              >
+                {uploading ? '上传中...' : '上传数据集'}
+              </button>
+              <button
+                className="sa-btn"
+                onClick={() => setImportDialogOpen(true)}
+                disabled={importing}
+                title="从「评测中心 → 评测数据集」选一个，把它的 query 当正例（应触发）导入"
+              >
+                {importing ? '导入中...' : '从评测集导入'}
+              </button>
+              <input
+                ref={uploadInputRef}
+                type="file"
+                accept=".json,application/json"
+                style={{ display: 'none' }}
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) void onUploadFile(f);
+                }}
+              />
+              <button
+                className="sa-btn"
+                onClick={saveAll}
+                disabled={saving || !set || readOnly}
+                title={readOnly ? '只能编辑最新版本——切回 latest 再保存' : undefined}
+              >
+                {saving ? '保存中...' : '保存'}
+              </button>
+              <button
+                className="sa-btn sa-btn-primary"
+                onClick={() => setRunDialogOpen(true)}
+                disabled={!set || set.items.length === 0 || hasRunningRun || running}
+                title={hasRunningRun ? '已有一次评测在后台运行，完成后再开始下一次' : undefined}
+              >
+                {hasRunningRun ? '评测进行中…' : hasRun ? '立即复测' : '立即评测'}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {errorMsg && (
+          <div
+            style={{
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            {errorMsg}
+          </div>
+        )}
+
+        {hasDrafting && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#eef2ff',
+              border: '1px solid #c7d2fe',
+              color: '#3730a3',
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            <span className="trigger-run-spinner" aria-hidden />
+            <span>
+              <b>AI 起草进行中…</b> 在后台跑，完成后这里会自动出现新版本数据集。
+              <span style={{ opacity: 0.85 }}>你可以关掉本页，跑完回来即可看到。</span>
+            </span>
+          </div>
+        )}
+
+        {!hasDrafting && failedDraftSet && (
+          <div
+            style={{
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              borderRadius: 6,
+              fontSize: 13,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>AI 起草失败</div>
+            {failedDraftSet.versionNote || '后台执行出错，请重新起草。'}
+          </div>
+        )}
+
+        {hasRunningRun && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#eef2ff',
+              border: '1px solid #c7d2fe',
+              color: '#3730a3',
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            <span className="trigger-run-spinner" aria-hidden />
+            <span>
+              <b>评测进行中…</b> 在后台跑，完成后这里会自动刷新。
+              <span style={{ opacity: 0.85 }}>你可以关掉本页，跑完回来即可看到结果。</span>
+            </span>
+            <button
+              type="button"
+              onClick={cancelRun}
+              disabled={cancelling}
+              style={{
+                marginLeft: 'auto',
+                flex: 'none',
+                padding: '5px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#991b1b',
+                background: '#fff',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+                cursor: cancelling ? 'default' : 'pointer',
+                opacity: cancelling ? 0.6 : 1,
+              }}
+            >
+              {cancelling ? '终止中…' : '终止'}
+            </button>
+          </div>
+        )}
+
+        {!hasRunningRun && mostRecentRun?.status === 'failed' && (
+          <div
+            style={{
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              borderRadius: 6,
+              fontSize: 13,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>最近一次评测失败</div>
+            {mostRecentRun.errorMessage || '后台执行出错，请重试。'}
+          </div>
+        )}
+
+        {/* ─────────── ① 配置 · 数据集构建 ─────────── */}
+        <SectionShell
+          num={1}
+          variant="config"
+          title="配置 · 数据集构建"
+          desc='触发评价集：哪些 query 该 / 不该命中本 Skill'
+          summary={
+            <ConfigSummary
+              set={set}
+              isViewingLatestSet={isViewingLatestSet}
+              versionsCount={readyVersions.length}
+            />
+          }
+          open={configSecOpen}
+          onToggle={() => setConfigSecOpen(o => !o)}
+        >
+          {readyVersions.length > 0 && (
+            <TriggerDatasetVersionsPanel
+              versions={readyVersions}
+              latestId={latestReadySet?.id ?? null}
+              selectedId={set?.id ?? null}
+              open={datasetVersionsOpen}
+              onToggle={() => setDatasetVersionsOpen(o => !o)}
+              onSelect={id => setSelectedSetId(id)}
+              onResetLatest={() => setSelectedSetId(null)}
+            />
+          )}
+          {!loading && (
+            <div className="recall-editor-grid">
+              <TriggerColumn
+                kind="positive"
+                items={positiveItems}
+                resultByItemId={resultByItemId}
+                readOnly={readOnly}
+                onAdd={() => addItem(true)}
+                onUpdate={updateItem}
+                onDelete={deleteItem}
+                onMove={id => updateItem(id, { shouldTrigger: false })}
+              />
+              <TriggerColumn
+                kind="negative"
+                items={negativeItems}
+                resultByItemId={resultByItemId}
+                readOnly={readOnly}
+                onAdd={() => addItem(false)}
+                onUpdate={updateItem}
+                onDelete={deleteItem}
+                onMove={id => updateItem(id, { shouldTrigger: true })}
+              />
+            </div>
+          )}
+        </SectionShell>
+
+        {/* ─────────── ② 执行 · 评测运行 ─────────── */}
+        <SectionShell
+          num={2}
+          variant="exec"
+          title="执行 · 评测运行"
+          desc="按当前数据集跑批，得出触发命中率 / 误触发率"
+          summary={
+            <ExecSummary
+              runs={runs}
+              latestRun={latestRun}
+              modelLabelOf={(id: string | null) => (id ? modelConfigs.find(c => c.id === id)?.name ?? id : null)}
+            />
+          }
+          open={execSecOpen}
+          onToggle={() => setExecSecOpen(o => !o)}
+        >
+          <div className="recall-exec-actions">
+            <button
+              className="sa-btn sa-btn-primary"
+              onClick={() => setRunDialogOpen(true)}
+              disabled={!set || set.items.length === 0 || hasRunningRun || running}
+              title={hasRunningRun ? '已有一次评测在后台运行，完成后再开始下一次' : undefined}
+            >
+              {hasRunningRun ? '评测进行中…' : hasRun ? '立即复测' : '立即评测'}
+            </button>
+            <span className="recall-exec-hint">
+              点击会打开评测配置对话框（模型 / 每条 query 跑几次 / 阈值 / 并发 / 数据集版本）
+            </span>
+          </div>
+          {runs.length > 0 && (
+            <TriggerRunHistoryPanel
+              runs={runs}
+              latestRunId={latestRun?.id ?? null}
+              selectedRunId={displayedRun?.id ?? null}
+              open={historyOpen}
+              onToggle={() => setHistoryOpen(o => !o)}
+              onSelect={id => {
+                setSelectedRunId(id);
+                // 点击 row 自动展开结果块，保证用户看到切换效果
+                setResultSecOpen(true);
+              }}
+              onResetLatest={() => setSelectedRunId(null)}
+              modelLabelOf={id => (id ? modelConfigs.find(c => c.id === id)?.name ?? id : null)}
+            />
+          )}
+        </SectionShell>
+
+        {/* ─────────── ③ 结果 · 触发分析 ─────────── */}
+        <SectionShell
+          num={3}
+          variant="result"
+          title="结果 · 触发分析"
+          desc={
+            displayedRun
+              ? `${new Date(displayedRun.createdAt).toLocaleString()} · v${displayedRun.skillVersion}${
+                  displayedRun.modelId
+                    ? ` · ${modelConfigs.find(c => c.id === displayedRun.modelId)?.name ?? displayedRun.modelId}`
+                    : ''
+                }${viewingHistory ? ' · 历史 run' : ''}`
+              : '尚未评测'
+          }
+          summary={<ResultSummary run={displayedRun} />}
+          open={resultSecOpen}
+          onToggle={() => setResultSecOpen(o => !o)}
+        >
+          {displayedRun ? (
+            <RecallResultBlock
+              run={displayedRun}
+              triggerSet={set}
+              viewingHistory={viewingHistory}
+              onBackToLatest={() => setSelectedRunId(null)}
+            />
+          ) : (
+            <div className="recall-empty">
+              <b>尚未跑过评测。</b>
+              <div style={{ marginTop: 6 }}>
+                先在 <b>① 配置</b> 里准备好用例，再到 <b>② 执行</b> 点击「立即评测」开始。
+              </div>
+            </div>
+          )}
+        </SectionShell>
+      </main>
+
+      {uploadFormatDialogOpen && (
+        <UploadFormatDialog
+          onCancel={() => setUploadFormatDialogOpen(false)}
+          onPickFile={() => {
+            setUploadFormatDialogOpen(false);
+            uploadInputRef.current?.click();
+          }}
+        />
+      )}
+
+      {importDialogOpen && user && (
+        <ImportFromDatasetDialog
+          user={user}
+          skillName={skillName}
+          importing={importing}
+          onCancel={() => setImportDialogOpen(false)}
+          onImport={onImportFromDataset}
+        />
+      )}
+
+      {runDialogOpen && (
+        <RunDialog
+          skillName={skillName}
+          skillVersion={selectedVersion}
+          user={user}
+          modelConfigs={modelConfigs}
+          activeConfigId={activeConfigId}
+          versions={readyVersions}
+          latestSetId={latestReadySet?.id ?? null}
+          currentSetId={set?.id ?? null}
+          onClose={() => setRunDialogOpen(false)}
+          running={running}
+          setRunning={setRunning}
+          onCompleted={() => {
+            setRunDialogOpen(false);
+            void reload();
+          }}
+          onError={msg => setErrorMsg(msg)}
+        />
+      )}
+    </div>
+  );
+}
+
+// =========================================================================
+// 触发评价集列（应触发 / 不该触发）
+// =========================================================================
+function TriggerColumn({
+  kind,
+  items,
+  resultByItemId,
+  readOnly,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onMove,
+}: {
+  kind: 'positive' | 'negative';
+  items: TriggerItem[];
+  resultByItemId: Map<string, RunResultItem>;
+  /** 非 latest 版本时为 true：disable textarea + 隐藏 加/移/删 按钮 */
+  readOnly?: boolean;
+  onAdd: () => void;
+  onUpdate: (id: string, patch: Partial<TriggerItem>) => void;
+  onDelete: (id: string) => void;
+  /** 把该条目挪到对侧（正↔反），用于用户改错时快速纠正 */
+  onMove: (id: string) => void;
+}) {
+  const isPositive = kind === 'positive';
+  const accent = isPositive ? '#10b981' : '#ef4444';
+  const tintBg = isPositive ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)';
+  const moveLabel = isPositive ? '挪到反例 →' : '← 挪到正例';
+  return (
+    <section
+      style={{
+        background: 'var(--bg-card, #fff)',
+        border: '1px solid var(--line, #e3e3e3)',
+        borderRadius: 8,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <header
+        style={{
+          padding: '10px 14px',
+          background: tintBg,
+          borderBottom: `2px solid ${accent}`,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <span
+          style={{
+            display: 'inline-block',
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: accent,
+          }}
+        />
+        <strong style={{ fontSize: 13, color: 'var(--fg, #333)' }}>
+          {isPositive ? '应触发' : '不该触发'}
+        </strong>
+        <span style={{ fontSize: 12, color: '#888' }}>· {items.length} 条</span>
+      </header>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {items.length === 0 ? (
+          <div style={{ padding: 28, textAlign: 'center', color: '#aaa', fontSize: 12 }}>
+            {isPositive ? '还没有"应触发"用例' : '还没有"不该触发"用例'}
+          </div>
+        ) : (
+          items.map(item => {
+            const result = resultByItemId.get(item.id);
+            return (
+              <div
+                key={item.id}
+                style={{
+                  padding: '10px 12px',
+                  borderBottom: '1px solid var(--line-soft, #f0f0f0)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <textarea
+                  value={item.query}
+                  onChange={e => onUpdate(item.id, { query: e.target.value })}
+                  placeholder="用户的真实输入..."
+                  readOnly={readOnly}
+                  style={{
+                    width: '100%',
+                    minHeight: 48,
+                    border: '1px solid var(--line, #e3e3e3)',
+                    borderRadius: 4,
+                    padding: '6px 8px',
+                    fontFamily: 'inherit',
+                    fontSize: 13,
+                    resize: 'vertical',
+                    background: readOnly ? 'rgba(0,0,0,0.03)' : 'var(--bg-card, #fff)',
+                    color: 'var(--fg, #333)',
+                  }}
+                />
+                {item.rationale && (
+                  <div style={{ fontSize: 11, color: '#888' }}>ℹ {item.rationale}</div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      padding: '2px 8px',
+                      fontSize: 11,
+                      borderRadius: 3,
+                      background: SOURCE_LABEL[item.source].tone + '22',
+                      color: SOURCE_LABEL[item.source].tone,
+                    }}
+                  >
+                    {SOURCE_LABEL[item.source].label}
+                  </span>
+                  {result ? (
+                    <span style={{ fontSize: 12, fontFamily: 'monospace', display: 'inline-flex', gap: 6 }}>
+                      <span style={{ color: result.pass ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+                        {result.pass ? '✓ pass' : '✗ fail'}
+                      </span>
+                      <span style={{ color: '#888' }}>
+                        触发 {result.runsTriggered}/{result.runsTotal}
+                      </span>
+                      {result.runsTimedOut ? (
+                        <span style={{ color: '#d97706' }} title="超时被掐断、没跑到 skill 调用（已含重试后仍超时）">
+                          ⏱ 超时 {result.runsTimedOut}
+                        </span>
+                      ) : null}
+                      {result.runsErrored ? (
+                        <span style={{ color: '#ef4444' }} title={result.errorMessage || 'opencode 报错'}>
+                          ⚠ 出错 {result.runsErrored}
+                        </span>
+                      ) : null}
+                      {result.competingSkill && (
+                        <span style={{ color: '#a16207' }}>↳ 被 {result.competingSkill} 抢路由</span>
+                      )}
+                    </span>
+                  ) : null}
+                  <div style={{ flex: 1 }} />
+                  {!readOnly && (
+                    <>
+                      <button
+                        onClick={() => onMove(item.id)}
+                        title="放错列了？一键挪到对侧"
+                        style={{
+                          padding: '3px 8px',
+                          background: 'transparent',
+                          color: '#888',
+                          border: '1px solid var(--line, #e3e3e3)',
+                          borderRadius: 3,
+                          fontSize: 11,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {moveLabel}
+                      </button>
+                      <button onClick={() => onDelete(item.id)} style={btnDanger}>删</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+        {!readOnly && (
+          <button
+            onClick={onAdd}
+            style={{
+              margin: 12,
+              padding: '8px 12px',
+              background: 'transparent',
+              color: accent,
+              border: `1px dashed ${accent}`,
+              borderRadius: 5,
+              fontSize: 13,
+              cursor: 'pointer',
+              fontWeight: 500,
+            }}
+          >
+            + 加{isPositive ? '正例' : '反例'}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const btnPrimary: React.CSSProperties = {
+  padding: '7px 14px',
+  background: '#3b65e8',
+  color: '#fff',
+  border: 'none',
+  borderRadius: 5,
+  fontSize: 13,
+  cursor: 'pointer',
+  fontWeight: 500,
+};
+const btnSecondary: React.CSSProperties = {
+  padding: '7px 12px',
+  background: 'var(--bg-card, #fff)',
+  color: 'var(--fg, #333)',
+  border: '1px solid var(--line, #e3e3e3)',
+  borderRadius: 5,
+  fontSize: 12,
+  cursor: 'pointer',
+};
+const btnDanger: React.CSSProperties = {
+  padding: '4px 9px',
+  background: '#fef2f2',
+  color: '#ef4444',
+  border: '1px solid #fecaca',
+  borderRadius: 4,
+  fontSize: 11,
+  cursor: 'pointer',
+};
+
+// =========================================================================
+// 复测对话框
+// =========================================================================
+function RunDialog({
+  skillName,
+  skillVersion,
+  user,
+  modelConfigs,
+  activeConfigId,
+  versions,
+  latestSetId,
+  currentSetId,
+  onClose,
+  running,
+  setRunning,
+  onCompleted,
+  onError,
+}: {
+  skillName: string;
+  /**
+   * 在哪个 skill 版本上跑评测。null = 让后端用 latest。
+   * 必须传：否则 v2 上点评测会被后端打到 latest 上，分数显示就漂到错的版本去了。
+   */
+  skillVersion: number | null;
+  user: string | null;
+  modelConfigs: Array<{ id: string; name: string; model?: string }>;
+  activeConfigId: string;
+  /** 全部数据集版本（version desc） */
+  versions: TriggerSet[];
+  /** latest 版本 id —— 默认就是这个 */
+  latestSetId: string | null;
+  /** 编辑器当前看的版本 id —— 若用户已经在看某个历史版本，对话框默认就跑那个 */
+  currentSetId: string | null;
+  onClose: () => void;
+  running: boolean;
+  setRunning: (v: boolean) => void;
+  onCompleted: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [runsPerQuery, setRunsPerQuery] = useState(1);
+  const [triggerThreshold, setTriggerThreshold] = useState(0.5);
+  const [timeoutMs, setTimeoutMs] = useState(60000);
+  const [concurrency, setConcurrency] = useState(5);
+  const [modelConfigId, setModelConfigId] = useState<string>(activeConfigId);
+  // 默认跑「用户当前在看的版本」；没有就 latest
+  const [triggerSetId, setTriggerSetId] = useState<string>(currentSetId ?? latestSetId ?? '');
+  // 模态框内部的错误状态——之前只往 parent 抛 onError，banner 被遮挡看不到，
+  // 用户以为"35ms 就结束了什么也没发生"。在模态框里就地展示。
+  const [dialogError, setDialogError] = useState<string | null>(null);
+
+  const startRun = async () => {
+    if (!user) return;
+    setRunning(true);
+    setDialogError(null);
+    try {
+      const res = await apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}/run`, {
+        method: 'POST',
+        body: JSON.stringify({
+          user,
+          // 把当前选中的 skill 版本传给后端，让 run 落到正确版本下、
+          // 且 opencode 实测的是该版本的 SKILL.md 内容（不传则后端用 latest）。
+          skillVersion: skillVersion ?? undefined,
+          triggerSetId: triggerSetId || undefined,
+          modelConfigId: modelConfigId || undefined,
+          runsPerQuery,
+          triggerThreshold,
+          timeoutMs,
+          concurrency,
+        }),
+      });
+      // 409 = 该版本已有一次评测在跑（防重入）。这不是错误：直接当成"已发起"，关窗后
+      // 由 parent 轮询接管同一条 run 的进度即可。
+      if (res.status === 409) {
+        setRunning(false);
+        onCompleted();
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `run failed: ${res.status}`);
+      }
+      // 异步评测：POST 仅把 run 建好（status=running）就返回，真正跑完是后台行为。
+      // 这里只负责"已成功发起"，把局部 running 复位、关掉对话框；后续进度由 parent 轮询
+      // /runs 接管（hasRunningRun → banner + 自动刷新）。
+      setRunning(false);
+      onCompleted();
+    } catch (err) {
+      const msg = (err as Error)?.message ?? '评测失败';
+      setDialogError(msg);
+      onError(msg); // 仍然往 parent 同步一份，关掉模态框后还能看到
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={() => !running && onClose()}
+    >
+      <div
+        style={{
+          background: 'var(--bg, #fff)',
+          padding: 24,
+          borderRadius: 8,
+          minWidth: 480,
+          maxWidth: 560,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: 16 }}>跑触发评测</h3>
+        <div
+          style={{
+            margin: '0 0 16px',
+            padding: '10px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#3730a3',
+          }}
+        >
+          opencode-live 模式 · 评测会在你 opencode 实际项目配置下跑（包括兄弟 skill 竞争）
+        </div>
+
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <span style={{ fontSize: 12, color: '#666' }}>数据集版本</span>
+          <select
+            value={triggerSetId}
+            onChange={e => setTriggerSetId(e.target.value)}
+            disabled={versions.length === 0}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              border: '1px solid var(--line, #e3e3e3)',
+              borderRadius: 4,
+              fontSize: 13,
+              marginTop: 4,
+              background: 'var(--bg-card, #fff)',
+            }}
+          >
+            {versions.length === 0 ? (
+              <option value="">（暂无数据集版本）</option>
+            ) : (
+              versions.map(v => (
+                <option key={v.id} value={v.id}>
+                  v{v.version}
+                  {v.id === latestSetId ? '（latest）' : ''}
+                  {' · '}
+                  {VERSION_SOURCE_LABEL[v.versionSource] ?? v.versionSource}
+                  {' · '}
+                  {v.items.length} 条
+                  {v.versionNote ? ` · ${v.versionNote}` : ''}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <span style={{ fontSize: 12, color: '#666' }}>评测用的模型（来自 /modelconfig）</span>
+          <select
+            value={modelConfigId}
+            onChange={e => setModelConfigId(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              border: '1px solid var(--line, #e3e3e3)',
+              borderRadius: 4,
+              fontSize: 13,
+              marginTop: 4,
+              background: 'var(--bg-card, #fff)',
+            }}
+          >
+            {modelConfigs.length === 0 ? (
+              <option value="">（未注册模型，将用 env 兜底）</option>
+            ) : (
+              modelConfigs.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.id === activeConfigId ? ' · 默认' : ''}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+
+        <details>
+          <summary style={{ cursor: 'pointer', fontSize: 12, color: '#666' }}>高级选项</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
+            <label>
+              <div style={{ fontSize: 11, color: '#888' }}>每条 query 跑几次</div>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={runsPerQuery}
+                onChange={e => setRunsPerQuery(Number(e.target.value))}
+                style={inputStyle}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: 11, color: '#888' }}>触发阈值（0-1）</div>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.1}
+                value={triggerThreshold}
+                onChange={e => setTriggerThreshold(Number(e.target.value))}
+                style={inputStyle}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: 11, color: '#888' }}>单条超时（ms，最高 300000）</div>
+              <input
+                type="number"
+                min={5000}
+                max={300000}
+                step={1000}
+                value={timeoutMs}
+                onChange={e => setTimeoutMs(Number(e.target.value))}
+                style={inputStyle}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: 11, color: '#888' }}>并发数</div>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={concurrency}
+                onChange={e => setConcurrency(Number(e.target.value))}
+                style={inputStyle}
+              />
+            </label>
+          </div>
+        </details>
+
+        {dialogError && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: '10px 12px',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              borderRadius: 6,
+              fontSize: 12,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>评测失败</div>
+            {dialogError}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button onClick={onClose} disabled={running} style={btnSecondary}>
+            取消
+          </button>
+          <button onClick={startRun} disabled={running} style={btnPrimary}>
+            {running ? '发起中…' : dialogError ? '重试' : '开始评测'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '5px 8px',
+  border: '1px solid var(--line, #e3e3e3)',
+  borderRadius: 4,
+  fontSize: 13,
+  marginTop: 3,
+};
+
+// =========================================================================
+// ③ 结果块的核心渲染——Hero（总评分 + 4 个 mini 指标）+ FindingsGrouped
+// （应触发 / 应不触发 两组折叠卡）。和静态合规分析的 EvaluationContent 视觉同源。
+//
+// 注意：
+// - 主分用「X 分」表达（passRate × 100 取整），不再用百分号；与静态合规对齐。
+// - TPR / FPR 仍保留百分号——这是诊断率而不是评分。
+// - 每个 case 的 rationale 当 evidence；触发观察当 reasoning；改进建议放 suggestion。
+//   通过的 case 走 passed: true（轻量绿色样式，不显 severity / suggestion）。
+// =========================================================================
+function RecallResultBlock({
+  run,
+  triggerSet,
+  viewingHistory,
+  onBackToLatest,
+}: {
+  run: RunRecord;
+  /** 触发评价集——用来取每条 case 的 rationale 作 evidence */
+  triggerSet: TriggerSet | null;
+  viewingHistory?: boolean;
+  onBackToLatest?: () => void;
+}) {
+  const score = Math.round(run.passRate * 100);
+  const tprPct = Math.round(run.truePositiveRate * 100);
+  const fprPct = Math.round(run.falsePositiveRate * 100);
+  const total = run.results.length;
+  const passed = run.results.filter(r => r.pass).length;
+  const positives = run.results.filter(r => r.shouldTrigger);
+  const negatives = run.results.filter(r => !r.shouldTrigger);
+  const latencies = run.results
+    .map(r => r.latencyMsAvg)
+    .filter(n => Number.isFinite(n) && n > 0);
+  const avgLatency = latencies.length
+    ? Math.round(latencies.reduce((a, n) => a + n, 0) / latencies.length)
+    : null;
+
+  // itemId → rationale 索引：rationale 是 trigger set 起草时填的"这条 case 测什么"，
+  // 当作"原因"（reasoning）展示——缺失就不展示，避免「都长一样」的占位填充。
+  const rationaleMap = new Map<string, string | undefined>(
+    (triggerSet?.items || []).map(it => [it.id, it.rationale]),
+  );
+
+  const toItem = (r: typeof run.results[number]): FindingItem => {
+    // 证据 = 本次跑的实测数据。每条 case 的触发率 / runs 数 / 抢路由情况都不同，
+    // 自然就是 per-case 真证据，绝对不会"全长一样"。
+    // 没跑完拆分（超时/出错）——区分"没触发"和"根本没跑到路由决策"。旧记录无这些字段 → 兼容缺失。
+    const notRunParts: string[] = [];
+    if (r.runsTimedOut) notRunParts.push(`⏱ ${r.runsTimedOut} 次超时未跑完`);
+    if (r.runsErrored) notRunParts.push(`⚠ ${r.runsErrored} 次出错${r.errorMessage ? `：${r.errorMessage}` : ''}`);
+    const triggerObs = `实际触发率 ${Math.round(r.triggerRate * 100)}%（命中 ${r.runsTriggered}/${r.runsTotal} 次${
+      r.latencyMsAvg > 0 ? ` · 平均 ${Math.round(r.latencyMsAvg)}ms` : ''
+    }）${r.competingSkill ? ` · 被「${r.competingSkill}」抢路由` : ''}${
+      notRunParts.length > 0 ? ` · ${notRunParts.join(' · ')}` : ''
+    }`;
+    // 这条 fail 是不是"没跑完"主导（超时+出错占了多数）——若是，建议改成"提高超时/降并发重测"，
+    // 而不是误导用户去改 SKILL.md（skill 可能根本没拿到一次完整的路由机会）。
+    const notRunCount = (r.runsTimedOut ?? 0) + (r.runsErrored ?? 0);
+    const notCompletedDominated = notRunCount > 0 && notRunCount >= r.runsTotal - notRunCount;
+    // 原因 = 当初这条 case 想测什么（rationale）。没有就不展示，让它退化为空——
+    // 比硬塞「触发评价集标记为应该命中本 Skill」的占位句子干净。
+    const rationale = rationaleMap.get(r.itemId)?.trim() || null;
+
+    if (r.pass) {
+      return {
+        id: r.itemId,
+        summary: r.query,
+        severity: 'low',
+        evidence: triggerObs,
+        reasoning: rationale,
+        passed: true,
+      };
+    }
+    return {
+      id: r.itemId,
+      summary: r.query,
+      severity: r.shouldTrigger ? 'high' : 'medium',
+      evidence: triggerObs,
+      reasoning: rationale,
+      suggestedFix: r.shouldTrigger
+        ? notCompletedDominated
+          ? '本条多为超时/出错没跑完（不是 skill 不触发）：提高单条超时或降低并发后重测，再判断触发质量'
+          : '在 SKILL.md 加该类 query 的触发关键词或更明确的触发场景说明'
+        : '在 SKILL.md 加排除条件 / 边界说明，避免被无关 query 命中',
+    };
+  };
+
+  const posItems = positives.map(toItem);
+  const negItems = negatives.map(toItem);
+  const posPass = posItems.filter(i => i.passed).length;
+  const negPass = negItems.filter(i => i.passed).length;
+
+  const groups: FindingGroup[] = [
+    {
+      key: 'positive',
+      title: '应触发场景',
+      desc: '触发评价集中标记为"应该命中本 Skill"的 case；未通过的是漏触发。',
+      status: positives.length === 0 ? 'notEvaluated' : posPass === positives.length ? 'passed' : 'failed',
+      scoreLabel: positives.length > 0 ? `命中 ${posPass} / ${positives.length}` : undefined,
+      items: posItems,
+    },
+    {
+      key: 'negative',
+      title: '应不触发场景',
+      desc: '触发评价集中标记为"不应该命中本 Skill"的 case；命中的属于误触发。',
+      status: negatives.length === 0 ? 'notEvaluated' : negPass === negatives.length ? 'passed' : 'failed',
+      scoreLabel: negatives.length > 0 ? `正确忽略 ${negPass} / ${negatives.length}` : undefined,
+      items: negItems,
+    },
+  ];
+
+  return (
+    <div className="ev-content">
+      {viewingHistory && onBackToLatest && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="trigger-overview-history-badge">查看历史 run</span>
+          <button
+            type="button"
+            className="trigger-overview-back-btn"
+            onClick={onBackToLatest}
+            title="切回最新一次评测"
+          >
+            ← 回到最新
+          </button>
+        </div>
+      )}
+
+      {/* Hero —— 主分用「X 分」 */}
+      <div className="ev-hero">
+        <div className="ev-hero-main">
+          <div className={`ev-hero-num ${scoreColorClass(score)}`}>
+            {score}
+            <span className="ev-hero-unit">分</span>
+          </div>
+          <div className="ev-hero-label">
+            总评分 · 命中 {passed} / {total}
+          </div>
+        </div>
+        <div className="ev-hero-sub">
+          <HeroMini
+            value={`${tprPct}%`}
+            label="TPR · 真阳率"
+            hint="应触发的命中比例"
+            tone={tprPct >= 70 ? 'good' : tprPct >= 50 ? null : 'bad'}
+          />
+          <HeroMini
+            value={`${fprPct}%`}
+            label="FPR · 假阳率"
+            hint="不该触发却命中"
+            tone={fprPct <= 15 ? 'good' : fprPct <= 30 ? null : 'bad'}
+          />
+          <HeroMini
+            value={avgLatency != null ? `${(avgLatency / 1000).toFixed(1)}s` : '--'}
+            label="平均延迟"
+            hint="单次决策耗时"
+          />
+          <HeroMini
+            value={String(total)}
+            label="评测规模"
+            hint={`${positives.length} 应触发 + ${negatives.length} 不该`}
+          />
+        </div>
+      </div>
+
+      {run.errorMessage && (
+        <div className="trigger-overview-error">错误：{run.errorMessage}</div>
+      )}
+
+      <FindingsGrouped
+        groups={groups}
+        title="分场景结果"
+        hint="展开查看每个 case 的具体表现"
+        emptyMessage="本次评测没有用例 ✓"
+      />
+    </div>
+  );
+}
+
+function HeroMini({
+  value,
+  label,
+  hint,
+  tone,
+}: {
+  value: string;
+  label: string;
+  hint: string;
+  tone?: 'good' | 'bad' | null;
+}) {
+  return (
+    <div className="ev-hero-sub-item">
+      <div className={`ev-hero-sub-num ${tone ?? ''}`}>{value}</div>
+      <div className="ev-hero-sub-label">{label}</div>
+      <div className="ev-hero-sub-hint">{hint}</div>
+    </div>
+  );
+}
+
+// 总评分阈值：80+ good / 60-79 warn / <60 bad
+function scoreColorClass(score: number): 'good' | 'warn' | 'bad' {
+  if (score >= 80) return 'good';
+  if (score >= 60) return 'warn';
+  return 'bad';
+}
+
+// ① 配置 section 的 summary 行
+function ConfigSummary({
+  set,
+  isViewingLatestSet,
+  versionsCount,
+}: {
+  set: TriggerSet | null;
+  isViewingLatestSet: boolean;
+  versionsCount: number;
+}) {
+  if (!set) {
+    return <span style={{ color: 'var(--ev-muted)' }}>尚未配置数据集</span>;
+  }
+  const positives = set.items.filter(i => i.shouldTrigger).length;
+  const negatives = set.items.length - positives;
+  return (
+    <>
+      <span>当前</span>
+      <code>v{set.version}</code>
+      {isViewingLatestSet ? (
+        <span style={{ color: 'var(--ev-success)', fontWeight: 600 }}>latest</span>
+      ) : (
+        <span style={{ color: '#a16207' }}>历史 · 只读</span>
+      )}
+      <span>·</span>
+      <span>
+        <b>{set.items.length}</b> 条
+      </span>
+      <span>
+        · <span style={{ color: 'var(--ev-success)' }}>{positives} 应触发</span> /{' '}
+        <span style={{ color: 'var(--ev-error)' }}>{negatives} 应不触发</span>
+      </span>
+      {versionsCount > 1 && (
+        <span style={{ color: 'var(--ev-muted)', fontSize: 11 }}>· 共 {versionsCount} 个版本</span>
+      )}
+    </>
+  );
+}
+
+// ② 执行 section 的 summary 行
+function ExecSummary({
+  runs,
+  latestRun,
+  modelLabelOf,
+}: {
+  runs: RunRecord[];
+  latestRun: RunRecord | null;
+  modelLabelOf: (id: string | null) => string | null;
+}) {
+  if (runs.length === 0) {
+    return <span style={{ color: 'var(--ev-muted)' }}>尚未评测</span>;
+  }
+  if (!latestRun) {
+    return <span style={{ color: 'var(--ev-muted)' }}>共 {runs.length} 次（无成功 run）</span>;
+  }
+  const score = Math.round(latestRun.passRate * 100);
+  const klass = scoreColorClass(score);
+  const modelName = modelLabelOf(latestRun.modelId);
+  // 跑完/没跑完 rollup：统计最近一次 run 里有多少 item 至少有一次没跑完（超时/出错），
+  // 以及总的超时/出错次数。直接在卡片摘要里点出来——让"应触发全挂"一眼能区分是
+  // "没跑完"还是"skill 真不触发"。旧 run 记录无这些字段时自然算 0、不显示。
+  const notRun = latestRun.results.reduce(
+    (acc, r) => {
+      acc.timedOut += r.runsTimedOut ?? 0;
+      acc.errored += r.runsErrored ?? 0;
+      return acc;
+    },
+    { timedOut: 0, errored: 0 },
+  );
+  const itemsNotFullyRun = latestRun.results.filter(
+    r => (r.runsTimedOut ?? 0) + (r.runsErrored ?? 0) > 0,
+  ).length;
+  return (
+    <>
+      <span>已执行</span>
+      <code>{runs.length} 次</code>
+      <span>· 最近 {new Date(latestRun.createdAt).toLocaleString()}</span>
+      {modelName && <span>· {modelName}</span>}
+      <span>· 最近评分</span>
+      <code className={`score-${klass}`}>{score} 分</code>
+      {itemsNotFullyRun > 0 && (
+        <span style={{ color: '#d97706' }} title="没跑完 = 被超时掐断或 opencode 报错，没产出路由决策；不等于 skill 不触发">
+          · ⚠ {itemsNotFullyRun} 条没跑完（超时 {notRun.timedOut}
+          {notRun.errored ? ` · 出错 ${notRun.errored}` : ''}）
+        </span>
+      )}
+    </>
+  );
+}
+
+// ③ 结果 section 的 summary 行
+function ResultSummary({ run }: { run: RunRecord | null }) {
+  if (!run) {
+    return <span style={{ color: 'var(--ev-muted)' }}>未评测</span>;
+  }
+  const score = Math.round(run.passRate * 100);
+  const klass = scoreColorClass(score);
+  const passed = run.results.filter(r => r.pass).length;
+  return (
+    <>
+      <span>总评分</span>
+      <code className={`score-${klass}`}>{score} 分</code>
+      <span>
+        · 命中 {passed} / {run.results.length}
+      </span>
+    </>
+  );
+}
+
+// =========================================================================
+// 「历史数据集」面板 —— 默认折叠；展开后列出该 (user, skillName) 下所有数据集版本。
+// 点击任意一行把编辑器切到那个版本（非 latest 只读）。这里复用历史评测面板的
+// CSS class，外观保持一致；差异点是「latest 标」+ source/note 列。
+// =========================================================================
+function TriggerDatasetVersionsPanel({
+  versions,
+  latestId,
+  selectedId,
+  open,
+  onToggle,
+  onSelect,
+  onResetLatest,
+}: {
+  versions: TriggerSet[];
+  latestId: string | null;
+  /** 当前编辑器在看哪个版本（null 等同 latest） */
+  selectedId: string | null;
+  open: boolean;
+  onToggle: () => void;
+  onSelect: (id: string) => void;
+  onResetLatest: () => void;
+}) {
+  const total = versions.length;
+  const viewingHistory = selectedId != null && selectedId !== latestId;
+  return (
+    <div className="trigger-history-wrap">
+      <button
+        type="button"
+        className="trigger-history-toggle"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className={`trigger-history-chevron ${open ? 'open' : ''}`}>▸</span>
+        <span className="trigger-history-title">历史数据集</span>
+        <span className="trigger-history-count">共 {total} 个版本</span>
+        {viewingHistory && (
+          <span className="trigger-history-viewing">正在查看历史版本（只读）</span>
+        )}
+        <span className="trigger-history-spacer" />
+        {viewingHistory && (
+          <span
+            role="button"
+            tabIndex={0}
+            className="trigger-history-reset"
+            onClick={e => {
+              e.stopPropagation();
+              onResetLatest();
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onResetLatest();
+              }
+            }}
+          >
+            回到 latest
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="trigger-history-body">
+          {total === 0 ? (
+            <div className="trigger-history-empty">还没有数据集版本</div>
+          ) : (
+            <ul className="trigger-history-list">
+              {versions.map(v => {
+                const isLatest = v.id === latestId;
+                const isSelected = v.id === selectedId || (selectedId == null && isLatest);
+                const positives = v.items.filter(it => it.shouldTrigger).length;
+                const negatives = v.items.length - positives;
+                return (
+                  <li key={v.id}>
+                    <button
+                      type="button"
+                      className={`trigger-history-row ${isSelected ? 'selected' : ''}`}
+                      onClick={() => onSelect(v.id)}
+                    >
+                      <span className="trigger-history-time">
+                        v{v.version} · {new Date(v.createdAt).toLocaleString()}
+                      </span>
+                      <span className="trigger-history-tags">
+                        <span className="trigger-history-tag muted">
+                          {VERSION_SOURCE_LABEL[v.versionSource] ?? v.versionSource}
+                        </span>
+                        {v.versionNote && (
+                          <span className="trigger-history-tag muted">{v.versionNote}</span>
+                        )}
+                        {isLatest && <span className="trigger-history-tag latest">latest</span>}
+                        {isSelected && !isLatest && (
+                          <span className="trigger-history-tag viewing">查看中</span>
+                        )}
+                      </span>
+                      <span className="trigger-history-metrics">
+                        <span className="trigger-history-metric">
+                          <em>{v.items.length}</em>
+                          <span>条</span>
+                        </span>
+                        <span className="trigger-history-metric">
+                          <em>{positives}</em>
+                          <span>正例</span>
+                        </span>
+                        <span className="trigger-history-metric">
+                          <em>{negatives}</em>
+                          <span>反例</span>
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =========================================================================
+// 「历史评测」面板 —— 默认折叠；展开后展示该 skill 下历次评测 run 的紧凑列表。
+// 点击任意一行将「执行概览」+ 行内评分切到那一次；当前展示的那条高亮，
+// 「最新」一次额外打 latest 标。设计上 history ≠ archive：用户可以随时切回。
+// =========================================================================
+function TriggerRunHistoryPanel({
+  runs,
+  latestRunId,
+  selectedRunId,
+  open,
+  onToggle,
+  onSelect,
+  onResetLatest,
+  modelLabelOf,
+}: {
+  runs: RunRecord[];
+  latestRunId: string | null;
+  selectedRunId: string | null;
+  open: boolean;
+  onToggle: () => void;
+  onSelect: (id: string) => void;
+  onResetLatest: () => void;
+  modelLabelOf: (id: string | null) => string | null;
+}) {
+  const total = runs.length;
+  const viewingHistory = selectedRunId != null && selectedRunId !== latestRunId;
+  return (
+    <div className="trigger-history-wrap">
+      <button
+        type="button"
+        className="trigger-history-toggle"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className={`trigger-history-chevron ${open ? 'open' : ''}`}>▸</span>
+        <span className="trigger-history-title">历史评测</span>
+        <span className="trigger-history-count">共 {total} 次评测</span>
+        {viewingHistory && (
+          <span className="trigger-history-viewing">正在查看历史 · 点「回到最新」可恢复</span>
+        )}
+        <span className="trigger-history-spacer" />
+        {viewingHistory && (
+          <span
+            role="button"
+            tabIndex={0}
+            className="trigger-history-reset"
+            onClick={e => {
+              e.stopPropagation();
+              onResetLatest();
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onResetLatest();
+              }
+            }}
+          >
+            回到最新
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="trigger-history-body">
+          {total === 0 ? (
+            <div className="trigger-history-empty">该版本下还没有历史评测</div>
+          ) : (
+            <ul className="trigger-history-list">
+              {runs.map(r => {
+                const isLatest = r.id === latestRunId;
+                const isSelected = r.id === selectedRunId || (selectedRunId == null && isLatest);
+                const modelName = modelLabelOf(r.modelId);
+                return (
+                  <li key={r.id}>
+                    <button
+                      type="button"
+                      className={`trigger-history-row ${isSelected ? 'selected' : ''} ${r.status === 'failed' ? 'failed' : ''}`}
+                      onClick={() => onSelect(r.id)}
+                    >
+                      <span className="trigger-history-time">
+                        {new Date(r.createdAt).toLocaleString()}
+                      </span>
+                      <span className="trigger-history-tags">
+                        <span className="trigger-history-tag">v{r.skillVersion}</span>
+                        {modelName && <span className="trigger-history-tag muted">{modelName}</span>}
+                        {isLatest && <span className="trigger-history-tag latest">latest</span>}
+                        {isSelected && !isLatest && (
+                          <span className="trigger-history-tag viewing">查看中</span>
+                        )}
+                      </span>
+                      <span className="trigger-history-metrics">
+                        {r.status === 'done' ? (
+                          <>
+                            <span className="trigger-history-metric">
+                              <em>{Math.round(r.passRate * 100)}%</em>
+                              <span>通过</span>
+                            </span>
+                            <span className="trigger-history-metric">
+                              <em>{Math.round(r.truePositiveRate * 100)}%</em>
+                              <span>TPR</span>
+                            </span>
+                            <span className="trigger-history-metric">
+                              <em>{Math.round(r.falsePositiveRate * 100)}%</em>
+                              <span>FPR</span>
+                            </span>
+                            <span className="trigger-history-metric">
+                              <em>{r.results.length}</em>
+                              <span>条</span>
+                            </span>
+                          </>
+                        ) : (
+                          <span className={`trigger-history-status status-${r.status}`}>
+                            {r.status === 'running' ? '执行中' : r.status === 'cancelled' ? '已终止' : '失败'}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// =========================================================================
+// 上传数据集格式说明对话框
+// =========================================================================
+function UploadFormatDialog({
+  onCancel,
+  onPickFile,
+}: {
+  onCancel: () => void;
+  onPickFile: () => void;
+}) {
+  const example = `[
+  { "query": "帮我写一段排序", "shouldTrigger": true,  "rationale": "可选：为什么应触发" },
+  { "query": "今天天气怎么样", "shouldTrigger": false }
+]`;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{
+          background: 'var(--bg, #fff)',
+          padding: 24,
+          borderRadius: 8,
+          minWidth: 520,
+          maxWidth: 640,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>上传数据集 · 格式要求</h3>
+
+        <div
+          style={{
+            margin: '0 0 12px',
+            padding: '10px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#3730a3',
+          }}
+        >
+          仅支持 <code>.json</code> 文件；上传成功后会作为新版本追加到当前数据集。
+        </div>
+
+        <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+          <strong>顶层结构</strong>（两种等价写法都接受）：
+        </div>
+        <ul style={{ margin: '0 0 12px 20px', fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+          <li>直接是一个数组 <code>[...]</code></li>
+          <li>或者包一层：<code>{'{ "items": [...] }'}</code></li>
+        </ul>
+
+        <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+          <strong>每项字段</strong>：
+        </div>
+        <ul style={{ margin: '0 0 12px 20px', fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+          <li>
+            <code>query</code> · string · <span style={{ color: '#b91c1c' }}>必填</span>，非空 —— 用户问句
+          </li>
+          <li>
+            <code>shouldTrigger</code> · boolean · <span style={{ color: '#b91c1c' }}>必填</span> —— 期望该 skill 是否被触发
+          </li>
+          <li>
+            <code>rationale</code> · string · 可选 —— 标注说明
+          </li>
+          <li>
+            <code>id</code> · string · 可选 —— 不传则自动生成
+          </li>
+        </ul>
+
+        <div style={{ fontSize: 13, marginBottom: 6, color: '#374151' }}>
+          <strong>示例</strong>：
+        </div>
+        <pre
+          style={{
+            margin: '0 0 16px',
+            padding: '10px 12px',
+            background: '#f9fafb',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            fontSize: 12,
+            lineHeight: 1.5,
+            overflow: 'auto',
+            maxHeight: 180,
+          }}
+        >
+          {example}
+        </pre>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="sa-btn" onClick={onCancel}>
+            取消
+          </button>
+          <button className="sa-btn sa-btn-primary" onClick={onPickFile}>
+            选择文件…
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// 从评测中心 → 评测数据集导入对话框
+// =========================================================================
+interface AgentDatasetCaseLite {
+  id: string;
+  input: string;
+  evaluationFocus?: string;
+}
+interface AgentDatasetLite {
+  id: string;
+  name: string;
+  description: string;
+  targetSkill: string;
+  datasetKind: string;
+  cases: AgentDatasetCaseLite[];
+  updatedAt: string;
+}
+
+function ImportFromDatasetDialog({
+  user,
+  skillName,
+  importing,
+  onCancel,
+  onImport,
+}: {
+  user: string;
+  skillName: string;
+  importing: boolean;
+  onCancel: () => void;
+  onImport: (
+    queries: Array<{ query: string; rationale?: string }>,
+    mode: 'append' | 'new-version',
+  ) => void | Promise<void>;
+}) {
+  const [datasets, setDatasets] = useState<AgentDatasetLite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [onlyThisSkill, setOnlyThisSkill] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mode, setMode] = useState<'append' | 'new-version'>('new-version');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setLoadError(null);
+        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as AgentDatasetLite[];
+        if (!cancelled) setDatasets(Array.isArray(data) ? data : []);
+      } catch (err) {
+        if (!cancelled) setLoadError((err as Error)?.message ?? '加载失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const filtered = useMemo(() => {
+    if (!onlyThisSkill) return datasets;
+    return datasets.filter(d => !d.targetSkill || d.targetSkill === skillName);
+  }, [datasets, onlyThisSkill, skillName]);
+
+  const selected = useMemo(
+    () => filtered.find(d => d.id === selectedId) ?? null,
+    [filtered, selectedId],
+  );
+
+  // 当 filter 切换导致原选中数据集被过滤掉，清空选择避免悬空。
+  useEffect(() => {
+    if (selectedId && !filtered.some(d => d.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [filtered, selectedId]);
+
+  const importableCount = useMemo(() => {
+    if (!selected) return 0;
+    return selected.cases.filter(c => (c.input ?? '').trim().length > 0).length;
+  }, [selected]);
+
+  const handleImport = () => {
+    if (!selected) return;
+    const queries = selected.cases
+      .map(c => ({ query: (c.input ?? '').trim(), rationale: c.evaluationFocus?.trim() || undefined }))
+      .filter(q => q.query);
+    void onImport(queries, mode);
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={() => !importing && onCancel()}
+    >
+      <div
+        style={{
+          background: 'var(--bg, #fff)',
+          padding: 24,
+          borderRadius: 8,
+          width: 680,
+          maxHeight: '80vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: 16 }}>从评测数据集导入</h3>
+        <div
+          style={{
+            margin: '0 0 12px',
+            padding: '8px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#3730a3',
+            lineHeight: 1.5,
+          }}
+        >
+          所选数据集的每条 <code>input</code> 会作为 <strong>正例（应触发）</strong> 导入；<code>evaluationFocus</code> 用作 rationale。已存在的 query 自动跳过。
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={onlyThisSkill}
+            onChange={e => setOnlyThisSkill(e.target.checked)}
+          />
+          <span>仅本 skill（包含未绑定的通用数据集）</span>
+        </label>
+
+        <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0, marginBottom: 12 }}>
+          {/* 左：数据集列表 */}
+          <div
+            style={{
+              flex: '0 0 280px',
+              border: '1px solid #e5e7eb',
+              borderRadius: 6,
+              overflow: 'auto',
+              background: '#fff',
+            }}
+          >
+            {loading ? (
+              <div style={{ padding: 16, fontSize: 13, color: '#6b7280' }}>加载中...</div>
+            ) : loadError ? (
+              <div style={{ padding: 16, fontSize: 13, color: '#b91c1c' }}>{loadError}</div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: 16, fontSize: 13, color: '#6b7280' }}>
+                {onlyThisSkill ? '没有匹配本 skill 的数据集。试试关掉「仅本 skill」。' : '没有可用的评测数据集。'}
+              </div>
+            ) : (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                {filtered.map(d => {
+                  const isSel = d.id === selectedId;
+                  return (
+                    <li key={d.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(d.id)}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 12px',
+                          background: isSel ? '#eef2ff' : 'transparent',
+                          border: 'none',
+                          borderBottom: '1px solid #f3f4f6',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>{d.name || '(未命名)'}</div>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                          {d.cases.length} 条 · {d.targetSkill ? `挂在 ${d.targetSkill}` : '通用'}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* 右：预览 */}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: '1px solid #e5e7eb',
+              borderRadius: 6,
+              overflow: 'auto',
+              padding: 12,
+              background: '#fafafa',
+            }}
+          >
+            {!selected ? (
+              <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', marginTop: 40 }}>
+                左侧选一个数据集查看预览
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+                  共 {selected.cases.length} 条 · 非空 query <strong>{importableCount}</strong> 条将被导入
+                </div>
+                {selected.cases.slice(0, 8).map((c, idx) => (
+                  <div
+                    key={c.id || idx}
+                    style={{
+                      fontSize: 12,
+                      padding: '6px 8px',
+                      marginBottom: 4,
+                      background: '#fff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 4,
+                      color: '#374151',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {(c.input ?? '').slice(0, 200) || <em style={{ color: '#9ca3af' }}>(空)</em>}
+                  </div>
+                ))}
+                {selected.cases.length > 8 && (
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                    …还有 {selected.cases.length - 8} 条未显示
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 模式 + 操作 */}
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+          <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+            <strong>导入方式</strong>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="import-mode"
+              checked={mode === 'new-version'}
+              onChange={() => setMode('new-version')}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>新建一个版本</strong>
+              <span style={{ color: '#6b7280' }}> · 直接落库，作为新版本提交</span>
+            </span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 12, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="import-mode"
+              checked={mode === 'append'}
+              onChange={() => setMode('append')}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>合并到当前版本</strong>
+              <span style={{ color: '#6b7280' }}> · 加到编辑器里，需要再点「保存」才入库</span>
+            </span>
+          </label>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button className="sa-btn" onClick={onCancel} disabled={importing}>
+              取消
+            </button>
+            <button
+              className="sa-btn sa-btn-primary"
+              onClick={handleImport}
+              disabled={importing || !selected || importableCount === 0}
+            >
+              {importing ? '导入中...' : `导入 ${importableCount} 条`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

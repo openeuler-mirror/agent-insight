@@ -1,0 +1,323 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use client';
+import { DeleteExperimentButton, PendingExperimentCancellations } from '@/components/eval/DeleteExperimentButton';
+
+// 实验列表 —— 评测「实验化」第一切片（本期仅单组实验）。
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { FlaskConical, Plus } from 'lucide-react';
+
+import { AppTopBar } from '@/components/shell/AppTopBar';
+import { PageContainer } from '@/components/shell/PageContainer';
+import { Button } from '@/components/ui/button';
+import { SameConfigExperimentAction } from '@/components/eval/SameConfigExperimentAction';
+import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
+import { EmptyState } from '@/components/feedback/EmptyState';
+import { useAuth } from '@/lib/auth/auth-context';
+import { apiFetch } from '@/lib/client/api';
+import { useExperimentListRefresh } from '@/lib/client/use-experiment-list-refresh';
+import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
+
+interface ExperimentRow {
+  id: string;
+  name: string;
+  type: string;
+  agentName: string;
+  agentLabel?: string;
+  status: string;
+  scope?: string;
+  submissionSource?: string;
+  watchMode?: boolean;
+  caseCount: number;
+  evaluatorCount: number;
+  overallScore: number | null;
+  createdAt: string;
+}
+
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+function responseError(value: unknown, fallback: string): string {
+  if (!value || typeof value !== 'object') return fallback;
+  const error = (value as { error?: unknown; code?: unknown }).error;
+  if (typeof error === 'string' && error) return error;
+  if (error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') {
+    return String((error as { message: string }).message);
+  }
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : fallback;
+}
+
+const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
+  draft: { label: '启动中', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
+  running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
+  done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
+  partial: { label: '部分完成', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
+  failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
+};
+
+function StatusChip({ status }: { status: string }) {
+  const meta = STATUS_META[status] ?? STATUS_META.draft;
+  return (
+    <span style={{
+      fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
+      background: meta.bg, color: meta.fg, whiteSpace: 'nowrap',
+    }}>
+      {meta.label}
+    </span>
+  );
+}
+
+function WatchChip() {
+  return (
+    <span
+      title="监听模式：该 Agent 新上报的 trace 会自动进本实验评测"
+      style={{
+        fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
+        background: 'var(--tag-green-bg)', color: 'var(--tag-green-fg)', whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+      }}
+    >
+      <span style={{
+        width: 6, height: 6, borderRadius: '50%', background: 'var(--tag-green-fg)',
+        display: 'inline-block',
+      }} />
+      监听中
+    </span>
+  );
+}
+
+function TypeChip({ scope }: { scope?: string }) {
+  return (
+    <span style={{
+      fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
+      background: 'var(--primary-subtle)', color: 'var(--primary)', whiteSpace: 'nowrap',
+    }}>
+      {scope === 'benchmark' ? 'Benchmark' : '单组实验'}
+    </span>
+  );
+}
+
+const TH: React.CSSProperties = {
+  textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600,
+  color: 'var(--foreground-muted)', borderBottom: '1px solid var(--border)',
+  whiteSpace: 'nowrap',
+};
+const TD: React.CSSProperties = {
+  padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
+  borderBottom: '1px solid var(--border)', verticalAlign: 'middle',
+};
+
+export default function ExperimentsPage() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [rows, setRows] = useState<ExperimentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
+  const [busyExperimentIds, setBusyExperimentIds] = useState<Record<string, boolean>>({});
+  const loadSequence = useRef(0);
+
+  const load = useCallback(async (silent = false) => {
+    if (!user) return;
+    const sequence = ++loadSequence.current;
+    if (!silent) setLoading(true);
+    try {
+      const offset = (page - 1) * pageSize;
+      const res = await apiFetch(
+        `/api/experiments?user=${encodeURIComponent(user)}&limit=${pageSize}&offset=${offset}`,
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(responseError(data, '加载实验失败'));
+      if (sequence !== loadSequence.current) return;
+      setRows(Array.isArray(data?.items) ? data.items : []);
+      setTotal(typeof data?.total === 'number' ? data.total : 0);
+    } catch {
+      if (!silent && sequence === loadSequence.current) {
+        setRows([]);
+        setTotal(0);
+      }
+    } finally {
+      if (!silent && sequence === loadSequence.current) setLoading(false);
+    }
+  }, [user, page, pageSize]);
+
+  useEffect(() => () => { loadSequence.current += 1; }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  useExperimentListRefresh(rows, load);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // 页码/每页条数变化后若越界（如切大页码后减小 pageSize），回夹到末页
+  useEffect(() => {
+    if (page <= totalPages) return;
+    const timer = window.setTimeout(() => setPage(totalPages), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, totalPages]);
+
+  return (
+    <>
+      <AppTopBar
+        title="实验"
+        actions={
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => router.push('/experiments/new')}>
+              <Plus className="size-3.5" />
+              新建实验
+            </Button>
+          </div>
+        }
+      />
+      <PageContainer>
+        {user && <PendingExperimentCancellations user={user} />}
+        <div style={{
+          background: 'var(--card-bg)', border: '1px solid var(--card-border)',
+          borderRadius: 10, flexShrink: 0, minWidth: 0, overflowX: 'auto',
+        }}>
+          {loading ? (
+            <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
+              加载中…
+            </div>
+          ) : total === 0 ? (
+            <EmptyState
+              icon={FlaskConical}
+              title="还没有实验"
+              description="实验 = 一批 case × 一组评估器。从「新建实验」开始：选 Agent → 圈选 Trace →（可选）标注预期答案 → 挑评估器。"
+              action={
+                <Button size="sm" onClick={() => router.push('/experiments/new')}>
+                  <Plus className="size-3.5" />
+                  新建实验
+                </Button>
+              }
+            />
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={TH}>实验</th>
+                  <th style={TH}>待评测 Agent</th>
+                  <th style={TH}>实验类型</th>
+                  <th style={{ ...TH, textAlign: 'right' }}>Case</th>
+                  <th style={{ ...TH, textAlign: 'right' }}>评估器</th>
+                  <th style={{ ...TH, textAlign: 'right' }}>综合分</th>
+                  <th style={TH}>状态</th>
+                  <th style={TH}>创建</th>
+                  <th style={TH}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr
+                    key={r.id}
+                    onClick={() => router.push(`/experiments/${r.id}`)}
+                    style={{ cursor: 'pointer', transition: 'background 0.12s' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--background-secondary)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <td style={{ ...TD, fontWeight: 500 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {displayedExperimentName(r.name, r.createdAt)}
+                        {user && <ExperimentRenameButton
+                          experimentId={r.id}
+                          user={user}
+                          name={r.name}
+                          createdAt={r.createdAt}
+                          onRenamed={(name) => {
+                            setRows((current) => current.map((item) => item.id === r.id ? { ...item, name } : item));
+                            void load(true);
+                          }}
+                        />}
+                      </span>
+                    </td>
+                    <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentLabel || r.agentName || '—'}</td>
+                    <td style={TD}><TypeChip scope={r.scope} /></td>
+                    <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
+                    <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
+                    <td style={{
+                      ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                      fontWeight: 700, color: typeof r.overallScore === 'number' ? 'var(--primary)' : 'var(--foreground-muted)',
+                    }}>
+                      {typeof r.overallScore === 'number' ? r.overallScore.toFixed(1).replace(/\.0$/, '') : '—'}
+                    </td>
+                    <td style={TD}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <StatusChip status={r.status} />
+                        {r.watchMode && <WatchChip />}
+                      </span>
+                    </td>
+                    <td style={{ ...TD, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
+                      {new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false })}
+                    </td>
+                    <td style={{ ...TD, whiteSpace: 'nowrap' }} onClick={(event) => event.stopPropagation()}>
+                      <SameConfigExperimentAction
+                        user={user || ''}
+                        sourceExperimentId={r.id}
+                        disabled={Boolean(busyExperimentIds[r.id])}
+                        onBusyChange={(busy) => setBusyExperimentIds(current => ({ ...current, [r.id]: busy }))}
+                        onStarted={(id) => router.push(`/experiments/${id}`)}
+                      >
+                        <button
+                          type="button"
+                          disabled={Boolean(busyExperimentIds[r.id])}
+                          onClick={() => router.push(`/experiments/new?reuseFrom=${encodeURIComponent(r.id)}`)}
+                          style={{ border: 0, padding: 0, background: 'transparent', color: 'var(--primary)', fontSize: 11, cursor: busyExperimentIds[r.id] ? 'not-allowed' : 'pointer' }}
+                        >复用评测配置</button>
+                        {user && <DeleteExperimentButton disabled={Boolean(busyExperimentIds[r.id])} user={user} experimentId={r.id} completed={['done', 'partial', 'failed', 'cancelled'].includes(r.status)} onDeleted={() => load(true)} />}
+                      </SameConfigExperimentAction>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {!loading && total > 0 && (
+          <div style={{ display: 'flex', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>
+            <span>共 {total} 个实验</span>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              每页
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                style={{
+                  fontSize: 12, padding: '3px 6px', borderRadius: 6,
+                  border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)',
+                }}
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              条
+            </label>
+            <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+              上一页
+            </Button>
+            <span>{page} / {totalPages}</span>
+            <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+              下一页
+            </Button>
+          </div>
+        )}
+      </PageContainer>
+    </>
+  );
+}

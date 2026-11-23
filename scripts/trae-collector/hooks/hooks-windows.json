@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"__HOOK_DIR__\\scripts\\session-start.ps1\"",
+          "timeout": 15
+        }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"__HOOK_DIR__\\scripts\\prompt-submit.ps1\"",
+          "timeout": 15
+        }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"__HOOK_DIR__\\scripts\\pre-tool-use.ps1\"",
+          "timeout": 15
+        }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"__HOOK_DIR__\\scripts\\post-tool-use.ps1\"",
+          "timeout": 15
+        }]
+      }
+    ],
+    "Stop": [
+      {
+        "loop_limit": 5,
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"__HOOK_DIR__\\scripts\\stop.ps1\"",
+          "timeout": 15
+        }]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "powershell -ExecutionPolicy Bypass -File \"__HOOK_DIR__\\scripts\\notification.ps1\"",
+          "timeout": 15
+        }]
+      }
+    ]
+  }
+}

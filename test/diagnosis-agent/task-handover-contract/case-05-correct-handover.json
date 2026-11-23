@@ -1,0 +1,305 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T10:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-05-correct-handover-99650",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-05-correct-handover-99650",
+        "taskId": "jiuwen-case-05-correct-handover-99650",
+        "query": "统计 2024 年华东区订单总额，返回 JSON 格式，并正确使用其结果。",
+        "framework": "jiuwenswarm",
+        "tokens": 68200,
+        "cost": null,
+        "latency": 10.0,
+        "toolCallCount": 8,
+        "llmCallCount": 8,
+        "inputTokens": 66000,
+        "outputTokens": 2200,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T10:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "2024 年华东区订单总额为 120000（JSON），交接契约完整满足。",
+        "diagnostics": {
+          "expectedViolation": null
+        },
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "analyst3"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-05-correct-handover-99650",
+        "label": "jiuwenswarm",
+        "query": "统计 2024 年华东区订单总额，返回 JSON 格式，并正确使用其结果。",
+        "startTime": "2026-08-07T10:00:00.000Z",
+        "endTime": "2026-08-07T10:00:10.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "统计 2024 年华东区订单总额，返回 JSON 格式，并正确使用其结果。",
+            "kind": "user",
+            "requirements": [
+              {
+                "constraint": "region=east"
+              },
+              {
+                "constraint": "year=2024"
+              },
+              {
+                "return_format": "json"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，统计订单。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"统计小队\", \"team_desc\": \"统计 2024 华东区订单。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织统计。\"}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建任务 s5，交接含完整约束与 JSON 返回要求（无违规）。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"s5\", \"title\": \"订单总额\", \"content\": \"统计 2024 年华东区订单总额并返回 JSON。\", \"constraints\": {\"year\": \"2024\", \"region\": \"east\"}, \"return_format\": \"json\"}]}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 analyst3 执行。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"analyst3\", \"display_name\": \"分析师C\", \"desc\": \"统计订单。\", \"prompt\": \"按约束统计并返回 JSON。\"}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"统计订单。\"}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst3",
+            "subagent_name": "analyst3",
+            "subagent_session_id": "team_case-05-correct-handover_analyst3",
+            "content": "按约束统计 2024 华东区。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "query_orders_analyst3",
+                "type": "function",
+                "function": {
+                  "name": "query_orders",
+                  "arguments": "[{\"where\": \"2024 AND east\"}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "analyst3",
+            "subagent_name": "analyst3",
+            "subagent_session_id": "team_case-05-correct-handover_analyst3",
+            "content": "返回 JSON。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_analyst3",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"team_leader\", \"content\": \"{\\\"total\\\":120000}\", \"summary\": \"analyst3 返回 JSON\", \"deliverable\": true}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "子智能体按要求返回了 JSON，正确使用。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'s5','status':'completed','value':120000}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "2024 年华东区订单总额为 120000，交接契约完整满足。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-correct-handover-99650\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

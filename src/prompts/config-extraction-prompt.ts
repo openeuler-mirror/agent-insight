@@ -1,19 +1,36 @@
-/**
- * 基于标准答案提取评估所需的"关键观点"与"关键动作"
- * 
- * - 关键观点 (root_causes)：Agent 回答中必须体现的核心信息和关键判断依据
- * - 关键动作 (key_actions)：Agent 解决问题时必须执行的核心操作步骤
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-export const generateConfigExtractionPrompt = (query: string, standardAnswer: string) => `
-You are an expert in building AI agent evaluation criteria.
 
-Given a user Query and a Standard Answer (the expected correct answer), your task is to extract two sets of evaluation criteria:
+/**
+ * 基于用户提供的标准答案 / 业务文档提取“关键观点”。
+ *
+ * - 关键观点 (root_causes)：回答中必须体现的业务相关结论、判断依据、关键事实
+ * - 与具体问题场景相关，可选；同一个 skill 可以搭配不同场景下的关键观点
+ */
+export const generateRootCauseExtractionPrompt = (query: string, standardAnswer: string) => `
+You are an expert in building evaluation criteria for AI agent outcomes.
 
-1. **Expected Key Points (root_causes)**: The critical information, conclusions, or judgments that the agent MUST mention in its response. These are the "what the answer should contain" — the essential facts, analysis results, or diagnostic conclusions.
+Your task is to extract ONLY the expected key points (root_causes) from the standard answer.
 
-2. **Expected Key Actions (key_actions)**: The specific steps, operations, tool calls, or verification actions the agent MUST perform to arrive at the correct answer. These are the "what the agent should do" — the necessary procedures and investigations.
+Definition:
+- root_causes are the business-facing conclusions, facts, judgments, or domain-specific points that the final answer should contain.
+- They are scenario-dependent and may vary across different queries for the same skill.
+- They come from the user-provided standard answer or business document, not from generic skill procedure inference.
 
-User Query:
+User Query / Scenario:
 """
 ${query}
 """
@@ -23,29 +40,67 @@ Standard Answer:
 ${standardAnswer}
 """
 
-Please analyze the standard answer and extract:
-- **Key Points**: What critical information/conclusions does the standard answer contain? What must the agent identify or mention?
-- **Key Actions**: What operations/steps are described or implied in the standard answer? What must the agent actually do?
-
 Return the result in the following JSON format:
 {
   "root_causes": [
     { "content": "Description of key point", "weight": 1.0 }
-  ],
+  ]
+}
+
+Guidelines:
+- Create 0-5 distinct key points.
+- If the standard answer mainly describes process steps and does not contain obvious scenario-specific business points, it is valid to return an empty array.
+- Each item's "content" should be concise but descriptive (one sentence).
+- Weights should default to 1.0 unless a point is optional (0.5) or critical (2.0).
+- Only extract points that are explicitly present or clearly implied by the standard answer.
+- Do not turn generic workflow steps into key points unless they are business conclusions required in the final answer.
+- The "content" field must follow the same language as the query or standard answer.
+`;
+
+/**
+ * 基于 skill 定义提取“关键动作”。
+ *
+ * - 关键动作 (key_actions)：skill 流程约束中必须执行的核心步骤
+ * - 对同一 skill / version 应尽量保持唯一且稳定
+ */
+export const generateKeyActionExtractionPrompt = (
+  skillLabel: string,
+  skillContent: string,
+) => `
+You are an expert in extracting canonical execution actions from an AI skill definition.
+
+Your task is to extract ONLY the expected key actions (key_actions) from the skill definition.
+
+Definition:
+- key_actions are the canonical procedural steps that this skill requires the agent to perform.
+- They should reflect workflow constraints, required checks, required tool usage, or required verification steps from the skill definition.
+- They should be stable across different business scenarios that use the same skill.
+- Do NOT derive key actions from a specific answer scenario. Derive them from the skill itself.
+
+Skill Target:
+"""
+${skillLabel}
+"""
+
+Skill Definition:
+"""
+${skillContent}
+"""
+
+Return the result in the following JSON format:
+{
   "key_actions": [
     { "content": "Description of key action", "weight": 1.0 }
   ]
 }
 
 Guidelines:
-- Create 3-5 distinct Key Points.
-- Create 3-5 distinct Key Actions.
-- Each item's "content" should be concise but descriptive (one sentence).
-- Weights should default to 1.0 unless a point is optional (0.5) or critical (2.0).
-- **CRITICAL**: Only extract points and actions that are EXPLICITLY present or clearly implied by the Standard Answer. Do not infer extra steps.
-- If the Standard Answer describes specific commands, tools, or operations, they MUST appear in Key Actions.
-- If the Standard Answer contains specific conclusions or diagnostic results, they MUST appear in Key Points.
-- **LANGUAGE RULE**: The "content" field of each Key Point and Key Action MUST be written in the SAME language as the User Query. If the query is in Chinese, write content in Chinese. If the query is in English, write content in English. Match the query language exactly.
+- Create 3-6 distinct key actions.
+- Each item should describe a required step or required verification action, not a final conclusion.
+- Keep the action list canonical and reusable for this skill version.
+- Only extract actions explicitly required by the skill definition or clearly implied by its process constraints.
+- Do not add scenario-specific business viewpoints or answer content here.
+- The "content" field should follow the same language as the skill definition when practical.
 `;
 
 export const generateAnswerExtractionPrompt = (query: string, documentContent: string) => `

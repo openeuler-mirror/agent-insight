@@ -1,0 +1,33 @@
+Separately installed tooling and inventory boundaries
+
+The root npm inventory does not resolve every optional tool in this repository.
+The following declarations are retained in the source baseline. Adding Apache
+license metadata and copyright comments does not remove these dependencies,
+relicense their code, or constitute approval to redistribute their artifacts.
+
+1. scripts/trae-collector/package.json declares @vscode/vsce ^2.22.0 as a
+   development dependency. Its original packaging commands remain in the
+   license-only source revision. The separately prepared TRAE snapshot in
+   dependency-inventory.json belongs to a replacement packaging environment;
+   it is not a resolved inventory of the retained vsce toolchain. Resolve that
+   toolchain and retain its package and embedded-binary notices for releases
+   that install or distribute it, including applicable signing-tool terms.
+
+2. skills/skill-generator/scripts/requirements.txt declares PyMuPDF >=1.23.0.
+   The pypdf 6.21.1 environment recorded in the notice is a replacement-parser
+   snapshot, not evidence that PyMuPDF has been removed. The selected PyMuPDF
+   artifact and its applicable license and source obligations require separate
+   release review while that original parser remains. No replacement of its
+   license by the root Apache license is asserted.
+
+3. skillbench/pyproject.toml and skillbench/uv.lock describe a separate Python
+   benchmark environment. The lock includes claude-agent-sdk 0.1.61 through
+   Harbor. That environment and any bundled CLI are not covered by the optional
+   pypdf snapshot or the root npm inventory. Preserve the SDK and CLI terms
+   separately when installing or redistributing that environment. Its source
+   distribution is recorded in the lock with SHA-256:
+   2dd6bcc8ed5a13b1a70dc986a01519537e9e690636bb278b942ede955fa9a09a
+
+Dependency replacement/removal is separate from the license and documentation
+change. Refresh these boundaries and the resolved inventories when those
+changes are integrated or a release artifact is assembled.

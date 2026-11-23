@@ -1,0 +1,188 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { DiagnosisProgressWriter } from './progress-types';
+import {
+  evaluateTrajectoryViaOpencode,
+  type TrajectoryEvalInput,
+} from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
+import {
+  buildSkillKeyActionComparison,
+  getPrimaryExecutionSkillTargets,
+  loadTaskCompletionSkillContext,
+  skillKeyActionComparisonMessage,
+  type KeyActionExecutionLike,
+} from '@/lib/engine/evaluation/key-action-trace-analysis';
+import { runSkillSuggestionAgent, shouldRunSuggestionAgent } from '@/lib/engine/evaluation/skill-suggestion-agent';
+import type { AgentDebugSkillsAnalysis, AgentDebugSkillsKeyActionResult, AgentDebugSkillSuggestion } from './types';
+
+export async function runAgentDebugSkillsAnalysis(args: {
+  execution: KeyActionExecutionLike;
+  interactions: unknown[];
+  user: string;
+  interactionHash: string;
+  progress?: DiagnosisProgressWriter;
+}): Promise<AgentDebugSkillsAnalysis> {
+  const executionId = String(args.execution.id || args.execution.taskId || '').trim();
+  const taskId = String(args.execution.taskId || args.execution.id || '').trim();
+  const interactions = Array.isArray(args.interactions) ? args.interactions : [];
+  const emit = (key: string, state: 'started' | 'completed' | 'failed', title: string, summary: string) => args.progress?.emit({ key, module: 'skills', kind: 'stage', state, title, summary });
+  emit('comparison-start', 'started', '提取 Skill 关键动作', '正在读取 Skill 要求与实际执行轨迹。');
+  const comparison = await buildSkillKeyActionComparison(args.execution, taskId, args.user, interactions);
+  if (comparison.status === 'no-skill-targets' || comparison.status === 'missing-skill') {
+    args.progress?.emit({
+      key: 'skipped',
+      kind: 'task',
+      module: 'skills',
+      state: 'skipped',
+      title: 'Skills 步骤核验已跳过',
+      summary: skillKeyActionComparisonMessage(comparison),
+    });
+    const now = new Date().toISOString();
+    return {
+      status: 'skipped',
+      skipReason: comparison.status,
+      source: 'agent-debug',
+      generatedAt: now,
+      updatedAt: now,
+      interactionHash: args.interactionHash,
+      errorMessage: null,
+      keyActionResults: [],
+    };
+  }
+  if (comparison.status !== 'ok') {
+    throw new Error(skillKeyActionComparisonMessage(comparison));
+  }
+
+  emit('comparison-ready', 'completed', '关键动作已提取', `已读取 ${comparison.referenceKeyActions.length} 条关键动作与 ${comparison.actualExtractedSteps.length} 个实际步骤。`);
+  const skillTargets = getPrimaryExecutionSkillTargets(args.execution, interactions);
+  const primarySkill = skillTargets[0] || null;
+  const input: TrajectoryEvalInput = {
+    caseId: `agent-debug:${executionId || taskId}`,
+    caseInput: String(args.execution.query || taskId || executionId || '').trim(),
+    referenceOutput: '',
+    referenceTrajectory: '',
+    referenceKeyActionsText: comparison.referenceKeyActionsText,
+    actualExtractedStepsText: comparison.actualExtractedStepsText,
+    referenceKeyActions: comparison.referenceKeyActions,
+    actualExtractedSteps: comparison.actualExtractedSteps,
+    skillContext: await loadTaskCompletionSkillContext(args.execution, interactions, args.user),
+    comparisonMode: 'skill_key_actions',
+    evaluationFocus: 'AgentDebug Skills 分析：逐条判断当前 trace 是否覆盖 Skill 关键动作，并给出可解释证据。',
+    actualInteractions: interactions,
+    taskId: taskId || undefined,
+    executionId: executionId || undefined,
+  };
+
+  emit('evaluation-start', 'started', '逐条核验执行证据', '正在核对关键动作覆盖情况，等待评估结果。');
+  const out = await evaluateTrajectoryViaOpencode(
+    input,
+    args.user,
+    primarySkill?.skill || null,
+    primarySkill?.version ?? null,
+  );
+
+  emit('evaluation-ready', 'completed', '关键动作核验已返回', `已获得 ${(out.keyActionResults || []).length} 条核验结果。`);
+  for (const [index, item] of (out.keyActionResults || []).entries()) {
+    emit(`action-${index}`, 'completed', item.actionContent || `关键动作 ${index + 1}`, item.traceComparisonAnalysis || '核验结果已返回。');
+  }
+
+  // 建议流：门控命中才跑读完整 trace 的建议 agent（非致命，失败退回空）。
+  let skillSuggestions: AgentDebugSkillSuggestion[] = [];
+  try {
+    if (
+      primarySkill?.skill &&
+      shouldRunSuggestionAgent({
+        keyActionResults: out.keyActionResults,
+        completeness: out.dimensionScores?.completeness,
+      })
+    ) {
+      emit('suggestions-start', 'started', '生成改进建议', '已满足建议生成条件，正在结合执行证据分析。');
+      skillSuggestions = await runSkillSuggestionAgent({
+        user: args.user,
+        skillName: primarySkill.skill,
+        skillVersion: primarySkill.version ?? null,
+        executionId: executionId || taskId,
+        interactions,
+        keyActionResults: out.keyActionResults,
+      });
+      emit('suggestions-ready', 'completed', '改进建议已返回', `已生成 ${skillSuggestions.length} 条建议。`);
+    }
+  } catch (e) {
+    emit('suggestions-failed', 'failed', '建议生成失败', '关键动作核验结果已保留，建议阶段未获得可用结果。');
+    console.warn('[agent-debug-skills] suggestion agent failed (non-fatal):', (e as Error).message);
+  }
+
+  const now = new Date().toISOString();
+  return {
+    status: 'done',
+    source: 'agent-debug',
+    generatedAt: now,
+    updatedAt: now,
+    interactionHash: args.interactionHash,
+    errorMessage: null,
+    reasonText: out.reasonText,
+    skillKeyActionComparison: {
+      status: comparison.status,
+      referenceKeyActionCount: comparison.referenceKeyActions.length,
+      actualExtractedStepCount: comparison.actualExtractedSteps.length,
+    },
+    keyActionResults: (out.keyActionResults || []).map(normalizeKeyActionResult),
+    skillSuggestions,
+  };
+}
+
+export function failedAgentDebugSkillsAnalysis(args: {
+  interactionHash: string;
+  errorMessage: string;
+}): AgentDebugSkillsAnalysis {
+  const now = new Date().toISOString();
+  return {
+    status: 'failed',
+    source: 'agent-debug',
+    generatedAt: now,
+    updatedAt: now,
+    interactionHash: args.interactionHash,
+    errorMessage: args.errorMessage,
+    keyActionResults: [],
+  };
+}
+
+export function runningAgentDebugSkillsAnalysis(args: {
+  interactionHash: string;
+}): AgentDebugSkillsAnalysis {
+  const now = new Date().toISOString();
+  return {
+    status: 'running',
+    source: 'agent-debug',
+    generatedAt: now,
+    updatedAt: now,
+    interactionHash: args.interactionHash,
+    errorMessage: null,
+    keyActionResults: [],
+  };
+}
+
+function normalizeKeyActionResult(item: AgentDebugSkillsKeyActionResult): AgentDebugSkillsKeyActionResult {
+  return {
+    actionId: String(item.actionId || '').trim(),
+    actionContent: String(item.actionContent || '').trim(),
+    coverage: item.coverage,
+    severity: item.severity,
+    traceComparisonAnalysis: String(item.traceComparisonAnalysis || '').trim(),
+    skillImprovementSuggestion: String(item.skillImprovementSuggestion || '').trim(),
+  };
+}

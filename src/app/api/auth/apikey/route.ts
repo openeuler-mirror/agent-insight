@@ -1,58 +1,93 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-import { db } from '@/lib/prisma';
-import crypto from 'crypto';
 import { NextResponse } from 'next/server';
+import { db } from '@/lib/storage/prisma';
+import { resolveLoginMode } from '@/lib/auth/login-mode';
+import { findOrCreateLocalUser, syncLocalUserExternalAccount } from '@/lib/auth/local-user';
+import {
+  inspectIdaasRegionAccess,
+  describeIdaasRegionAccessError,
+} from '@/lib/auth/idaas-region-access';
 
 export async function POST(request: Request) {
   try {
-    const { username } = await request.json();
-    
-    if (!username || typeof username !== 'string') {
+    const body: any = await request.json().catch(() => ({}));
+    const submittedUsername = String(body?.username || '').trim();
+
+    if (!submittedUsername) {
       return NextResponse.json({ error: 'Username is required' }, { status: 400 });
     }
 
-    const cleanUsername = username.trim().toLowerCase();
-    
-    // Validate email format only if username looks like an email
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const looksLikeEmail = cleanUsername.includes('@');
-    if (looksLikeEmail && !emailRegex.test(cleanUsername)) {
+    const loginMode = resolveLoginMode();
+    const username = loginMode === 'idaas_oauth'
+      ? submittedUsername
+      : submittedUsername.toLowerCase();
+
+    if (username.includes('@') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) {
       return NextResponse.json({ error: 'Username must be a valid email address' }, { status: 400 });
     }
-    
-    // Find existing user
-    let user = await db.findUserByUsername(cleanUsername);
 
-    // If not found, create new user with API Key
-    if (!user) {
-      const apiKey = `sk-${crypto.randomBytes(16).toString('hex')}`;
-      try {
-          user = await db.createUser({
-              username: cleanUsername,
-              apiKey
-          });
-      } catch (e: any) {
-          // Handle race condition where user might be created between findUnique and create
-          // P2002 is Prisma unique constraint violation code
-          // Postgres duplicate key error is 23505
-          if (e.code === 'P2002' || (e.code === '23505' && (e.constraint?.includes('User_username_key') || e.detail?.includes('username')))) {
-              user = await db.findUserByUsername(cleanUsername);
-          } else {
-              throw e;
-          }
+    if (loginMode === 'idaas_oauth') {
+      const apiKey = request.headers.get('x-witty-api-key') || '';
+      const user = apiKey ? await db.findUserByApiKey(apiKey) : null;
+      if (!user || user.username !== username) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
       }
+
+      let externalAccount: string | null = null;
+      try {
+        const regionAccess = await inspectIdaasRegionAccess(user.username);
+        externalAccount = regionAccess.externalAccount;
+        if (regionAccess.decision === 'restricted') {
+          console.warn('[Auth/IDaaS] Login restore blocked: region_restricted');
+          return NextResponse.json(
+            { error: 'Region restricted', code: 'region_restricted' },
+            { status: 403 },
+          );
+        }
+      } catch (error) {
+        console.error(
+          '[Auth/IDaaS] Region access restore failed: ' + describeIdaasRegionAccessError(error),
+        );
+        return NextResponse.json(
+          { error: 'Region access check unavailable', code: 'region_check_unavailable' },
+          { status: 503 },
+        );
+      }
+
+      const refreshedUser = await syncLocalUserExternalAccount(
+        user,
+        externalAccount || undefined,
+      );
+      return NextResponse.json({
+        username: refreshedUser.username,
+        apiKey: refreshedUser.apiKey,
+        displayName: refreshedUser.externalAccount || refreshedUser.username,
+      });
     }
 
-    if (!user) {
-        throw new Error("Failed to retrieve or create user");
-    }
+    const user = await findOrCreateLocalUser(username);
 
-    return NextResponse.json({ 
+    return NextResponse.json({
+      username: user.username,
       apiKey: user.apiKey,
-      username: user.username
     });
-  } catch (error) {
-    console.error('API Key generation error:', error);
+  } catch (err: any) {
+    console.error('[Auth/Apikey] Error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

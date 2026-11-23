@@ -1,0 +1,1071 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { evidenceSource } from '../../../../../packages/benchmark-protocol/artifact-path.cjs';
+import { agentEvaluationTraceId } from '@/lib/evaluators/evaluator-skills';
+import { casePagination, locateCasePage } from '@/lib/engine/experiment/case-navigation';
+import { normalizeAgentOptions, validateDefinition } from '../../../../../packages/agent-runtime/index.cjs';
+// 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
+// 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
+// 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
+// 对比实验（type='llm'）：按 type 分流调 getComparisonDetail（含 groups+pairing）；
+// 单组实验（type='single'）：走原聚合路径，并附加同评测基线趋势。
+import { NextResponse } from 'next/server';
+import type { ExperimentCase, ExperimentEvalResult, Prisma } from '@prisma/client';
+import {
+  extractLegacyFiFromEvaluatorContextJson,
+  parseExperimentCaseEvaluatorContext,
+} from '@/lib/engine/experiment/case-fi-meta';
+import { prisma } from '@/lib/storage/prisma';
+import { resolveUser } from '@/lib/auth/auth';
+import {
+  normalizeTerminalExperimentStatus,
+  publishedOverallAverage,
+  evaluatorBreakdown,
+} from '@/lib/engine/experiment/detail-agg';
+import { isFiTraceWaitExpired } from '@/lib/fault-injection/trace-readiness';
+import { hasUsableTraceInteractions, isFiBusinessTraceUsable } from '@/lib/engine/experiment/fi-orchestrate';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
+import { parseStoredEvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
+import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
+import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
+import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
+import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
+import { findBenchmarkExecution } from '@/lib/benchmark/trace-reference';
+import { canonicalExperimentAgentName } from '@/lib/engine/experiment/agent-identity';
+import {
+  summarizeExistingTraceItemProgress,
+  summarizeWorkbenchItemProgress,
+  workbenchCompletionStatus,
+} from '@/lib/skill-workbench/item-progress';
+import type { BenchmarkManifest } from '../../../../../packages/benchmark-protocol/src/contracts';
+
+import { loadSkillExecutionProgress } from '@/lib/skill-workbench/execution-progress-service';
+import { loadCaseExecutionProgress } from '@/lib/engine/experiment/execution-progress-service';
+
+export const dynamic = 'force-dynamic';
+
+function parseJsonValue(value: string | null): unknown {
+  if (!value) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+type GeneratedTraceStatus = 'pending' | 'ready' | 'failed';
+
+function deriveGeneratedTraceStatus(input: {
+  usable: boolean;
+  triggerDecisionReady?: boolean;
+  runStatus?: string | null;
+  runUpdatedAt?: Date | null;
+  commandStatus?: string | null;
+  attemptStatus?: string | null;
+  generationError?: string | null;
+  experimentStatus: string;
+}): GeneratedTraceStatus {
+  if (input.usable || input.triggerDecisionReady) return 'ready';
+  if (['queued', 'dispatching', 'running', 'waiting_trace', 'retry_wait'].includes(input.attemptStatus || '')) {
+    return 'pending';
+  }
+  if (['queued', 'collecting', 'running', 'judging'].includes(input.runStatus || '')) return 'pending';
+  if (input.generationError) return 'failed';
+  if (input.attemptStatus === 'failed') return 'failed';
+  if (input.runStatus === 'failed' || input.runStatus === 'stopped') return 'failed';
+  if (input.runUpdatedAt && isFiTraceWaitExpired(input.runStatus || '', input.runUpdatedAt)) return 'failed';
+  if (['FAILED', 'EXPIRED', 'DELIVERY_FAILED'].includes(input.commandStatus || '')) return 'failed';
+  if (['failed', 'partial', 'done'].includes(input.experimentStatus)) return 'failed';
+  return 'pending';
+}
+
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    const url = new URL(req.url);
+    const q = url.searchParams;
+    const { username } = await resolveUser(req, q.get('user'));
+    const { casePage: casePageRaw, casePageSize } = casePagination(q.get('casePage'), q.get('casePageSize'));
+    const locateCaseId = q.get('locateCaseId') || '';
+    const wantCaseId = q.get('caseId') || '';
+
+    const experimentMeta = await prisma.experiment.findFirst({
+      where: { id, deletedAt: null, ...(username ? { user: username } : {}) },
+      select: { id: true, type: true },
+    });
+    if (!experimentMeta) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+
+    // 对比实验：分流到 getComparisonDetail（含 groups + pairing）
+    if (experimentMeta.type === 'llm') {
+      const detail = await getComparisonDetail(id, {
+        casePage: casePageRaw,
+        casePageSize,
+        caseId: wantCaseId || undefined,
+      });
+      return NextResponse.json(detail);
+    }
+
+    // 单组实验：走原聚合路径（响应 shape 不变）
+    const experiment = await prisma.experiment.findFirst({
+      where: { id, ...(username ? { user: username } : {}) },
+      select: {
+        id: true, user: true, name: true, type: true, agentName: true, status: true,
+        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true,
+        evaluatorConfigsJson: true, createdAt: true,
+        scope: true, skillName: true, skillVersion: true, preset: true,
+        skillContextJson: true, configSnapshotJson: true, sourceExperimentId: true,
+        benchmarkBinding: { select: { adapterKey: true } },
+      },
+    });
+    if (!experiment) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+
+    let evaluatorIds: string[] = [];
+    try {
+      const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
+      if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
+    } catch { /* 忽略脏数据 */ }
+    const evaluatorConfigs = parseStoredEvaluatorRunConfigs(
+      experiment.evaluatorConfigsJson,
+      evaluatorIds,
+    );
+    const evaluatorExecution = parseStoredEvaluatorExecutionConfig(experiment.evaluatorConfigsJson);
+    const benchmarkAdapterKey = experiment.benchmarkBinding?.adapterKey || '';
+    let benchmarkManifest: BenchmarkManifest | null = null;
+    if (benchmarkAdapterKey) {
+      try { benchmarkManifest = getBenchmarkAdapter(benchmarkAdapterKey).manifest; } catch { benchmarkManifest = null; }
+    }
+    const configSnapshot = parseJsonValue(experiment.configSnapshotJson) as Record<string, unknown> | null;
+    const executionConfig = asRecord(configSnapshot?.runConfig) || asRecord(configSnapshot?.executionTarget);
+    let executionAgentOptions = null;
+    let executionParameterDefinition = null;
+    if (executionConfig?.agentParameterDefinition) {
+      try {
+        executionParameterDefinition = validateDefinition(executionConfig.agentParameterDefinition);
+        executionAgentOptions = normalizeAgentOptions(executionConfig.agentOptions, executionParameterDefinition) || null;
+      } catch { executionParameterDefinition = null; }
+    }
+    const baselineTrendPromise = ['', 'benchmark'].includes(experiment.scope)
+      ? getExperimentBaselineTrend({ experimentId: experiment.id, user: experiment.user }).catch((error) => {
+          console.error('[Experiment baseline trend]', error);
+          return null;
+        })
+      : Promise.resolve(null);
+
+    // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
+    // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
+    const allResults = await prisma.experimentEvalResult.findMany({
+      where: { experimentId: id, case: { deletedAt: null } },
+      select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
+    });
+    // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
+    // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
+    const allExperimentCases = await prisma.experimentCase.findMany({
+      where: { experimentId: id, deletedAt: null },
+      select: { id: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    const allExperimentCaseIds = allExperimentCases.map((item: Pick<ExperimentCase, 'id'>) => item.id);
+    const caseTotal = allExperimentCaseIds.length;
+    const { casePage, locatedCaseId } = locateCasePage(allExperimentCaseIds, casePageRaw, casePageSize, wantCaseId || locateCaseId);
+    const pagedCases = await prisma.experimentCase.findMany({
+      where: { experimentId: id, deletedAt: null, ...(wantCaseId ? { id: wantCaseId } : {}) },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
+      include: { results: { orderBy: { createdAt: 'asc' } } },
+    }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
+
+    const skillExecutionSnapshot = experiment.scope === 'skill-workbench' ? await loadSkillExecutionProgress(id, experiment.user) : null;
+    const skillRowProgress = new Map(Object.values(skillExecutionSnapshot?.progress || {}).flatMap(sides => Object.values(sides).flatMap(runs => runs || []))
+      .filter(run => run.experimentCaseId).map(run => [run.experimentCaseId!, run]));
+    const caseExecutionProgress = !experiment.scope && experiment.type !== 'llm'
+      ? await loadCaseExecutionProgress(id, experiment.user, pagedCases.map(c => c.id), evaluatorIds, configSnapshot?.traceSource === 'generate')
+      : null;
+
+    const benchmarkAttemptByRun = new Map<string, number>();
+    const benchmarkExecutionsByTrace = new Map<string, Array<{ id: string; taskId: string | null }>>();
+    const benchmarkRunByCase = new Map<string, {
+      id: string;
+      retryOfRunId: string | null;
+      updatedAt: Date;
+      submissionSource: string;
+      createdAt: Date;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      lastProgressAt: Date | null;
+      status: string;
+      failureCode: string | null;
+      failureMessage: string | null;
+      progressJson: string | null;
+      taskEnvelopeJson: string | null;
+      publicPayloadJson: string | null;
+      runFactsJson: string | null;
+      cleanupJson: string | null;
+      datasetCase: { externalCaseId: string } | null;
+      artifacts: Array<{ id: string; name: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      evaluations: Array<{
+        id: string;
+        attemptNo: number;
+        updatedAt: Date;
+        status: string;
+        failureCode: string | null;
+        failureMessage: string | null;
+        progressJson: string | null;
+        createdAt: Date;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+        lastProgressAt: Date | null;
+        normalizedResultJson: string | null;
+        runtimeFactsJson: string | null;
+        artifacts: Array<{ id: string; name: string; kind: string; sha256: string; sizeBytes: number; mediaType: string }>;
+      }>;
+    }>();
+    if (experiment.scope === 'benchmark' && pagedCases.length) {
+      const runs = await prisma.benchmarkCaseRun.findMany({
+        where: { experimentId: id, experimentCaseId: { in: pagedCases.map((item) => item.id) } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: {
+          datasetCase: { select: { externalCaseId: true } },
+          artifacts: {
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, name: true, sha256: true, sizeBytes: true, mediaType: true },
+          },
+          evaluations: {
+            orderBy: { attemptNo: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              attemptNo: true,
+              updatedAt: true,
+              status: true,
+              failureCode: true,
+              failureMessage: true,
+              progressJson: true,
+              createdAt: true,
+              startedAt: true,
+              finishedAt: true,
+              lastProgressAt: true,
+              normalizedResultJson: true,
+              runtimeFactsJson: true,
+              artifacts: {
+                orderBy: { createdAt: 'asc' },
+                select: { id: true, name: true, kind: true, sha256: true, sizeBytes: true, mediaType: true },
+              },
+            },
+          },
+        },
+      });
+      const runParents = new Map<string, string | null>(runs.map((run: { id: string; retryOfRunId: string | null }) => [run.id, run.retryOfRunId]));
+      for (const run of runs) {
+        let attemptNo = 1;
+        let parent = runParents.get(run.id);
+        const visited = new Set<string>([run.id]);
+        while (parent && !visited.has(parent)) { visited.add(parent); attemptNo += 1; parent = runParents.get(parent); }
+        benchmarkAttemptByRun.set(run.id, attemptNo);
+      }
+      const retried = new Set(runs.map((run: { retryOfRunId: string | null }) => run.retryOfRunId).filter(Boolean));
+      for (const run of runs) {
+        if (retried.has(run.id)) continue;
+        if (!benchmarkRunByCase.has(run.experimentCaseId)) benchmarkRunByCase.set(run.experimentCaseId, run);
+      }
+      const traceIds = [...benchmarkRunByCase.values()].map(run => asRecord(parseJsonValue(run.runFactsJson))?.traceId).filter((value): value is string => typeof value === 'string' && Boolean(value));
+      if (traceIds.length) {
+        const roots = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: { in: traceIds } }, select: { id: true, taskId: true } });
+        for (const root of roots) if (root.taskId) benchmarkExecutionsByTrace.set(root.taskId, [...(benchmarkExecutionsByTrace.get(root.taskId) || []), root]);
+        for (const traceId of traceIds.filter(value => /^[0-9a-f]{32}$/.test(value) && !benchmarkExecutionsByTrace.has(value))) {
+          const legacy = await findBenchmarkExecution(experiment.user, traceId);
+          if (legacy?.taskId) {
+            const matches = await prisma.execution.findMany({ where: { user: experiment.user, isSubagent: false, taskId: legacy.taskId }, select: { id: true, taskId: true }, take: 2 });
+            if (matches.length === 1) benchmarkExecutionsByTrace.set(traceId, matches);
+          }
+        }
+      }
+    }
+
+    const generatedCases = await prisma.experimentCase.findMany({
+      where: {
+        experimentId: id,
+        deletedAt: null,
+        OR: [
+          { fiRunId: { not: null } },
+          { traceGenerationCommandId: { not: null } },
+          { traceAttempts: { some: {} } },
+          ...(experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' ? [{ executionId: null }] : []),
+        ],
+      },
+      select: {
+        id: true,
+        executionId: true,
+        taskId: true,
+        fiRunId: true,
+        traceGenerationCommandId: true,
+        traceGenerationError: true,
+        traceAttempts: {
+          orderBy: { attemptNo: 'desc' },
+          take: 1,
+          select: {
+            attemptNo: true,
+            status: true,
+            failureCode: true,
+            errorMessage: true,
+            traceId: true,
+          },
+        },
+      },
+    }) as Array<{
+      id: string;
+      executionId: string | null;
+      taskId: string | null;
+      fiRunId: string | null;
+      traceGenerationCommandId: string | null;
+      traceGenerationError: string | null;
+      traceAttempts: Array<{
+        attemptNo: number;
+        status: string;
+        failureCode: string | null;
+        errorMessage: string | null;
+        traceId: string | null;
+      }>;
+    }>;
+    const fiRunKeys = Array.from(new Set(
+      generatedCases.map((item) => item.fiRunId).filter((value): value is string => Boolean(value)),
+    ));
+    const generatedUserWhere = username ? { user: username } : {};
+    const commandIds = Array.from(new Set(
+      generatedCases
+        .map((item) => item.traceGenerationCommandId)
+        .filter((value): value is string => Boolean(value)),
+    ));
+    const [fiRunsRaw, generationCommandsRaw] = await Promise.all([
+      fiRunKeys.length ? prisma.faultInjectionRun.findMany({
+        where: {
+          ...generatedUserWhere,
+          OR: [{ id: { in: fiRunKeys } }, { runId: { in: fiRunKeys } }],
+        },
+        select: { id: true, runId: true, status: true, sessionTaskId: true, error: true, agent: true, platform: true, updatedAt: true },
+      }) : [],
+      commandIds.length ? prisma.reliabilityCommand.findMany({
+        where: { ...generatedUserWhere, commandId: { in: commandIds } },
+        select: { commandId: true, status: true, errorMessage: true, errorCode: true },
+      }) : [],
+    ]);
+    const fiRuns = fiRunsRaw as Array<{
+      id: string;
+      runId: string;
+      status: string;
+      sessionTaskId: string | null;
+      error: string | null;
+      agent: string;
+      platform: string;
+      updatedAt: Date;
+    }>;
+    const generationCommands = generationCommandsRaw as Array<{
+      commandId: string;
+      status: string;
+      errorMessage: string | null;
+      errorCode: string | null;
+    }>;
+    const fiRunByKey = new Map<string, typeof fiRuns[number]>();
+    for (const run of fiRuns) {
+      fiRunByKey.set(run.id, run);
+      fiRunByKey.set(run.runId, run);
+    }
+    const generationCommandById = new Map(
+      generationCommands.map((command) => [command.commandId, command]),
+    );
+    const generatedTaskIds = Array.from(new Set(
+      generatedCases
+        .map((item) => item.taskId || (item.fiRunId ? fiRunByKey.get(item.fiRunId)?.sessionTaskId : null))
+        .filter((value): value is string => Boolean(value)),
+    ));
+    const [generatedExecutionsRaw, generatedSessionsRaw] = await Promise.all([
+      generatedTaskIds.length
+        ? prisma.execution.findMany({
+          where: { ...generatedUserWhere, taskId: { in: generatedTaskIds }, isSubagent: false },
+          orderBy: { timestamp: 'desc' },
+          select: { id: true, taskId: true, query: true, finalResult: true, agentName: true },
+        })
+        : [],
+      generatedTaskIds.length
+        ? prisma.session.findMany({
+          where: { ...generatedUserWhere, taskId: { in: generatedTaskIds } },
+          select: { taskId: true, interactions: true, endTime: true },
+        })
+        : [],
+    ]);
+    const generatedExecutions = generatedExecutionsRaw as Array<{
+      id: string;
+      taskId: string | null;
+      query: string | null;
+      finalResult: string | null;
+      agentName: string | null;
+    }>;
+    const generatedSessions = generatedSessionsRaw as Array<{
+      taskId: string;
+      interactions: string | null;
+      endTime: Date | null;
+    }>;
+    const generatedExecutionByTask = new Map<string, typeof generatedExecutions[number]>();
+    for (const execution of generatedExecutions) {
+      if (execution.taskId && !generatedExecutionByTask.has(execution.taskId)) {
+        generatedExecutionByTask.set(execution.taskId, execution);
+      }
+    }
+    const generatedSessionByTask = new Map(
+      generatedSessions.map((session) => [session.taskId, session]),
+    );
+    const traceStateByCase = new Map<string, {
+      status: GeneratedTraceStatus;
+      error: string | null;
+      taskId: string | null;
+      executionId: string | null;
+      attemptNo: number | null;
+      attemptStatus: string | null;
+    }>();
+    for (const item of generatedCases) {
+      const run = item.fiRunId ? fiRunByKey.get(item.fiRunId) : undefined;
+      const command = item.traceGenerationCommandId
+        ? generationCommandById.get(item.traceGenerationCommandId)
+        : undefined;
+      const attempt = item.traceAttempts[0];
+      const taskId = item.taskId || run?.sessionTaskId || null;
+      const execution = taskId ? generatedExecutionByTask.get(taskId) : undefined;
+      const session = taskId ? generatedSessionByTask.get(taskId) : undefined;
+      const usable = Boolean(execution && (run
+        ? isFiBusinessTraceUsable({
+            platform: run.platform, agent: run.agent, executionAgent: execution.agentName,
+            interactions: session?.interactions, endTime: session?.endTime,
+          })
+        : hasUsableTraceInteractions(session?.interactions)));
+      const status = deriveGeneratedTraceStatus({
+        usable,
+        triggerDecisionReady: experiment.scope === 'skill-workbench' && experiment.preset === 'trigger' && attempt?.status === 'ready',
+        runStatus: run?.status,
+        runUpdatedAt: run?.updatedAt,
+        commandStatus: command?.status,
+        attemptStatus: attempt?.status,
+        generationError: item.traceGenerationError,
+        experimentStatus: experiment.status,
+      });
+      traceStateByCase.set(item.id, {
+        status,
+        error: status === 'failed'
+          ? (
+            item.traceGenerationError
+            || attempt?.errorMessage
+            || attempt?.failureCode
+            || run?.error
+            || command?.errorMessage
+            || command?.errorCode
+            || 'Trace 未上报、轨迹为空或等待超时'
+          )
+          : null,
+        taskId,
+        executionId: item.executionId || execution?.id || null,
+        attemptNo: attempt?.attemptNo || null,
+        attemptStatus: attempt?.status || null,
+      });
+    }
+    const traceStates = Array.from(traceStateByCase.values());
+    const traceProgress = traceStates.length ? {
+      total: traceStates.length,
+      ready: traceStates.filter((item) => item.status === 'ready').length,
+      failed: traceStates.filter((item) => item.status === 'failed').length,
+      pending: traceStates.filter((item) => item.status === 'pending').length,
+      waitingTrace: traceStates.filter((item) => item.status === 'pending' && item.attemptStatus === 'waiting_trace').length,
+    } : null;
+    const invalidGeneratedCaseIds = new Set(
+      Array.from(traceStateByCase.entries())
+        .filter(([, state]) => state.status !== 'ready')
+        .map(([caseId]) => caseId),
+    );
+    const effectiveAllResults = allResults.filter(
+      (result: { caseId: string }) => !invalidGeneratedCaseIds.has(result.caseId),
+    );
+    const doneResultCount = effectiveAllResults.filter((r: { status: string }) => r.status === 'done').length;
+    const failedResultCount = effectiveAllResults.filter((r: { status: string }) => r.status === 'failed').length;
+    let expectedResultTotal = effectiveAllResults.length;
+    let syntheticExecutionFailures = 0;
+    let itemProgress: ReturnType<typeof summarizeWorkbenchItemProgress> | null = null;
+    let sideProgress: Partial<Record<'a' | 'b', ReturnType<typeof summarizeWorkbenchItemProgress>>> | null = null;
+    if (experiment.scope === 'skill-workbench' && configSnapshot) {
+      const cancellations: Array<{ caseKey: string }> = await prisma.experimentCancellation.findMany({ where: { experimentId: id }, select: { caseKey: true } });
+      const removedDatasetCases = new Set(cancellations.filter((item) => item.caseKey.startsWith('dataset:')).map((item) => item.caseKey.slice(8)));
+      if (Array.isArray(configSnapshot.caseIds)) configSnapshot.caseIds = configSnapshot.caseIds.filter((key) => !removedDatasetCases.has(String(key)));
+      const supportsItemProgress = ['trigger', 'use-case', 'skill-ab'].includes(experiment.preset || '');
+      const frozenCaseIds = Array.isArray(configSnapshot.caseIds)
+        ? configSnapshot.caseIds.map(String).filter(Boolean)
+        : [];
+      const executionSides = Array.isArray(configSnapshot.executionSides)
+        ? configSnapshot.executionSides.filter((side) => side === 'a' || side === 'b')
+        : experiment.preset === 'skill-ab' ? ['a', 'b'] : ['b'];
+      const repeatRounds = Math.max(1, Number(configSnapshot.repeatRounds) || 1);
+      expectedResultTotal = Math.max(
+        expectedResultTotal,
+        frozenCaseIds.length * executionSides.length * repeatRounds * evaluatorIds.length,
+      );
+
+      const grayscaleTaskId = typeof configSnapshot.grayscaleTaskId === 'string'
+        ? configSnapshot.grayscaleTaskId
+        : '';
+      if (grayscaleTaskId && evaluatorIds.length) {
+        const grayscaleTask = await prisma.grayscaleTask.findFirst({
+          where: { id: grayscaleTaskId, ...(username ? { user: username } : {}) },
+          select: { caseStatesJson: true },
+        });
+        const caseStates = (skillExecutionSnapshot?.caseStates || parseJsonValue(grayscaleTask?.caseStatesJson || null)) as Record<string, unknown> | null;
+        if (supportsItemProgress) {
+          const progressInput = {
+            caseIds: frozenCaseIds,
+            repeatRounds,
+            evaluatorIds,
+            caseStates: (caseStates || {}) as Parameters<typeof summarizeWorkbenchItemProgress>[0]['caseStates'],
+            settled: ['failed', 'cancelled'].includes(experiment.status),
+          };
+          itemProgress = summarizeWorkbenchItemProgress({ ...progressInput, executionSides });
+          if (experiment.preset === 'skill-ab') {
+            sideProgress = {
+              a: summarizeWorkbenchItemProgress({ ...progressInput, executionSides: ['a'] }),
+              b: summarizeWorkbenchItemProgress({ ...progressInput, executionSides: ['b'] }),
+            };
+          }
+        }
+        if (caseStates) {
+          for (const state of Object.values(caseStates)) {
+            if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
+            for (const side of executionSides) {
+              const sideState = (state as Record<string, unknown>)[String(side)];
+              if (!sideState || typeof sideState !== 'object' || Array.isArray(sideState)) continue;
+              const runs = (sideState as Record<string, unknown>).runs;
+              if (!Array.isArray(runs)) continue;
+              syntheticExecutionFailures += runs.filter((run) => {
+                if (!run || typeof run !== 'object' || Array.isArray(run)) return false;
+                const value = run as Record<string, unknown>;
+                return value.status === 'fail' && typeof value.failureType === 'string' && value.failureType.length > 0;
+              }).length * evaluatorIds.length;
+            }
+          }
+        }
+      } else if (supportsItemProgress) {
+        itemProgress = summarizeExistingTraceItemProgress({
+          caseIds: allExperimentCaseIds,
+          evaluatorIds,
+          results: effectiveAllResults,
+          settled: ['failed', 'cancelled'].includes(experiment.status),
+        });
+      }
+    }
+    const failed = Math.min(expectedResultTotal, failedResultCount + syntheticExecutionFailures);
+    const progress = {
+      total: expectedResultTotal,
+      done: doneResultCount,
+      failed,
+      pending: Math.max(0, expectedResultTotal - doneResultCount - failed),
+    };
+    const normalizedResultStatus = normalizeTerminalExperimentStatus(experiment.status, effectiveAllResults);
+    const normalizedStatus = normalizedResultStatus === 'done' && traceProgress?.failed
+      ? 'partial' : normalizedResultStatus;
+    const aggregateStatus = itemProgress ? workbenchCompletionStatus(normalizedStatus, itemProgress.executionProgress, itemProgress.evaluationProgress) : normalizedStatus;
+    const responseStatus = (aggregateStatus === 'done' && progress.pending > 0)
+      || (aggregateStatus !== 'cancelled' && Boolean(traceProgress?.pending))
+      ? 'running'
+      : aggregateStatus;
+    const overall = publishedOverallAverage(responseStatus, effectiveAllResults);
+    const breakdown = evaluatorBreakdown(effectiveAllResults);
+
+    // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution
+    // 的 query/finalResult 兜底（与评估时 loadCaseRuntime 口径一致），否则详情页显示为 "-"。
+    const legacyTraceReferences = new Map<string, { id: string; taskId: string | null }>();
+    const benchmarkPlatform = experiment.scope === 'benchmark'
+      ? String(asRecord(configSnapshot?.runConfig)?.platform || (experiment.agentName === 'pi-mcts' ? 'pi-mcts' : '')) : '';
+    const displayAgentName = experiment.agentName
+      ? canonicalExperimentAgentName(benchmarkPlatform, experiment.agentName) : experiment.agentName;
+    if (benchmarkPlatform === 'pi-mcts') {
+      const legacyTaskIds = Array.from(new Set(pagedCases.map(c => c.taskId)
+        .filter((taskId): taskId is string => Boolean(taskId && /^[0-9a-f]{32}$/.test(taskId)))));
+      await Promise.all(legacyTaskIds.map(async taskId => {
+        const execution = await findBenchmarkExecution(experiment.user, taskId);
+        if (execution?.taskId) legacyTraceReferences.set(taskId, execution);
+      }));
+    }
+    const needExecTaskIds = Array.from(new Set(
+      pagedCases
+        .map((c) => (c.taskId && legacyTraceReferences.get(c.taskId)?.taskId) || c.taskId || traceStateByCase.get(c.id)?.taskId)
+        .filter((taskId): taskId is string => Boolean(taskId)),
+    ));
+    const needExecutionIds = Array.from(new Set(
+      pagedCases.map((c) => c.executionId).filter((executionId): executionId is string => Boolean(executionId)),
+    ));
+    type ExecutionFallback = {
+      id: string;
+      query: string;
+      finalResult: string;
+      skill: string | null;
+      model: string | null;
+      hostIp: string | null;
+      executionSkills: Array<{ skillName: string; skillVersion: number | null }>;
+    };
+    const execFallback = new Map<string, ExecutionFallback>();
+    const execFallbackById = new Map<string, ExecutionFallback>();
+    if (needExecTaskIds.length || needExecutionIds.length) {
+      const execs = await prisma.execution.findMany({
+        where: {
+          OR: [
+            ...(needExecTaskIds.length ? [{ taskId: { in: needExecTaskIds } }] : []),
+            ...(needExecutionIds.length ? [{ id: { in: needExecutionIds } }] : []),
+          ],
+        },
+        orderBy: { timestamp: 'desc' },
+        select: {
+          id: true,
+          taskId: true,
+          query: true,
+          finalResult: true,
+          skill: true,
+          model: true,
+          hostIp: true,
+          executionSkills: { select: { skillName: true, skillVersion: true } },
+        },
+      });
+      for (const e of execs) {
+        const fallback = {
+          id: e.id,
+          query: e.query || '',
+          finalResult: e.finalResult || '',
+          skill: e.skill,
+          model: e.model,
+          hostIp: e.hostIp,
+          executionSkills: e.executionSkills,
+        };
+        if (e.taskId && !execFallback.has(e.taskId)) {
+          execFallback.set(e.taskId, fallback);
+        }
+        execFallbackById.set(e.id, fallback);
+      }
+    }
+
+    const results = pagedCases.flatMap((c) =>
+      (caseExecutionProgress?.get(c.id)?.results ?? (invalidGeneratedCaseIds.has(c.id) ? [] : c.results)).map((r) => ({
+        id: r.id,
+        caseId: r.caseId,
+        evaluatorId: r.evaluatorId,
+        status: r.status,
+        verdict: r.verdict,
+        summary: r.summary,
+        score: r.score,
+        points: parseJsonValue(r.pointsJson),
+        evidence: parseJsonValue(r.evidenceJson),
+        humanScore: r.humanScore,
+        humanReason: r.humanReason,
+        humanBy: r.humanBy,
+        humanAt: r.humanAt,
+        errorMessage: r.errorMessage,
+        attempts: r.attempts,
+        durationMs: r.durationMs,
+      })),
+    );
+    const traceIds = results.map(result => agentEvaluationTraceId(result.evidence)).filter((id): id is string => Boolean(id));
+    const recordedTraces = username && traceIds.length ? await prisma.execution.findMany({
+      where: { user: username, taskId: { in: traceIds } }, select: { taskId: true },
+    }) : [];
+    const availableTraces = new Set(recordedTraces.map((trace: { taskId: string | null }) => trace.taskId));
+    const resultsWithTraces = results.map(result => {
+      const traceId = agentEvaluationTraceId(result.evidence);
+      return { ...result, evaluationTraceId: traceId && availableTraces.has(traceId) ? traceId : null };
+    });
+    const baselineTrend = await baselineTrendPromise;
+
+    return NextResponse.json({
+      id: experiment.id,
+      name: experiment.name,
+      type: experiment.type,
+      agentName: displayAgentName,
+      status: responseStatus,
+      watchMode: experiment.watchMode,
+      watchEnabledAt: experiment.watchEnabledAt,
+      evaluatorIds,
+      evaluatorConfigs,
+      evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
+      evaluatorExecutionResolved: evaluatorExecution?.resolved ?? null,
+      createdAt: experiment.createdAt,
+      scope: experiment.scope,
+      skillName: experiment.skillName,
+      skillVersion: experiment.skillVersion,
+      preset: experiment.preset,
+      skillContext: parseJsonValue(experiment.skillContextJson),
+      configSnapshot: experiment.scope === 'benchmark' ? null : configSnapshot,
+      executionConcurrency: configSnapshot?.submissionSource === 'imported' ? null : experiment.scope === 'benchmark'
+        ? Number((configSnapshot?.runConfig as Record<string, unknown> | undefined)?.executionConcurrency) || 1
+        : experiment.scope === 'skill-workbench' && (configSnapshot?.traceSource === 'generate' || experiment.preset === 'skill-ab')
+          ? Number(configSnapshot?.executionConcurrency ?? (configSnapshot?.runtime as Record<string, unknown> | undefined)?.executionConcurrency) || 1
+          : !experiment.scope && configSnapshot?.traceSource === 'generate' && !configSnapshot.fiOrchestrate
+          ? Number(configSnapshot.executionConcurrency) || 1 : null,
+      executionAgentOptions,
+      executionParameterDefinition,
+      sourceExperimentId: experiment.sourceExperimentId,
+      overall,
+      breakdown,
+      baselineTrend,
+      reusableConfig: {
+        schemaVersion: 1,
+        sourceExperimentId: experiment.id,
+        datasetId: typeof configSnapshot?.agentEvalDatasetId === 'string'
+          ? configSnapshot.agentEvalDatasetId
+          : typeof configSnapshot?.datasetId === 'string' && experiment.scope !== 'benchmark'
+            ? configSnapshot.datasetId
+            : null,
+        datasetCaseIds: Array.isArray(configSnapshot?.caseIds)
+          ? configSnapshot.caseIds.map(String)
+          : [],
+        traceSource: typeof configSnapshot?.traceSource === 'string'
+          ? configSnapshot.traceSource
+          : experiment.watchMode ? 'existing' : null,
+        agentName: displayAgentName,
+        evaluatorIds,
+        evaluatorConfigs,
+        evaluatorExecutionConfig: evaluatorExecution?.config ?? null,
+        executionTarget: configSnapshot?.runConfig && typeof configSnapshot.runConfig === 'object'
+          ? {
+              workerId: typeof configSnapshot.clientId === 'string' ? configSnapshot.clientId : null,
+              platform: String((configSnapshot.runConfig as Record<string, unknown>).platform || ''),
+              agent: String((configSnapshot.runConfig as Record<string, unknown>).agent || ''),
+              agentOptions: executionAgentOptions,
+              executionProfile: (configSnapshot.runConfig as Record<string, unknown>).executionProfile || null,
+              model: (configSnapshot.runConfig as Record<string, unknown>).model || null,
+              timeoutSeconds: Number((configSnapshot.runConfig as Record<string, unknown>).timeoutSeconds) || null,
+            }
+          : configSnapshot?.executionTarget ? { ...asRecord(configSnapshot.executionTarget), agentOptions: executionAgentOptions } : null,
+      },
+      cases: pagedCases.map((c) => {
+        const traceState = traceStateByCase.get(c.id);
+        const legacyReference = c.taskId ? legacyTraceReferences.get(c.taskId) : undefined;
+        const effectiveTaskId = legacyReference?.taskId || c.taskId || traceState?.taskId || null;
+        const ex = (c.executionId ? execFallbackById.get(c.executionId) : undefined)
+          || (effectiveTaskId ? execFallback.get(effectiveTaskId) : undefined);
+        const evaluatorContext = parseExperimentCaseEvaluatorContext(c.evaluatorContextJson);
+        const legacyFi = extractLegacyFiFromEvaluatorContextJson(c.evaluatorContextJson);
+        const faultInjectionType =
+          (typeof c.faultInjectionType === 'string' && c.faultInjectionType.trim()) ||
+          legacyFi.faultInjectionType ||
+          null;
+        const benchmarkRun = benchmarkRunByCase.get(c.id);
+        const benchmarkTraceId = asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.traceId;
+        const reportedTraceId = typeof benchmarkTraceId === 'string' ? benchmarkTraceId : null;
+        const benchmarkRoots = reportedTraceId ? benchmarkExecutionsByTrace.get(reportedTraceId) || [] : [];
+        const benchmarkRoot = benchmarkRoots.length === 1 ? benchmarkRoots[0] : null;
+        const currentTraceId = benchmarkRoot?.taskId || reportedTraceId;
+        const benchmarkProgress = asRecord(parseJsonValue(benchmarkRun?.progressJson || null));
+        const benchmarkEvaluation = benchmarkRun?.evaluations[0];
+        const evaluationProgress = asRecord(parseJsonValue(benchmarkEvaluation?.progressJson || null));
+        const executionProgressDetail = asRecord(benchmarkProgress?.progress);
+        const benchmarkTask = asRecord(parseJsonValue(benchmarkRun?.taskEnvelopeJson || null));
+        const environmentFacts = asRecord(asRecord(parseJsonValue(benchmarkRun?.runFactsJson || null))?.execution);
+        const cleanupFacts = asRecord(parseJsonValue(benchmarkRun?.cleanupJson || null));
+        const benchmarkWorkspace = asRecord(benchmarkTask?.workspace);
+        const benchmarkPayload = benchmarkRun
+          ? parseJsonValue(benchmarkRun.publicPayloadJson) as Record<string, unknown> | null
+          : null;
+        const benchmarkNormalized = benchmarkRun?.evaluations[0]?.normalizedResultJson
+          ? parseJsonValue(benchmarkRun.evaluations[0].normalizedResultJson) as {
+              primaryMetric?: { key?: unknown; value?: unknown };
+            } | null
+          : null;
+        const benchmarkPrimaryMetric = benchmarkNormalized?.primaryMetric;
+        const submissions = benchmarkRun?.artifacts || [];
+        const benchmarkTraceStatus = deriveBenchmarkTraceStatus({
+          runStatus: benchmarkRun?.status || null,
+          hasSubmission: submissions.length > 0,
+          hasExecution: Boolean(benchmarkRoot),
+          hasTask: Boolean(currentTraceId),
+        });
+        let caseValues: Record<string, unknown> | null = null;
+        if (c.caseValuesJson) {
+          try {
+            const parsed = JSON.parse(c.caseValuesJson) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              caseValues = withoutExperimentDatasetCaseBinding(parsed as Record<string, unknown>);
+            }
+          } catch {
+            caseValues = null;
+          }
+        } else if (legacyFi.values) {
+          caseValues = legacyFi.values;
+        }
+        return {
+          id: c.id,
+          ...(caseExecutionProgress ? { executionProgress: caseExecutionProgress.get(c.id)?.progress || null } : skillExecutionSnapshot ? { executionProgress: skillRowProgress.get(c.id) || null } : {}),
+          executionId: c.executionId || legacyReference?.id || traceState?.executionId || null,
+          taskId: effectiveTaskId,
+          input: c.input || ex?.query || '',
+          datasetInput: c.datasetInput,
+          actualOutput: c.actualOutput || ex?.finalResult || '',
+          actualModel: ex?.model || (typeof caseValues?.routing_model === 'string' ? caseValues.routing_model : null),
+          actualHost: ex?.hostIp || null,
+          referenceOutput: c.referenceOutput,
+          faultInjectionType,
+          caseValues,
+          fiTaskId: c.fiTaskId || legacyFi.fiTaskId,
+          fiRunId: c.fiRunId || legacyFi.fiRunId,
+          evaluatorContext: evaluatorContext.context,
+          evaluatorContextError: evaluatorContext.error,
+          skillTriggered: experiment.preset === 'trigger' && typeof caseValues?.skill_triggered === 'boolean'
+            ? caseValues.skill_triggered : null,
+          traceStatus: benchmarkRun ? benchmarkTraceStatus : traceState?.status || null,
+          traceError: benchmarkRun ? benchmarkRun.failureMessage : traceState?.error || null,
+          traceAttemptNo: traceState?.attemptNo || null,
+          traceAttemptStatus: traceState?.attemptStatus || null,
+          ...(caseExecutionProgress?.get(c.id) ? {
+            taskId: caseExecutionProgress.get(c.id)!.taskId,
+            executionId: caseExecutionProgress.get(c.id)!.executionId,
+            actualOutput: caseExecutionProgress.get(c.id)!.actualOutput,
+            traceStatus: caseExecutionProgress.get(c.id)!.progress.source === 'existing' ? null
+              : caseExecutionProgress.get(c.id)!.progress.stage >= 3 ? 'ready'
+              : ['failed', 'cancelled'].includes(caseExecutionProgress.get(c.id)!.progress.status) ? 'failed' : 'pending',
+            traceError: caseExecutionProgress.get(c.id)!.progress.error,
+            traceAttemptNo: caseExecutionProgress.get(c.id)!.progress.attemptNo || null,
+          } : {}),
+          ...(benchmarkRun ? {
+            taskId: currentTraceId,
+            executionId: benchmarkRoot?.id || null,
+            benchmark: {
+              runId: benchmarkRun.id,
+              runAttemptNo: benchmarkAttemptByRun.get(benchmarkRun.id) || 1,
+              generation: benchmarkRun.createdAt.getTime(),
+              revision: Math.max(benchmarkRun.updatedAt.getTime(), benchmarkEvaluation?.updatedAt.getTime() || 0),
+              evaluationAttemptNo: benchmarkEvaluation?.attemptNo || 0,
+              traceId: reportedTraceId,
+              traceTaskId: currentTraceId,
+              executionId: benchmarkRoot?.id || null,
+              submissionSource: benchmarkRun.submissionSource,
+              adapterKey: benchmarkAdapterKey,
+              displayName: benchmarkManifest?.displayName || benchmarkAdapterKey,
+              presentation: benchmarkManifest?.presentation || null,
+              primaryMetric: benchmarkPrimaryMetric && typeof benchmarkPrimaryMetric.key === 'string'
+                && (typeof benchmarkPrimaryMetric.value === 'boolean'
+                  || typeof benchmarkPrimaryMetric.value === 'number'
+                  || benchmarkPrimaryMetric.value === null)
+                ? { key: benchmarkPrimaryMetric.key, value: benchmarkPrimaryMetric.value }
+                : null,
+              externalCaseId: benchmarkRun.datasetCase?.externalCaseId || '',
+              publicPayload: benchmarkPayload,
+              reference: {
+                kind: 'private-case',
+                description: benchmarkManifest?.presentation?.referencePanel?.description
+                  || '隐藏评测数据仅供评测服务判定，不会发送给 Agent',
+              },
+              submissions: submissions.map((submission) => ({
+                artifactId: submission.id,
+                name: submission.name,
+                sha256: submission.sha256,
+                sizeBytes: submission.sizeBytes,
+                mediaType: submission.mediaType,
+                kind: 'submission',
+                contentUrl: `/api/benchmark/v1/artifacts/${encodeURIComponent(submission.id)}/content`,
+              })),
+              evidenceArtifacts: (benchmarkRun.evaluations[0]?.artifacts || []).map((artifact) => ({
+                evidenceSource: evidenceSource(benchmarkRun.evaluations[0]?.runtimeFactsJson, artifact.id),
+                artifactId: artifact.id,
+                name: artifact.name,
+                kind: artifact.kind,
+                sha256: artifact.sha256,
+                sizeBytes: artifact.sizeBytes,
+                mediaType: artifact.mediaType,
+                contentUrl: `/api/benchmark/v1/evaluations/${encodeURIComponent(benchmarkRun.evaluations[0].id)}/artifacts/${encodeURIComponent(artifact.id)}/content`,
+              })),
+              runStatus: benchmarkRun.status,
+              progressDetails: {
+                createdAt: benchmarkRun.createdAt.toISOString(),
+                finishedAt: benchmarkRun.finishedAt?.toISOString() || null,
+                execution: {
+                  startedAt: benchmarkRun.startedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkRun.lastProgressAt?.toISOString() || null,
+                  stageStartedAt: typeof executionProgressDetail?.stageStartedAt === 'string' ? executionProgressDetail.stageStartedAt : null,
+                },
+                evaluation: benchmarkEvaluation ? {
+                  stage: typeof evaluationProgress?.stage === 'string' ? evaluationProgress.stage : null,
+                  createdAt: benchmarkEvaluation.createdAt.toISOString(),
+                  startedAt: benchmarkEvaluation.startedAt?.toISOString() || null,
+                  finishedAt: benchmarkEvaluation.finishedAt?.toISOString() || null,
+                  lastProgressAt: benchmarkEvaluation.lastProgressAt?.toISOString() || null,
+                  failureMessage: benchmarkEvaluation.failureMessage,
+                } : null,
+              },
+              environmentFacts: environmentFacts ? {
+                imageId: typeof environmentFacts.imageId === 'string' ? environmentFacts.imageId : null,
+                toolBoundary: typeof environmentFacts.toolBoundary === 'string' ? environmentFacts.toolBoundary : null,
+                controllerBoundary: typeof environmentFacts.controllerBoundary === 'string' ? environmentFacts.controllerBoundary : null,
+                network: typeof environmentFacts.network === 'string' ? environmentFacts.network : null,
+              } : null,
+              cleanupStatus: typeof cleanupFacts?.status === 'string' ? cleanupFacts.status : null,
+              progressStage: typeof benchmarkProgress?.stage === 'string' ? benchmarkProgress.stage : null,
+              workspaceProvider: typeof benchmarkWorkspace?.provider === 'string' ? benchmarkWorkspace.provider : null,
+              evaluationStatus: benchmarkRun.evaluations[0]?.status || null,
+              evaluationWaitCode: benchmarkRun.evaluations[0]?.failureCode || null,
+              failure: benchmarkRun.failureCode || benchmarkRun.failureMessage
+                ? {
+                    code: benchmarkRun.failureCode || 'EXECUTION_FAILED',
+                    message: benchmarkRun.failureMessage,
+                  }
+                : null,
+            },
+          } : {}),
+        };
+      }),
+      results: resultsWithTraces,
+      progress,
+      traceProgress,
+      skillExecutionSnapshot,
+      executionProgress: itemProgress?.executionProgress || null,
+      evaluationProgress: itemProgress?.evaluationProgress || null,
+      sideProgress,
+      caseTotal,
+      casePage,
+      casePageSize,
+      locatedCaseId,
+    });
+  } catch (error) {
+    console.error('[Experiment Detail Error]', error);
+    return NextResponse.json({ error: 'Failed to load experiment' }, { status: 500 });
+  }
+}
+
+// 停止监听：把监听实验的 watchMode 置回 false（触发查询 where watchMode=true 即不再命中，
+// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    const body = await req.json().catch(() => ({}));
+    const { username } = await resolveUser(req, body?.user);
+    if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    if (body && Object.prototype.hasOwnProperty.call(body, 'name')) {
+      if (body.watchMode !== undefined) {
+        return NextResponse.json({ error: '一次只能修改一个实验字段' }, { status: 400 });
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name || name.length > 120) {
+        return NextResponse.json({ error: '实验名称须为 1～120 个字符' }, { status: 400 });
+      }
+      const updated = await prisma.experiment.updateMany({
+        where: { id, user: username, deletedAt: null },
+        data: { name },
+      });
+      if (updated.count === 0) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+      return NextResponse.json({ success: true, name });
+    }
+
+    if (body?.watchMode !== false) {
+      return NextResponse.json({ error: 'only supports watchMode:false (stop watching)' }, { status: 400 });
+    }
+
+    const exp = await prisma.experiment.findFirst({
+      where: { id, user: username },
+      select: { id: true },
+    });
+    if (!exp) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+
+    await prisma.experiment.update({
+      where: { id },
+      data: { watchMode: false, watchEnabledAt: null },
+    });
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.watch.stop' });
+
+    return NextResponse.json({ success: true, watchMode: false });
+  } catch (error) {
+    console.error('[Experiment PATCH Error]', error);
+    return NextResponse.json({ error: 'Failed to update experiment' }, { status: 500 });
+  }
+}
+
+// 创建页启动失败时的补偿操作。只允许删除仍未启动的内部 draft；如果 run 已经
+// 把状态推进到 running/done/failed，则拒绝删除，避免响应丢失时误删真实实验。
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    const url = new URL(req.url);
+    const { username } = await resolveUser(req, url.searchParams.get('user'));
+    if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    const experiment = await prisma.experiment.findFirst({
+      where: { id, user: username },
+      select: { status: true, scope: true, configSnapshotJson: true },
+    });
+    if (!experiment) {
+      return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+    }
+    if (url.searchParams.get('stop') === 'true') {
+      const { deleteExperimentExecution } = await import('@/lib/engine/experiment/cancellation-service');
+      const result = await deleteExperimentExecution(username, id);
+      return NextResponse.json({ deleted: true, cancellation: result }, { status: result.status === 'completed' ? 200 : 202 });
+    }
+    if (experiment.status !== 'draft') {
+      return NextResponse.json({
+        error: 'experiment has already started',
+        status: experiment.status,
+      }, { status: 409 });
+    }
+
+    let grayscaleTaskId = '';
+    if (experiment.scope === 'skill-workbench') {
+      try {
+        const snapshot = JSON.parse(experiment.configSnapshotJson || '{}') as { grayscaleTaskId?: unknown };
+        grayscaleTaskId = typeof snapshot.grayscaleTaskId === 'string' ? snapshot.grayscaleTaskId : '';
+      } catch { /* ignore malformed rollback metadata */ }
+    }
+    const rollbackTask = grayscaleTaskId
+      ? await prisma.grayscaleTask.findFirst({ where: { id: grayscaleTaskId, user: username } })
+      : null;
+    const rollbackTaskConfig = rollbackTask ? parseJsonValue(rollbackTask.configJson) : null;
+    const canDeleteTask = rollbackTask
+      && rollbackTaskConfig
+      && typeof rollbackTaskConfig === 'object'
+      && !Array.isArray(rollbackTaskConfig)
+      && (rollbackTaskConfig as { evalExperimentId?: unknown }).evalExperimentId === id;
+    const deleted = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const result = await tx.experiment.deleteMany({
+        where: { id, user: username, status: 'draft' },
+      });
+      if (result.count > 0 && canDeleteTask) {
+        await tx.grayscaleTask.deleteMany({ where: { id: grayscaleTaskId, user: username } });
+      }
+      return result;
+    });
+    if (deleted.count === 0) {
+      return NextResponse.json({ error: 'experiment has already started' }, { status: 409 });
+    }
+    return NextResponse.json({ deleted: true });
+  } catch (error) {
+    console.error('[Experiment DELETE Error]', error);
+    return NextResponse.json({ error: 'Failed to rollback experiment' }, { status: 500 });
+  }
+}

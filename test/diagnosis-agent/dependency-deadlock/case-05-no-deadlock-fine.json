@@ -1,0 +1,481 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T03:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-05-no-deadlock-fine-86492",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-05-no-deadlock-fine-86492",
+        "taskId": "jiuwen-case-05-no-deadlock-fine-86492",
+        "query": "多个任务按正确依赖顺序执行，全部完成。",
+        "framework": "jiuwenswarm",
+        "tokens": 120900,
+        "cost": null,
+        "latency": 6.0,
+        "toolCallCount": 15,
+        "llmCallCount": 15,
+        "inputTokens": 117000,
+        "outputTokens": 3900,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T03:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "任务链 t1→t2→t3 顺序执行全部完成，无死锁。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "worker-a",
+          "worker-b",
+          "worker-c"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-05-no-deadlock-fine-86492",
+        "label": "jiuwenswarm",
+        "query": "多个任务按正确依赖顺序执行，全部完成。",
+        "startTime": "2026-08-07T03:00:00.000Z",
+        "endTime": "2026-08-07T03:00:06.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "多个任务按正确依赖顺序执行，全部完成。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队并创建无环依赖链。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"正常小队\", \"team_desc\": \"t1→t2→t3 顺序执行。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"负责组织依赖链。\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t1（第一步）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t1\", \"title\": \"第一步\", \"content\": \"第一步。\"}]}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t2（第二步，依赖 t1）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t2\", \"title\": \"第二步\", \"content\": \"第二步。\", \"blocked_by\": [\"t1\"]}]}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t3（第三步，依赖 t2）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t3\", \"title\": \"第三步\", \"content\": \"第三步。\", \"blocked_by\": [\"t2\"]}]}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 worker-a/b/c。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-a\", \"display_name\": \"A\", \"desc\": \"执行 t1。\", \"prompt\": \"执行 t1。\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-b\", \"display_name\": \"B\", \"desc\": \"执行 t2。\", \"prompt\": \"执行 t2。\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-c\", \"display_name\": \"C\", \"desc\": \"执行 t3。\", \"prompt\": \"执行 t3。\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"开始执行。\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-05-no-deadlock-fine_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-05-no-deadlock-fine_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "update_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "update_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"assignee\": \"worker-a\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-05-no-deadlock-fine_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4000,
+              "completed": 4400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-05-no-deadlock-fine_worker-b",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "update_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "update_task",
+                  "arguments": "[{\"task_id\": \"t2\", \"assignee\": \"worker-b\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4400,
+              "completed": 4800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-c",
+            "subagent_name": "worker-c",
+            "subagent_session_id": "team_case-05-no-deadlock-fine_worker-c",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-c",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t3\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4800,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-c",
+            "subagent_name": "worker-c",
+            "subagent_session_id": "team_case-05-no-deadlock-fine_worker-c",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "update_task_worker-c",
+                "type": "function",
+                "function": {
+                  "name": "update_task",
+                  "arguments": "[{\"task_id\": \"t3\", \"assignee\": \"worker-c\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 5600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "检查各任务全部完成。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-no-deadlock-fine-86492\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'completed'},{'task_id':'t2','status':'completed'},{'task_id':'t3','status':'completed'}],'count':3} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 5600,
+              "completed": 6000
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

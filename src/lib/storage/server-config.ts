@@ -1,0 +1,302 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { resolveModelTestTimeoutMs } from '@/lib/shared/model-connection-test';
+import { db } from '@/lib/storage/prisma';
+import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
+import {
+    normalizeCustomHeaders,
+    resolveModelConnection,
+    validateModelProtocol,
+    type ModelProtocol,
+} from '@/lib/shared/model-connection';
+import { randomUUID } from 'node:crypto';
+import {
+    appendRuntimeParameterTemplate,
+    readRuntimeParameterTemplates,
+    type RuntimeParameterTemplate,
+} from '@/lib/engine/experiment/runtime-parameter-templates';
+
+export interface ModelConfig {
+    id: string;
+    name: string;
+    provider?: string;
+    apiKey: string;
+    baseUrl?: string;
+    model?: string;
+    headers?: Record<string, string>;
+    protocol?: ModelProtocol;
+    testTimeoutMs?: number;
+}
+
+/** 个人默认 Agent 运行时；接入执行层后只影响新任务和新会话。 */
+export interface AgentRuntimePreference {
+    defaultRuntimeId: string | null;
+}
+
+export interface UserSettings {
+    activeConfigId: string | null;
+    configs: ModelConfig[];
+    autoEvaluationEnabled?: boolean;
+    /** Playground 联网搜索供应商；当前只支持 Tavily */
+    searchProvider?: 'tavily' | 'none';
+    /** 联网搜索 API key（明文存 JSON blob，跟模型 apiKey 同等敏感度处理） */
+    searchApiKey?: string;
+    runtimeParameterTemplates?: RuntimeParameterTemplate[];
+    agentRuntime?: AgentRuntimePreference;
+}
+
+const settingsWrites = new Map<string, Promise<void>>();
+
+async function writeUserSettings<T>(user: string, write: () => Promise<T>): Promise<T> {
+    const previous = settingsWrites.get(user) ?? Promise.resolve();
+    const result = previous.catch(() => {}).then(write);
+    const settled = result.then(() => {}, () => {});
+    settingsWrites.set(user, settled);
+    try { return await result; }
+    finally { if (settingsWrites.get(user) === settled) settingsWrites.delete(user); }
+}
+
+/**
+ * Sentinel character used to mask the middle of an API key in client-facing
+ * responses. Real keys are ASCII (alphanumeric + -/_) and never contain it, so
+ * its presence reliably marks a value as a masked placeholder — never a real key.
+ */
+const MASK_CHAR = '•';
+
+/** True if `key` is a masked placeholder (must NOT be persisted as a real key). */
+export function isMaskedApiKey(key: string | null | undefined): boolean {
+    return typeof key === 'string' && key.includes(MASK_CHAR);
+}
+
+/**
+ * Mask an API key for client rendering: keep the first/last 4 chars (enough to
+ * verify which key is configured) and replace the middle with bullets. Short
+ * keys are fully masked. Empty stays empty so "(未设置)" still renders.
+ */
+export function maskApiKey(key: string | null | undefined): string {
+    if (!key) return '';
+    if (key.length <= 8) return MASK_CHAR.repeat(8);
+    return `${key.slice(0, 4)}${MASK_CHAR.repeat(8)}${key.slice(-4)}`;
+}
+
+export function restoreMaskedHeaders(
+    incoming: Record<string, string> | null | undefined,
+    existing: Record<string, string> | null | undefined,
+): Record<string, string> | undefined {
+    if (!incoming) return undefined;
+    const existingHeaderByLowerName = new Map(
+        Object.entries(existing ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
+    );
+    return Object.fromEntries(
+        Object.entries(incoming).map(([name, value]) => [
+            name,
+            isMaskedApiKey(value)
+                ? (existingHeaderByLowerName.get(name.toLowerCase()) ?? '')
+                : value,
+        ]),
+    );
+}
+
+/**
+ * Return a copy of settings with every model config's apiKey AND the web-search
+ * apiKey masked. Use this for any client-facing response — the browser must
+ * never receive a plaintext key.
+ */
+export function maskUserSettings(settings: UserSettings): UserSettings {
+    return {
+        ...settings,
+        configs: settings.configs.map(c => ({
+            ...c,
+            apiKey: maskApiKey(c.apiKey),
+            headers: c.headers
+                ? Object.fromEntries(Object.entries(c.headers).map(([name, value]) => [name, maskApiKey(value)]))
+                : undefined,
+        })),
+        searchApiKey: maskApiKey(settings.searchApiKey),
+    };
+}
+
+export async function getActiveConfig(user?: string | null): Promise<ModelConfig | null> {
+    const settings = await getUserSettings(user);
+    if (!settings || !settings.activeConfigId) return null;
+    return settings.configs.find(c => c.id === settings.activeConfigId) || null;
+}
+
+export async function getUserSettings(user?: string | null): Promise<UserSettings> {
+    const settings = await getStoredUserSettings(user);
+    return {
+        ...settings,
+        configs: settings.configs.map(config => ({ ...config, ...resolveModelConnection(config) })),
+    };
+}
+
+// Keep unset model fields intact when settings can be saved back.
+export async function getStoredUserSettings(user?: string | null): Promise<UserSettings> {
+    if (!user) {
+        return { activeConfigId: null, configs: [], autoEvaluationEnabled: true };
+    }
+
+    const defaultConfigs = loadDefaultModelConfigs();
+
+    let userConfigs: ModelConfig[] = [];
+    let activeConfigId: string | null = null;
+    let autoEvaluationEnabled = true;
+    let searchProvider: 'tavily' | 'none' | undefined;
+    let searchApiKey: string | undefined;
+    let runtimeParameterTemplates: RuntimeParameterTemplate[] = [];
+    let agentRuntime: AgentRuntimePreference | undefined;
+
+    try {
+        const record = await db.findUserSettings(user);
+        if (record?.settingsJson) {
+            const settings = JSON.parse(record.settingsJson);
+            userConfigs = (settings.configs || []).filter((c: ModelConfig) => !c.id.startsWith('default_'));
+            activeConfigId = settings.activeConfigId;
+            if (typeof settings.autoEvaluationEnabled === 'boolean') {
+                autoEvaluationEnabled = settings.autoEvaluationEnabled;
+            }
+            if (settings.searchProvider === 'tavily' || settings.searchProvider === 'none') {
+                searchProvider = settings.searchProvider;
+            }
+            if (typeof settings.searchApiKey === 'string') {
+                searchApiKey = settings.searchApiKey;
+            }
+            runtimeParameterTemplates = readRuntimeParameterTemplates(settings.runtimeParameterTemplates);
+            const storedRuntime = settings.agentRuntime;
+            if (storedRuntime && typeof storedRuntime === 'object') {
+                const defaultRuntimeId = storedRuntime.defaultRuntimeId;
+                if (typeof defaultRuntimeId === 'string' || defaultRuntimeId === null) {
+                    agentRuntime = { defaultRuntimeId };
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load user settings:', e);
+    }
+
+    const mergedConfigs = [...defaultConfigs, ...userConfigs];
+
+    if (!activeConfigId || !mergedConfigs.find(c => c.id === activeConfigId)) {
+        activeConfigId = defaultConfigs.length > 0 ? defaultConfigs[0].id : null;
+    }
+
+    return {
+        activeConfigId,
+        configs: mergedConfigs,
+        autoEvaluationEnabled,
+        searchProvider,
+        searchApiKey,
+        ...(runtimeParameterTemplates.length ? { runtimeParameterTemplates } : {}),
+        ...(agentRuntime ? { agentRuntime } : {}),
+    };
+}
+
+export async function saveUserSettings(user: string, settings: UserSettings): Promise<void> {
+    return writeUserSettings(user, () => persistUserSettings(user, settings));
+}
+
+async function persistUserSettings(user: string, settings: UserSettings): Promise<void> {
+    // The client only ever receives masked keys (see maskUserSettings), so an
+    // unchanged config round-trips back here with a masked apiKey. Restore the
+    // stored original for those, so saving never clobbers a real key with a mask.
+    const existing = await getStoredUserSettings(user);
+    const existingKeyById = new Map(existing.configs.map(c => [c.id, c.apiKey]));
+    const existingHeadersById = new Map(existing.configs.map(c => [c.id, c.headers ?? {}]));
+    const restoredConfigs = settings.configs.map(c => {
+        const existingHeaders = existingHeadersById.get(c.id) ?? {};
+        const restoredHeaders = restoreMaskedHeaders(c.headers, existingHeaders);
+        validateModelProtocol(c.protocol);
+        return {
+            ...c,
+            apiKey: isMaskedApiKey(c.apiKey) ? (existingKeyById.get(c.id) ?? '') : c.apiKey,
+            headers: normalizeCustomHeaders(restoredHeaders),
+            testTimeoutMs: resolveModelTestTimeoutMs(c.testTimeoutMs),
+        };
+    });
+
+    // Same protection for the web-search key: a masked value means "unchanged".
+    const restoredSearchApiKey = isMaskedApiKey(settings.searchApiKey)
+        ? (existing.searchApiKey ?? '')
+        : (settings.searchApiKey ?? '');
+
+    const userOnlyConfigs = restoredConfigs.filter((c: ModelConfig) => !c.id.startsWith('default_'));
+
+    const settingsJson = JSON.stringify({
+        activeConfigId: settings.activeConfigId,
+        configs: userOnlyConfigs,
+        autoEvaluationEnabled: settings.autoEvaluationEnabled ?? true,
+        searchProvider: settings.searchProvider ?? 'none',
+        searchApiKey: restoredSearchApiKey,
+        runtimeParameterTemplates: existing.runtimeParameterTemplates ?? [],
+        ...(existing.agentRuntime ? { agentRuntime: existing.agentRuntime } : {}),
+    });
+
+    await db.upsertUserSettings(user, settingsJson);
+}
+
+/**
+ * 只更新运行时偏好，避免「模型注册/联网搜索」页提交整份 settings 时
+ * 因请求体里没有该字段而把偏好清掉。
+ *
+ * 兼容两种既有调用：执行层传 `AgentRuntimePreference` 对象，配置接口传 runtimeId
+ * （字符串；null 表示清除）。两者都写入 `agentRuntime.defaultRuntimeId`。
+ */
+export async function saveAgentRuntimePreference(user: string, preference: AgentRuntimePreference): Promise<void>;
+export async function saveAgentRuntimePreference(user: string, runtimeId: string | null): Promise<void>;
+export async function saveAgentRuntimePreference(
+    user: string,
+    value: AgentRuntimePreference | string | null,
+): Promise<void> {
+    const preference: AgentRuntimePreference = value !== null && typeof value === 'object'
+        ? value
+        : { defaultRuntimeId: value };
+    return writeUserSettings(user, async () => {
+        const record = await db.findUserSettings(user);
+        const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : { activeConfigId: null, configs: [] };
+        await db.upsertUserSettings(user, JSON.stringify({ ...stored, agentRuntime: preference }));
+    });
+}
+
+/** 读取用户保存的 Agent 运行时默认值；无记录或未保存时为 null。 */
+export async function getAgentRuntimePreference(user: string | null): Promise<string | null> {
+    if (!user) return null;
+    try {
+        const record = await db.findUserSettings(user);
+        const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : null;
+        const saved = stored?.agentRuntime?.defaultRuntimeId;
+        return typeof saved === 'string' && saved ? saved : null;
+    } catch (error) {
+        console.error('Failed to load Agent runtime preference:', error);
+        return null;
+    }
+}
+
+export async function getRuntimeParameterTemplates(user: string | null): Promise<RuntimeParameterTemplate[]> {
+    if (!user) return [];
+    const record = await db.findUserSettings(user);
+    return readRuntimeParameterTemplates(record?.settingsJson ? JSON.parse(record.settingsJson).runtimeParameterTemplates : []);
+}
+
+export async function saveRuntimeParameterTemplate(user: string, input: unknown): Promise<RuntimeParameterTemplate> {
+    return writeUserSettings(user, async () => {
+        const record = await db.findUserSettings(user);
+        const stored = record?.settingsJson ? JSON.parse(record.settingsJson) : { activeConfigId: null, configs: [] };
+        const result = appendRuntimeParameterTemplate(readRuntimeParameterTemplates(stored.runtimeParameterTemplates), input, randomUUID());
+        await db.upsertUserSettings(user, JSON.stringify({ ...stored, runtimeParameterTemplates: result.templates }));
+        return result.template;
+    });
+}

@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { NextResponse } from 'next/server';
+import { prisma } from '@/lib/storage/prisma';
+import { resolveUser } from '@/lib/auth/auth';
+import { listObservedAgentNames, listObservedSkills } from '@/lib/storage/data-service';
+import type { QualityAgentInfo } from '@/lib/engine/quality-monitoring/types';
+
+export const dynamic = 'force-dynamic';
+
+export async function GET(req: Request) {
+    try {
+        const url = new URL(req.url);
+        // 与全站口径一致：身份由前端 ?user= 携带（resolveUser 优先用 explicitUser，再退回 apiKey）。
+        // 不读则 username=null → listObservedAgentNames(undefined) 会越权返回全量 Agent。
+        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
+        const platform = url.searchParams.get('platform') || undefined;
+
+        const names = await listObservedAgentNames(username ?? undefined);
+        if (!names.length) return NextResponse.json({ agents: [], skills: [] });
+
+        const skillFacet = await listObservedSkills(username ?? undefined).catch(() => [] as { name: string }[]);
+        const skills = skillFacet.map((s: { name: string }) => s.name);
+
+        const userScope = username ? { OR: [{ user: username }, { user: null }] } : {};
+
+        // 富化（platform/ownership）+ 统计（traceCount/lastSeen）。无 groupBy，内存聚合（对齐 dashboard/stats）。
+        const [registered, execs] = await Promise.all([
+            prisma.registeredAgent.findMany({
+                where: { ...userScope, ...(platform ? { platform } : {}) },
+                select: { name: true, platform: true, agentOwnership: true },
+            }),
+            prisma.execution.findMany({
+                where: { ...userScope, isSubagent: false, agentName: { in: names } },
+                select: { agentName: true, timestamp: true },
+            }),
+        ]);
+
+        type RegRow = { name: string; platform: string | null; agentOwnership: string | null };
+        const regByName = new Map<string, RegRow>(
+            (registered as RegRow[]).map((r) => [r.name, r]),
+        );
+        const countByName = new Map<string, number>();
+        const lastByName = new Map<string, number>();
+        for (const e of execs) {
+            const name = e.agentName ?? '';
+            if (!name) continue;
+            countByName.set(name, (countByName.get(name) ?? 0) + 1);
+            const ts = new Date(e.timestamp).getTime();
+            if (!lastByName.has(name) || ts > (lastByName.get(name) as number)) lastByName.set(name, ts);
+        }
+
+        const agents: QualityAgentInfo[] = names
+            .filter((n) => !platform || regByName.has(n))
+            .map((name) => {
+                const reg = regByName.get(name);
+                return {
+                    name,
+                    platform: reg?.platform ?? null,
+                    ownership: reg?.agentOwnership ?? null,
+                    traceCount: countByName.get(name) ?? 0,
+                    lastSeen: lastByName.has(name) ? new Date(lastByName.get(name) as number).toISOString() : null,
+                };
+            })
+            .sort((a, b) => (b.traceCount ?? 0) - (a.traceCount ?? 0));
+
+        return NextResponse.json({ agents, skills });
+    } catch (error) {
+        console.error('[Quality Agents Error]', error);
+        return NextResponse.json({ error: 'Failed to list agents' }, { status: 500 });
+    }
+}

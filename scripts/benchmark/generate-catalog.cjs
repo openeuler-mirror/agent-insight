@@ -1,0 +1,638 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use strict'
+
+const { createHash } = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
+const matter = require('gray-matter')
+
+function fail(message) {
+  throw new Error(`[benchmark catalog] ${message}`)
+}
+
+function readYaml(filePath) {
+  const source = fs.readFileSync(filePath, 'utf8')
+  const parsed = matter(`---\n${source}\n---\n`).data
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) fail(`${filePath} 不是 YAML 对象`)
+  return parsed
+}
+
+function resolveInside(packageDir, relativePath, label) {
+  if (typeof relativePath !== 'string' || !relativePath.startsWith('./')) fail(`${label} 必须是包内 ./ 相对路径`)
+  const resolved = path.resolve(packageDir, relativePath)
+  if (!resolved.startsWith(`${packageDir}${path.sep}`) || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    fail(`${label} 不存在或越出接入包：${relativePath}`)
+  }
+  return resolved
+}
+
+function resolvePackageFile(packageDir, baseDir, relativePath, label) {
+  if (typeof relativePath !== 'string' || !relativePath.startsWith('.')) fail(`${label} 必须是接入包内相对路径`)
+  const resolved = path.resolve(baseDir, relativePath)
+  if (!resolved.startsWith(`${packageDir}${path.sep}`) || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    fail(`${label} 不存在或越出接入包：${relativePath}`)
+  }
+  return resolved
+}
+
+function readJson(filePath, label) {
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')) }
+  catch (error) { fail(`${label} 不是合法 JSON：${error.message}`) }
+}
+
+function listFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === '__pycache__' || entry.name === '.DS_Store' || /\.py[co]$/.test(entry.name)) return []
+    const target = path.join(directory, entry.name)
+    return entry.isDirectory() ? listFiles(target) : [target]
+  })
+}
+
+function digestFiles(files, baseDir) {
+  const hash = createHash('sha256')
+  for (const filePath of [...files].sort()) {
+    hash.update(path.relative(baseDir, filePath).replaceAll(path.sep, '/')).update('\0')
+      .update(fs.readFileSync(filePath)).update('\0')
+  }
+  return `sha256:${hash.digest('hex')}`
+}
+
+function string(value, label, pattern) {
+  if (typeof value !== 'string' || !value.trim() || (pattern && !pattern.test(value))) fail(`${label} 不合法`)
+  return value.trim()
+}
+
+function positiveInteger(value, label) {
+  if (!Number.isInteger(value) || value < 1) fail(`${label} 必须是正整数`)
+  return value
+}
+
+const PRESENTATION_TYPES = new Set(['text', 'code', 'number', 'boolean'])
+const PRESENTATION_FORMATS = new Set(['plain', 'percentage', 'bytes', 'duration-ms', 'date-time'])
+const CASE_PRESENTATION_PATH = /^(input|externalCaseId|values(?:\.[A-Za-z0-9_-]+)+)$/
+
+function optionalString(value, label) {
+  return value == null ? undefined : string(value, label)
+}
+
+function boundedInteger(value, label, minimum, maximum) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    fail(`${label} 必须是 ${minimum}～${maximum} 的整数`)
+  }
+  return value
+}
+
+function presentationColumns(value, label) {
+  if (!Array.isArray(value) || !value.length || value.length > 8) fail(`${label} 必须包含 1～8 列`)
+  const paths = new Set()
+  return value.map((column, index) => {
+    const pathValue = string(column?.path, `${label}[${index}].path`, CASE_PRESENTATION_PATH)
+    if (paths.has(pathValue)) fail(`${label}[${index}].path 重复`)
+    paths.add(pathValue)
+    const type = string(column?.type, `${label}[${index}].type`)
+    if (!PRESENTATION_TYPES.has(type)) fail(`${label}[${index}].type 不受支持`)
+    const format = column?.format == null ? undefined : string(column.format, `${label}[${index}].format`)
+    if (format && !PRESENTATION_FORMATS.has(format)) fail(`${label}[${index}].format 不受支持`)
+    return {
+      path: pathValue,
+      label: string(column?.label, `${label}[${index}].label`),
+      type,
+      ...(column?.width == null ? {} : { width: boundedInteger(column.width, `${label}[${index}].width`, 60, 1200) }),
+      ...(format ? { format } : {}),
+      ...(column?.truncate == null ? {} : { truncate: boundedInteger(column.truncate, `${label}[${index}].truncate`, 1, 10000) }),
+      ...(column?.description == null ? {} : { description: string(column.description, `${label}[${index}].description`) }),
+    }
+  })
+}
+
+function normalizeArtifactPresentation(value) {
+  if (value == null) return undefined
+  if (!Array.isArray(value) || value.length > 64) fail('presentation.artifacts 必须是至多 64 项的数组')
+  const identities = new Set()
+  return value.map((item, index) => {
+    const source = string(item?.source, `presentation.artifacts[${index}].source`)
+    if (!['submission', 'evidence'].includes(source)) {
+      fail(`presentation.artifacts[${index}].source 不受支持`)
+    }
+    const name = optionalString(item?.name, `presentation.artifacts[${index}].name`)
+    const kind = optionalString(item?.kind, `presentation.artifacts[${index}].kind`)
+    if (Boolean(name) === Boolean(kind)) {
+      fail(`presentation.artifacts[${index}] 必须且只能声明 name 或 kind`)
+    }
+    const identity = `${source}:${name ? `name:${name}` : `kind:${kind}`}`
+    if (identities.has(identity)) fail(`presentation.artifacts[${index}] 匹配条件重复`)
+    identities.add(identity)
+    return {
+      source,
+      ...(name ? { name } : { kind }),
+      label: string(item?.label, `presentation.artifacts[${index}].label`),
+      order: boundedInteger(item?.order, `presentation.artifacts[${index}].order`, 0, 10000),
+    }
+  })
+}
+
+function normalizeDataset(source, key) {
+  if (source == null) return undefined
+  if (!Array.isArray(source.profiles) || !source.profiles.length) fail(`${key} 缺少 dataset.profiles`)
+  const keys = new Set()
+  const profiles = source.profiles.map((profile, index) => {
+    const profileKey = string(profile?.key, `dataset.profiles[${index}].key`, /^[a-z0-9][a-z0-9._-]{0,63}$/)
+    if (keys.has(profileKey)) fail(`${key} 的 Dataset Profile 重复：${profileKey}`)
+    keys.add(profileKey)
+    const sourceKinds = profile.acceptedSourceKinds == null ? ['file'] : profile.acceptedSourceKinds
+    if (!Array.isArray(sourceKinds) || !sourceKinds.length || sourceKinds.some(kind => !['file', 'directory'].includes(kind))) {
+      fail(`${profileKey}.acceptedSourceKinds 不合法`)
+    }
+    if (!Array.isArray(profile?.acceptedExtensions) || (!profile.acceptedExtensions.length && sourceKinds.includes('file'))) {
+      fail(`${profileKey} 缺少 acceptedExtensions`)
+    }
+    const acceptedExtensions = profile.acceptedExtensions.map((extension, extensionIndex) => (
+      string(extension, `${profileKey}.acceptedExtensions[${extensionIndex}]`, /^\.[a-z0-9]+$/)
+    ))
+    return {
+      key: profileKey,
+      displayName: string(profile?.displayName || profileKey, `${profileKey}.displayName`),
+      acceptedExtensions,
+      ...(profile.version == null ? {} : { version: string(profile.version, `${profileKey}.version`) }),
+      ...(profile.acceptedSourceKinds == null ? {} : { acceptedSourceKinds: sourceKinds }),
+      ...(profile?.expectedCaseCount == null
+        ? {}
+        : { expectedCaseCount: positiveInteger(profile.expectedCaseCount, `${profileKey}.expectedCaseCount`) }),
+    }
+  })
+  return { profiles }
+}
+
+function normalizePresentation(source, key) {
+  if (source == null) return undefined
+  const caseTable = source.caseTable
+  if (!caseTable || typeof caseTable !== 'object' || Array.isArray(caseTable)) {
+    fail(`${key} 缺少 presentation.caseTable`)
+  }
+  const searchPaths = Array.isArray(caseTable.searchPaths) && caseTable.searchPaths.length
+    ? caseTable.searchPaths.map((item, index) => string(item, `caseTable.searchPaths[${index}]`, CASE_PRESENTATION_PATH))
+    : ['externalCaseId']
+  const result = {
+    caseTable: {
+      searchPaths,
+      ...(caseTable.searchPlaceholder
+        ? { searchPlaceholder: string(caseTable.searchPlaceholder, 'caseTable.searchPlaceholder') }
+        : {}),
+      columns: presentationColumns(caseTable.columns, 'caseTable.columns'),
+    },
+  }
+  if (source.execution != null) {
+    if (typeof source.execution !== 'object' || Array.isArray(source.execution)) {
+      fail('presentation.execution 必须是对象')
+    }
+    if (source.execution.notice != null) {
+      result.execution = { notice: string(source.execution.notice, 'execution.notice') }
+    }
+  }
+  if (source.evaluator != null) {
+    result.evaluator = {
+      displayName: string(source.evaluator.displayName, 'evaluator.displayName'),
+      description: string(source.evaluator.description, 'evaluator.description'),
+      runMode: string(source.evaluator.runMode, 'evaluator.runMode'),
+      outputDescription: string(source.evaluator.outputDescription, 'evaluator.outputDescription'),
+    }
+  }
+  if (source.referencePanel != null) {
+    result.referencePanel = {
+      title: string(source.referencePanel.title, 'referencePanel.title'),
+      description: string(source.referencePanel.description, 'referencePanel.description'),
+      columns: presentationColumns(source.referencePanel.columns, 'referencePanel.columns'),
+    }
+  }
+  if (source.result != null) {
+    const primaryMetric = source.result.primaryMetric
+    const type = string(primaryMetric?.type, 'result.primaryMetric.type')
+    if (!PRESENTATION_TYPES.has(type)) fail('result.primaryMetric.type 不受支持')
+    const format = primaryMetric?.format == null ? undefined : string(primaryMetric.format, 'result.primaryMetric.format')
+    if (format && !PRESENTATION_FORMATS.has(format)) fail('result.primaryMetric.format 不受支持')
+    result.result = {
+      primaryMetric: {
+        path: string(primaryMetric?.path, 'result.primaryMetric.path', /^primaryMetric\.value$/),
+        label: string(primaryMetric?.label, 'result.primaryMetric.label'),
+        type,
+        ...(primaryMetric?.aggregateLabel == null ? {} : { aggregateLabel: string(primaryMetric.aggregateLabel, 'result.primaryMetric.aggregateLabel') }),
+        ...(primaryMetric?.trueLabel == null ? {} : { trueLabel: string(primaryMetric.trueLabel, 'result.primaryMetric.trueLabel') }),
+        ...(primaryMetric?.falseLabel == null ? {} : { falseLabel: string(primaryMetric.falseLabel, 'result.primaryMetric.falseLabel') }),
+        ...(format ? { format } : {}),
+        ...(primaryMetric?.precision == null ? {} : { precision: boundedInteger(primaryMetric.precision, 'result.primaryMetric.precision', 0, 12) }),
+        ...(primaryMetric?.unit == null ? {} : { unit: string(primaryMetric.unit, 'result.primaryMetric.unit') }),
+      },
+    }
+  }
+  const artifacts = normalizeArtifactPresentation(source.artifacts)
+  if (artifacts) result.artifacts = artifacts
+  return result
+}
+
+function loadPackage(packageDir) {
+  const yamlPath = path.join(packageDir, 'benchmark.yaml')
+  const source = readYaml(yamlPath)
+  const key = string(source.key, 'key', /^[a-z0-9][a-z0-9._-]{0,63}$/)
+  if (source.protocols?.agentTask !== 'agent-task/v1' || source.protocols?.evaluation !== 'benchmark-evaluation/v1') {
+    fail(`${key} 的协议与当前 Runtime 不兼容`)
+  }
+  const adapterPath = resolveInside(packageDir, source.implementation?.adapter, 'implementation.adapter')
+  const datasetLoaderPath = source.implementation?.datasetLoader
+    ? resolveInside(packageDir, source.implementation.datasetLoader, 'implementation.datasetLoader')
+    : null
+  const datasetLoaderExport = datasetLoaderPath
+    ? string(source.implementation?.datasetLoaderExport, 'implementation.datasetLoaderExport', /^[A-Za-z_$][\w$]*$/)
+    : null
+  const datasetPreparerPath = source.implementation?.datasetPreparer
+    ? resolveInside(packageDir, source.implementation.datasetPreparer, 'implementation.datasetPreparer')
+    : null
+  const datasetPreparerExport = datasetPreparerPath
+    ? string(source.implementation?.datasetPreparerExport, 'implementation.datasetPreparerExport', /^[A-Za-z_$][\w$]*$/)
+    : null
+  const evaluatorYamlPath = resolveInside(packageDir, source.implementation?.evaluator, 'implementation.evaluator')
+  const caseSchemaPath = resolveInside(packageDir, source.schemas?.case, 'schemas.case')
+  const resultSchemaPath = resolveInside(packageDir, source.schemas?.rawResult, 'schemas.rawResult')
+  const evaluator = readYaml(evaluatorYamlPath)
+  if (string(evaluator.key, 'evaluator.key') !== string(source.evaluation?.evaluatorKey, 'evaluation.evaluatorKey')) {
+    fail(`${key} 的 evaluator key 与 benchmark.yaml 不一致`)
+  }
+  if (!['oci-container', 'controller-container', 'script-package', 'builtin'].includes(evaluator.runtime)) {
+    fail(`${key} 的 evaluator.runtime 不受支持`)
+  }
+  if (!['node', 'python3', 'direct'].includes(evaluator.command)) {
+    fail(`${key} 的 evaluator.command 不受支持`)
+  }
+  const evaluatorDir = path.dirname(evaluatorYamlPath)
+  const entrypoint = resolveInside(evaluatorDir, evaluator.entrypoint, 'evaluator.entrypoint')
+  const imageProvider = evaluator.imageProvider
+    ? resolveInside(evaluatorDir, evaluator.imageProvider, 'evaluator.imageProvider')
+    : null
+  const assets = evaluator.assets == null ? null : {
+    image: string(evaluator.assets.image, 'evaluator.assets.image', /^[a-z0-9][a-z0-9.:-]*\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/),
+    sourcePath: string(evaluator.assets.sourcePath, 'evaluator.assets.sourcePath', /^\/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._-]*$/),
+    releaseId: string(evaluator.assets.releaseId, 'evaluator.assets.releaseId', /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    bundleDigest: string(evaluator.assets.bundleDigest, 'evaluator.assets.bundleDigest', /^sha256:[a-f0-9]{64}$/),
+    ...(evaluator.assets.directoryEnv == null ? {} : {
+      directoryEnv: string(evaluator.assets.directoryEnv, 'evaluator.assets.directoryEnv', /^[A-Z][A-Z0-9_]*$/),
+    }),
+    verifyCommand: string(evaluator.assets.verifyCommand, 'evaluator.assets.verifyCommand', /^(python3|node)$/),
+    verifyEntrypoint: resolveInside(evaluatorDir, evaluator.assets.verifyEntrypoint, 'evaluator.assets.verifyEntrypoint'),
+  }
+  const ociRuntime = evaluator.runtime === 'oci-container'
+  const imageRepository = ociRuntime
+    ? string(evaluator.imageRepository, 'evaluator.imageRepository', /^[a-z0-9.-]+(?::[0-9]+)?(?:\/[a-z0-9._-]+)*$/i)
+    : null
+  const containerEntrypoint = ociRuntime
+    ? string(evaluator.containerEntrypoint, 'evaluator.containerEntrypoint', /^\/[A-Za-z0-9._/-]+$/)
+    : null
+  const runtimeDockerfile = ociRuntime
+    ? resolveInside(evaluatorDir, evaluator.dockerfile || './Dockerfile', 'evaluator.dockerfile')
+    : null
+  const smokeEntrypoint = evaluator.smokeEntrypoint
+    ? resolvePackageFile(packageDir, evaluatorDir, evaluator.smokeEntrypoint, 'evaluator.smokeEntrypoint')
+    : null
+  const runtimeSmokeEntrypoint = ociRuntime && smokeEntrypoint
+    ? string(evaluator.containerSmokeEntrypoint, 'evaluator.containerSmokeEntrypoint', /^\/[A-Za-z0-9._/-]+$/)
+    : null
+  const artifacts = source.submission?.artifacts
+  if (!Array.isArray(artifacts) || !artifacts.length) fail(`${key} 至少声明一个 Artifact`)
+  const names = new Set()
+  const normalizedArtifacts = artifacts.map((artifact, index) => {
+    const name = string(artifact?.name, `submission.artifacts[${index}].name`, /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/)
+    if (names.has(name)) fail(`${key} 的 Artifact 名称重复：${name}`)
+    names.add(name)
+    return {
+      name,
+      mediaType: string(artifact.mediaType, `${name}.mediaType`),
+      collector: string(artifact.collector, `${name}.collector`, /^[a-z0-9][a-z0-9._/-]{0,127}$/),
+      maxBytes: positiveInteger(artifact.maxBytes, `${name}.maxBytes`),
+    }
+  })
+  const requiredCapabilities = source.executor?.requiredCapabilities
+  if (!Array.isArray(requiredCapabilities) || (!requiredCapabilities.length && source.executor?.supported !== false)) fail(`${key} 缺少执行器能力声明`)
+  const normalizedCapabilities = requiredCapabilities.map((item, index) => (
+    string(item, `requiredCapabilities[${index}]`, /^[a-z0-9][a-z0-9._/-]{0,127}$/)
+  ))
+  if (new Set(normalizedCapabilities).size !== normalizedCapabilities.length) {
+    fail(`${key} 的执行器能力声明重复`)
+  }
+  const gitSourcePolicyPath = source.executor?.gitSourcePolicy == null
+    ? null
+    : resolveInside(packageDir, source.executor.gitSourcePolicy, 'executor.gitSourcePolicy')
+  if (gitSourcePolicyPath && (source.executor?.supported === false || !normalizedCapabilities.includes('git-workspace/v1'))) {
+    fail(`${key} 的 Git 来源策略需要 git-workspace/v1 执行能力`)
+  }
+  if (gitSourcePolicyPath && path.extname(gitSourcePolicyPath) !== '.cjs') {
+    fail(`${key} 的 executor.gitSourcePolicy 必须是 CommonJS .cjs 模块`)
+  }
+  const preparation = source.executor?.environmentPreparation
+  if (preparation && (preparation.protocol !== 'execution-environment/v1'
+    || Object.keys(preparation).some(key => !['protocol', 'implementation'].includes(key)))) fail(`${key} 的环境准备协议不支持`)
+  const environmentPreparationPath = preparation
+    ? resolveInside(packageDir, preparation.implementation, 'executor.environmentPreparation.implementation') : null
+  if (environmentPreparationPath && (path.extname(environmentPreparationPath) !== '.cjs' || source.executor?.supported === false)) fail(`${key} 的环境准备必须是启用的执行端 CommonJS 模块`)
+  const executorFiles = [...new Set([gitSourcePolicyPath, environmentPreparationPath].filter(Boolean).flatMap(file => listFiles(path.dirname(file))))]
+  for (const filePath of executorFiles) {
+    if (!fs.realpathSync(filePath).startsWith(`${fs.realpathSync(packageDir)}${path.sep}`)) {
+      fail(`${key} 的执行器文件越出接入包：${filePath}`)
+    }
+  }
+  for (const artifact of normalizedArtifacts) {
+    if (source.executor?.supported !== false && !normalizedCapabilities.includes(artifact.collector)) {
+      fail(`${key} 的 Artifact collector 未列入 requiredCapabilities：${artifact.collector}`)
+    }
+  }
+  const cpu = Number(source.evaluation?.resources?.cpu)
+  if (!Number.isFinite(cpu) || cpu <= 0) fail('evaluation.resources.cpu 必须是正数')
+  if (
+    Number(evaluator.resources?.cpu) !== cpu
+    || evaluator.resources?.memoryMiB !== source.evaluation?.resources?.memoryMiB
+    || evaluator.resources?.timeoutSeconds !== source.evaluation?.defaultTimeoutSeconds
+  ) {
+    fail(`${key} 的 evaluator.yaml 资源限制必须与 benchmark.yaml 一致`)
+  }
+  const caseSchema = readJson(caseSchemaPath, `${key} Case Schema`)
+  const rawResultSchema = readJson(resultSchemaPath, `${key} Result Schema`)
+  const adapterExport = string(source.implementation?.adapterExport, 'implementation.adapterExport', /^[A-Za-z_$][\w$]*$/)
+  const dataset = normalizeDataset(source.dataset, key)
+  const presentation = normalizePresentation(source.presentation, key)
+  if (datasetPreparerPath && !dataset) fail(`${key} 声明了 Dataset Preparer，但没有 dataset.profiles`)
+  if (datasetLoaderPath && !dataset) fail(`${key} 声明了 Dataset Loader，但没有 dataset.profiles`)
+  const primaryMetricKey = string(source.result?.primaryMetric?.key, 'result.primaryMetric.key')
+  const primaryMetricAggregation = source.result?.primaryMetric?.aggregation
+  if (!['boolean-rate', 'mean'].includes(primaryMetricAggregation)) {
+    fail(`${key} 的 result.primaryMetric.aggregation 不受支持`)
+  }
+  const evaluatorFiles = [...new Set([
+    ...listFiles(evaluatorDir),
+    ...(smokeEntrypoint ? listFiles(path.dirname(smokeEntrypoint)) : []),
+    ...(ociRuntime ? [
+      path.resolve(packageDir, '../../packages/project-config'),
+      path.resolve(packageDir, '../../config/benchmark/evaluator.yaml'),
+      path.resolve(packageDir, '../../services/evaluator/src'),
+      path.resolve(packageDir, '../../packages/benchmark-protocol/artifact-path.cjs'),
+    ].flatMap((file) => fs.existsSync(file) ? (fs.statSync(file).isDirectory() ? listFiles(file) : [file]) : []) : []),
+  ])]
+  const evaluatorDigest = digestFiles(evaluatorFiles, evaluatorDir)
+  const files = [
+    yamlPath,
+    adapterPath,
+    ...(datasetLoaderPath ? listFiles(path.dirname(datasetLoaderPath)) : []),
+    ...(datasetPreparerPath ? listFiles(path.dirname(datasetPreparerPath)) : []),
+    caseSchemaPath,
+    resultSchemaPath,
+    ...executorFiles,
+    ...evaluatorFiles,
+  ]
+  return {
+    key,
+    packageDir,
+    adapterPath,
+    adapterExport,
+    datasetLoaderPath,
+    datasetLoaderExport,
+    datasetPreparerPath,
+    datasetPreparerExport,
+    gitSourcePolicyPath,
+    environmentPreparationPath,
+    executorFiles,
+    manifest: {
+      adapterKey: key,
+      displayName: string(source.displayName, 'displayName'),
+      ...(source.executor?.supported === false ? { supportsAgentExecution: false } : {}),
+      protocols: {
+        agentTask: string(source.protocols?.agentTask, 'protocols.agentTask'),
+        evaluation: string(source.protocols?.evaluation, 'protocols.evaluation'),
+      },
+      requiredCapabilities: normalizedCapabilities,
+      defaultTimeoutSeconds: positiveInteger(source.executor?.defaultTimeoutSeconds, 'executor.defaultTimeoutSeconds'),
+      requiredArtifacts: normalizedArtifacts,
+      schemas: { case: caseSchema, rawResult: rawResultSchema },
+      evaluation: {
+        evaluatorKey: string(source.evaluation?.evaluatorKey, 'evaluation.evaluatorKey'),
+        defaultTimeoutSeconds: positiveInteger(source.evaluation?.defaultTimeoutSeconds, 'evaluation.defaultTimeoutSeconds'),
+        defaultResources: {
+          cpu,
+          memoryMiB: positiveInteger(source.evaluation?.resources?.memoryMiB, 'evaluation.resources.memoryMiB'),
+        },
+      },
+      result: {
+        primaryMetric: {
+          key: primaryMetricKey,
+          aggregation: primaryMetricAggregation,
+        },
+      },
+      ...(dataset ? { dataset } : {}),
+      ...(presentation ? { presentation } : {}),
+    },
+    evaluator: {
+      key: evaluator.key,
+      benchmarkKey: key,
+      runtime: evaluator.runtime,
+      ...(evaluator.requiresPrebuiltRuntime === true ? { requiresPrebuiltRuntime: true } : {}),
+      command: string(evaluator.command, 'evaluator.command'),
+      entrypoint: containerEntrypoint || entrypoint,
+      ...(imageProvider ? { imageProvider } : {}),
+      ...(assets ? { assets } : {}),
+      ...(imageRepository ? {
+        image: `${imageRepository}:artifact-${evaluatorDigest.slice('sha256:'.length)}`,
+        dockerfile: runtimeDockerfile,
+      } : {}),
+      ...(smokeEntrypoint ? { smokeEntrypoint } : {}),
+      ...(runtimeSmokeEntrypoint ? { runtimeSmokeEntrypoint } : {}),
+      artifactDigest: evaluatorDigest,
+      network: evaluator.network === 'allow' ? 'allow' : 'deny',
+      resources: {
+        cpu: Number(evaluator.resources.cpu),
+        memoryMiB: evaluator.resources.memoryMiB,
+        timeoutSeconds: evaluator.resources.timeoutSeconds,
+      },
+      requiredArtifacts: normalizedArtifacts,
+      rawResultSchema,
+    },
+    packageDigest: digestFiles(files, packageDir),
+  }
+}
+
+function toImportPath(fromDir, targetPath) {
+  const value = path.relative(fromDir, targetPath).replaceAll(path.sep, '/')
+  return value.startsWith('.') ? value : `./${value}`
+}
+
+function loadPackageForOnboarding(packageDir) {
+  const result = loadPackage(packageDir)
+  if (result.manifest.supportsAgentExecution !== false && !result.environmentPreparationPath) {
+    fail(`${result.key} 的新接入验收必须声明 executor.environmentPreparation，并提供 execution-environment/v1 的执行端入口；仅导入已有提交的接入可设置 executor.supported: false`)
+  }
+  return result
+}
+
+function generate(rootDir = path.resolve(__dirname, '../..')) {
+  const benchmarksDir = path.join(rootDir, 'benchmarks')
+  const outputDir = path.join(rootDir, 'generated', 'benchmark-catalog')
+  const packages = fs.readdirSync(benchmarksDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(benchmarksDir, entry.name, 'benchmark.yaml')))
+    .map((entry) => loadPackage(path.join(benchmarksDir, entry.name)))
+    .sort((left, right) => left.key.localeCompare(right.key))
+  if (!packages.length) fail('至少需要一个 Benchmark 接入包')
+  const seen = new Set()
+  for (const item of packages) {
+    if (seen.has(item.key)) fail(`Benchmark key 重复：${item.key}`)
+    seen.add(item.key)
+  }
+  fs.mkdirSync(outputDir, { recursive: true })
+  const manifestSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
+    '',
+    "import type { BenchmarkManifest } from '../../packages/benchmark-protocol/src/contracts'",
+    '',
+    `export const generatedBenchmarkManifests = ${JSON.stringify(Object.fromEntries(packages.map((item) => [item.key, item.manifest])), null, 2)} as const satisfies Record<string, BenchmarkManifest>`,
+    '',
+    'export function getGeneratedBenchmarkManifest(key: keyof typeof generatedBenchmarkManifests): BenchmarkManifest {',
+    '  return generatedBenchmarkManifests[key]',
+    '}',
+    '',
+  ].join('\n')
+  const imports = packages.map((item, index) => (
+    `import { ${item.adapterExport} as adapter${index} } from '${toImportPath(outputDir, item.adapterPath).replace(/\.ts$/, '')}'`
+  ))
+  const adaptersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
+    '',
+    "import type { BenchmarkAdapter } from '../../packages/benchmark-protocol/src/evaluation-contracts'",
+    ...imports,
+    '',
+    `export const generatedBenchmarkAdapters: readonly BenchmarkAdapter[] = [${packages.map((_, index) => `adapter${index}`).join(', ')}]`,
+    '',
+  ].join('\n')
+  const packagesWithLoaders = packages.filter((item) => item.datasetLoaderPath)
+  const loaderImports = packagesWithLoaders.map((item, index) => (
+    `import { ${item.datasetLoaderExport} as loader${index} } from '${toImportPath(outputDir, item.datasetLoaderPath).replace(/\.ts$/, '')}'`
+  ))
+  const loadersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
+    '',
+    "import type { BenchmarkDatasetLoader } from '../../packages/benchmark-protocol/src/contracts'",
+    ...loaderImports,
+    '',
+    'export type GeneratedBenchmarkDatasetLoader = { adapterKey: string; loader: BenchmarkDatasetLoader }',
+    `export const generatedBenchmarkDatasetLoaders: readonly GeneratedBenchmarkDatasetLoader[] = [${packagesWithLoaders.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, loader: loader${index} }`).join(', ')}]`,
+    '',
+  ].join('\n')
+  const packagesWithPreparers = packages.filter(item => item.datasetPreparerPath)
+  const preparersSource = [
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
+    "import type { BenchmarkDatasetPreparer } from '../../packages/benchmark-protocol/src/contracts'",
+    ...packagesWithPreparers.map((item, index) => `import { ${item.datasetPreparerExport} as preparer${index} } from '${toImportPath(outputDir, item.datasetPreparerPath).replace(/\.ts$/, '')}'`),
+    `export const generatedBenchmarkDatasetPreparers: readonly { adapterKey: string; preparer: BenchmarkDatasetPreparer }[] = [${packagesWithPreparers.map((item, index) => `{ adapterKey: ${JSON.stringify(item.key)}, preparer: preparer${index} }`).join(', ')}]`,
+    '',
+  ].join('\n')
+  const preparerKeysSource = `// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog\n// Copyright (c) 2026 Huawei Technologies Co., Ltd.\n// SPDX-License-Identifier: Apache-2.0\nmodule.exports = ${JSON.stringify(packagesWithPreparers.map(item => item.key))}\n`
+  const descriptors = packages.map((item) => ({
+    ...item.evaluator,
+    ...(item.evaluator.assets ? { assets: {
+      ...item.evaluator.assets,
+      verifyEntrypoint: path.relative(outputDir, item.evaluator.assets.verifyEntrypoint).replaceAll(path.sep, '/'),
+    } } : {}),
+    ...(item.evaluator.imageProvider
+      ? { imageProvider: path.relative(outputDir, item.evaluator.imageProvider).replaceAll(path.sep, '/') }
+      : {}),
+    entrypoint: item.evaluator.runtime === 'oci-container'
+      ? item.evaluator.entrypoint
+      : path.relative(outputDir, item.evaluator.entrypoint).replaceAll(path.sep, '/'),
+    ...(item.evaluator.smokeEntrypoint
+      ? { smokeEntrypoint: path.relative(outputDir, item.evaluator.smokeEntrypoint).replaceAll(path.sep, '/') }
+      : {}),
+    ...(item.evaluator.dockerfile
+      ? { dockerfile: path.relative(outputDir, item.evaluator.dockerfile).replaceAll(path.sep, '/') }
+      : {}),
+  }))
+  let descriptorJson = JSON.stringify(descriptors, null, 2)
+  descriptorJson = descriptorJson.replace(/"imageProvider": "([^"/][^"]*)"/g, '"imageProvider": path.resolve(__dirname, "$1")')
+  descriptorJson = descriptorJson.replace(/"verifyEntrypoint": "([^"/][^"]*)"/g, '"verifyEntrypoint": path.resolve(__dirname, "$1")')
+  descriptorJson = descriptorJson.replace(/"smokeEntrypoint": "([^"/][^"]*)"/g, '"smokeEntrypoint": path.resolve(__dirname, "$1")')
+  descriptorJson = descriptorJson.replace(
+    /"entrypoint": "([^"/][^"]*)"/g,
+    '"entrypoint": path.resolve(__dirname, "$1")',
+  )
+  descriptorJson = descriptorJson.replace(
+    /"dockerfile": "([^"]+)"/g,
+    '"dockerfile": path.resolve(__dirname, "$1")',
+  )
+  const evaluatorSource = [
+    "'use strict'",
+    '',
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
+    '',
+    "const path = require('node:path')",
+    '',
+    `const generatedEvaluatorDescriptors = ${descriptorJson}`,
+    '',
+    'module.exports = { generatedEvaluatorDescriptors }',
+    '',
+  ].join('\n')
+  const policyPackages = packages.filter(item => item.gitSourcePolicyPath)
+  const executorSource = [
+    "'use strict'",
+    '',
+    '// AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    '// Copyright (c) 2026 Huawei Technologies Co., Ltd.',
+    '// SPDX-License-Identifier: Apache-2.0',
+    '',
+    "const path = require('node:path')",
+    '',
+    'const generatedGitSourcePolicyDescriptors = [',
+    ...policyPackages.map(item => `  { benchmarkKey: ${JSON.stringify(item.key)}, modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.gitSourcePolicyPath))}) },`),
+    ']',
+    '',
+    'const generatedEnvironmentPreparationDescriptors = [',
+    ...packages.filter(item => item.environmentPreparationPath).map(item => `  { datasetAdapterKey: ${JSON.stringify(item.key)}, protocol: 'execution-environment/v1', modulePath: path.resolve(__dirname, ${JSON.stringify(toImportPath(outputDir, item.environmentPreparationPath))}) },`),
+    ']',
+    '',
+    `const generatedExecutorPackageFiles = ${JSON.stringify([...new Set(packages.flatMap(item => item.executorFiles.map(filePath => path.relative(rootDir, filePath).replaceAll(path.sep, '/'))))].sort(), null, 2)}`,
+    '',
+    'module.exports = { generatedGitSourcePolicyDescriptors, generatedEnvironmentPreparationDescriptors, generatedExecutorPackageFiles }',
+    '',
+  ].join('\n')
+  fs.writeFileSync(path.join(outputDir, 'manifests.ts'), manifestSource)
+  fs.writeFileSync(path.join(outputDir, 'adapters.ts'), adaptersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-loaders.ts'), loadersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-preparers.ts'), preparersSource)
+  fs.writeFileSync(path.join(outputDir, 'dataset-preparer-keys.cjs'), preparerKeysSource)
+  fs.writeFileSync(path.join(outputDir, 'evaluators.cjs'), evaluatorSource)
+  fs.writeFileSync(path.join(outputDir, 'executors.cjs'), executorSource)
+  fs.writeFileSync(path.join(outputDir, 'catalog-lock.json'), `${JSON.stringify({
+    notice: 'AUTO-GENERATED FILE. DO NOT EDIT. Run: npm run benchmark:catalog',
+    packages: packages.map((item) => ({ key: item.key, digest: item.packageDigest, evaluatorDigest: item.evaluator.artifactDigest })),
+  }, null, 2)}\n`)
+  return packages.map((item) => item.key)
+}
+
+if (require.main === module) console.log(`[benchmark catalog] generated: ${generate().join(', ')}`)
+
+module.exports = { generate, loadPackage, loadPackageForOnboarding }

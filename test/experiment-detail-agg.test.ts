@@ -1,0 +1,252 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// 实验详情聚合口径（detail-agg.ts 纯函数）：
+// 有分/无分混合（failed/pending 不入均分）、类目归组、全失败 case、N/M 标注口径，
+// 以及人工修正分的生效口径（生效分 = humanScore ?? score，全部聚合跟随）。
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  caseScore,
+  categorySummary,
+  deriveSettledExperimentStatus,
+  effectiveScore,
+  evaluatorBreakdown,
+  groupByCategory,
+  normalizeTerminalExperimentStatus,
+  overallAverage,
+  publishedOverallAverage,
+  scoredRows,
+  type CategoryOf,
+  type ResultRowLike,
+} from '@/lib/engine/experiment/detail-agg';
+
+const CAT: Record<string, 'res' | 'traj'> = {
+  'ev-res-a': 'res',
+  'ev-res-b': 'res',
+  'ev-traj-a': 'traj',
+};
+const categoryOf: CategoryOf = (id) => CAT[id] ?? 'res';
+
+function row(partial: Partial<ResultRowLike> & { evaluatorId: string }): ResultRowLike {
+  return { caseId: 'case-1', status: 'done', score: null, ...partial };
+}
+
+test('两个拆分 RAS 评估器与通用评估器一样按各自总分求综合平均', () => {
+  const rows = [
+    row({ evaluatorId: 'preset-ras-reliability-fault-injection', score: 100 }),
+    row({ evaluatorId: 'preset-ras-reliability-detection-recovery', score: 33.3 }),
+  ];
+  assert.equal(overallAverage(rows), 66.7);
+});
+
+test('scoredRows / overallAverage：仅 done 且有分入均分', () => {
+  const rows: ResultRowLike[] = [
+    row({ evaluatorId: 'ev-res-a', score: 90 }),
+    row({ evaluatorId: 'ev-res-b', score: 70 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed', score: null }),   // 失败无分
+    row({ evaluatorId: 'ev-traj-a', status: 'pending', score: null }),  // 待执行
+    row({ evaluatorId: 'ev-res-a', status: 'done', score: null }),      // done 但评估器未产分
+    row({ evaluatorId: 'ev-res-b', status: 'failed', score: 55 }),      // 防御：失败行即便带分也不计
+  ];
+  assert.equal(scoredRows(rows).length, 2);
+  assert.equal(overallAverage(rows), 80);
+  // 全无分 → null（不是 0）
+  assert.equal(overallAverage([row({ evaluatorId: 'ev-res-a', status: 'failed' })]), null);
+  assert.equal(overallAverage([]), null);
+});
+
+test('实验终态：混合成功/失败为部分完成，历史 done 会按结果纠正', () => {
+  assert.equal(deriveSettledExperimentStatus([{ status: 'done' }, { status: 'done' }]), 'done');
+  assert.equal(deriveSettledExperimentStatus([{ status: 'failed' }, { status: 'failed' }]), 'failed');
+  assert.equal(deriveSettledExperimentStatus([{ status: 'done' }, { status: 'failed' }]), 'partial');
+  assert.equal(deriveSettledExperimentStatus([{ status: 'done' }, { status: 'running' }]), null);
+  assert.equal(
+    normalizeTerminalExperimentStatus('done', [{ status: 'done' }, { status: 'failed' }]),
+    'partial',
+  );
+});
+
+test('publishedOverallAverage：运行中不发布，完成和部分完成发布有效均分', () => {
+  const rows = [
+    row({ evaluatorId: 'ev-res-a', score: 90 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
+  ];
+  assert.equal(publishedOverallAverage('running', rows), null);
+  assert.equal(publishedOverallAverage('failed', rows), null);
+  assert.equal(publishedOverallAverage('done', rows), 90);
+  assert.equal(publishedOverallAverage('partial', rows), 90);
+});
+
+test('evaluatorBreakdown：按评估器归组，N/M 与失败数正确，保持出现顺序', () => {
+  const rows: ResultRowLike[] = [
+    row({ caseId: 'c1', evaluatorId: 'ev-res-a', score: 80 }),
+    row({ caseId: 'c2', evaluatorId: 'ev-res-a', score: 90 }),
+    row({ caseId: 'c3', evaluatorId: 'ev-res-a', status: 'failed' }),
+    row({ caseId: 'c1', evaluatorId: 'ev-traj-a', score: 61 }),
+    row({ caseId: 'c2', evaluatorId: 'ev-traj-a', status: 'pending' }),
+  ];
+  const bd = evaluatorBreakdown(rows);
+  assert.deepEqual(bd.map((b) => b.evaluatorId), ['ev-res-a', 'ev-traj-a']);
+  const [a, t] = bd;
+  assert.equal(a.avg, 85);
+  assert.equal(a.scored, 2);
+  assert.equal(a.total, 3);
+  assert.equal(a.failed, 1);
+  assert.equal(t.avg, 61);
+  assert.equal(t.scored, 1);
+  assert.equal(t.total, 2);
+  assert.equal(t.failed, 0);
+});
+
+test('caseScore：综合/结果/轨迹按类目分别均分，均分保留 1 位小数', () => {
+  const rows: ResultRowLike[] = [
+    row({ evaluatorId: 'ev-res-a', score: 90 }),
+    row({ evaluatorId: 'ev-res-b', score: 71 }),
+    row({ evaluatorId: 'ev-traj-a', score: 60 }),
+  ];
+  const s = caseScore(rows, categoryOf, ['ev-res-a', 'ev-res-b', 'ev-traj-a']);
+  assert.equal(s.overall, 73.7); // (90+71+60)/3 = 73.666… → 73.7
+  assert.equal(s.res, 80.5);
+  assert.equal(s.traj, 60);
+  assert.equal(s.failed, 0);
+});
+
+test('caseScore：某类目无分 → 该项 null；全失败 case → 全 null + failed 计数', () => {
+  const mixed = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.equal(mixed.overall, 88);
+  assert.equal(mixed.res, 88);
+  assert.equal(mixed.traj, null);
+  assert.equal(mixed.failed, 1);
+
+  const allFailed = caseScore([
+    row({ evaluatorId: 'ev-res-a', status: 'failed' }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.deepEqual(allFailed, { overall: null, res: null, traj: null, failed: 2, adjusted: 0 });
+});
+
+test('groupByCategory：按类目归组；未知评估器回退 res', () => {
+  const rows: ResultRowLike[] = [
+    row({ evaluatorId: 'ev-res-a', score: 90 }),
+    row({ evaluatorId: 'ev-traj-a', score: 70 }),
+    row({ evaluatorId: 'ev-unknown', score: 50 }), // 注册表找不到 → res
+  ];
+  const g = groupByCategory(rows, categoryOf);
+  assert.deepEqual(g.res.map((r) => r.evaluatorId), ['ev-res-a', 'ev-unknown']);
+  assert.deepEqual(g.traj.map((r) => r.evaluatorId), ['ev-traj-a']);
+});
+
+test('caseScore：全部已选评估器终态前不发布综合得分', () => {
+  const running = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'running' }),
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.equal(running.overall, null);
+  assert.equal(running.res, 88);
+  assert.equal(running.traj, null);
+
+  const resultOnly = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+  ], categoryOf, ['ev-res-a']);
+  assert.equal(resultOnly.overall, 88);
+
+  const settledWithFailure = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
+  ], categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.equal(settledWithFailure.overall, 88);
+});
+
+test('caseScore：结果分和轨迹分分别等待该类全部已选评估器终态', () => {
+  const partialResult = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+    row({ evaluatorId: 'ev-res-b', status: 'running' }),
+    row({ evaluatorId: 'ev-traj-a', score: 70 }),
+  ], categoryOf, ['ev-res-a', 'ev-res-b', 'ev-traj-a']);
+  assert.equal(partialResult.overall, null);
+  assert.equal(partialResult.res, null);
+  assert.equal(partialResult.traj, 70);
+
+  const noTrajectorySelected = caseScore([
+    row({ evaluatorId: 'ev-res-a', score: 88 }),
+  ], categoryOf, ['ev-res-a']);
+  assert.equal(noTrajectorySelected.res, 88);
+  assert.equal(noTrajectorySelected.traj, null);
+});
+
+test('categorySummary：N=有分行 / M=类目结果行总数；空类目与全失败', () => {
+  const s = categorySummary([
+    row({ evaluatorId: 'ev-res-a', score: 96 }),
+    row({ evaluatorId: 'ev-res-b', score: 100 }),
+    row({ evaluatorId: 'ev-res-b', status: 'failed' }),
+  ]);
+  assert.equal(s.avg, 98);
+  assert.equal(s.scored, 2);
+  assert.equal(s.total, 3);
+
+  assert.deepEqual(categorySummary([]), { avg: null, scored: 0, total: 0, adjusted: 0 });
+  assert.deepEqual(
+    categorySummary([row({ evaluatorId: 'ev-res-a', status: 'failed' })]),
+    { avg: null, scored: 0, total: 1, adjusted: 0 },
+  );
+});
+
+// ── 人工修正分：生效分 = humanScore ?? score，全部聚合口径跟随 ────────────────
+
+test('effectiveScore：人工分优先于机器分，未修正回落机器分', () => {
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: 60, humanScore: 80 })), 80);
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: 60 })), 60);
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: null })), null);
+  // 人工判 0 分是有效判断，不能被 ?? 之外的假值判断吃掉
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: 90, humanScore: 0 })), 0);
+});
+
+test('人工修正后综合/类目/评估器/单 case 均分全部按人工分重算', () => {
+  const rows: ResultRowLike[] = [
+    row({ evaluatorId: 'ev-res-a', score: 60, humanScore: 80 }), // 机器 60 → 人工 80
+    row({ evaluatorId: 'ev-traj-a', score: 60 }),
+  ];
+  assert.equal(overallAverage(rows), 70);          // (80+60)/2，而非 (60+60)/2
+
+  const s = caseScore(rows, categoryOf, ['ev-res-a', 'ev-traj-a']);
+  assert.equal(s.overall, 70);
+  assert.equal(s.res, 80);
+  assert.equal(s.traj, 60);
+  assert.equal(s.adjusted, 1);
+
+  const [resRow] = evaluatorBreakdown([rows[0]]);
+  assert.equal(resRow.avg, 80);
+  assert.equal(resRow.adjusted, 1);
+
+  const cat = categorySummary([rows[0]]);
+  assert.equal(cat.avg, 80);
+  assert.equal(cat.adjusted, 1);
+});
+
+test('机器未产分但人工给了分 → 该行进均分；失败行即便有人工分也不计', () => {
+  // done 且机器无分：人工分让它重新进入分母
+  assert.equal(overallAverage([row({ evaluatorId: 'ev-res-a', score: null, humanScore: 75 })]), 75);
+  // failed 行不参与聚合（口径同机器分：先重评拿到结果再修正）
+  assert.equal(
+    overallAverage([row({ evaluatorId: 'ev-res-a', status: 'failed', score: null, humanScore: 75 })]),
+    null,
+  );
+});

@@ -1,0 +1,74 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { startRuntimeCleanup } from '../src/lib/runtime-cleanup'
+
+const key = Symbol.for('@agent-insight/runtime-cleanup')
+
+test('startup registers one unref timer without starting cleanup work', async t => {
+  const globalState = globalThis as unknown as Record<symbol, unknown>
+  delete globalState[key]
+  let calls = 0
+  let delay = 0
+  let unref = 0
+  const messages: unknown[][] = []
+  t.mock.method(globalThis, 'setTimeout', (_fn: () => void, wait: number) => {
+    calls++; delay = wait
+    return { unref: () => { unref++ } }
+  })
+  t.mock.method(globalThis, 'clearTimeout', () => {})
+  t.mock.method(console, 'info', (...args: unknown[]) => { messages.push(args) })
+  const previous = process.env.AGENT_INSIGHT_CLEANUP_ENABLED
+  delete process.env.AGENT_INSIGHT_CLEANUP_ENABLED
+  const first = startRuntimeCleanup()
+  assert.equal(startRuntimeCleanup(), first)
+  assert.equal(calls, 1)
+  assert.equal(delay, 60_000)
+  assert.equal(unref, 1)
+  assert.deepEqual(messages, [['[runtime-cleanup] scheduled', {
+    dryRun: false, startupDelayMs: 60_000, intervalMs: 3_600_000, normalDays: 7, abnormalDays: 7,
+  }]])
+  await first?.stop()
+  delete globalState[key]
+  if (previous === undefined) delete process.env.AGENT_INSIGHT_CLEANUP_ENABLED
+  else process.env.AGENT_INSIGHT_CLEANUP_ENABLED = previous
+})
+
+test('disabled cleanup registers no timer', async t => {
+  const globalState = globalThis as unknown as Record<symbol, unknown>
+  delete globalState[key]
+  let scheduled = 0
+  t.mock.method(globalThis, 'setTimeout', () => { scheduled++; return { unref: () => {} } })
+  const previous = process.env.AGENT_INSIGHT_CLEANUP_ENABLED
+  process.env.AGENT_INSIGHT_CLEANUP_ENABLED = '0'
+  const controller = startRuntimeCleanup()
+  assert.equal(scheduled, 0, 'disabled cleanup must not schedule')
+  await controller?.stop()
+  delete globalState[key]
+  if (previous === undefined) delete process.env.AGENT_INSIGHT_CLEANUP_ENABLED
+  else process.env.AGENT_INSIGHT_CLEANUP_ENABLED = previous
+})
+
+test('timer registration failure cannot throw into application startup', t => {
+  const globalState = globalThis as unknown as Record<symbol, unknown>
+  delete globalState[key]
+  t.mock.method(globalThis, 'setTimeout', () => { throw new Error('timer unavailable') })
+  t.mock.method(console, 'warn', () => {})
+  assert.doesNotThrow(() => startRuntimeCleanup())
+  delete globalState[key]
+})

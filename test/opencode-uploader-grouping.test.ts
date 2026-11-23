@@ -1,0 +1,771 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import test from "node:test"
+
+process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
+
+const uploaderPromise = import("../scripts/opencode_uploader_client.js")
+
+test("opencode uploader: persists a stable machine client identity", async () => {
+  const uploader = await uploaderPromise
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-client-id-"))
+  try {
+    const first = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+      hostname: "host-a",
+      now: () => new Date("2026-08-13T00:00:00.000Z"),
+    })
+    const second = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      hostname: "host-b",
+    })
+
+    assert.equal(first.clientId, "cli_12345678-1234-1234-1234-123456789abc")
+    assert.deepEqual(second, first)
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(dataDir, "client.json"), "utf8")),
+      first,
+    )
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: prefers the registered reliability client identity", async () => {
+  const uploader = await uploaderPromise
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-registered-client-id-"))
+  try {
+    const registeredDir = path.join(dataDir, "client")
+    fs.mkdirSync(registeredDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(registeredDir, "config.json"),
+      JSON.stringify({
+        user: "alice",
+        clientId: "cli_registered-12345678",
+        deviceCredential: "dc_registered-secret",
+      }),
+    )
+
+    const identity = uploader.ensureClientIdentity({
+      dataDir,
+      randomUUID: () => "12345678-1234-1234-1234-123456789abc",
+    })
+
+    assert.equal(identity.clientId, "cli_registered-12345678")
+    assert.equal(identity.deviceCredential, "dc_registered-secret")
+    assert.equal(fs.existsSync(path.join(dataDir, "client.json")), false)
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: reports the first external IPv4 address", async () => {
+  const uploader = await uploaderPromise
+  assert.equal(
+    uploader.pickReportedIp({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "255.0.0.0", mac: "00:00:00:00:00:00", cidr: "127.0.0.1/8" }],
+      eth0: [
+        { address: "2001:db8::1", family: "IPv6", internal: false, scopeid: 0, netmask: "ffff:ffff:ffff:ffff::", mac: "00:00:00:00:00:01", cidr: "2001:db8::1/64" },
+        { address: "10.20.30.40", family: "IPv4", internal: false, netmask: "255.255.255.0", mac: "00:00:00:00:00:02", cidr: "10.20.30.40/24" },
+      ],
+    }),
+    "10.20.30.40",
+  )
+})
+
+test("opencode uploader: recognizes session.created properties.info.parentID", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    {
+      kind: "event",
+      payload: {
+        type: "session.created",
+        event: { properties: { info: { id: "ses_root", agent: "root" } } },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "session.created",
+        event: { properties: { info: { id: "ses_child", parentID: "ses_root", agent: "worker" } } },
+      },
+    },
+  ])
+
+  assert.equal(state.sessionParent.get("ses_child"), "ses_root")
+  assert.deepEqual(Array.from(state.children.get("ses_root") || []), ["ses_child"])
+  assert.deepEqual(Array.from(state.sessions.keys()).filter((sid) => !state.sessionParent.get(sid)), ["ses_root"])
+})
+
+test("opencode uploader: infers child sessions from task tool output metadata", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: {
+              id: "msg_root",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: {
+              id: "part_task",
+              messageID: "msg_root",
+              sessionID: "ses_root",
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "success",
+                input: { subagent_type: "worker" },
+                output: "<task_metadata>\nsession_id: ses_child\n</task_metadata>",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: {
+              id: "msg_child",
+              sessionID: "ses_child",
+              role: "assistant",
+              time: { created: 3, completed: 4 },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: {
+              id: "part_child_text",
+              messageID: "msg_child",
+              sessionID: "ses_child",
+              type: "text",
+              text: "child result",
+            },
+          },
+        },
+      },
+    },
+  ])
+
+  assert.equal(state.sessionParent.get("ses_child"), "ses_root")
+  assert.deepEqual(Array.from(state.sessions.keys()).filter((sid) => !state.sessionParent.get(sid)), ["ses_root"])
+
+  const merged = uploader.mergeGraph(state, "ses_root")
+  assert.ok(merged.some((m: any) => m.role === "subagent" && m.subagent_session_id === "ses_child"))
+})
+
+test("opencode uploader: merges repeated updates for the same task tool call by callID", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: {
+              id: "msg_root",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: {
+              id: "part_task_draft",
+              callID: "call_task_1",
+              messageID: "msg_root",
+              sessionID: "ses_root",
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "running",
+                input: { subagent_type: "fuxi-sub", description: "构建文件系统故障诊断计划" },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: {
+              id: "part_task_final",
+              callID: "call_task_1",
+              messageID: "msg_root",
+              sessionID: "ses_root",
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "success",
+                input: { subagent_type: "fuxi-sub", description: "构建文件系统故障诊断计划" },
+                output: "<task_metadata>\nsession_id: ses_child\n</task_metadata>",
+              },
+            },
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages.length, 1)
+  const toolCalls = messages[0]?.tool_calls
+  assert.ok(Array.isArray(toolCalls), "messages[0].tool_calls 应该是数组")
+  assert.equal(toolCalls.length, 1)
+  assert.equal(toolCalls[0].id, "call_task_1")
+  assert.equal(toolCalls[0].state, "success")
+})
+
+test("opencode uploader: recovers user input from text part when chat.message.messageID is null", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    // Newer opencode often fires the chat.message hook without a messageID, so
+    // userTextByMsg can't be keyed to the message.
+    { kind: "chat.message", sessionID: "ses_root", payload: { messageID: null, text: "nihao" } },
+    // User message. On newer opencode info.system is null (not the system-prompt
+    // string the old fallback relied on).
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: { id: "msg_user", sessionID: "ses_root", role: "user", system: null, time: { created: 1 } },
+          },
+        },
+      },
+    },
+    // The user's typed query reliably lives in the message's own text part.
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: { id: "prt_user", messageID: "msg_user", sessionID: "ses_root", type: "text", text: "nihao" },
+          },
+        },
+      },
+    },
+    // An assistant reply so the session looks complete.
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: { id: "msg_asst", sessionID: "ses_root", role: "assistant", time: { created: 2, completed: 3 } },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: { id: "prt_asst", messageID: "msg_asst", sessionID: "ses_root", type: "text", text: "你好" },
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  const user = messages.find((m: any) => m.role === "user")
+  assert.ok(user, "应当存在 user 消息")
+  assert.equal(user.content, "nihao", "messageID 缺失时仍应从 text part 还原用户输入")
+  assert.equal(user.messageID, "msg_user")
+  const asst = messages.find((m: any) => m.role === "assistant")
+  assert.ok(asst)
+  assert.equal(asst.messageID, "msg_asst")
+})
+
+test("opencode uploader: rebuilds aborted assistant output from message.part.delta", async () => {
+  const uploader = await uploaderPromise
+  const baseEvent = {
+    kind: "event",
+    sessionID: "ses_root",
+  }
+  const state = uploader.buildState([
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.updated",
+        event: {
+          id: "evt_message",
+          properties: {
+            info: {
+              id: "msg_asst",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1 },
+            },
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.updated",
+        event: {
+          id: "evt_part",
+          properties: {
+            part: {
+              id: "prt_text",
+              messageID: "msg_asst",
+              sessionID: "ses_root",
+              type: "text",
+              text: "",
+            },
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_1",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_2",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+    // A second telemetry plugin can write the same OpenCode event. Event IDs
+    // must make the merge idempotent instead of duplicating streamed text.
+    {
+      ...baseEvent,
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_delta_2",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_text",
+            field: "text",
+            delta: "让我协助",
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages[0]?.content, "让我协助让我协助")
+  assert.equal(messages[0]?.parts?.[0]?.text, "让我协助让我协助")
+})
+
+test("opencode uploader: preserves streamed reasoning parts after interruption", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.updated",
+        event: {
+          id: "evt_reasoning_message",
+          properties: {
+            info: {
+              id: "msg_asst",
+              sessionID: "ses_root",
+              role: "assistant",
+              time: { created: 1 },
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          id: "evt_reasoning_part",
+          properties: {
+            part: {
+              id: "prt_reasoning",
+              messageID: "msg_asst",
+              sessionID: "ses_root",
+              type: "reasoning",
+              text: "",
+            },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      sessionID: "ses_root",
+      payload: {
+        type: "message.part.delta",
+        event: {
+          id: "evt_reasoning_delta",
+          properties: {
+            sessionID: "ses_root",
+            messageID: "msg_asst",
+            partID: "prt_reasoning",
+            field: "text",
+            delta: "正在分析工具调用",
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  assert.equal(messages[0]?.parts?.[0]?.type, "reasoning")
+  assert.equal(messages[0]?.parts?.[0]?.text, "正在分析工具调用")
+})
+
+test("opencode uploader: getRequestOptions preserves host basePath on ingest upload", async () => {
+  const uploader = await uploaderPromise
+  const root = uploader.getRequestOptions(new URL("http://localhost:3000"), "wi_key", 2)
+  assert.equal(root.path, "/api/ingest/upload")
+
+  const prefixed = uploader.getRequestOptions(new URL("http://localhost:3000/insight/"), "wi_key", 2)
+  assert.equal(prefixed.path, "/insight/api/ingest/upload")
+
+  const apiSuffix = uploader.getRequestOptions(new URL("http://localhost:3000/insight/api"), "wi_key", 2)
+  assert.equal(apiSuffix.path, "/insight/api/ingest/upload")
+})
+
+test("opencode uploader: authenticates registered clients with their device credential", async () => {
+  const uploader = await uploaderPromise
+  const options = uploader.getRequestOptions(
+    new URL("https://insight.test"),
+    "wi_key",
+    2,
+    {
+      clientId: "cli_registered-12345678",
+      deviceCredential: "dc_registered-secret",
+    },
+  )
+
+  assert.equal(options.headers.Authorization, "Bearer dc_registered-secret")
+  assert.equal(options.headers["x-agent-insight-client-id"], "cli_registered-12345678")
+  assert.equal(options.headers["x-witty-api-key"], "wi_key")
+
+  const legacy = uploader.getRequestOptions(
+    new URL("https://insight.test"),
+    "wi_key",
+    2,
+    { clientId: "cli_legacy-12345678" },
+  )
+  assert.equal(legacy.headers.Authorization, undefined)
+  assert.equal(legacy.headers["x-agent-insight-client-id"], undefined)
+})
+
+test("opencode uploader: only sends a device credential back to its issuing service base URL", async () => {
+  const uploader = await uploaderPromise
+  const identity = {
+    clientId: "cli_registered-12345678",
+    deviceCredential: "dc_registered-secret",
+    insightBaseUrl: "http://localhost:3000/insight",
+  }
+
+  assert.equal(
+    uploader.clientIdentityForHost(identity, "http://localhost:3000/insight/").deviceCredential,
+    "dc_registered-secret",
+  )
+  assert.equal(
+    uploader.clientIdentityForHost(identity, "http://localhost:3000/another-prefix").deviceCredential,
+    null,
+  )
+  assert.equal(
+    uploader.clientIdentityForHost(identity, "http://119.3.152.42:3000").deviceCredential,
+    null,
+  )
+  assert.equal(
+    uploader.clientIdentityForHost({ ...identity, insightBaseUrl: undefined }, "http://localhost:3000").deviceCredential,
+    null,
+  )
+})
+
+test("opencode uploader: only parses changed files that contain session telemetry", async () => {
+  const uploader = await uploaderPromise
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-uploader-scan-"))
+  try {
+    const oldSession = path.join(spoolDir, "old-session.jsonl")
+    const changedConfig = path.join(spoolDir, "changed-config.jsonl")
+    const changedSession = path.join(spoolDir, "changed-session.jsonl")
+    fs.writeFileSync(oldSession, '{"sessionID":"ses_old","kind":"event"}\n')
+    fs.writeFileSync(changedConfig, '{"kind":"event","payload":{"type":"config.redacted"}}\n')
+    fs.writeFileSync(changedSession, '{"sessionID":"ses_new","kind":"event"}\n')
+    fs.utimesSync(oldSession, 1, 1)
+    fs.utimesSync(changedConfig, 3, 3)
+    fs.utimesSync(changedSession, 3, 3)
+
+    assert.deepEqual(
+      uploader.selectJsonlFilesForUpload(
+        [oldSession, changedConfig, changedSession],
+        { lastScanMtime: 2_000 },
+      ),
+      [changedSession],
+    )
+  } finally {
+    fs.rmSync(spoolDir, { recursive: true, force: true })
+  }
+})
+
+test("opencode uploader: force-session scan finds older files for only the requested trace", async () => {
+  const uploader = await uploaderPromise
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-uploader-force-session-"))
+  try {
+    const requested = path.join(spoolDir, "requested.jsonl")
+    const other = path.join(spoolDir, "other.jsonl")
+    const config = path.join(spoolDir, "config.jsonl")
+    fs.writeFileSync(requested, '{"sessionID":"ses_requested","kind":"event"}\n')
+    fs.writeFileSync(other, '{"sessionID":"ses_other","kind":"event"}\n')
+    fs.writeFileSync(config, '{"kind":"event","payload":{"type":"config.redacted"}}\n')
+
+    assert.deepEqual(
+      uploader.selectJsonlFilesForUpload(
+        [requested, other, config],
+        { forceSessions: new Set(["ses_requested"]), lastScanMtime: Date.now() },
+      ),
+      [requested],
+    )
+  } finally {
+    fs.rmSync(spoolDir, { recursive: true, force: true })
+  }
+})
+
+test('opencode uploader: keeps tool execution times independently of the assistant completion', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', payload: { type: 'message.updated', event: { properties: { info: {
+      id: 'timed-message', sessionID: 'timed-session', role: 'assistant', time: { created: 1000, completed: 2000 },
+    } } } } },
+    ...[true, false].map(timed => ({ kind: 'event', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: `tool-${timed}`, callID: `call-${timed}`, messageID: 'timed-message', sessionID: 'timed-session', type: 'tool', tool: 'read',
+      state: { status: 'completed', input: {}, ...(timed ? { time: { start: 2000, end: 20000 } } : {}) },
+    } } } } })),
+  ])
+  const calls = uploader.buildMessagesForSession(state, 'timed-session')[0].tool_calls!
+  assert.deepEqual(calls.find((call: any) => call.id === 'call-true')!.timing, { started_at: 2000, completed_at: 20000 })
+  assert.equal(calls.find((call: any) => call.id === 'call-false')!.timing, undefined)
+})
+
+test('opencode uploader: rebuilds the CLI answer from deltas alone (no message/part snapshots)', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'cli-d1', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_cli', partID: 'prt_cli', field: 'text', delta: '最终',
+    } } } },
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'cli-d2', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_cli', partID: 'prt_cli', field: 'text', delta: '回答',
+    } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_cli')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].role, 'assistant')
+  assert.equal(messages[0].content, '最终回答')
+  assert.equal(messages[0].parts[0].type, 'text')
+  assert.equal(messages[0].parts[0].text, '最终回答')
+  assert.equal(messages[0].usage, undefined)
+
+  const derived = uploader.deriveFields(messages)
+  assert.equal(derived.final_result, '最终回答')
+  // 上游没有传 usage：保持 undefined，界面标记「未提供」，不能伪造成 0。
+  assert.equal(derived.tokens, undefined)
+  assert.equal(derived.usageReported, false)
+})
+
+test('opencode uploader: buckets deltas without partID per message and field', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'no-part-1', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_no_part', field: 'text', delta: 'hello ',
+    } } } },
+    { kind: 'event', sessionID: 'ses_cli', payload: { type: 'message.part.delta', event: { id: 'no-part-2', properties: {
+      sessionID: 'ses_cli', messageID: 'msg_no_part', field: 'text', delta: 'world',
+    } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_cli')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, 'hello world')
+})
+
+test('opencode uploader: a later real part snapshot supersedes the partID-less delta bucket', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_snap', payload: { type: 'message.part.delta', event: { id: 'snap-d1', properties: {
+      sessionID: 'ses_snap', messageID: 'msg_snap', field: 'text', delta: 'complete ',
+    } } } },
+    { kind: 'event', sessionID: 'ses_snap', payload: { type: 'message.part.delta', event: { id: 'snap-d2', properties: {
+      sessionID: 'ses_snap', messageID: 'msg_snap', field: 'text', delta: 'answer',
+    } } } },
+    // The CLI eventually flushes the real part; keeping both would duplicate the answer.
+    { kind: 'event', sessionID: 'ses_snap', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_snap', messageID: 'msg_snap', sessionID: 'ses_snap', type: 'text', text: 'complete answer',
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_snap')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, 'complete answer')
+  assert.deepEqual(messages[0].parts.map((part: { id: string }) => part.id), ['prt_snap'])
+})
+
+test('opencode uploader: falls back to step-finish tokens when message.updated has no usage', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_usage', payload: { type: 'message.part.delta', event: { id: 'usage-d1', properties: {
+      sessionID: 'ses_usage', messageID: 'msg_usage', partID: 'prt_usage', field: 'text', delta: 'answer',
+    } } } },
+    { kind: 'event', sessionID: 'ses_usage', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_step', messageID: 'msg_usage', sessionID: 'ses_usage', type: 'step-finish',
+      reason: 'stop', cost: 0.01, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 0 } },
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_usage')
+  assert.equal(messages[0]!.usage!.input, 100)
+  assert.equal(messages[0]!.usage!.cache.read, 10)
+  assert.equal(messages[0]!.usage!.total, 135)
+
+  const derived = uploader.deriveFields(messages)
+  assert.equal(derived.tokens, 135)
+  assert.equal(derived.input_tokens, 100)
+  assert.equal(derived.output_tokens, 20)
+  assert.equal(derived.reasoning_tokens, 5)
+  assert.equal(derived.usageReported, true)
+})
+
+test('opencode uploader: a reasoning-only snapshot does not discard the streamed answer', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_reason', payload: { type: 'message.part.delta', event: { id: 'reason-d1', properties: {
+      sessionID: 'ses_reason', messageID: 'msg_reason', field: 'text', delta: '最终回答',
+    } } } },
+    // CLI published the reasoning snapshot but lost the answer's text snapshot.
+    { kind: 'event', sessionID: 'ses_reason', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_reason', messageID: 'msg_reason', sessionID: 'ses_reason', type: 'reasoning', text: 'thinking',
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_reason')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, '最终回答')
+  assert.deepEqual(messages[0].parts.map((part: { id: string }) => part.id), ['delta-text', 'prt_reason'])
+})
+
+test('opencode uploader: a stale text snapshot is superseded by the longer delta stream', async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    { kind: 'event', sessionID: 'ses_stale', payload: { type: 'message.part.delta', event: { id: 'stale-d1', properties: {
+      sessionID: 'ses_stale', messageID: 'msg_stale', field: 'text', delta: 'complete ',
+    } } } },
+    { kind: 'event', sessionID: 'ses_stale', payload: { type: 'message.part.delta', event: { id: 'stale-d2', properties: {
+      sessionID: 'ses_stale', messageID: 'msg_stale', field: 'text', delta: 'answer',
+    } } } },
+    // The snapshot only covers a prefix; keeping it alongside the bucket would
+    // either truncate the answer or duplicate the prefix.
+    { kind: 'event', sessionID: 'ses_stale', payload: { type: 'message.part.updated', event: { properties: { part: {
+      id: 'prt_stale', messageID: 'msg_stale', sessionID: 'ses_stale', type: 'text', text: 'complete ',
+    } } } } },
+  ])
+  const messages = uploader.buildMessagesForSession(state, 'ses_stale')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].content, 'complete answer')
+  assert.deepEqual(messages[0].parts.map((part: { id: string }) => part.id), ['delta-text'])
+})
+
+test('opencode uploader: an all-zero usage object is not reported as valid usage', async () => {
+  const uploader = await uploaderPromise
+  const derived = uploader.deriveFields([
+    {
+      role: 'assistant',
+      content: 'answer',
+      usage: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }, total: 0 },
+    },
+  ])
+  assert.equal(derived.usageReported, false)
+  assert.equal(derived.tokens, undefined)
+  assert.equal(derived.input_tokens, undefined)
+  assert.equal(derived.output_tokens, undefined)
+})

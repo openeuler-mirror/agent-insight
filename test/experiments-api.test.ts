@@ -1,0 +1,756 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// 实验 API 冒烟：POST 创建 → GET 列表 → GET 详情（落在临时隔离数据库）。
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createIsolatedDatabase } from './helpers/isolated-database';
+
+const database = createIsolatedDatabase();
+
+import { GET as listExperiments, POST as createExperiment } from '@/app/api/experiments/route';
+import { DELETE as deleteExperiment, GET as getExperiment } from '@/app/api/experiments/[id]/route';
+import { prisma } from '@/lib/storage/prisma';
+import { createWorkbenchExperiment } from '@/lib/skill-workbench/experiment-service';
+import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
+import { normalizeCase } from '@/server/agent_datasets_storage';
+import { POST as createSkillExperiment } from '@/app/api/skill-workbench/skills/[name]/experiments/route';
+import { NextRequest } from 'next/server';
+
+const TEST_USER = `exp-smoke-${Date.now()}`;
+
+test.before(async () => {
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: 'dataset-1', user: TEST_USER, name: '冒烟数据集',
+      casesJson: JSON.stringify([{ id: 'dataset-case-1', input: 'dataset input', expectedOutput: 'dataset ref' }]),
+    },
+  });
+});
+
+test.after(async () => {
+  await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
+  await prisma.$disconnect();
+  database.dispose();
+});
+
+function postReq(body: unknown): Request {
+  return new Request('http://localhost/api/experiments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+test('Jiuwen experiment list and details keep the frozen Agent label after catalog deletion and configuration reuse', async (t) => {
+  const user = `${TEST_USER}-jiuwen-label`;
+  const agentName = `jiuwen-ee-${'a'.repeat(32)}`;
+  const agentLabel = 'Example Agent · workspace · group · jiuwenswarm';
+  const clientId = `${user}-client`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+    await prisma.reliabilityClient.deleteMany({ where: { user } });
+  });
+  await prisma.reliabilityClient.create({ data: {
+    clientId, user, name: 'Jiuwen fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(),
+    capabilitiesJson: JSON.stringify({
+      actions: ['RUN_EXPERIMENT_CASE'],
+      platforms: [{ id: 'jiuwenswarm', agents: [agentName], actions: ['RUN_EXPERIMENT_CASE'],
+        runExperimentCase: { version: 2, returnsTraceId: true, ready: true },
+        agentCatalog: [{ id: agentName, label: 'Example Agent · workspace · group', models: ['fixture-model'], ready: true }],
+      }],
+    }),
+  } });
+  const executionTarget = { workerId: clientId, platform: 'jiuwenswarm', agent: agentName };
+  const response = await createExperiment(postReq({
+    user, name: 'Jiuwen label snapshot', agentName, traceSource: 'generate', executionTarget,
+    configSnapshot: { traceSource: 'generate', agentName, agentLabel },
+    evaluatorIds: ['preset-agent-trace-quality'], cases: [{ input: 'fixture', actualOutput: '' }],
+  }));
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const { id } = await response.json();
+  const stored = await prisma.experiment.findUniqueOrThrow({ where: { id } });
+  const snapshot = JSON.parse(stored.configSnapshotJson || '{}');
+  assert.equal(stored.agentName, agentName);
+  assert.equal(snapshot.agentLabel, agentLabel);
+  assert.equal(snapshot.executionTarget.agent, agentName);
+
+  await prisma.reliabilityClient.delete({ where: { clientId } });
+  const copied = await createExperiment(postReq({ user, createMode: 'same-config', sourceExperimentId: id }));
+  assert.equal(copied.status, 201, JSON.stringify(await copied.clone().json()));
+  const cloneId = String((await copied.json()).id);
+  const clone = await prisma.experiment.findUniqueOrThrow({ where: { id: cloneId } });
+  assert.equal(clone.agentName, agentName);
+  assert.equal(JSON.parse(clone.configSnapshotJson || '{}').agentLabel, agentLabel);
+  assert.equal(JSON.parse(clone.configSnapshotJson || '{}').executionTarget.agent, agentName);
+  await prisma.experiment.updateMany({ where: { user }, data: { status: 'running' } });
+  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  assert.equal(listed.status, 200);
+  const { items } = await listed.json();
+  assert.equal(items.length, 2);
+  for (const item of items) {
+    assert.equal(item.agentName, agentName);
+    assert.equal(item.agentLabel, agentLabel);
+    const response = await getExperiment(new Request(`http://localhost/api/experiments/${item.id}?user=${user}`), { params: Promise.resolve({ id: item.id }) });
+    assert.equal(response.status, 200);
+    const detail = await response.json();
+    assert.equal(detail.agentName, agentName);
+    assert.equal(detail.configSnapshot.agentLabel, item.agentLabel);
+    assert.equal(detail.reusableConfig.agentName, agentName);
+    assert.equal(detail.reusableConfig.executionTarget.agent, agentName);
+  }
+});
+
+test('experiment list preserves Agent identities when label snapshots are missing or invalid', async (t) => {
+  const user = `${TEST_USER}-legacy-label`;
+  t.after(() => prisma.experiment.deleteMany({ where: { user } }));
+  const snapshots = [null, '{}', '{', 'null', '[]', '{"agentLabel":42}', '{"agentLabel":"  "}'];
+  for (const [index, configSnapshotJson] of snapshots.entries()) {
+    await prisma.experiment.create({ data: {
+      user, name: `Legacy ${index}`, agentName: `legacy-agent-${index}`, status: 'running', configSnapshotJson,
+    } });
+  }
+  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  assert.equal(listed.status, 200);
+  const { items } = await listed.json();
+  assert.equal(items.length, snapshots.length);
+  assert.deepEqual(items.map((item: { agentName: string }) => item.agentName).sort(), snapshots.map((_, index) => `legacy-agent-${index}`).sort());
+  assert.ok(items.every((item: { agentLabel?: string }) => item.agentLabel === undefined));
+});
+
+test('experiments API stores execution policy and exposes it for reuse; invalid overrides return 400', async (t) => {
+  const user = `${TEST_USER}-execution-config`;
+  t.after(() => prisma.experiment.deleteMany({ where: { user } }));
+  const config = { mode: 'system', overrides: { 'preset-result-answer': { attemptTimeoutSeconds: 900, maxRetries: 0 } } };
+  const body = { user, name: '配置测试', agentName: 'build', evaluatorIds: ['preset-result-answer'],
+    evaluatorExecutionConfig: config, cases: [{ input: 'question', actualOutput: 'answer' }] };
+  const response = await createExperiment(postReq(body));
+  assert.equal(response.status, 200);
+  const { id } = await response.json();
+  const detailResponse = await getExperiment(new Request(`http://localhost/api/experiments/${id}?user=${user}`), { params: Promise.resolve({ id }) });
+  assert.equal(detailResponse.status, 200);
+  const detail = await detailResponse.json();
+  assert.deepEqual(detail.evaluatorExecutionConfig, config);
+  assert.deepEqual(detail.evaluatorExecutionResolved['preset-result-answer'], { attemptTimeoutSeconds: 900, maxRetries: 0, source: 'override' });
+  assert.deepEqual(detail.reusableConfig.evaluatorExecutionConfig, config);
+  const bad = await createExperiment(postReq({ ...body, evaluatorExecutionConfig: { ...config, overrides: { 'custom-not-owned': { attemptTimeoutSeconds: 600, maxRetries: 2 } } } }));
+  assert.equal(bad.status, 400);
+});
+
+test('experiments API: POST create -> GET list -> GET detail', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+
+  // 创建
+  const createRes = await createExperiment(postReq({
+    user: TEST_USER,
+    name: '冒烟实验',
+    agentName: 'smoke-agent',
+    cases: [
+      {
+        executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1',
+        datasetId: 'dataset-1', datasetCaseId: 'dataset-case-1',
+        values: { visible_note: 'keep me' },
+        evaluatorContext: {
+          schemaVersion: 1,
+          availableTools: [{ name: 'search', description: '搜索' }],
+          availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
+        },
+      },
+      {
+        executionId: 'exec-2', taskId: 'task-2', input: 'q2', actualOutput: 'a2',
+      },
+    ],
+    evaluatorIds: ['preset-agent-trace-quality', 'preset-agent-task-completion'],
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+  assert.ok(typeof id === 'string' && id.length > 0);
+
+  // draft 仅用于创建与启动之间的内部衔接，不出现在用户列表。
+  const listRes = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
+  );
+  assert.equal(listRes.status, 200);
+  const { items } = await listRes.json();
+  assert.equal(items.length, 0);
+
+  await prisma.experiment.update({ where: { id }, data: { status: 'running' } });
+  const runningListRes = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
+  );
+  assert.equal(runningListRes.status, 200);
+  const { items: runningItems } = await runningListRes.json();
+  assert.equal(runningItems.length, 1);
+  assert.equal(runningItems[0].id, id);
+  assert.equal(runningItems[0].name, '冒烟实验');
+  assert.equal(runningItems[0].type, 'single');
+  assert.equal(runningItems[0].status, 'running');
+  assert.equal(runningItems[0].caseCount, 2);
+  assert.equal(runningItems[0].evaluatorCount, 2);
+  assert.equal(runningItems[0].overallScore, null);
+
+  // 详情
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.equal(detail.name, '冒烟实验');
+  assert.equal(detail.agentName, 'smoke-agent');
+  assert.deepEqual(detail.evaluatorIds, ['preset-agent-trace-quality', 'preset-agent-task-completion']);
+  assert.equal(detail.cases.length, 2);
+  assert.equal(detail.cases[0].referenceOutput, 'ref1');
+  assert.equal(detail.cases[1].referenceOutput, null);
+  assert.deepEqual(detail.cases[0].evaluatorContext, {
+    schemaVersion: 1,
+    availableTools: [{ name: 'search', description: '搜索' }],
+    availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
+  });
+  assert.equal(detail.cases[1].evaluatorContext, null);
+  assert.deepEqual(detail.cases[0].caseValues, { visible_note: 'keep me' });
+  const storedCase = await prisma.experimentCase.findFirst({
+    where: { experimentId: id, taskId: 'task-1' },
+    select: { caseValuesJson: true },
+  });
+  assert.deepEqual(JSON.parse(storedCase?.caseValuesJson || '{}').__agentInsightDatasetCase, {
+    datasetId: 'dataset-1',
+    caseId: 'dataset-case-1',
+    contentHash: datasetCaseContentHash(normalizeCase({ input: 'dataset input', expectedOutput: 'dataset ref' })),
+  });
+  assert.deepEqual(detail.results, []);
+});
+
+test('experiments API: rollback deletes drafts but never started experiments', async (t) => {
+  const user = `exp-rollback-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+
+  const create = async (name: string) => {
+    const response = await createExperiment(postReq({
+      user,
+      name,
+      agentName: 'rollback-agent',
+      cases: [{ input: 'q', actualOutput: 'a' }],
+      evaluatorIds: ['preset-agent-task-completion'],
+    }));
+    assert.equal(response.status, 200);
+    return String((await response.json()).id);
+  };
+
+  const draftId = await create('待回滚');
+  const deleteDraft = await deleteExperiment(
+    new Request(`http://localhost/api/experiments/${draftId}?user=${user}`, { method: 'DELETE' }),
+    { params: Promise.resolve({ id: draftId }) },
+  );
+  assert.equal(deleteDraft.status, 200);
+  assert.equal(await prisma.experiment.count({ where: { id: draftId } }), 0);
+
+  const runningId = await create('已启动');
+  await prisma.experiment.update({ where: { id: runningId }, data: { status: 'running' } });
+  const deleteRunning = await deleteExperiment(
+    new Request(`http://localhost/api/experiments/${runningId}?user=${user}`, { method: 'DELETE' }),
+    { params: Promise.resolve({ id: runningId }) },
+  );
+  assert.equal(deleteRunning.status, 409);
+  assert.equal((await deleteRunning.json()).status, 'running');
+  assert.equal(await prisma.experiment.count({ where: { id: runningId } }), 1);
+});
+
+test('experiments API: global list excludes Skill workbench experiments', async (t) => {
+  const user = `exp-scope-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+  const [globalExperiment, skillExperiment, legacyCaseAnalysis, legacyGrayscale] = await Promise.all([
+    prisma.experiment.create({
+      data: { user, name: '全局实验', status: 'running', scope: '' },
+    }),
+    prisma.experiment.create({
+      data: {
+        user,
+        name: 'Skill 触发分析',
+        status: 'running',
+        scope: 'skill-workbench',
+        skillName: 'scope-skill',
+        skillVersion: 1,
+        preset: 'trigger',
+      },
+    }),
+    prisma.experiment.create({
+      data: { user, name: '旧用例分析', status: 'running', scope: 'skill-case-analysis', skillName: 'scope-skill' },
+    }),
+    prisma.experiment.create({
+      data: { user, name: '旧 Skill A/B', status: 'running', scope: 'grayscale-ab', skillName: 'scope-skill' },
+    }),
+  ]);
+
+  const response = await listExperiments(
+    new Request(`http://localhost/api/experiments?user=${user}&limit=100`),
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(payload.items.map((item: { id: string }) => item.id), [globalExperiment.id]);
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === skillExperiment.id));
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === legacyCaseAnalysis.id));
+  assert.ok(!payload.items.some((item: { id: string }) => item.id === legacyGrayscale.id));
+});
+
+test('experiments API: reliability FI fields stay off evaluatorContextJson', async (t) => {
+  const user = `exp-fi-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+  });
+
+  const createRes = await createExperiment(postReq({
+    user,
+    name: '可靠性 FI 分离',
+    agentName: 'fi-agent',
+    cases: [
+      {
+        input: 'inject me',
+        faultInjectionType: 'analysis-paralysis',
+        values: { fault_injection_type: 'analysis-paralysis', scene: 'e2e' },
+      },
+      {
+        input: 'with tools + fi',
+        faultInjectionType: 'tool-failure',
+        evaluatorContext: {
+          schemaVersion: 1,
+          availableTools: [{ name: 'bash' }],
+        },
+      },
+    ],
+    evaluatorIds: ['preset-ras-reliability'],
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+
+  const rows = await prisma.experimentCase.findMany({
+    where: { experimentId: id },
+    orderBy: { createdAt: 'asc' },
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].faultInjectionType, 'analysis-paralysis');
+  assert.equal(rows[0].evaluatorContextJson, null);
+  assert.match(String(rows[0].caseValuesJson), /analysis-paralysis/);
+  assert.equal(rows[1].faultInjectionType, 'tool-failure');
+  assert.deepEqual(JSON.parse(String(rows[1].evaluatorContextJson)), {
+    schemaVersion: 1,
+    availableTools: [{ name: 'bash' }],
+  });
+
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${user}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.equal(detail.cases[0].faultInjectionType, 'analysis-paralysis');
+  assert.equal(detail.cases[0].evaluatorContext, null);
+  assert.equal(detail.cases[0].evaluatorContextError, null);
+  assert.equal(detail.cases[1].faultInjectionType, 'tool-failure');
+  assert.deepEqual(detail.cases[1].evaluatorContext, {
+    schemaVersion: 1,
+    availableTools: [{ name: 'bash' }],
+  });
+});
+
+test('experiments API: POST validation rejects empty payloads', async () => {
+  const noName = await createExperiment(postReq({
+    user: TEST_USER, name: '', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a' }], evaluatorIds: ['x'],
+  }));
+  assert.equal(noName.status, 400);
+
+  const noCases = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a', cases: [], evaluatorIds: ['x'],
+  }));
+  assert.equal(noCases.status, 400);
+
+  const noEvaluators = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a' }], evaluatorIds: [],
+  }));
+  assert.equal(noEvaluators.status, 400);
+
+  const invalidContext = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', evaluatorContext: { schemaVersion: 1 } }],
+    evaluatorIds: ['x'],
+  }));
+  assert.equal(invalidContext.status, 400);
+  assert.match(String((await invalidContext.json()).error), /availableTools/);
+
+  const invalidConfig = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', referenceOutput: 'a' }],
+    evaluatorIds: ['preset-text-entity-f1'],
+    evaluatorConfigs: {
+      'preset-text-entity-f1': { matchMode: 'fuzzy', fuzzyThreshold: 101 },
+    },
+  }));
+  assert.equal(invalidConfig.status, 400);
+  assert.match(String((await invalidConfig.json()).error), /0 到 100/);
+});
+
+test('experiments API: persist and return normalized evaluator configs', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+  const createRes = await createExperiment(postReq({
+    user: TEST_USER,
+    name: '配置实验',
+    agentName: 'smoke-agent',
+    cases: [{ input: 'q', actualOutput: 'ＯＫ！', referenceOutput: 'ok' }],
+    evaluatorIds: ['preset-text-exact-match'],
+    evaluatorConfigs: {
+      'preset-text-exact-match': {
+        caseSensitive: false,
+        punctuationInsensitive: true,
+        widthNormalization: true,
+      },
+    },
+  }));
+  assert.equal(createRes.status, 200);
+  const { id } = await createRes.json();
+
+  const detailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(detailRes.status, 200);
+  const detail = await detailRes.json();
+  assert.deepEqual(detail.evaluatorConfigs['preset-text-exact-match'], {
+    caseSensitive: false,
+    punctuationInsensitive: true,
+    whitespaceNormalization: false,
+    widthNormalization: true,
+    multiCandidateScoring: 'any',
+  });
+  assert.deepEqual(detail.reusableConfig.evaluatorConfigs, detail.evaluatorConfigs);
+
+  const cloneRes = await createExperiment(postReq({
+    user: TEST_USER,
+    createMode: 'same-config',
+    sourceExperimentId: id,
+  }));
+  assert.equal(cloneRes.status, 201);
+  const cloned = await cloneRes.json();
+  const clonedDetailRes = await getExperiment(
+    new Request(`http://localhost/api/experiments/${cloned.id}?user=${TEST_USER}`),
+    { params: Promise.resolve({ id: cloned.id }) },
+  );
+  assert.equal(clonedDetailRes.status, 200);
+  const clonedDetail = await clonedDetailRes.json();
+  assert.match(clonedDetail.name, /^Agent 评测 \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.deepEqual(clonedDetail.evaluatorConfigs, detail.evaluatorConfigs);
+});
+
+test('experiments API: evaluatorConfigs 相似度阈值校验与持久化', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+
+  // 越界阈值 → 400
+  const bad = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a' }],
+    evaluatorIds: ['preset-similarity-text'],
+    evaluatorConfigs: { 'preset-similarity-text': { threshold: 150 } },
+  }));
+  assert.equal(bad.status, 400);
+  assert.match(String((await bad.json()).error), /0 到 100/);
+
+  // 非数字阈值 → 400
+  const badType = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a' }],
+    evaluatorIds: ['preset-similarity-text'],
+    evaluatorConfigs: { 'preset-similarity-text': { threshold: 'high' } },
+  }));
+  assert.equal(badType.status, 400);
+
+  // 合法阈值 → 落库（版本化 JSON，小数取整）
+  const ok = await createExperiment(postReq({
+    user: TEST_USER, name: '阈值实验', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', referenceOutput: 'ref' }],
+    evaluatorIds: ['preset-similarity-text'],
+    evaluatorConfigs: { 'preset-similarity-text': { threshold: 60.4 } },
+  }));
+  assert.equal(ok.status, 200);
+  const { id } = await ok.json();
+  const exp = await prisma.experiment.findUnique({ where: { id } });
+  assert.deepEqual(JSON.parse(exp!.evaluatorConfigsJson), {
+    schemaVersion: 1,
+    configs: { 'preset-similarity-text': { threshold: 60 } },
+  });
+});
+
+test('experiments API: detail 404 for missing experiment', async () => {
+  const res = await getExperiment(
+    new Request(`http://localhost/api/experiments/nope?user=${TEST_USER}`),
+    { params: Promise.resolve({ id: 'nope' }) },
+  );
+  assert.equal(res.status, 404);
+});
+
+test('Skill 用例分析复用已有 Trace 时只复制未删除的 Case，并保留来源关联', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+  });
+  const created = await createExperiment(postReq({
+    user: TEST_USER,
+    name: 'Skill 用例分析',
+    agentName: 'case-agent',
+    scope: 'skill-workbench',
+    skillName: 'test-skill',
+    skillVersion: 1,
+    preset: 'use-case',
+    evaluatorIds: ['preset-agent-task-completion'],
+    cases: [
+      { executionId: 'trace-keep', taskId: 'task-keep', input: 'keep', actualOutput: 'ok' },
+      { executionId: 'trace-delete', taskId: 'task-delete', input: 'delete', actualOutput: 'ok' },
+    ],
+    configSnapshot: { traceSource: 'existing', caseIds: ['trace-keep', 'trace-delete'] },
+  }));
+  assert.equal(created.status, 200);
+  const sourceId = String((await created.json()).id);
+  const removed = await prisma.experimentCase.findFirstOrThrow({
+    where: { experimentId: sourceId, executionId: 'trace-delete' },
+  });
+  await prisma.experimentCase.update({ where: { id: removed.id }, data: { deletedAt: new Date() } });
+
+  const copied = await createExperiment(postReq({
+    user: TEST_USER, createMode: 'same-config', sourceExperimentId: sourceId,
+  }));
+  assert.equal(copied.status, 201);
+  const cloneId = String((await copied.json()).id);
+  const clone = await prisma.experiment.findUniqueOrThrow({
+    where: { id: cloneId }, include: { cases: true },
+  });
+  assert.match(clone.name, /^test-skill · 用例分析 · v1 · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.equal(clone.sourceExperimentId, sourceId);
+  assert.deepEqual(clone.cases.map((item: { executionId: string | null }) => item.executionId), ['trace-keep']);
+  assert.deepEqual(JSON.parse(clone.configSnapshotJson || '{}').caseIds, ['trace-keep']);
+});
+
+test('Skill A/B 和触发分析同配置实验创建独立任务并沿用冻结的版本文件', async (t) => {
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
+    await prisma.grayscaleTask.deleteMany({ where: { user: TEST_USER } });
+    await prisma.agentEvalDataset.deleteMany({ where: { user: TEST_USER } });
+    await prisma.reliabilityClient.deleteMany({ where: { user: TEST_USER } });
+    await prisma.skill.deleteMany({ where: { user: TEST_USER } });
+  });
+  const skillName = `reuse-skill-${Date.now()}`;
+  const skill = await prisma.skill.create({
+    data: {
+      name: skillName, user: TEST_USER,
+      versions: { create: [
+        { version: 1, content: '---\nname: reuse-skill\ndescription: original\n---\nOriginal' },
+        { version: 2, content: '---\nname: reuse-skill\ndescription: compare\n---\nCompare' },
+      ] },
+    },
+    include: { versions: true },
+  });
+  const datasetId = `reuse-dataset-${Date.now()}`;
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: datasetId, user: TEST_USER, name: 'A/B Case', targetSkill: skillName,
+      casesJson: JSON.stringify([
+        { id: 'case-a', input: 'first', expectedOutput: 'one' },
+        { id: 'case-b', input: 'second', expectedOutput: 'two' },
+      ]),
+    },
+  });
+  const workerId = `reuse-worker-${Date.now()}`;
+  await prisma.reliabilityClient.create({
+    data: {
+      clientId: workerId, user: TEST_USER, name: 'test client', hostname: 'test-host',
+      status: 'online', lastSeenAt: new Date(),
+      capabilitiesJson: JSON.stringify({
+        actions: ['RUN_EXPERIMENT_CASE'],
+        platforms: [{
+          id: 'opencode', agents: ['build'], models: ['test/model'],
+          runExperimentCase: { version: 1, returnsTraceId: true, skillSnapshotVersion: 5 },
+        }],
+      }),
+    },
+  });
+  for (const executionConcurrency of [0, -1, 1.5, '2']) {
+    const response = await createSkillExperiment(new NextRequest('http://localhost/api/skill-workbench/skills/test/experiments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: TEST_USER, version: 1, preset: 'skill-ab', compareVersion: 2, datasetId, executionConcurrency }),
+    }), { params: Promise.resolve({ name: skillName }) });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /执行并发/);
+  }
+  const source = await createWorkbenchExperiment({
+    user: TEST_USER, skillName, version: 1, preset: 'skill-ab', compareVersion: 2,
+    datasetId, caseIds: ['case-a', 'case-b'], agentName: 'build', executionConcurrency: 3,
+    evaluatorIds: ['preset-agent-task-completion'],
+    executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },
+  });
+  assert.equal(source.kind, 'created');
+  if (source.kind !== 'created') return;
+  assert.match(source.experiment.name, new RegExp(`^${skillName} · A/B 测试 · v1 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));
+  await prisma.experimentCancellation.create({
+    data: { id: `reuse-cancel-${Date.now()}`, user: TEST_USER, experimentId: source.experiment.id, caseKey: 'dataset:case-b' },
+  });
+  await prisma.skillVersion.update({
+    where: { id: skill.versions.find((item: { version: number; id: string }) => item.version === 1)!.id },
+    data: { content: 'Changed after the original experiment' },
+  });
+
+  const copied = await createExperiment(postReq({
+    user: TEST_USER, createMode: 'same-config', sourceExperimentId: source.experiment.id,
+  }));
+  assert.equal(copied.status, 201);
+  const clone = await copied.json();
+  assert.notEqual(clone.grayscaleTaskId, source.grayscaleTask.id);
+  assert.deepEqual(clone.caseIds, ['case-a']);
+  assert.deepEqual(clone.evaluatorIds, ['preset-agent-task-completion']);
+  const newTask = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: clone.grayscaleTaskId } });
+  const config = JSON.parse(newTask.configJson);
+  assert.equal(config.evalExperimentId, clone.id);
+  assert.equal(config.runCount, 1);
+  assert.equal(config.executionConcurrency, 3);
+  assert.equal(source.configSnapshot.executionConcurrency, 3);
+  const detail = await getExperiment(new Request(`http://localhost/api/experiments/${clone.id}?user=${TEST_USER}`), { params: Promise.resolve({ id: clone.id }) });
+  assert.equal((await detail.json()).executionConcurrency, 3);
+  assert.match(config.skillSnapshots.a.files['SKILL.md'], /Original/);
+  const newExperiment = await prisma.experiment.findUniqueOrThrow({ where: { id: clone.id } });
+  assert.match(newExperiment.name, new RegExp(`^${skillName} · A/B 测试 · v1 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));
+  assert.equal(newExperiment.sourceExperimentId, source.experiment.id);
+
+  const triggerDatasetId = `reuse-trigger-dataset-${Date.now()}`;
+  await prisma.agentEvalDataset.create({
+    data: {
+      id: triggerDatasetId, user: TEST_USER, name: 'Trigger Case', targetSkill: skillName,
+      tagsJson: JSON.stringify(['trigger']),
+      fieldsJson: JSON.stringify([{ id: 'should_trigger', key: 'should_trigger', label: '应触发', type: 'boolean' }]),
+      casesJson: JSON.stringify([
+        { id: 'positive', input: 'use skill', values: { should_trigger: true } },
+        { id: 'negative', input: 'ignore skill', values: { should_trigger: false } },
+      ]),
+    },
+  });
+  const triggerSource = await createWorkbenchExperiment({
+    user: TEST_USER, skillName, version: 2, preset: 'trigger', datasetId: triggerDatasetId,
+    caseIds: ['positive', 'negative'], agentName: 'build',
+    executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },
+  });
+  assert.equal(triggerSource.kind, 'created');
+  if (triggerSource.kind !== 'created') return;
+  assert.match(triggerSource.experiment.name, new RegExp(`^${skillName} · 触发分析 · v2 · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}$`));
+  const triggerCopied = await createExperiment(postReq({
+    user: TEST_USER, createMode: 'same-config', sourceExperimentId: triggerSource.experiment.id,
+  }));
+  assert.equal(triggerCopied.status, 201);
+  const triggerClone = await triggerCopied.json();
+  assert.notEqual(triggerClone.grayscaleTaskId, triggerSource.grayscaleTask.id);
+  const sourceTriggerTask = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: triggerSource.grayscaleTask.id } });
+  const copiedTriggerTask = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: triggerClone.grayscaleTaskId } });
+  assert.deepEqual(JSON.parse(copiedTriggerTask.configJson).triggerSkills, JSON.parse(sourceTriggerTask.configJson).triggerSkills);
+});
+
+test('Skill A/B 两侧无 Skill、V0 与其他版本创建和同配置复用保持有效绑定', async (t) => {
+  const { POST: createSkillExperiment } = await import('@/app/api/skill-workbench/skills/[name]/experiments/route');
+  const { isGrayscaleTaskBindingValid } = await import('@/lib/grayscale/task-binding');
+  const { NextRequest } = await import('next/server');
+  const user = `ab-binding-${Date.now()}`;
+  t.after(async () => {
+    await prisma.experiment.deleteMany({ where: { user } });
+    await prisma.grayscaleTask.deleteMany({ where: { user } });
+    await prisma.agentEvalDataset.deleteMany({ where: { user } });
+    await prisma.reliabilityClient.deleteMany({ where: { user } });
+    await prisma.skill.deleteMany({ where: { user } });
+  });
+  const skillName = user;
+  await prisma.skill.create({ data: { name: skillName, user, versions: { create: [
+    { version: 0, content: '---\nname: ab-test\ndescription: V0\n---\nV0 frozen' },
+    { version: 1, content: '---\nname: ab-test\ndescription: V1\n---\nV1 frozen' },
+  ] } } });
+  const datasetId = `${user}-dataset`;
+  await prisma.agentEvalDataset.create({ data: {
+    id: datasetId, user, name: 'Binding cases', targetSkill: skillName,
+    casesJson: JSON.stringify([{ id: 'binding-case', input: 'Reply OK', expectedOutput: 'OK' }]),
+  } });
+  const workerId = `${user}-worker`;
+  await prisma.reliabilityClient.create({ data: {
+    clientId: workerId, user, name: 'binding client', hostname: 'test-host', status: 'online', lastSeenAt: new Date(),
+    capabilitiesJson: JSON.stringify({ actions: ['RUN_EXPERIMENT_CASE'], platforms: [{
+      id: 'opencode', agents: ['build'], models: ['test/model'],
+      runExperimentCase: { version: 1, returnsTraceId: true, skillSnapshotVersion: 4 },
+    }] }),
+  } });
+  const create = (selection: Record<string, unknown>) => createSkillExperiment(new NextRequest('http://localhost/api/skill-workbench/skills/test/experiments', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      user, version: 0, preset: 'skill-ab', datasetId, evaluatorIds: ['preset-agent-task-completion'],
+      executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },
+      ...selection,
+    }),
+  }), { params: Promise.resolve({ name: skillName }) });
+  for (const selection of [
+    { versionAEnabled: true, versionBEnabled: false },
+    { versionAEnabled: false, compareVersion: 0 },
+    { versionAEnabled: false, compareVersion: 1 },
+    { compareVersion: 1 },
+  ]) {
+    const response = await create(selection);
+    const created = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(created));
+    const config = JSON.parse(created.grayscaleTask.configJson);
+    assert.equal(isGrayscaleTaskBindingValid(config, created.grayscaleTask), true);
+    assert.equal(created.experiment.skillVersion, 0);
+    assert.equal(config.boundSide, selection.versionAEnabled === false ? 'b' : 'a');
+    assert.equal(created.grayscaleTask.skillVersion, selection.versionAEnabled === false ? selection.compareVersion : 0);
+    if (selection.versionAEnabled === false) {
+      assert.equal(config.versionAId, '__NONE__');
+      assert.equal(config.skillSnapshots.a, null);
+      // 模拟旧版本创建的错误绑定，复用时不能继承它。
+      await prisma.grayscaleTask.update({ where: { id: created.grayscaleTask.id }, data: { configJson: JSON.stringify({ ...config, boundSide: 'a' }) } });
+    }
+    if ('versionBEnabled' in selection && selection.versionBEnabled === false) {
+      assert.equal(config.versionBId, '__NONE__');
+      assert.equal(config.skillSnapshots.b, null);
+      assert.equal(JSON.parse(created.experiment.skillContextJson).versionB, null);
+    }
+    const cloneResponse = await createExperiment(postReq({ user, createMode: 'same-config', sourceExperimentId: created.experiment.id }));
+    const cloned = await cloneResponse.json();
+    assert.equal(cloneResponse.status, 201, JSON.stringify(cloned));
+    const task = await prisma.grayscaleTask.findUniqueOrThrow({ where: { id: cloned.grayscaleTaskId } });
+    const copied = JSON.parse(task.configJson);
+    assert.equal(isGrayscaleTaskBindingValid(copied, task), true);
+    assert.equal(copied.versionAId, config.versionAId);
+    assert.equal(copied.versionBId, config.versionBId);
+    assert.deepEqual(copied.skillSnapshots, config.skillSnapshots);
+  }
+  for (const selection of [
+    { versionAEnabled: false, versionBEnabled: false },
+    { compareVersion: 0 },
+    { versionAEnabled: false, compareVersion: 999 },
+    {},
+  ]) {
+    const response = await create(selection);
+    assert.equal(response.status, 400, JSON.stringify(await response.json()));
+  }
+});

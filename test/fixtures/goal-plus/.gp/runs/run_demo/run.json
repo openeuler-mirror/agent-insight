@@ -1,0 +1,18 @@
+{
+  "run_id": "run_demo",
+  "state": "promoted",
+  "frozen_spec_id": "spec_demo",
+  "source_path": "/home/example/private/spec.json",
+  "created_at": "2026-09-01T01:04:00Z",
+  "candidates_total": 1,
+  "candidates_evaluated": 1,
+  "best_candidate_id": "candidate_001",
+  "best_score": 0.92,
+  "selected_candidate_id": "candidate_001",
+  "selected_score": 0.92,
+  "selected_iteration": 2,
+  "selected_git_head": "cccccccccccccccccccccccccccccccccccccccc",
+  "selected_artifact_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "budget_used": { "tokens": 2048 },
+  "selected_models": [{ "slot": 1, "model": "synthetic-model" }]
+}

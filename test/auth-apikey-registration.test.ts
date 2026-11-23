@@ -1,0 +1,168 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import assert from 'node:assert/strict';
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-auth-registration-'));
+process.env.AGENT_INSIGHT_HOME = testHome;
+const testDbPath = path.join(testHome, "witty_insight.db");
+fs.closeSync(fs.openSync(testDbPath, "w"));
+process.env.DATABASE_URL = "file:" + testDbPath;
+execFileSync(
+  process.execPath,
+  [path.resolve(__dirname, "../node_modules/prisma/build/index.js"), "db", "push", "--skip-generate"],
+  { cwd: path.resolve(__dirname, ".."), env: process.env, stdio: "ignore" },
+);
+
+let POST: (request: Request) => Promise<Response>;
+let prisma: typeof import('@/lib/storage/prisma').prisma;
+
+const suffix = `${Date.now()}-${process.pid}`;
+const usernames = {
+  seed: `registration-seed-${suffix}`,
+  casing: `registration-case-${suffix}`,
+  race: `registration-race-${suffix}@example.com`,
+};
+const idaasUsername = `Employee-UUID-${suffix}-ABCDEF`;
+
+function register(username: string): Promise<Response> {
+  return POST(new Request('http://localhost/api/auth/apikey', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  }));
+}
+
+test.before(async () => {
+  const [routeModule, prismaModule] = await Promise.all([
+    import('@/app/api/auth/apikey/route'),
+    import('@/lib/storage/prisma'),
+  ]);
+  POST = routeModule.POST;
+  prisma = prismaModule.prisma;
+});
+
+test.after(async () => {
+  const candidates = [
+    usernames.seed,
+    usernames.casing,
+    usernames.casing.toUpperCase(),
+    usernames.race,
+    idaasUsername,
+  ];
+
+  await prisma.session.deleteMany({ where: { user: { in: candidates } } });
+  await prisma.execution.deleteMany({ where: { user: { in: candidates } } });
+  await prisma.agentEvalDataset.deleteMany({ where: { user: { in: candidates } } });
+  await prisma.registeredAgent.deleteMany({ where: { user: { in: candidates } } });
+  await prisma.skill.deleteMany({ where: { user: { in: candidates } } });
+  await prisma.user.deleteMany({ where: { username: { in: candidates } } });
+  await prisma.$disconnect();
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
+
+test('首次注册只创建账号，不注入内置示例数据', async () => {
+  const response = await register(usernames.seed);
+  assert.equal(response.status, 200);
+
+  const [users, agents, skills, versions, datasets, sessions, executions] = await Promise.all([
+    prisma.user.count({ where: { username: usernames.seed } }),
+    prisma.registeredAgent.count({ where: { user: usernames.seed } }),
+    prisma.skill.count({ where: { user: usernames.seed } }),
+    prisma.skillVersion.count({ where: { Skill: { user: usernames.seed } } }),
+    prisma.agentEvalDataset.count({ where: { user: usernames.seed } }),
+    prisma.session.count({ where: { user: usernames.seed } }),
+    prisma.execution.count({ where: { user: usernames.seed } }),
+  ]);
+
+  assert.deepEqual(
+    { users, agents, skills, versions, datasets, sessions, executions },
+    { users: 1, agents: 0, skills: 0, versions: 0, datasets: 0, sessions: 0, executions: 0 },
+  );
+});
+
+test('用户名大小写归一到同一用户和同一 API key', async () => {
+  const first = await register(usernames.casing.toUpperCase());
+  const second = await register(usernames.casing);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+
+  const firstBody = await first.json();
+  const secondBody = await second.json();
+  assert.equal(firstBody.username, usernames.casing);
+  assert.equal(secondBody.username, usernames.casing);
+  assert.equal(firstBody.apiKey, secondBody.apiKey);
+  assert.equal(await prisma.user.count({ where: { username: usernames.casing } }), 1);
+});
+
+test('10 路并发首次注册全部成功并返回同一 API key', async () => {
+  const responses = await Promise.all(Array.from({ length: 10 }, () => register(usernames.race)));
+  assert.deepEqual(responses.map((response) => response.status), Array(10).fill(200));
+
+  const bodies = await Promise.all(responses.map((response) => response.json()));
+  assert.equal(new Set(bodies.map((body) => body.apiKey)).size, 1);
+  assert.equal(await prisma.user.count({ where: { username: usernames.race } }), 1);
+});
+
+test('看起来像邮箱但格式非法的用户名返回 400', async () => {
+  const response = await register(`invalid-${suffix}@domain`);
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'Username must be a valid email address' });
+});
+
+test('IDaaS 恢复登录时保持 UUID 大小写并校验已有 API key', async () => {
+  const apiKey = `wi_idaas_restore_${suffix}`;
+  await prisma.user.create({
+    data: { username: idaasUsername, apiKey },
+  });
+
+  const previousLoginMode = process.env.LOGIN_MODE;
+  const previousOrganizationMode = process.env.ORGANIZATION_MODE;
+  const previousRegionAccessEnabled = process.env.IDAAS_REGION_ACCESS_ENABLED;
+  process.env.LOGIN_MODE = 'idaas_oauth';
+  delete process.env.ORGANIZATION_MODE;
+  process.env.IDAAS_REGION_ACCESS_ENABLED = "false";
+
+  try {
+    const response = await POST(new Request('http://localhost/api/auth/apikey', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-witty-api-key': apiKey,
+      },
+      body: JSON.stringify({ username: `  ${idaasUsername}  ` }),
+    }));
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      username: idaasUsername,
+      apiKey,
+      displayName: idaasUsername,
+    });
+  } finally {
+    if (previousLoginMode === undefined) delete process.env.LOGIN_MODE;
+    else process.env.LOGIN_MODE = previousLoginMode;
+    if (previousOrganizationMode === undefined) delete process.env.ORGANIZATION_MODE;
+    else process.env.ORGANIZATION_MODE = previousOrganizationMode;
+    if (previousRegionAccessEnabled === undefined) delete process.env.IDAAS_REGION_ACCESS_ENABLED;
+    else process.env.IDAAS_REGION_ACCESS_ENABLED = previousRegionAccessEnabled;
+  }
+});

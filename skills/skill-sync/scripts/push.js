@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -9,9 +25,12 @@ const readline = require('readline');
 function loadConfiguration() {
     let config = {};
     try {
-        const envPath = path.join(os.homedir(), '.witty', '.env');
-        if (fs.existsSync(envPath)) {
-            const content = fs.readFileSync(envPath, 'utf8');
+        const envPath = path.join(os.homedir(), '.agent-insight', '.env');
+        const legacyEnvPath = path.join(os.homedir(), '.witty', '.env');
+        const oldEnvPath = path.join(os.homedir(), '.skill-insight', '.env');
+        const selectedEnvPath = fs.existsSync(envPath) ? envPath : (fs.existsSync(oldEnvPath) ? oldEnvPath : legacyEnvPath);
+        if (fs.existsSync(selectedEnvPath)) {
+            const content = fs.readFileSync(selectedEnvPath, 'utf8');
             content.split('\n').forEach(line => {
                 const match = line.match(/^\s*([\w_]+)\s*=\s*(.*)?\s*$/);
                 if (match && match[1]) {
@@ -19,12 +38,12 @@ function loadConfiguration() {
                 }
             });
         }
-    } catch (e) {}
+    } catch {}
     
     return {
-        apiKey: config['WITTY_INSIGHT_API_KEY'] || process.env.WITTY_INSIGHT_API_KEY,
-        host: config['WITTY_INSIGHT_HOST'] || process.env.WITTY_INSIGHT_HOST,
-        user: config['WITTY_INSIGHT_USER'] || process.env.WITTY_INSIGHT_USER
+        apiKey: config['AGENT_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
+        host: config['AGENT_INSIGHT_HOST'] || config['WITTY_INSIGHT_HOST'] || process.env.AGENT_INSIGHT_HOST || process.env.WITTY_INSIGHT_HOST,
+        user: config['AGENT_INSIGHT_USER'] || config['WITTY_INSIGHT_USER'] || process.env.AGENT_INSIGHT_USER || process.env.WITTY_INSIGHT_USER
     };
 }
 
@@ -80,8 +99,8 @@ async function main() {
 
     const { host, apiKey, user } = loadConfiguration();
     if (!host) {
-        console.error('⚠️  Error: Witty Insight Host is not configured.');
-        console.error('Please configure WITTY_INSIGHT_HOST in ~/.witty/.env');
+        console.error('⚠️  Error: Agent Insight Host is not configured.');
+        console.error('Please configure AGENT_INSIGHT_HOST in ~/.agent-insight/.env');
         process.exit(1);
     }
 
@@ -103,7 +122,7 @@ async function main() {
                         const skills = JSON.parse(data);
                         const existing = skills.find(s => s.name === extractedName);
                         resolve(existing);
-                    } catch(e) { resolve(null); }
+                    } catch { resolve(null); }
                 } else {
                     resolve(null);
                 }

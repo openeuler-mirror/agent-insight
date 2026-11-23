@@ -5,19 +5,27 @@
 
 ## 快照目录结构
 
-每次优化在 Skill 根目录下生成 `snapshots/`：
+每次优化在外层工作区目录下生成 `snapshots/`（与内层 Skill 目录同级）：
 ```
-snapshots/
-  v0/                  ← 初始基线版本
-    SKILL.md
-    meta.json          ← {"reason": "Initial version", "source": "auto", ...}
-  v1/                  ← 优化后的新基线
-    SKILL.md
-    meta.json
-  v1.1/                ← 用户反馈后的候选版本 (minor 递增)
-    SKILL.md
-    meta.json
+{skill-name}-optimized-{timestamp}/       ← 外层工作区
+├── {skill-name}/                          ← 内层纯 Skill 目录
+│   ├── SKILL.md
+│   ├── scripts/
+│   └── references/
+├── snapshots/                             ← 版本快照（位于外层工作区）
+│   ├── v0/                  ← 初始基线版本
+│   │   ├── SKILL.md
+│   │   └── meta.json          ← {"reason": "Initial version", "source": "auto", ...}
+│   ├── v1/                  ← 优化后的新基线
+│   │   ├── SKILL.md
+│   │   └── meta.json
+│   └── v1.1/                ← 用户反馈后的候选版本 (minor 递增)
+│       ├── SKILL.md
+│       └── meta.json
+└── OPTIMIZATION_REPORT.md                 ← 最新优化报告
 ```
+
+> **注意**：`snapshots/` 位于外层工作区而非内层 Skill 目录中，这样加载 Skill 到 `.opencode/skills/` 时不会包含快照等过程产物。
 
 `meta.json` 字段：`reason`（本次优化原因）、`source`（本次优化的来源，user/auto）、`mode`（模式，static/dynamic/feedback/hybrid）、`base_version`（基于哪个版本）、`created_at`（时间戳）。
 

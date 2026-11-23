@@ -1,0 +1,1486 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T03:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-02-stuck-on-prerequisite-78585",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-02-stuck-on-prerequisite-78585",
+        "taskId": "jiuwen-case-02-stuck-on-prerequisite-78585",
+        "query": "t1 生成关键数据，t2 依赖 t1，完成后 t2 才能执行。",
+        "framework": "jiuwenswarm",
+        "tokens": 334800,
+        "cost": null,
+        "latency": 20.0,
+        "toolCallCount": 49,
+        "llmCallCount": 50,
+        "inputTokens": 324000,
+        "outputTokens": 10800,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T03:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "t1 长期停留在 in_progress 未完成，t2 持续处于 blocked（blocked_by t1），始终未获得执行机会。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "worker-a",
+          "worker-b"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-02-stuck-on-prerequisite-78585",
+        "label": "jiuwenswarm",
+        "query": "t1 生成关键数据，t2 依赖 t1，完成后 t2 才能执行。",
+        "startTime": "2026-08-07T03:00:00.000Z",
+        "endTime": "2026-08-07T03:00:20.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "t1 生成关键数据，t2 依赖 t1，完成后 t2 才能执行。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队并创建依赖链任务。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"依赖小队\", \"team_desc\": \"t2 依赖 t1，t1 长期未完成。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"负责组织任务依赖链。\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t1（生成数据）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t1\", \"title\": \"生成数据\", \"content\": \"生成关键数据。\"}]}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建 t2（消费 t1 的数据）。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"t2\", \"title\": \"消费数据\", \"content\": \"等待 t1 数据后消费。\", \"blocked_by\": [\"t1\"]}]}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 worker-a 执行 t1。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-a\", \"display_name\": \"工作者A\", \"desc\": \"执行 t1。\", \"prompt\": \"认领并完成 t1。\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 worker-b 执行 t2。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"worker-b\", \"display_name\": \"工作者B\", \"desc\": \"执行 t2。\", \"prompt\": \"等待 t1 完成后执行 t2。\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"各自认领任务开始。\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-a",
+            "content": "认领 t1。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"claimable\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "claim_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "claim_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"claimed\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-a",
+            "content": "",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "update_task_worker-a",
+                "type": "function",
+                "function": {
+                  "name": "update_task",
+                  "arguments": "[{\"task_id\": \"t1\", \"status\": \"in_progress\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-a",
+            "subagent_name": "worker-a",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-a",
+            "content": "t1 进入 in_progress 后遇到问题暂停。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "等待 t1 完成。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','assignee':'worker-a','blocked_by':[]},{'task_id':'t2','status':'blocked','assignee':None,'blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 4000,
+              "completed": 4400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 汇报为 blocked，等待 t1。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 4400,
+              "completed": 4800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "t2 一直等待 t1。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 4800,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 5600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 5600,
+              "completed": 6000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 6000,
+              "completed": 6400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 6400,
+              "completed": 6800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 6800,
+              "completed": 7200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 7200,
+              "completed": 7600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 7600,
+              "completed": 8000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 8000,
+              "completed": 8400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 8400,
+              "completed": 8800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 8800,
+              "completed": 9200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 9200,
+              "completed": 9600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 9600,
+              "completed": 10000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 10000,
+              "completed": 10400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 10400,
+              "completed": 10800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 10800,
+              "completed": 11200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 11200,
+              "completed": 11600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 11600,
+              "completed": 12000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 12000,
+              "completed": 12400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 12400,
+              "completed": 12800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 12800,
+              "completed": 13200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 13200,
+              "completed": 13600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 13600,
+              "completed": 14000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 14000,
+              "completed": 14400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 14400,
+              "completed": 14800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 14800,
+              "completed": 15200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 15200,
+              "completed": 15600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 15600,
+              "completed": 16000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 16000,
+              "completed": 16400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 16400,
+              "completed": 16800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 16800,
+              "completed": 17200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 17200,
+              "completed": 17600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 17600,
+              "completed": 18000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 18000,
+              "completed": 18400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 18400,
+              "completed": 18800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 18800,
+              "completed": 19200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "worker-b",
+            "subagent_name": "worker-b",
+            "subagent_session_id": "team_case-02-stuck-on-prerequisite_worker-b",
+            "content": "t2 仍被 t1 阻塞。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_worker-b",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 19200,
+              "completed": 19600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "t1 长期停留在 in_progress 未完成，t2 被前置阻塞，始终未获得执行机会。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-02-stuck-on-prerequisite-78585\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'t1','status':'in_progress','blocked_by':[]},{'task_id':'t2','status':'blocked','blocked_by':['t1']}],'count':2} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 19600,
+              "completed": 20000
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

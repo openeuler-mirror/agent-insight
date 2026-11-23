@@ -1,0 +1,128 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use client';
+
+import { createContext, ReactNode, useContext, useMemo, useState } from 'react';
+import { copyText } from '@/lib/copy-text';
+import { detect } from './detector';
+import { unescapeText } from './unescape';
+import { CodeRenderer } from './renderers/CodeRenderer';
+import { JsonRenderer } from './renderers/JsonRenderer';
+import { MarkdownRenderer } from './renderers/MarkdownRenderer';
+import { PlainRenderer } from './renderers/PlainRenderer';
+import './styles.css';
+
+export interface SmartViewerProps {
+    text: string;
+    type?: 'json' | 'markdown' | 'code' | 'plain';
+    lang?: string;
+    unescape?: boolean;
+    theme?: 'light' | 'dark';
+    toolbar?: boolean;
+    maxHeight?: number | string;
+    className?: string;
+    jsonCollapsed?: boolean | number;
+    fullContent?: boolean;
+}
+
+interface SmartViewerConfig {
+    jsonCollapsed: boolean | number;
+}
+
+const SmartViewerConfigContext = createContext<SmartViewerConfig>({ jsonCollapsed: 2 });
+
+export function SmartViewerConfigProvider({
+    jsonCollapsed,
+    children,
+}: SmartViewerConfig & { children: ReactNode }) {
+    const value = useMemo(() => ({ jsonCollapsed }), [jsonCollapsed]);
+    return (
+        <SmartViewerConfigContext.Provider value={value}>
+            {children}
+        </SmartViewerConfigContext.Provider>
+    );
+}
+
+export function SmartViewer({
+    text,
+    type,
+    lang,
+    unescape = true,
+    theme = 'light',
+    toolbar = true,
+    maxHeight = 500,
+    className,
+    jsonCollapsed,
+    fullContent = false,
+}: SmartViewerProps) {
+    const [copied, setCopied] = useState(false);
+    const config = useContext(SmartViewerConfigContext);
+
+    const processed = useMemo(
+        () => (unescape ? unescapeText(text) : text),
+        [text, unescape],
+    );
+
+    const detected = useMemo(() => {
+        if (type === 'code' && lang) return { kind: 'code' as const, lang };
+        if (type === 'plain') return { kind: 'plain' as const };
+        return detect(processed, type);
+    }, [processed, type, lang]);
+
+    const onCopy = async () => {
+        try {
+            await copyText(processed);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch { }
+    };
+
+    const kindLabel = detected.kind === 'code' ? (detected as any).lang : detected.kind;
+
+    return (
+        <div
+            className={`sv-root sv-theme-${theme}${className ? ' ' + className : ''}`}
+            style={{ maxHeight }}
+        >
+            {toolbar && (
+                <div className="sv-toolbar">
+                    <span className="sv-badge">{kindLabel}</span>
+                    <button className="sv-copy" onClick={onCopy}>
+                        {copied ? '✓ Copied' : 'Copy'}
+                    </button>
+                </div>
+            )}
+            <div className="sv-body">
+                {detected.kind === 'json' && (
+                    <JsonRenderer
+                        data={detected.data}
+                        theme={theme}
+                        collapsed={jsonCollapsed ?? config.jsonCollapsed}
+                        fullContent={fullContent}
+                    />
+                )}
+                {detected.kind === 'markdown' && (
+                    <MarkdownRenderer text={processed} theme={theme} />
+                )}
+                {detected.kind === 'code' && (
+                    <CodeRenderer code={processed} lang={detected.lang} theme={theme} />
+                )}
+                {detected.kind === 'plain' && <PlainRenderer text={processed} />}
+            </div>
+        </div>
+    );
+}

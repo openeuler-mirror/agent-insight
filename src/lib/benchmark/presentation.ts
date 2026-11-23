@@ -1,0 +1,274 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type {
+  BenchmarkArtifactPresentation,
+  BenchmarkPresentationColumn,
+  BenchmarkPresentationFormat,
+} from '../../../packages/benchmark-protocol/src/contracts';
+import { isEvidencePath } from '../../../packages/benchmark-protocol/artifact-path.cjs';
+
+export interface BenchmarkPresentationRecord {
+  input?: unknown;
+  externalCaseId?: unknown;
+  values?: Record<string, unknown> | null;
+  publicPayload?: unknown;
+  primaryMetric?: { key?: string; value?: unknown } | null;
+}
+
+export interface BenchmarkArtifactLike {
+  name: string;
+  kind: string;
+  mediaType: string;
+  sizeBytes: number;
+  contentUrl: string;
+}
+
+export interface PresentedBenchmarkArtifact<T extends BenchmarkArtifactLike = BenchmarkArtifactLike> {
+  source: 'submission' | 'evidence';
+  label: string;
+  order: number;
+  artifact: T;
+}
+
+function nestedValue(value: unknown, path: string): unknown {
+  let current = value;
+  for (const segment of path.split('.').filter(Boolean)) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+export function benchmarkPresentationValue(
+  item: BenchmarkPresentationRecord,
+  path: string,
+): unknown {
+  if (path === 'input') return item.input;
+  if (path === 'externalCaseId') return item.externalCaseId;
+  if (path.startsWith('values.')) {
+    const nestedPath = path.slice('values.'.length);
+    const projected = nestedValue(item.values, nestedPath);
+    return projected === undefined ? nestedValue(item.publicPayload, nestedPath) : projected;
+  }
+  return nestedValue(item as unknown, path);
+}
+
+function compactNumber(value: number, precision?: number): string {
+  return new Intl.NumberFormat('zh-CN', {
+    maximumFractionDigits: precision ?? 2,
+    minimumFractionDigits: precision,
+  }).format(value);
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let amount = Math.abs(value);
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  const signed = value < 0 ? -amount : amount;
+  return `${compactNumber(signed, unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatDuration(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  return Math.abs(value) >= 1000
+    ? `${compactNumber(value / 1000, 2)} s`
+    : `${compactNumber(value, 0)} ms`;
+}
+
+export function benchmarkPresentationText(
+  value: unknown,
+  options: {
+    format?: BenchmarkPresentationFormat | 'ratio';
+    precision?: number;
+    unit?: string;
+    trueLabel?: string;
+    falseLabel?: string;
+    total?: number;
+  } = {},
+): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') {
+    return value ? options.trueLabel || '是' : options.falseLabel || '否';
+  }
+  if (options.format === 'ratio' && options.total !== undefined) {
+    return `${String(value)} / ${options.total}`;
+  }
+  if (typeof value === 'number') {
+    let text: string;
+    switch (options.format) {
+      case 'percentage':
+        text = `${compactNumber(value, options.precision)}%`;
+        break;
+      case 'bytes':
+        text = formatBytes(value);
+        break;
+      case 'duration-ms':
+        text = formatDuration(value);
+        break;
+      default:
+        text = compactNumber(value, options.precision);
+    }
+    return options.unit ? `${text}${options.unit}` : text;
+  }
+  if (options.format === 'date-time') {
+    const timestamp = new Date(String(value));
+    if (!Number.isNaN(timestamp.getTime())) {
+      return timestamp.toLocaleString('zh-CN', { hour12: false });
+    }
+  }
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function benchmarkColumnText(
+  item: BenchmarkPresentationRecord,
+  column: Pick<BenchmarkPresentationColumn, 'path' | 'format'>,
+): string {
+  return benchmarkPresentationText(benchmarkPresentationValue(item, column.path), {
+    format: column.format,
+  });
+}
+
+export function truncateBenchmarkText(value: string, limit?: number): string {
+  if (!limit || limit < 1 || value.length <= limit) return value;
+  return `${value.slice(0, limit)}…`;
+}
+
+function artifactRule(
+  source: 'submission' | 'evidence',
+  artifact: BenchmarkArtifactLike,
+  rules: readonly BenchmarkArtifactPresentation[],
+): BenchmarkArtifactPresentation | undefined {
+  return rules.find((rule) => rule.source === source && rule.name === artifact.name)
+    || rules.find((rule) => rule.source === source && !rule.name && rule.kind === artifact.kind);
+}
+
+export function presentBenchmarkArtifacts<T extends BenchmarkArtifactLike>(input: {
+  submissions: readonly T[];
+  evidence: readonly T[];
+  rules?: readonly BenchmarkArtifactPresentation[];
+}): PresentedBenchmarkArtifact<T>[] {
+  const rules = input.rules || [];
+  const artifacts = [
+    ...input.submissions.map((artifact, index) => ({ source: 'submission' as const, artifact, index })),
+    ...input.evidence.map((artifact, index) => ({ source: 'evidence' as const, artifact, index })),
+  ];
+  return artifacts
+    .map((item) => {
+      const rule = artifactRule(item.source, item.artifact, rules);
+      return {
+        source: item.source,
+        artifact: item.artifact,
+        label: rule?.label || item.artifact.name,
+        order: rule?.order ?? Number.MAX_SAFE_INTEGER,
+        index: item.index,
+      };
+    })
+    .sort((left, right) => left.order - right.order
+      || (left.source === right.source ? 0 : left.source === 'submission' ? -1 : 1)
+      || left.index - right.index)
+    .map((item) => ({
+      source: item.source,
+      label: item.label,
+      order: item.order,
+      artifact: item.artifact,
+    }));
+}
+
+export type BenchmarkArtifactRenderer = 'text' | 'markdown' | 'html' | 'csv' | 'image' | 'pdf';
+
+type BenchmarkArtifactFormat = BenchmarkArtifactRenderer | 'json' | 'jsonl' | 'diff' | 'unknown';
+type BenchmarkArtifactFile = Pick<BenchmarkArtifactLike, 'mediaType' | 'name'>;
+
+type BenchmarkArtifactPreview = {
+  format: BenchmarkArtifactFormat;
+  renderer: BenchmarkArtifactRenderer | null;
+  load: 'text' | 'blob' | 'none';
+};
+
+const artifactTextFormats = [
+  { format: 'markdown', renderer: 'markdown', mediaTypes: ['text/markdown'], extension: /\.(md|markdown)$/i },
+  { format: 'html', renderer: 'html', mediaTypes: ['text/html'], extension: /\.html?$/i },
+  { format: 'csv', renderer: 'csv', mediaTypes: ['text/csv', 'application/csv'], extension: /\.csv$/i },
+  { format: 'jsonl', renderer: 'text', mediaTypes: ['application/x-ndjson', 'application/ndjson', 'application/jsonl', 'application/jsonlines'], extension: /\.(jsonl|ndjson)$/i },
+  { format: 'json', renderer: 'text', mediaTypes: ['application/json'], extension: /\.json$/i },
+  { format: 'diff', renderer: 'text', mediaTypes: ['text/x-diff', 'text/x-patch'], extension: /\.(diff|patch)$/i },
+] satisfies readonly {
+  format: BenchmarkArtifactFormat;
+  renderer: BenchmarkArtifactRenderer;
+  mediaTypes: string[];
+  extension: RegExp;
+}[];
+
+export function resolveBenchmarkArtifactPreview(artifact: BenchmarkArtifactFile): BenchmarkArtifactPreview {
+  const mediaType = artifact.mediaType.split(';', 1)[0].trim().toLowerCase();
+  if (mediaType.startsWith('image/')) return { format: 'image', renderer: 'image', load: 'blob' };
+  if (mediaType === 'application/pdf') return { format: 'pdf', renderer: 'pdf', load: 'blob' };
+
+  const matched = artifactTextFormats.find(rule => rule.mediaTypes.includes(mediaType))
+    ?? artifactTextFormats.find(rule => rule.extension.test(artifact.name));
+  if (matched) return { format: matched.format, renderer: matched.renderer, load: 'text' };
+  if (mediaType.startsWith('text/')) return { format: 'text', renderer: 'text', load: 'text' };
+  return { format: 'unknown', renderer: null, load: 'none' };
+}
+
+export function isMarkdownBenchmarkArtifact(artifact: BenchmarkArtifactFile): boolean {
+  return resolveBenchmarkArtifactPreview(artifact).format === 'markdown';
+}
+
+export function canPreviewBenchmarkArtifact(artifact: BenchmarkArtifactFile): boolean {
+  return resolveBenchmarkArtifactPreview(artifact).renderer !== null;
+}
+
+export type BenchmarkArtifactTreeNode<T extends BenchmarkArtifactLike = BenchmarkArtifactLike> =
+  | { name: string; path: string; item: PresentedBenchmarkArtifact<T>; children?: never }
+  | { name: string; path: string; children: BenchmarkArtifactTreeNode<T>[]; item?: never };
+
+export function benchmarkArtifactTree<T extends BenchmarkArtifactLike>(
+  items: readonly PresentedBenchmarkArtifact<T>[],
+): BenchmarkArtifactTreeNode<T>[] {
+  const roots: BenchmarkArtifactTreeNode<T>[] = [];
+  const directories = new Map<string, BenchmarkArtifactTreeNode<T>[]>();
+  directories.set('', roots);
+  for (const item of items) {
+    const segments = isEvidencePath(item.artifact.name) ? item.artifact.name.split('/') : [item.artifact.name];
+    let parent = '';
+    for (let index = 0; index < segments.length; index += 1) {
+      const name = segments[index];
+      const path = parent ? `${parent}/${name}` : name;
+      const siblings = directories.get(parent)!;
+      if (index === segments.length - 1) {
+        siblings.push({ name, path, item });
+      } else if (!directories.has(path)) {
+        const children: BenchmarkArtifactTreeNode<T>[] = [];
+        siblings.push({ name, path, children });
+        directories.set(path, children);
+      }
+      parent = path;
+    }
+  }
+  return roots;
+}

@@ -1,0 +1,36 @@
+Third-party source code availability
+
+The third-party components listed here retain their own licenses. The root
+Apache-2.0 license does not replace their terms or existing notices.
+
+MPL components
+Version-specific source locations and downloaded archive checksums are in
+source-index.json. These include lightningcss, axe-core and the inspected
+optional Python certifi environment. The original MPL license text and any
+third-party notices remain in this directory. Source distributions retain
+their original notices and license terms, including modifications supplied
+by their respective upstream authors.
+
+libvips native packages
+libvips/SOURCE.txt and libvips/source-manifest.json identify the published
+sharp-libvips build revision, component sources, patches and build recipes.
+libvips/RELINKING.txt describes the shared-library layout and the limits of
+the isolated replacement checks. Preserve these materials when distributing
+the native libraries; replacing the application license does not change the
+licenses of libraries embedded in the native binary.
+
+Archive retrieval
+source-archives.json records upstream download URLs and SHA-256 checksums.
+The named archive members are paths inside the separately prepared source
+materials bundle, not paths installed into node_modules. Recipients can use
+the upstream URLs to retrieve the corresponding versioned source archives.
+If an upstream location stops serving the matching source, the distributor
+must arrange another source delivery method consistent with the applicable
+license. Do not replace version-specific URLs with a moving main branch.
+
+Scope
+These records describe inspected versions, not every version that a future
+dependency-range installation may select. Refresh the records for each
+release and platform. The source bundle includes Rust dependency lockfile
+supersets, including build/test/other-platform sources; it is not a statement
+that every archived crate is linked into every released binary.

@@ -1,30 +1,42 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 'use client';
 
-import { useAuth } from '@/lib/auth-context';
+import { getSafeReturnTo, useAuth } from '@/lib/auth/auth-context';
 import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
-import { apiFetch } from '@/lib/api';
+import { useState, useEffect, useRef } from 'react';
+import { useTheme } from '@/lib/client/theme-context';
+import { useLocale } from '@/lib/client/locale-context';
+import { apiFetch, getApiUrl } from '@/lib/client/api';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
-  const [isOrgMode, setIsOrgMode] = useState(false);
-  const [orgRedirectUrl, setOrgRedirectUrl] = useState('');
-  const { login } = useAuth();
+  const [isCompletingIdaas, setIsCompletingIdaas] = useState(false);
+  const idaasCompletionStarted = useRef(false);
+  const {
+    login, loginMode, loginModeReady, organizationLoginRedirectUrl,
+  } = useAuth();
   const router = useRouter();
+  const { isDark } = useTheme();
+  const { t, locale } = useLocale();
 
   useEffect(() => {
-    apiFetch('/api/config/status?check_org=true')
-      .then(res => res.json())
-      .then(data => {
-        setIsOrgMode(data.org_mode || false);
-        setOrgRedirectUrl(data.org_login_redirect_url || '');
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!isOrgMode || !orgRedirectUrl) return;
+    if (loginMode !== 'organization' || !organizationLoginRedirectUrl) return;
 
     let cancelled = false;
 
@@ -33,9 +45,8 @@ export default function LoginPage() {
         const res = await apiFetch('/api/auth/organization', { cache: 'no-store' });
 
         if (!res.ok) {
-          // 如果企业侧还没有登录态，则跳转到企业登录页
           if (!cancelled && (res.status === 401 || res.status === 403)) {
-            window.location.href = orgRedirectUrl;
+            window.location.href = organizationLoginRedirectUrl;
           }
           return;
         }
@@ -43,12 +54,12 @@ export default function LoginPage() {
         const data = await res.json();
         if (!cancelled && data?.username) {
           login(data.username, data.apiKey);
-          router.replace('/');
+          // login() 已按 returnTo 回跳；仅在无 returnTo 时维持历史组织集成的落 / 行为。
+          if (!getSafeReturnTo()) router.replace('/');
         }
-      } catch (e) {
-        // 网络等异常场景，兜底走企业登录
+      } catch {
         if (!cancelled) {
-          window.location.href = orgRedirectUrl;
+          window.location.href = organizationLoginRedirectUrl;
         }
       }
     };
@@ -58,14 +69,62 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [isOrgMode, orgRedirectUrl, login, router]);
+  }, [loginMode, organizationLoginRedirectUrl, login, router]);
+
+  useEffect(() => {
+    if (!loginModeReady || loginMode !== 'idaas_oauth') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const idaasError = params.get('idaasError');
+    if (idaasError) {
+      if (idaasError === 'region_restricted') {
+        setError(t('login.identityRegionRestricted'));
+      } else if (idaasError === 'region_check_unavailable') {
+        setError(t('login.identityRegionCheckUnavailable'));
+      } else {
+        setError(t('login.identityLoginFailed'));
+      }
+      return;
+    }
+    if (params.get('idaas') !== 'complete') return;
+
+    if (idaasCompletionStarted.current) return;
+    idaasCompletionStarted.current = true;
+    setIsCompletingIdaas(true);
+    apiFetch('/api/auth/idaas-oauth/complete', {
+      method: 'POST',
+      cache: 'no-store',
+    })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || 'IDaaS login failed');
+        login(data.username, data.apiKey, data.displayName);
+      })
+      .catch(() => {
+        setError(t('login.identityLoginFailed'));
+      })
+      .finally(() => {
+        setIsCompletingIdaas(false);
+      });
+  }, [login, loginMode, loginModeReady, t]);
+
+  const handleIdaasLogin = () => {
+    setError('');
+    const url = new URL(
+      getApiUrl('/api/auth/idaas-oauth/authorize'),
+      window.location.origin,
+    );
+    const returnTo = getSafeReturnTo();
+    if (returnTo) url.searchParams.set('returnTo', returnTo);
+    window.location.assign(url.toString());
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(''); // Clear previous error
+    setError('');
     
     if (!username.trim()) {
-      setError('请输入邮箱地址');
+      setError(t('login.emailRequired'));
       return;
     }
     
@@ -81,20 +140,51 @@ export default function LoginPage() {
         if (res.ok) {
             login(data.username, data.apiKey);
         } else {
-            // Show error from API
-            setError(data.error || '登录失败，请重试');
+            setError(data.error || t('login.loginFailed'));
         }
     } catch (err) {
         console.error(err);
-        setError('网络错误，请检查连接');
+        setError(t('login.networkError'));
     }
   };
 
-  if (isOrgMode) {
+  const colors = isDark ? {
+    fg: '#fafafa',
+    fgSecondary: '#a1a1aa',
+    fgMuted: '#71717a',
+    primary: '#3b82f6',
+    primaryGlow: 'rgba(59, 130, 246, 0.3)',
+    error: '#ef4444',
+    errorSubtle: 'rgba(239, 68, 68, 0.1)',
+    errorBorder: 'rgba(239, 68, 68, 0.2)',
+  } : {
+    fg: '#18181b',
+    fgSecondary: '#52525b',
+    fgMuted: '#a1a1aa',
+    primary: '#2563eb',
+    primaryGlow: 'rgba(29, 78, 216, 0.3)',
+    error: '#dc2626',
+    errorSubtle: 'rgba(185, 28, 28, 0.08)',
+    errorBorder: 'rgba(185, 28, 28, 0.18)',
+  };
+
+  if (!loginModeReady || isCompletingIdaas || loginMode === 'organization') {
     return (
       <div className="login-container">
         <div className="login-box">
-          <p style={{ color: '#94a3b8', textAlign: 'center' }}>正在跳转到企业登录页...</p>
+          <p style={{ color: colors.fgMuted, textAlign: 'center' }}>
+            {loginMode === 'organization' ? t('login.redirecting') : t('login.checkingLogin')}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loginMode === 'invalid') {
+    return (
+      <div className="login-container">
+        <div className="login-box">
+          <p style={{ color: colors.error, textAlign: 'center' }}>{t('login.configurationError')}</p>
         </div>
       </div>
     );
@@ -103,50 +193,73 @@ export default function LoginPage() {
   return (
     <div className="login-container">
       <div className="login-box">
-        {/* Logo Section */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1.5rem', marginBottom: '2.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1.25rem', marginBottom: '2rem' }}>
              <div style={{
-                background: 'linear-gradient(135deg, #38bdf8, #818cf8)',
+                background: `linear-gradient(135deg, ${colors.primary}, #7c3aed)`,
                 color: 'white',
-                fontWeight: 'bold',
-                fontSize: '1.8rem',
-                padding: '0.8rem 1.2rem',
+                fontWeight: 600,
+                fontSize: '1.5rem',
+                padding: '0.625rem 1rem',
                 borderRadius: '0.75rem',
                 whiteSpace: 'nowrap',
-                boxShadow: '0 10px 15px -3px rgba(56, 189, 248, 0.4), 0 4px 6px -2px rgba(56, 189, 248, 0.2)'
+                boxShadow: `0 8px 16px -4px ${colors.primaryGlow}`
             }}>
-                Skill
+                Agent
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <h1 style={{ fontSize: '3rem', fontWeight: '800', color: '#f8fafc', margin: 0, lineHeight: 1, letterSpacing: '-0.02em', textShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>Insight</h1>
-                <span style={{ fontSize: '1rem', color: '#94a3b8', letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: '0.25rem' }}>智能体技能评估、分析与优化</span>
+                <h1 style={{ fontSize: '2.25rem', fontWeight: 700, color: colors.fg, margin: 0, lineHeight: 1, letterSpacing: '-0.025em' }}>Insight</h1>
+                <span style={{ fontSize: '0.8125rem', color: colors.fgMuted, letterSpacing: '0.04em', textTransform: 'uppercase', marginTop: '0.25rem' }}>{t('login.subtitle')}</span>
             </div>
         </div>
 
-        <form className="login-form">
-          <div style={{ marginBottom: '1rem' }}>
+        {loginMode === 'idaas_oauth' ? (
+          <div className="login-form">
+            {error && (
+              <div style={{
+                color: colors.error,
+                fontSize: '0.8125rem',
+                marginBottom: '0.875rem',
+                padding: '0.375rem 0.625rem',
+                background: colors.errorSubtle,
+                borderRadius: '0.375rem',
+                border: `1px solid ${colors.errorBorder}`,
+              }}>
+                ⚠️ {error}
+              </div>
+            )}
+            <button
+              className="login-btn"
+              type="button"
+              onClick={handleIdaasLogin}
+              disabled={isCompletingIdaas}
+            >
+              {t('login.identitySignIn')}
+            </button>
+          </div>
+        ) : (
+          <form className="login-form" onSubmit={handleLogin} noValidate>
+          <div style={{ marginBottom: '0.875rem' }}>
             <label className="login-label" htmlFor="username">
-              邮箱地址
+              {t('login.emailLabel')}
             </label>
             <input
               className="login-input"
               id="username"
-              type="email"
-              placeholder="your.email@example.com"
+              type="text"
+              placeholder={locale === 'zh' ? '请输入邮箱或 admin' : 'Enter your email or admin'}
               value={username}
               onChange={(e) => { setUsername(e.target.value); setError(''); }}
-              style={error ? { borderColor: '#ef4444' } : {}}
+              style={error ? { borderColor: colors.error } : {}}
             />
-            {/* Error Message */}
             {error && (
               <div style={{
-                color: '#ef4444',
-                fontSize: '0.875rem',
-                marginTop: '0.5rem',
-                padding: '0.5rem 0.75rem',
-                background: 'rgba(239, 68, 68, 0.1)',
+                color: colors.error,
+                fontSize: '0.8125rem',
+                marginTop: '0.375rem',
+                padding: '0.375rem 0.625rem',
+                background: colors.errorSubtle,
                 borderRadius: '0.375rem',
-                border: '1px solid rgba(239, 68, 68, 0.3)'
+                border: `1px solid ${colors.errorBorder}`
               }}>
                 ⚠️ {error}
               </div>
@@ -155,13 +268,13 @@ export default function LoginPage() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <button
               className="login-btn"
-              type="button"
-              onClick={handleLogin}
+              type="submit"
             >
-              Sign In
+              {t('login.signIn')}
             </button>
           </div>
-        </form>
+          </form>
+        )}
       </div>
     </div>
   );

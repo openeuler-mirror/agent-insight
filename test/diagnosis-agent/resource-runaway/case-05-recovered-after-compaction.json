@@ -1,0 +1,1452 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T07:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-05-recovered-after-compaction-23394",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-05-recovered-after-compaction-23394",
+        "taskId": "jiuwen-case-05-recovered-after-compaction-23394",
+        "query": "长任务中可能发生上下文压缩。",
+        "framework": "jiuwenswarm",
+        "tokens": 332950,
+        "cost": 0.1565,
+        "latency": 51.6,
+        "toolCallCount": 4,
+        "llmCallCount": 54,
+        "inputTokens": 279600,
+        "outputTokens": 11100,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": 24100,
+        "cacheCreationInputTokens": 15000,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": 3150,
+        "timestamp": "2026-08-07T07:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "完成。压缩后上下文回落到低位并保持，任务正常收敛。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-05-recovered-after-compaction-23394",
+        "label": "jiuwenswarm",
+        "query": "长任务中可能发生上下文压缩。",
+        "startTime": "2026-08-07T07:00:00.000Z",
+        "endTime": "2026-08-07T07:00:51.600Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "长任务中可能发生上下文压缩。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，处理长任务。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"长任务小队\", \"team_desc\": \"处理长任务，允许上下文压缩。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织长任务。\"}, {\"session\": \"session:jiuwen-case-05-recovered-after-compaction-23394\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 执行长任务。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"执行员\", \"desc\": \"执行长任务。\", \"prompt\": \"执行长任务，必要时压缩上下文。\"}, {\"session\": \"session:jiuwen-case-05-recovered-after-compaction-23394\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"执行长任务。\"}, {\"session\": \"session:jiuwen-case-05-recovered-after-compaction-23394\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第1轮",
+            "usage": {
+              "input": 5000,
+              "output": 200,
+              "cacheRead": 1000,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 6250
+            },
+            "durationMs": 1000,
+            "inputLength": 20000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 2200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第2轮",
+            "usage": {
+              "input": 5500,
+              "output": 200,
+              "cacheRead": 1100,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 6850
+            },
+            "durationMs": 1000,
+            "inputLength": 22000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 2200,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第3轮",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "cacheRead": 1200,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 7450
+            },
+            "durationMs": 1000,
+            "inputLength": 24000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 4200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第4轮",
+            "usage": {
+              "input": 7000,
+              "output": 200,
+              "cacheRead": 1400,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 8650
+            },
+            "durationMs": 1000,
+            "inputLength": 28000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 4200,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第5轮",
+            "usage": {
+              "input": 8000,
+              "output": 200,
+              "cacheRead": 1600,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 9850
+            },
+            "durationMs": 1000,
+            "inputLength": 32000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 6200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第6轮",
+            "usage": {
+              "input": 9500,
+              "output": 200,
+              "cacheRead": 1900,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 11650
+            },
+            "durationMs": 1000,
+            "inputLength": 38000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 6200,
+              "completed": 7200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第7轮",
+            "usage": {
+              "input": 11000,
+              "output": 200,
+              "cacheRead": 2200,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 13450
+            },
+            "durationMs": 1000,
+            "inputLength": 44000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 7200,
+              "completed": 8200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第8轮",
+            "usage": {
+              "input": 13000,
+              "output": 200,
+              "cacheRead": 2600,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 15850
+            },
+            "durationMs": 1000,
+            "inputLength": 52000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 8200,
+              "completed": 9200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第9轮",
+            "usage": {
+              "input": 15500,
+              "output": 200,
+              "cacheRead": 3100,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 18850
+            },
+            "durationMs": 1000,
+            "inputLength": 62000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 9200,
+              "completed": 10200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第10轮",
+            "usage": {
+              "input": 18000,
+              "output": 200,
+              "cacheRead": 3600,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 21850
+            },
+            "durationMs": 1000,
+            "inputLength": 72000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 10200,
+              "completed": 11200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "第11轮",
+            "usage": {
+              "input": 22000,
+              "output": 200,
+              "cacheRead": 4400,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 26650
+            },
+            "durationMs": 1000,
+            "inputLength": 88000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 11200,
+              "completed": 12200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "触发上下文压缩",
+            "usage": {
+              "input": 7000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 15000,
+              "reasoning": 50,
+              "total": 22250
+            },
+            "durationMs": 1000,
+            "inputLength": 28000,
+            "outputLength": 300,
+            "isCompaction": true,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 12200,
+              "completed": 13200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第1轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 13200,
+              "completed": 14200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第2轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 14200,
+              "completed": 15200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第3轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 15200,
+              "completed": 16200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第4轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 16200,
+              "completed": 17200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第5轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 17200,
+              "completed": 18200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第6轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 18200,
+              "completed": 19200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第7轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 19200,
+              "completed": 20200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第8轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 20200,
+              "completed": 21200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第9轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 21200,
+              "completed": 22200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第10轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 22200,
+              "completed": 23200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第11轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 23200,
+              "completed": 24200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第12轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 24200,
+              "completed": 25200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第13轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 25200,
+              "completed": 26200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第14轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 26200,
+              "completed": 27200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第15轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 27200,
+              "completed": 28200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第16轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 28200,
+              "completed": 29200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第17轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 29200,
+              "completed": 30200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第18轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 30200,
+              "completed": 31200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第19轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 31200,
+              "completed": 32200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第20轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 32200,
+              "completed": 33200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第21轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 33200,
+              "completed": 34200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第22轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 34200,
+              "completed": 35200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第23轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 35200,
+              "completed": 36200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第24轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 36200,
+              "completed": 37200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第25轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 37200,
+              "completed": 38200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第26轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 38200,
+              "completed": 39200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第27轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 39200,
+              "completed": 40200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第28轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 40200,
+              "completed": 41200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第29轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 41200,
+              "completed": 42200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第30轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 42200,
+              "completed": 43200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第31轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 43200,
+              "completed": 44200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第32轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 44200,
+              "completed": 45200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第33轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 45200,
+              "completed": 46200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第34轮",
+            "usage": {
+              "input": 3300,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3550
+            },
+            "durationMs": 1000,
+            "inputLength": 13200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 46200,
+              "completed": 47200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第35轮",
+            "usage": {
+              "input": 3400,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3650
+            },
+            "durationMs": 1000,
+            "inputLength": 13600,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 47200,
+              "completed": 48200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第36轮",
+            "usage": {
+              "input": 3000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3250
+            },
+            "durationMs": 1000,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 48200,
+              "completed": 49200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第37轮",
+            "usage": {
+              "input": 3100,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3350
+            },
+            "durationMs": 1000,
+            "inputLength": 12400,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 49200,
+              "completed": 50200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-recovered-after-compaction_reporter",
+            "content": "压缩后第38轮",
+            "usage": {
+              "input": 3200,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3450
+            },
+            "durationMs": 1000,
+            "inputLength": 12800,
+            "outputLength": 300,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 50200,
+              "completed": 51200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "完成。",
+            "usage": {
+              "input": 3800,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 4050
+            },
+            "durationMs": 400,
+            "inputLength": 15200,
+            "outputLength": 300,
+            "isCompaction": false,
+            "isSummary": true,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-recovered-after-compaction-23394\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 51200,
+              "completed": 51600
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

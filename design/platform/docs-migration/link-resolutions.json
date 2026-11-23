@@ -1,0 +1,653 @@
+{
+  "date": "2026-10-28",
+  "baselineOccurrences": 80,
+  "counts": {
+    "format-example": 1,
+    "relative-path": 63,
+    "current-model-source": 1,
+    "missing-material-noted": 8,
+    "historical-source": 7
+  },
+  "items": [
+    {
+      "file": "docs/zh/how-to/platform/conventions-and-extension.md",
+      "url": "../../explanation/path:line",
+      "line": 25,
+      "target": "docs/zh/explanation/path:line",
+      "resolution": "format-example",
+      "destination": "path:line"
+    },
+    {
+      "file": "docs/zh/explanation/observability/trae-collector.md",
+      "url": "../../../src/lib/ingest/adapters/trae.ts:1",
+      "line": 167,
+      "target": "docs/src/lib/ingest/adapters/trae.ts",
+      "resolution": "relative-path",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/ingest/adapters/trae.ts#L1"
+    },
+    {
+      "file": "docs/zh/explanation/observability/trae-collector.md",
+      "url": "../../../src/lib/shared/interaction-utils.ts:1",
+      "line": 170,
+      "target": "docs/src/lib/shared/interaction-utils.ts",
+      "resolution": "relative-path",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/master/src/lib/shared/interaction-utils.ts#L1"
+    },
+    {
+      "file": "docs/zh/explanation/evaluation/skills/static-evaluator.mdx",
+      "url": "../../architecture/data-model",
+      "line": 334,
+      "target": "docs/zh/explanation/architecture/data-model",
+      "resolution": "current-model-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/master/prisma/schema.prisma"
+    },
+    {
+      "file": "design/README.md",
+      "url": "agentdebug-parallel-skills-analysis/",
+      "line": 44,
+      "target": "design/agentdebug-parallel-skills-analysis",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/evaluation/experiment-cancellation/phase1-requirements.md",
+      "url": "../../../评测服务文档/实验删除与评测服务停止清理方案.md",
+      "line": 3,
+      "target": "评测服务文档/实验删除与评测服务停止清理方案.md",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+      "url": "../../../src/lib/engine/evaluation/result-quality-evaluator.ts",
+      "line": 22,
+      "target": "src/lib/engine/evaluation/result-quality-evaluator.ts",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/707672398380d203468486e33084a9d306100800/src/lib/engine/evaluation/result-quality-evaluator.ts"
+    },
+    {
+      "file": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+      "url": "../../../src/lib/engine/quality-monitoring/sampling.ts",
+      "line": 85,
+      "target": "src/lib/engine/quality-monitoring/sampling.ts",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/ba0f885cf9a7d20a4f7cc7d9095a175c96bf6071/src/lib/engine/quality-monitoring/sampling.ts"
+    },
+    {
+      "file": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+      "url": "../../../src/components/quality/ResultPanel.tsx",
+      "line": 600,
+      "target": "src/components/quality/ResultPanel.tsx",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/ba0f885cf9a7d20a4f7cc7d9095a175c96bf6071/src/components/quality/ResultPanel.tsx"
+    },
+    {
+      "file": "design/evaluation/quality-monitoring/quality-monitoring-result-evaluation-plan.md",
+      "url": "../../../src/components/quality/result-detail-tables.ts",
+      "line": 601,
+      "target": "src/components/quality/result-detail-tables.ts",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/ba0f885cf9a7d20a4f7cc7d9095a175c96bf6071/src/components/quality/result-detail-tables.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/phase1-requirements-analysis.md",
+      "url": "../../../src/lib/fault-injection/queue.ts",
+      "line": 11,
+      "target": "src/lib/fault-injection/queue.ts",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/config/agent_ras_config.default.yaml",
+      "line": 18,
+      "target": "docs/agent_ras/config/agent_ras_config.default.yaml",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/config/agent_ras_config.default.yaml"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/config/agent_ras_config.default.yaml",
+      "line": 36,
+      "target": "docs/agent_ras/config/agent_ras_config.default.yaml",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/config/agent_ras_config.default.yaml"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/config/agent_ras.inproc.example.json",
+      "line": 37,
+      "target": "docs/agent_ras/config/agent_ras.inproc.example.json",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/config/agent_ras.inproc.example.json"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/detectors/catalog.py",
+      "line": 58,
+      "target": "docs/agent_ras/detectors/catalog.py",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/detectors/catalog.py"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/detectors/catalog.py",
+      "line": 128,
+      "target": "docs/agent_ras/detectors/catalog.py",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/detectors/catalog.py"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/src/lib/ingest/ras/capability-config.ts",
+      "line": 129,
+      "target": "docs/src/lib/ingest/ras/capability-config.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/ras/capability-config.ts"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/src/lib/ingest/ras/capability-config-store.ts",
+      "line": 130,
+      "target": "docs/src/lib/ingest/ras/capability-config-store.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/ras/capability-config-store.ts"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/src/lib/ingest/ras/insight-legacy-flat-aliases.ts",
+      "line": 131,
+      "target": "docs/src/lib/ingest/ras/insight-legacy-flat-aliases.ts",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/fae88b344d3b7db0f68a2e76d9ccca5db52b7102/src/lib/ingest/ras/insight-legacy-flat-aliases.ts"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/src/app/api/agent-ras/catalog/route.ts",
+      "line": 132,
+      "target": "docs/src/app/api/agent-ras/catalog/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/agent-ras/catalog/route.ts"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/src/app/api/agent-ras/config/route.ts",
+      "line": 133,
+      "target": "docs/src/app/api/agent-ras/config/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/agent-ras/config/route.ts"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/platform_adapter/opencode/config_sync.js",
+      "line": 134,
+      "target": "docs/agent_ras/platform_adapter/opencode/config_sync.js",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/platform_adapter/opencode/config_sync.js"
+    },
+    {
+      "file": "design/reliability/agent-ras/capability-config.md",
+      "url": "../../../docs/agent_ras/platform_adapter/xiaoo/config_sync.py",
+      "line": 135,
+      "target": "docs/agent_ras/platform_adapter/xiaoo/config_sync.py",
+      "resolution": "relative-path",
+      "destination": "../../../agent_ras/platform_adapter/xiaoo/config_sync.py"
+    },
+    {
+      "file": "design/reliability/agent-ras/analysis-paralysis.md",
+      "url": "../../../docs/zh/explanation/reliability/agent-fault-injection/modules/semantic-fault-injection-survey.md",
+      "line": 503,
+      "target": "docs/zh/explanation/reliability/agent-fault-injection/modules/semantic-fault-injection-survey.md",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/reliability/agent-ras/reliability-client-control-plane.md",
+      "url": "../../../src/lib/reliability/clients-from-workers.ts",
+      "line": 44,
+      "target": "src/lib/reliability/clients-from-workers.ts",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/agent_fault_injection/cli.py",
+      "line": 11,
+      "target": "docs/agent_fault_injection/cli.py",
+      "resolution": "relative-path",
+      "destination": "../../../../agent_fault_injection/cli.py"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/lib/fault-injection/engine.ts",
+      "line": 11,
+      "target": "docs/src/lib/fault-injection/engine.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/lib/fault-injection/engine.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/api/fault-injection/tasks/stop/route.ts",
+      "line": 12,
+      "target": "docs/src/app/api/fault-injection/tasks/stop/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/app/api/fault-injection/tasks/stop/route.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/lib/fault-injection/store.ts",
+      "line": 13,
+      "target": "docs/src/lib/fault-injection/store.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/lib/fault-injection/store.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/lib/fault-injection/store.ts",
+      "line": 14,
+      "target": "docs/src/lib/fault-injection/store.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/lib/fault-injection/store.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/api/fault-injection/tasks/route.ts",
+      "line": 15,
+      "target": "docs/src/app/api/fault-injection/tasks/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/app/api/fault-injection/tasks/route.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/lib/fault-injection/platforms.ts",
+      "line": 15,
+      "target": "docs/src/lib/fault-injection/platforms.ts",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/(main)/agent-ras/fault-injection/tasks/new/page.tsx",
+      "line": 19,
+      "target": "docs/src/app/(main)/agent-ras/fault-injection/tasks/new/page.tsx",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/api/fault-injection/tasks/route.ts",
+      "line": 19,
+      "target": "docs/src/app/api/fault-injection/tasks/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/app/api/fault-injection/tasks/route.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/api/fault-injection/faults/route.ts",
+      "line": 23,
+      "target": "docs/src/app/api/fault-injection/faults/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/app/api/fault-injection/faults/route.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/api/fault-injection/health/route.ts",
+      "line": 23,
+      "target": "docs/src/app/api/fault-injection/health/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/app/api/fault-injection/health/route.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/src/app/api/fault-injection/task/[taskId]/rerun/route.ts",
+      "line": 23,
+      "target": "docs/src/app/api/fault-injection/task/[taskId]/rerun/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../../src/app/api/fault-injection/task/[taskId]/rerun/route.ts"
+    },
+    {
+      "file": "design/reliability/fi-server-client-split/review/design-feasibility-review.md",
+      "url": "../../../../docs/scripts/install-fault-injection.js",
+      "line": 29,
+      "target": "docs/scripts/install-fault-injection.js",
+      "resolution": "relative-path",
+      "destination": "../../../../scripts/install-fault-injection.js"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/claude-otel/spool.ts",
+      "line": 34,
+      "target": "../src/lib/ingest/claude-otel/spool.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/claude-otel/spool.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel-consumer/consumer.ts",
+      "line": 35,
+      "target": "../src/lib/ingest/otel-consumer/consumer.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel-consumer/consumer.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 37,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 71,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/adapters/jiuwen.ts",
+      "line": 72,
+      "target": "../src/lib/ingest/adapters/jiuwen.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/adapters/jiuwen.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/storage/data-service.ts",
+      "line": 72,
+      "target": "../src/lib/storage/data-service.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/storage/data-service.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/storage/data-service.ts",
+      "line": 87,
+      "target": "../src/lib/storage/data-service.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/storage/data-service.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 89,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/aggregate.ts",
+      "line": 104,
+      "target": "../src/lib/ingest/otel/jiuwen/aggregate.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/aggregate.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 120,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/app/api/ingest/otel/v1/traces/route.ts",
+      "line": 184,
+      "target": "../src/app/api/ingest/otel/v1/traces/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/ingest/otel/v1/traces/route.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/claude-otel/spool.ts",
+      "line": 188,
+      "target": "../src/lib/ingest/claude-otel/spool.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/claude-otel/spool.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/aggregate.ts",
+      "line": 189,
+      "target": "../src/lib/ingest/otel/jiuwen/aggregate.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/aggregate.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel-consumer/consumer.ts",
+      "line": 193,
+      "target": "../src/lib/ingest/otel-consumer/consumer.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel-consumer/consumer.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel-consumer/sources.ts",
+      "line": 199,
+      "target": "../src/lib/ingest/otel-consumer/sources.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel-consumer/sources.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 202,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 206,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/storage/data-service.ts",
+      "line": 212,
+      "target": "../src/lib/storage/data-service.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/storage/data-service.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/instrumentation-node.ts",
+      "line": 224,
+      "target": "../src/instrumentation-node.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/instrumentation-node.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 250,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 270,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 271,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/claude-otel/spool.ts",
+      "line": 272,
+      "target": "../src/lib/ingest/claude-otel/spool.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/claude-otel/spool.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel-consumer/consumer.ts",
+      "line": 273,
+      "target": "../src/lib/ingest/otel-consumer/consumer.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel-consumer/consumer.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel-consumer/sources.ts",
+      "line": 274,
+      "target": "../src/lib/ingest/otel-consumer/sources.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel-consumer/sources.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/instrumentation-node.ts",
+      "line": 275,
+      "target": "../src/instrumentation-node.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/instrumentation-node.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/aggregate.ts",
+      "line": 276,
+      "target": "../src/lib/ingest/otel/jiuwen/aggregate.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/aggregate.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/storage/data-service.ts",
+      "line": 277,
+      "target": "../src/lib/storage/data-service.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/storage/data-service.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/adapters/jiuwen.ts",
+      "line": 278,
+      "target": "../src/lib/ingest/adapters/jiuwen.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/adapters/jiuwen.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/spool.ts",
+      "line": 348,
+      "target": "../src/lib/ingest/otel/jiuwen/spool.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/spool.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "line": 349,
+      "target": "../src/lib/ingest/otel/jiuwen/ingest.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/ingest/otel/jiuwen/ingest.ts"
+    },
+    {
+      "file": "design/observability/jiuwenswarm-tracing/durable-span-spool.md",
+      "url": "../../../../src/lib/storage/data-service.ts",
+      "line": 351,
+      "target": "../src/lib/storage/data-service.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/storage/data-service.ts"
+    },
+    {
+      "file": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+      "url": "../../../docs/src/lib/storage/data-service.ts",
+      "line": 112,
+      "target": "docs/src/lib/storage/data-service.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/lib/storage/data-service.ts"
+    },
+    {
+      "file": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+      "url": "../../../docs/src/app/api/ingest/upload/route.ts",
+      "line": 113,
+      "target": "docs/src/app/api/ingest/upload/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/ingest/upload/route.ts"
+    },
+    {
+      "file": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+      "url": "../../../docs/src/app/api/eval/rejudge/route.ts",
+      "line": 114,
+      "target": "docs/src/app/api/eval/rejudge/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/eval/rejudge/route.ts"
+    },
+    {
+      "file": "design/observability/framework-adapter-registry/phase2-requirements-design.md",
+      "url": "../../../docs/src/app/api/ingest/proxy/[taskId]/end/route.ts",
+      "line": 115,
+      "target": "docs/src/app/api/ingest/proxy/[taskId]/end/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/ingest/proxy/[taskId]/end/route.ts"
+    },
+    {
+      "file": "design/observability/otel-spool-consumer/fix-2026-07-28-trace-backlog-plan.md",
+      "url": "incident-2026-07-28-langfuse-trace-gap.md",
+      "line": 7,
+      "target": "design/observability/otel-spool-consumer/incident-2026-07-28-langfuse-trace-gap.md",
+      "resolution": "missing-material-noted",
+      "destination": null
+    },
+    {
+      "file": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+      "url": "../../../docs/src/lib/ingest/claude-watcher.ts",
+      "line": 11,
+      "target": "docs/src/lib/ingest/claude-watcher.ts",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/6c280e3aea380ac6a2f0c1226258b964b2d14c05/src/lib/ingest/claude-watcher.ts"
+    },
+    {
+      "file": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+      "url": "../../../docs/src/app/api/ingest/otel/v1/logs/route.ts",
+      "line": 19,
+      "target": "docs/src/app/api/ingest/otel/v1/logs/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/ingest/otel/v1/logs/route.ts"
+    },
+    {
+      "file": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+      "url": "../../../docs/src/app/api/ingest/otel/v1/traces/route.ts",
+      "line": 19,
+      "target": "docs/src/app/api/ingest/otel/v1/traces/route.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/app/api/ingest/otel/v1/traces/route.ts"
+    },
+    {
+      "file": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+      "url": "../../../docs/src/instrumentation-node.ts",
+      "line": 21,
+      "target": "docs/src/instrumentation-node.ts",
+      "resolution": "relative-path",
+      "destination": "../../../src/instrumentation-node.ts"
+    },
+    {
+      "file": "design/observability/otel-spool-consumer/phase1-requirements-analysis.md",
+      "url": "../../../docs/src/lib/ingest/claude-watcher.ts",
+      "line": 21,
+      "target": "docs/src/lib/ingest/claude-watcher.ts",
+      "resolution": "historical-source",
+      "destination": "https://gitcode.com/openeuler/agent-insight/blob/6c280e3aea380ac6a2f0c1226258b964b2d14c05/src/lib/ingest/claude-watcher.ts"
+    }
+  ]
+}

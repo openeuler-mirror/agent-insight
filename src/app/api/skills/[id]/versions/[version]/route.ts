@@ -1,6 +1,24 @@
-import { canAccessSkill, resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { db } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { NextRequest, NextResponse } from 'next/server';
+import { deleteEnterpriseSkill, fetchEnterpriseSkillInfo } from '@/lib/engine/skill-generation/legacy/skill-sync-service';
 
 export async function DELETE(
     request: NextRequest,
@@ -30,24 +48,68 @@ export async function DELETE(
         }
 
         if (skill.versions && skill.versions.length === 1) {
-            return NextResponse.json({ 
-                error: 'Cannot delete the last version. Delete the skill instead.' 
+            return NextResponse.json({
+                error: 'Cannot delete the last version. Delete the skill instead.'
             }, { status: 400 });
+        }
+
+        // 企业模式：先删除对应的企业skill（带版本检查）
+        if (process.env.ORGANIZATION_MODE === 'true') {
+          try {
+            const incomingCookie = request.headers.get('cookie') || undefined;
+            console.log('[Delete-Version] 企业模式，开始删除企业skill');
+
+            if (versionToDelete.enterpriseSkillId) {
+              console.log('[Delete-Version] 检查企业skill ID:', versionToDelete.enterpriseSkillId);
+
+              // 查询企业skill的版本号
+              const enterpriseVersion = await fetchEnterpriseSkillInfo(
+                versionToDelete.enterpriseSkillId,
+                incomingCookie
+              );
+
+              // 本地skill的版本号
+              const localVersion = versionToDelete.semanticVersion;
+
+              console.log('[Delete-Version] 本地版本:', localVersion, '企业版本:', enterpriseVersion);
+
+              // 版本一致性检查
+              if (localVersion === enterpriseVersion) {
+                console.log('[Delete-Version] 版本一致，删除企业skill');
+                await deleteEnterpriseSkill(versionToDelete.enterpriseSkillId, incomingCookie);
+              } else {
+                console.log('[Delete-Version] 版本不一致，跳过删除（企业已有新版本）');
+              }
+            }
+          } catch (error: any) {
+            console.error('[Delete-Version] 企业删除失败，继续删除本地版本:', error);
+            console.error('[Delete-Version] 错误信息:', error.message);
+          }
+        }
+
+        let newActiveVersion: number | null = null;
+        if (skill.activeVersion === version) {
+            const remainingVersions = (skill.versions || []).filter((v: any) => v.version !== version);
+            const verifiedVersions = remainingVersions.filter((candidate: any) => (
+                candidate.verificationMode !== 'external' || candidate.verificationStatus === 'passed'
+            ));
+            if (verifiedVersions.length === 0) {
+                return NextResponse.json({ error: 'No verified version is available to become active' }, { status: 409 });
+            }
+            newActiveVersion = verifiedVersions[0].version;
         }
 
         await db.deleteSkillVersion(id, version);
 
-        if (skill.activeVersion === version) {
-            const remainingVersions = (skill.versions || []).filter((v: any) => v.version !== version);
-            if (remainingVersions.length > 0) {
-                const newActiveVersion = remainingVersions[0].version;
-                await db.updateSkill(id, { activeVersion: newActiveVersion });
-                console.log(`[Delete Version] Updated activeVersion from ${version} to ${newActiveVersion}`);
-            }
+        if (newActiveVersion !== null) {
+            await db.updateSkill(id, { activeVersion: newActiveVersion });
+            console.log(`[Delete Version] Updated activeVersion from ${version} to ${newActiveVersion}`);
         }
 
-        return NextResponse.json({ 
-            success: true, 
+        recordUsageEvent({ user: username, featureKey: 'skill', eventKey: 'skill.delete' });
+
+        return NextResponse.json({
+            success: true,
             message: `Version ${version} deleted successfully`,
             previousActiveVersion: skill.activeVersion
         });

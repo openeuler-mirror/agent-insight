@@ -1,11 +1,32 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 "use strict";
+function getAgentInsightHome() {
+  if (process.env.AGENT_INSIGHT_DATA_DIR) throw new Error('AGENT_INSIGHT_DATA_DIR is no longer supported; use AGENT_INSIGHT_HOME.')
+  const root = process.env.AGENT_INSIGHT_HOME || path.join(os.homedir(), '.agent-insight')
+  return path.resolve(root.replace(/^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/, () => os.homedir()))
+}
 /**
- * Skill-Insight Skill Synchronizer
+ * Agent-Insight Skill Synchronizer
  *
  * Fetches configured skills from Dashboard and installs them locally.
  * Usage: node sync_skills.js [--check-only] [--agent <name>]
  *
- * Requires: ~/.skill-insight/.env configuration
+ * Requires: ~/.agent-insight/.env configuration
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -55,8 +76,8 @@ const AGENTS_DIR_MAP = {
 function loadConfiguration() {
     let config = {};
     try {
-        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
-        if (fs.existsSync(envPath)) {
+        for (const envPath of [path.join(getAgentInsightHome(), '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
+            if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf8');
             content.split('\n').forEach(line => {
                 const match = line.match(/^\s*([\w_]+)\s*=\s*(.*)?\s*$/);
@@ -66,10 +87,10 @@ function loadConfiguration() {
             });
         }
     }
-    catch (e) { }
+    catch { }
     return {
-        apiKey: config['SKILL_INSIGHT_API_KEY'] || process.env.SKILL_INSIGHT_API_KEY,
-        host: config['SKILL_INSIGHT_HOST'] || process.env.SKILL_INSIGHT_HOST || '127.0.0.1:3000'
+        apiKey: config['AGENT_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY,
+        host: config['AGENT_INSIGHT_HOST'] || process.env.AGENT_INSIGHT_HOST || '127.0.0.1:3000'
     };
 }
 async function fetchManifest(host) {
@@ -174,7 +195,7 @@ async function syncSkills(targetAgent) {
                     localManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
                 }
             }
-            catch (e) { }
+            catch { }
             for (const skill of remoteSkills) {
                 const localVer = localManifest[skill.name]?.version || -1;
                 if (skill.version > localVer) {

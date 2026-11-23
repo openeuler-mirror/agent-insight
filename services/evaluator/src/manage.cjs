@@ -1,0 +1,232 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+'use strict'
+
+const fs = require('node:fs/promises')
+const net = require('node:net')
+const path = require('node:path')
+const { DockerImageStore } = require('./image-pool-docker.cjs')
+const { EvaluationJobJournal, atomicWriteJson } = require('./job-journal.cjs')
+const { ServiceControl, readJson, recordManagedImage } = require('./service-control.cjs')
+const { cleanupRuntimeImages } = require('./runtime-image-cleanup.cjs')
+
+const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
+const MANAGEMENT_PROTOCOL_VERSION = 2
+const RUNTIME_IMAGE_MANAGEMENT_VERSION = 1
+
+function imagePoolCommand(dataDir, command, options = {}) {
+  return new Promise((resolve, reject) => {
+    const socket = path.join(dataDir, 'image-pool', 'manager.sock')
+    const connection = net.connect(socket)
+    let body = ''
+    connection.setEncoding('utf8')
+    connection.setTimeout(15 * 60_000, () => connection.destroy(new Error('Image pool management command timed out')))
+    connection.once('connect', () => connection.write(`${JSON.stringify({ version: 1, command, ...options })}\n`))
+    connection.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 16 * 1024 * 1024) connection.destroy(new Error('Image pool management response exceeds limit'))
+    })
+    connection.once('end', () => {
+      try {
+        const response = JSON.parse(body)
+        if (!response.ok) return reject(Object.assign(new Error(response.error?.message || 'Image pool command failed'), { code: response.error?.code }))
+        resolve(response.result)
+      } catch (error) { reject(error) }
+    })
+    connection.once('error', (error) => reject(Object.assign(new Error(`Image pool Controller is unavailable: ${error.message}`), { code: 'IMAGE_POOL_CONTROLLER_UNAVAILABLE' })))
+  })
+}
+
+async function manage(options) {
+  const { dataDir, instance, dryRun = false, purge = false, mode = 'stop' } = options
+  if (!/^[A-Za-z0-9_.-]+$/.test(instance || '')) throw new Error('Invalid evaluator instance')
+  if (mode === 'runtimes-purge') return { dryRun, runtimes: await cleanupRuntimeImages(options) }
+  if (mode === 'images-list' || mode === 'images-purge') {
+    const enabled = options.imagePoolEnabled ?? require('../../../packages/project-config/index.cjs').loadProjectConfig('evaluator').imagePool.enabled
+    const pool = enabled ? await (options.poolCommand || imagePoolCommand)(dataDir, mode === 'images-list' ? 'list' : 'purge', { dryRun })
+      : { images: [], enabled: false }
+    return { ...pool, dryRun: mode === 'images-list' || dryRun,
+      runtimes: await cleanupRuntimeImages({ ...options, dryRun: mode === 'images-list' || dryRun }) }
+  }
+  const docker = options.docker || new DockerImageStore()
+  const control = new ServiceControl(dataDir)
+  const journal = new EvaluationJobJournal(dataDir)
+  const info = await docker.request('GET', '/info')
+  const containers = await docker.request('GET', '/containers/json?all=1')
+  const controller = containers.find((item) => item.Names?.includes(`/${instance}`))
+  if (controller) {
+    const inspected = await docker.request('GET', `/containers/${controller.Id}/json`)
+    if (!inspected.Mounts?.some((mount) => mount.Name === options.volume && mount.Destination === '/data')) {
+      throw new Error('Controller data volume does not match; refusing to stop')
+    }
+  }
+  if (mode === 'start') {
+    if (controller?.State === 'running') throw new Error('Stop the existing evaluator before starting a replacement')
+    const image = await docker.inspect(options.imageReference)
+    if (!image) throw new Error('Controller image not found')
+    await recordManagedImage(dataDir, { reference: options.imageReference, id: image.id, daemonId: info.ID, role: 'controller', uncertain: false })
+    await control.resume()
+    return { initialized: true }
+  }
+  const runIds = new Set(await journal.listRunIds())
+  const owned = (item) => item.Id === controller?.Id
+    || (item.Labels?.['agent-insight.evaluator-instance']
+      ? item.Labels['agent-insight.evaluator-instance'] === instance
+      : runIds.has(item.Labels?.['agent-insight.evaluation-id']))
+  const targets = containers.filter(owned)
+  const result = { dryRun, stopped: false, containers: targets.map((item) => item.Id), removed: [], skipped: [], controllerImages: [] }
+  result.availableBytesBefore = await fs.statfs(dataDir).then((value) => value.bavail * value.bsize).catch(() => null)
+  if (!dryRun) {
+    await control.stop()
+    for (const runId of runIds) {
+      const state = await journal.state(runId)
+      if (!TERMINAL.has(state?.stage)) {
+        await control.cancel(runId, 'SERVICE_STOPPED')
+        await journal.writeState(runId, { stage: 'cancelling', cancellationReason: 'SERVICE_STOPPED', cancellationCallbackPending: true })
+      }
+    }
+    if (controller) {
+      // Stop the producer before removing sibling containers created through its Docker socket.
+      await docker.request('POST', `/containers/${controller.Id}/update`, false, { RestartPolicy: { Name: 'no' } })
+      if (controller.State === 'running') await docker.request('POST', `/containers/${controller.Id}/stop?t=2`)
+    }
+    for (const runId of await journal.listRunIds()) {
+      runIds.add(runId)
+      const state = await journal.state(runId)
+      if (!TERMINAL.has(state?.stage)) {
+        await control.cancel(runId, 'SERVICE_STOPPED')
+        await journal.writeState(runId, { stage: 'cancelling', cancellationReason: 'SERVICE_STOPPED', cancellationCallbackPending: true })
+      }
+    }
+    const latest = await docker.request('GET', '/containers/json?all=1')
+    for (const item of latest.filter(owned)) {
+      try { await docker.request('DELETE', `/containers/${item.Id}?force=true&v=false`) }
+      catch (error) { if (error.dockerStatus !== 404) result.skipped.push({ target: item.Id, reason: error.message }) }
+    }
+    const remaining = (await docker.request('GET', '/containers/json?all=1')).filter(owned)
+    result.stopped = remaining.length === 0
+    if (!result.stopped) return result
+    for (const runId of runIds) {
+      if (await control.cancelled(runId)) await journal.writeState(runId, { stage: 'cancelled', cancellationCallbackPending: true })
+    }
+  }
+  if (!purge) return result
+  const poolFile = path.join(dataDir, 'image-pool', 'state.json')
+  const pool = await readJson(poolFile)
+  if (pool && (pool.version !== 1 || pool.daemonId !== info.ID)) throw new Error('Image pool daemon or version mismatch')
+  const records = []
+  if (pool) {
+    if (Object.values(pool.operations || {}).some((item) => !item.completed)) {
+      result.skipped.push({ target: 'image-pool', reason: 'Docker operations remain unconfirmed; pool images retained' })
+    } else {
+      for (const entry of Object.values(pool.images)) {
+        if (entry.uncertain || entry.deleting) {
+          result.skipped.push({ target: entry.id, reason: 'Image operation remains unconfirmed' })
+          continue
+        }
+        const users = Object.values(entry.users || {})
+        if ((await Promise.all(users.map(async (owner) => runIds.has(owner.runId) && Boolean(await control.cancelled(owner.runId))))).some((known) => !known)) {
+          result.skipped.push({ target: entry.id, reason: 'Image has an unconfirmed owner' })
+          continue
+        }
+        for (const reference of [...entry.ownedReferences, ...entry.ownedDigests]) {
+          records.push({ reference, id: entry.id, role: 'case', entry })
+        }
+      }
+    }
+  }
+  const directory = path.join(dataDir, 'managed-images')
+  const files = await fs.readdir(directory).catch((error) => { if (error.code === 'ENOENT') return []; throw error })
+  for (const file of files.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))) {
+    const record = await readJson(path.join(directory, file))
+    if (record.daemonId !== info.ID || record.uncertain || !record.id) {
+      result.skipped.push({ target: record.reference, reason: 'Ownership or operation unconfirmed' })
+    } else records.push({ ...record, file: path.join(directory, file) })
+  }
+  for (const record of records) {
+    const actual = await docker.inspect(record.reference)
+    if (actual && actual.id !== record.id) {
+      result.skipped.push({ target: record.reference, reason: 'Reference points to a different image' })
+      continue
+    }
+    if (record.role === 'controller' && actual) {
+      result.controllerImages.push({ reference: record.reference, id: record.id })
+      continue
+    }
+    if (actual && await docker.referenced(actual.id)) {
+      result.skipped.push({ target: record.reference, reason: 'Image referenced by a container' })
+      continue
+    }
+    try {
+      if (actual && !dryRun) await docker.remove(record.reference)
+      result.removed.push({ reference: record.reference, existed: Boolean(actual), dryRun })
+      if (!dryRun) {
+        if (record.file) await fs.unlink(record.file)
+        if (record.entry) {
+          record.entry.ownedReferences = record.entry.ownedReferences.filter((ref) => ref !== record.reference)
+          record.entry.ownedDigests = record.entry.ownedDigests.filter((ref) => ref !== record.reference)
+          if (!record.entry.ownedReferences.length && !record.entry.ownedDigests.length) delete pool.images[record.id]
+          await atomicWriteJson(poolFile, pool)
+        }
+      }
+    } catch (error) { result.skipped.push({ target: record.reference, reason: error.message }) }
+  }
+  result.availableBytesAfter = await fs.statfs(dataDir).then((value) => value.bavail * value.bsize).catch(() => null)
+  result.spaceMeasurement = 'data-volume-filesystem; controller image cleanup happens after helper exit'
+  return result
+}
+
+function formatManagementOutput(result, summary = false) {
+  if (!summary) return JSON.stringify(result, null, 2)
+  if (result.runtimes) {
+    const { removed, retained, skipped } = result.runtimes
+    const deleted = removed.filter((item) => item.existed).length
+    const lines = [`旧 Runtime 清理：删除 ${deleted} 个镜像，保留 ${retained.length} 项，失败 ${skipped.length} 项。`]
+    if (removed.length > deleted) lines.push(`已清除 ${removed.length - deleted} 条失效 Runtime 归属记录。`)
+    for (const item of skipped) lines.push(`Runtime 清理失败：${item.reference}：${item.reason}`)
+    return lines.join('\n')
+  }
+  if (result.initialized) return '评测服务管理状态已就绪。'
+  if (result.stopped !== undefined) {
+    const lines = [result.stopped ? '旧评测服务已停止。' : '旧评测服务未完全停止。']
+    for (const item of result.skipped || []) lines.push(`未完成：${item.target}：${item.reason}`)
+    return lines.join('\n')
+  }
+  return JSON.stringify(result, null, 2)
+}
+
+if (require.main === module) {
+  const args = new Set(process.argv.slice(2))
+  const modes = ['--start', '--images-list', '--images-purge', '--runtimes-purge'].filter((flag) => args.has(flag))
+  if (modes.length > 1) {
+    console.error('Only one evaluator management mode may be selected')
+    process.exitCode = 1
+  } else {
+    const mode = args.has('--start') ? 'start' : args.has('--images-list') ? 'images-list' : args.has('--images-purge') ? 'images-purge'
+      : args.has('--runtimes-purge') ? 'runtimes-purge' : 'stop'
+    manage({ dataDir: '/data', instance: process.env.EVALUATOR_INSTANCE_ID,
+      volume: process.env.EVALUATOR_VOLUME, imageReference: process.env.EVALUATOR_IMAGE_REFERENCE,
+      mode, dryRun: args.has('--dry-run'), purge: args.has('--purge-images') })
+      .then((result) => {
+        console.log(formatManagementOutput(result, args.has('--summary')))
+        for (const record of result.controllerImages || []) console.log(`CONTROLLER_IMAGE\t${record.id}\t${record.reference}`)
+        if (!result.dryRun && (result.skipped?.length || result.runtimes?.skipped?.length || result.stopped === false)) process.exitCode = 2
+      }).catch((error) => { console.error(error.message); process.exitCode = 1 })
+  }
+}
+
+module.exports = { MANAGEMENT_PROTOCOL_VERSION, RUNTIME_IMAGE_MANAGEMENT_VERSION, manage, imagePoolCommand, formatManagementOutput }

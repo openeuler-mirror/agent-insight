@@ -1,0 +1,31 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+const URL_PREFIX = process.env.NEXT_PUBLIC_URL_PREFIX || '';
+
+export async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
+  const fullUrl = URL_PREFIX + url;
+  const headers = new Headers(options?.headers);
+  if (typeof window !== 'undefined' && (url.startsWith('/api/observe/') || url.startsWith('/api/fleet/') || url.startsWith('/api/dashboard/') || url.startsWith('/api/tags') || url.startsWith('/api/agent-datasets') || url.startsWith('/api/experiments') || url.startsWith('/api/diagnosis-runs') || url.includes('/diagnosis-inputs') || (url.startsWith('/api/skill-workbench/skills/') && url.endsWith('/retest')) || url.startsWith('/api/skill-workbench/sessions/diagnosis-') || url.startsWith('/api/skill-opt/sessions/diagnosis-') || url.startsWith('/api/skill-opt/chat') || url.startsWith('/api/skill-opt/plan') || url.startsWith('/api/eval/trajectory') || url.startsWith('/api/debug/grayscale')) && !headers.has('x-witty-api-key')) {
+    const key = localStorage.getItem('api_key');
+    if (key) headers.set('x-witty-api-key', key);
+  }
+  return fetch(fullUrl, { ...options, headers });
+}
+
+export function getApiUrl(url: string): string {
+  return URL_PREFIX + url;
+}

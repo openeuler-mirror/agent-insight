@@ -1,0 +1,12 @@
+[
+  {
+    "id": "agent_fault_injection_tool_post",
+    "hook_point": "*.Tool.*.post",
+    "command": "python3 PLACEHOLDER_HOOK_SCRIPT"
+  },
+  {
+    "id": "agent_fault_injection_tool_pre",
+    "hook_point": "*.Tool.*.pre",
+    "command": "python3 PLACEHOLDER_HOOK_SCRIPT"
+  }
+]

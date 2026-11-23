@@ -1,0 +1,493 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for OpenCode CLI agent/model catalog parsing."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import TestCase
+from unittest.mock import MagicMock, call, patch
+
+from agent_fault_injection.platform_adapters.opencode import catalog
+from agent_fault_injection.platform_adapters.opencode.catalog import (
+    agent_matches_oh_my_key,
+    choose_default_agent,
+    filter_models_by_providers,
+    list_opencode_agents,
+    list_opencode_models,
+    load_oh_my_agent_keys,
+    merge_agent_snapshots,
+    models_from_config_providers,
+    parse_opencode_agent_api_payload,
+    parse_opencode_agent_list_output,
+    parse_opencode_models_output,
+    select_usable_agents,
+)
+
+
+_AGENT_CLI = """
+[AET] Trace logging installed
+build (subagent)
+  [
+  {
+    "permission": "*"
+  }
+  ]
+plan (subagent)
+compaction (primary)
+summary (primary)
+title (primary)
+ras-judge (subagent)
+explore (subagent)
+general (subagent)
+aet-implement (primary)
+\u200bSisyphus - Ultraworker (primary)
+oracle (subagent)
+librarian (subagent)
+\u200b\u200b\u200bPrometheus - Plan Builder (primary)
+Atlas - Plan Executor (primary)
+deepresearch (primary)
+"""
+
+_MODELS_CLI = """
+[AET] Trace logging installed
+opencode/big-pickle
+google/gemini-2.5-flash
+google/antigravity-gemini-3-pro
+huawei-blue/GLM-5.2
+personal/Minimax-M3
+deepseek/deepseek-chat
+deepseek/deepseek-reasoner
+minimax/MiniMax-M2
+"""
+
+_AGENT_API = [
+    {"name": "build", "mode": "primary", "hidden": False},
+    {"name": "aet-design", "mode": "primary", "hidden": False},
+    {"name": "aet-implement", "mode": "primary", "hidden": False},
+    {"name": "compaction", "mode": "primary", "hidden": True},
+    {"name": "ras-judge", "mode": "subagent", "hidden": True},
+]
+
+
+class OpenCodeCatalogParseTests(TestCase):
+    def test_v2_catalog_uses_agent_id_instead_of_display_name(self) -> None:
+        self.assertEqual(
+            parse_opencode_agent_api_payload({"data": [{"id": "build", "name": "Build"}]}),
+            [{"id": "build", "name": "build"}],
+        )
+
+    def test_server_uses_versioned_endpoint_and_private_v2_credentials(self) -> None:
+        for major in (1, 2):
+            with self.subTest(major=major), \
+                patch.object(catalog, "_resolve_executable", return_value="/fixture/opencode"), \
+                patch.object(catalog, "_run_opencode_cli", return_value=(f"opencode v{major}.1.4", None)), \
+                patch.object(catalog, "_reserve_loopback_port", return_value=12345), \
+                patch.object(catalog, "_AGENT_SERVER_SETTLE_SECONDS", 0), \
+                patch.object(catalog.subprocess, "Popen") as popen, \
+                patch.object(catalog.urllib.request, "urlopen") as urlopen, \
+                patch.object(catalog, "_stop_process_tree") as stop:
+                popen.return_value.poll.return_value = None
+                payload = {"data": [{"id": "build", "name": "Build"}]} if major == 2 else _AGENT_API
+                urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+                agents, error = catalog._list_agents_via_server()
+                self.assertIsNone(error)
+                self.assertEqual(agents[0]["id"], "build")
+                request = urlopen.call_args.args[0]
+                self.assertEqual(request.full_url, "http://127.0.0.1:12345" + ("/api/agent" if major == 2 else "/agent"))
+                env = popen.call_args.kwargs["env"]
+                if major == 2:
+                    credentials = base64.b64decode(request.get_header("Authorization").split()[1]).decode()
+                    self.assertEqual(credentials, "opencode:" + env["OPENCODE_PASSWORD"])
+                else:
+                    self.assertNotIn("OPENCODE_PASSWORD", env)
+                    self.assertIsNone(request.get_header("Authorization"))
+                stop.assert_called_once_with(popen.return_value)
+
+    def test_v2_does_not_fall_back_to_removed_agent_list_command(self) -> None:
+        with patch.object(catalog, "_list_agents_via_server", return_value=(None, "connection refused")), \
+            patch.object(catalog, "_run_opencode_cli", return_value=("opencode v2.1.4", None)) as cli:
+            result = list_opencode_agents(oh_my_keys=set())
+            self.assertEqual(result["agents"], [])
+            self.assertIn("v2 Agent API", result["note"])
+            cli.assert_called_once_with(["--version"], executable=None)
+
+    def test_v1_keeps_cli_fallback(self) -> None:
+        with patch.object(catalog, "_list_agents_via_server", return_value=(None, "connection refused")), \
+            patch.object(catalog, "_run_opencode_cli", side_effect=[("1.14.39", None), (_AGENT_CLI, None)]):
+            result = list_opencode_agents(oh_my_keys=set())
+            self.assertEqual(result["default"], "build")
+            self.assertTrue(result["agents"])
+
+    @patch.object(catalog.os, "name", "posix")
+    @patch.object(catalog, "_wait_for_process_group_exit", return_value=True)
+    @patch.object(catalog.os, "killpg", create=True)
+    def test_stop_process_tree_signals_group_after_launcher_exits(
+        self,
+        killpg: MagicMock,
+        wait_for_exit: MagicMock,
+    ) -> None:
+        process = MagicMock(pid=4321)
+        process.poll.return_value = 0
+
+        catalog._stop_process_tree(process)
+
+        killpg.assert_called_once_with(4321, catalog.signal.SIGTERM)
+        wait_for_exit.assert_called_once_with(process, timeout=2.0)
+
+    @patch.object(catalog.os, "name", "posix")
+    @patch.object(
+        catalog,
+        "_wait_for_process_group_exit",
+        side_effect=[False, True],
+    )
+    @patch.object(catalog.os, "killpg", create=True)
+    def test_stop_process_tree_kills_group_remaining_after_term(
+        self,
+        killpg: MagicMock,
+        wait_for_exit: MagicMock,
+    ) -> None:
+        process = MagicMock(pid=4321)
+
+        catalog._stop_process_tree(process)
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                call(4321, catalog.signal.SIGTERM),
+                call(4321, catalog.signal.SIGKILL),
+            ],
+        )
+        self.assertEqual(
+            wait_for_exit.call_args_list,
+            [
+                call(process, timeout=2.0),
+                call(process, timeout=2.0),
+            ],
+        )
+
+    def test_parse_agents_excludes_system_agents(self) -> None:
+        agents = parse_opencode_agent_list_output(_AGENT_CLI)
+        ids = [item["id"] for item in agents]
+        self.assertIn("build", ids)
+        self.assertIn("plan", ids)
+        self.assertIn("explore", ids)
+        self.assertIn("aet-implement", ids)
+        self.assertIn("Sisyphus - Ultraworker", ids)
+        self.assertIn("oracle", ids)
+        self.assertNotIn("compaction", ids)
+        self.assertNotIn("summary", ids)
+        self.assertNotIn("title", ids)
+        self.assertNotIn("ras-judge", ids)
+        build = next(item for item in agents if item["id"] == "build")
+        self.assertEqual(build["mode"], "subagent")
+
+    def test_parse_agent_api_includes_dynamic_and_excludes_hidden_agents(self) -> None:
+        agents = parse_opencode_agent_api_payload(_AGENT_API)
+        self.assertEqual(
+            [item["id"] for item in agents],
+            ["build", "aet-design", "aet-implement"],
+        )
+
+    def test_merge_agent_snapshots_keeps_late_plugin_agents(self) -> None:
+        merged = merge_agent_snapshots(
+            [{"id": "build", "name": "build", "mode": "primary"}],
+            [
+                {"id": "build", "name": "build", "mode": "primary"},
+                {
+                    "id": "Fuxi (Diagnostic Planner)",
+                    "name": "Fuxi (Diagnostic Planner)",
+                    "mode": "primary",
+                },
+            ],
+        )
+        self.assertEqual(
+            [item["id"] for item in merged],
+            ["build", "Fuxi (Diagnostic Planner)"],
+        )
+
+    def test_list_agents_prefers_resolved_agent_api(self) -> None:
+        result = list_opencode_agents(
+            agent_api_payload=_AGENT_API,
+            cli_output=_AGENT_CLI,
+        )
+        self.assertEqual(result["default"], "build")
+        self.assertEqual(
+            [item["id"] for item in result["agents"]],
+            ["build", "aet-design", "aet-implement"],
+        )
+        self.assertIn("/agent", result["note"])
+
+    def test_choose_default_prefers_build(self) -> None:
+        agents = parse_opencode_agent_list_output(_AGENT_CLI)
+        self.assertEqual(choose_default_agent(agents), "build")
+        self.assertEqual(
+            choose_default_agent([{"id": "plan"}, {"id": "explore"}]),
+            "plan",
+        )
+
+    def test_oh_my_key_matching(self) -> None:
+        self.assertTrue(agent_matches_oh_my_key("Sisyphus - Ultraworker", "sisyphus"))
+        self.assertTrue(agent_matches_oh_my_key("oracle", "oracle"))
+        self.assertTrue(agent_matches_oh_my_key("Sisyphus-Junior", "sisyphus-junior"))
+        self.assertFalse(agent_matches_oh_my_key("aet-implement", "sisyphus"))
+
+    def test_select_usable_agents_includes_oh_my(self) -> None:
+        cli_agents = parse_opencode_agent_list_output(_AGENT_CLI)
+        selected = select_usable_agents(
+            cli_agents,
+            config={
+                "agent": {
+                    "ras-judge": {"hidden": True, "mode": "subagent"},
+                    "my-custom": {"mode": "primary"},
+                }
+            },
+            oh_my_keys={
+                "sisyphus",
+                "oracle",
+                "librarian",
+                "prometheus",
+                "atlas",
+                "explore",
+            },
+        )
+        ids = [item["id"] for item in selected]
+        # Prefer known builtins that appear in CLI, in _BUILTIN_AGENTS order.
+        self.assertEqual(ids[:4], ["build", "plan", "general", "explore"])
+        self.assertIn("my-custom", ids)
+        self.assertIn("Sisyphus - Ultraworker", ids)
+        self.assertIn("oracle", ids)
+        self.assertIn("Prometheus - Plan Builder", ids)
+        self.assertIn("Atlas - Plan Executor", ids)
+        self.assertNotIn("aet-implement", ids)
+        self.assertNotIn("deepresearch", ids)
+        self.assertNotIn("ras-judge", ids)
+
+    def test_select_usable_agents_does_not_synthesize_missing_builtins(self) -> None:
+        selected = select_usable_agents(
+            [],
+            config={"agent": {"my-custom": {"mode": "primary"}}},
+            oh_my_keys={"sisyphus", "oracle"},
+        )
+        ids = [item["id"] for item in selected]
+        self.assertEqual(ids, ["my-custom"])
+        for builtin in ("build", "plan", "general", "explore"):
+            self.assertNotIn(builtin, ids)
+
+    def test_select_usable_agents_omits_builtins_absent_from_cli(self) -> None:
+        selected = select_usable_agents(
+            [{"id": "explore", "name": "explore", "mode": "subagent"}],
+            config={},
+            oh_my_keys=set(),
+        )
+        ids = [item["id"] for item in selected]
+        self.assertEqual(ids, ["explore"])
+        self.assertNotIn("build", ids)
+        self.assertNotIn("plan", ids)
+        self.assertNotIn("general", ids)
+
+    def test_list_agents_from_cli_with_oh_my_config(self) -> None:
+        result = list_opencode_agents(
+            cli_output=_AGENT_CLI,
+            config={},
+            oh_my_config={
+                "agents": {
+                    "sisyphus": {"model": "personal/Minimax-M3"},
+                    "oracle": {},
+                }
+            },
+        )
+        self.assertEqual(result["platform"], "opencode")
+        self.assertEqual(result["default"], "build")
+        ids = [item["id"] for item in result["agents"]]
+        self.assertIn("build", ids)
+        self.assertIn("Sisyphus - Ultraworker", ids)
+        self.assertIn("oracle", ids)
+        self.assertNotIn("aet-implement", ids)
+        self.assertNotIn("ras-judge", ids)
+
+    def test_load_oh_my_agent_keys_from_dict(self) -> None:
+        keys = load_oh_my_agent_keys(
+            oh_my_config={"agents": {"sisyphus": {}, "oracle": {}}}
+        )
+        self.assertEqual(keys, {"sisyphus", "oracle"})
+
+    def test_parse_models_lines(self) -> None:
+        models = parse_opencode_models_output(_MODELS_CLI)
+        ids = [item["id"] for item in models]
+        self.assertIn("huawei-blue/GLM-5.2", ids)
+        self.assertIn("deepseek/deepseek-chat", ids)
+
+    def test_filter_models_by_configured_providers(self) -> None:
+        models = parse_opencode_models_output(_MODELS_CLI)
+        filtered = filter_models_by_providers(
+            models,
+            {"huawei-blue", "personal"},
+        )
+        self.assertEqual(
+            [item["id"] for item in filtered],
+            ["huawei-blue/GLM-5.2", "personal/Minimax-M3"],
+        )
+
+    def test_list_models_unions_usable_config_and_credentialed_cli(self) -> None:
+        result = list_opencode_models(
+            cli_output=_MODELS_CLI,
+            config={
+                "model": "huawei-blue/GLM-5.2",
+                "provider": {
+                    "huawei-blue": {
+                        "options": {"apiKey": "sk-test"},
+                        "models": {"GLM-5.2": {"name": "GLM 5.2"}},
+                    },
+                    "personal": {
+                        "options": {"apiKey": "sk-test"},
+                        "models": {
+                            "Minimax-M3": {"name": "Minimax M3"},
+                            "Minimax-M2.7-highspeed": {},
+                        },
+                    },
+                    "google": {
+                        "models": {
+                            "antigravity-gemini-3-pro": {
+                                "name": "Gemini 3 Pro (Antigravity)",
+                            }
+                        },
+                    },
+                },
+            },
+            auth_providers={"deepseek"},
+            environ={},
+        )
+        ids = [item["id"] for item in result["models"]]
+        self.assertEqual(result["default"], "huawei-blue/GLM-5.2")
+        self.assertTrue(result["models"][0]["default"])
+        self.assertIn("huawei-blue/GLM-5.2", ids)
+        self.assertIn("personal/Minimax-M3", ids)
+        self.assertIn("personal/Minimax-M2.7-highspeed", ids)
+        self.assertIn("deepseek/deepseek-chat", ids)
+        self.assertIn("deepseek/deepseek-reasoner", ids)
+        # No Google credentials and no inline apiKey → excluded.
+        self.assertNotIn("google/antigravity-gemini-3-pro", ids)
+        self.assertNotIn("google/gemini-2.5-flash", ids)
+
+    def test_list_models_fallback_filters_credentialed_only(self) -> None:
+        result = list_opencode_models(
+            cli_output=_MODELS_CLI,
+            config={"provider": {}},
+            auth_providers={"deepseek"},
+            environ={},
+        )
+        ids = [item["id"] for item in result["models"]]
+        self.assertEqual(
+            set(ids),
+            {"deepseek/deepseek-chat", "deepseek/deepseek-reasoner"},
+        )
+        self.assertNotIn("huawei-blue/GLM-5.2", ids)
+
+    def test_v1_reads_connect_auth_and_json_from_xdg_directories(self) -> None:
+        from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            auth_file = root / "data" / "opencode" / "auth.json"
+            auth_file.parent.mkdir(parents=True)
+            auth_file.write_text(json.dumps({"deepseek": {"type": "api", "key": "fixture"}}))
+            config = root / "config" / "opencode" / "opencode.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"provider": {
+                "custom": {"options": {"apiKey": "fixture"}, "models": {"model": {}}},
+                "deepseek": {"models": {"custom-alias": {}}},
+            }}))
+            with patch.dict(os.environ, {
+                "XDG_DATA_HOME": str(root / "data"), "XDG_CONFIG_HOME": str(root / "config"),
+                "OPENCODE_AUTH_CONTENT": "",
+            }), patch.object(catalog, "_run_opencode_cli", side_effect=[
+                ("1.14.39", None), ("deepseek/deepseek-chat\n", None),
+            ]):
+                result = OpenCodeAdapter().list_models()
+        self.assertEqual({row["id"] for row in result["models"]}, {
+            "deepseek/deepseek-chat", "deepseek/custom-alias", "custom/model",
+        })
+
+    def test_v2_lists_native_models_even_with_stale_v1_auth(self) -> None:
+        connected = {"providerID": "connected", "id": "alias", "modelID": "upstream", "enabled": True}
+        configured = {"providerID": "custom", "id": "model", "name": "Configured model", "enabled": True}
+        disabled = {"providerID": "old", "id": "model", "enabled": False}
+        with patch.object(catalog, "auth_provider_ids", return_value={"old"}) as legacy_auth, patch.object(
+            catalog, "_run_opencode_cli", side_effect=[
+                ("opencode v2.2.0", None),
+                (json.dumps({"data": [configured, disabled, connected]}), None),
+                (json.dumps({"data": connected}), None),
+            ],
+        ) as cli:
+            result = list_opencode_models(executable="/bin/opencode")
+        legacy_auth.assert_not_called()
+        self.assertEqual([c.args[0] for c in cli.call_args_list], [
+            ["--version"], ["api", "--standalone", "model.list"], ["api", "--standalone", "model.default"],
+        ])
+        self.assertEqual([row["id"] for row in result["models"]], ["connected/alias", "custom/model"])
+        self.assertEqual(result["models"][0]["modelID"], "alias")
+        self.assertEqual(result["models"][1]["name"], "Configured model")
+        self.assertEqual(result["default"], "connected/alias")
+        self.assertTrue(result["models"][0]["default"])
+
+    def test_v2_model_list_failure_does_not_use_v1_config_or_leak_output(self) -> None:
+        for failed in [(None, "private-fixture-token"), ('{"data":[{}]}', None)]:
+            with self.subTest(failed=failed), patch.object(catalog, "_run_opencode_cli", side_effect=[
+                ("2.2.6", None), failed,
+            ]) as cli:
+                result = list_opencode_models(config={"model": "v1/model"})
+                self.assertEqual(cli.call_count, 2)
+                self.assertEqual(result["models"], [])
+                self.assertIn("无法读取", result["note"])
+                self.assertNotIn("private-fixture-token", result["note"])
+
+    def test_v2_keeps_enabled_models_when_default_is_unreadable_or_outside_list(self) -> None:
+        listed = {"providerID": "connected", "id": "model", "enabled": True}
+        for default in [(None, "private-fixture-token"), (json.dumps({"data": {**listed, "id": "missing"}}), None)]:
+            with self.subTest(default=default), patch.object(catalog, "_run_opencode_cli", side_effect=[
+                ("2.2.0", None), (json.dumps({"data": [listed]}), None), default,
+            ]):
+                result = list_opencode_models()
+                self.assertEqual([row["id"] for row in result["models"]], ["connected/model"])
+                self.assertIsNone(result["default"])
+
+    def test_models_from_config_providers_require_usable(self) -> None:
+        config = {
+            "provider": {
+                "huawei-blue": {
+                    "options": {"apiKey": "sk-test"},
+                    "models": {"GLM-5.2": {"name": "GLM 5.2"}},
+                },
+                "google": {
+                    "models": {"antigravity-gemini-3-pro": {"name": "Gemini"}},
+                },
+            }
+        }
+        all_models = models_from_config_providers(config)
+        self.assertEqual(
+            {item["id"] for item in all_models},
+            {"huawei-blue/GLM-5.2", "google/antigravity-gemini-3-pro"},
+        )
+        usable = models_from_config_providers(
+            config,
+            credentialed=set(),
+            require_usable=True,
+        )
+        self.assertEqual([item["id"] for item in usable], ["huawei-blue/GLM-5.2"])

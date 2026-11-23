@@ -1,0 +1,3707 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { randomUUID } from 'node:crypto';
+import { ownsSkillExecution } from '@/lib/grayscale/execution-fence';
+import { commitRunProgress } from '@/lib/grayscale/run-progress-store';
+import { type ExecutionIdentity } from '@/lib/grayscale/run-progress';
+import type { AgentRunError } from '../../../../../../scripts/agent-run-diagnostics.cjs';
+import { guardTraceDataset, generationErrorResponse } from '@/server/trace-datasets/http';
+import { GenerationError } from '@/lib/trace-datasets/contracts';
+import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
+import { prisma } from '@/lib/storage/prisma';
+import { visibleExperimentTask } from '@/lib/engine/experiment/task-visibility';
+import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { executeSkillCaseOnClient } from '@/lib/skill-workbench/client-execution';
+import { mapConcurrent, parseExecutionConcurrency } from '@/lib/engine/experiment/execution-concurrency';
+import { validateSkillExecutionTarget } from '@/lib/skill-workbench/execution-target';
+import { ensureTriggerExperimentCases, shouldStopTriggerBatch } from '@/lib/skill-workbench/trigger-execution';
+import { generateExperimentTraces } from '@/lib/engine/experiment/trace-generation';
+import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import { withExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import type { SkillExecutionTarget, SkillExecutionSnapshot } from '@/lib/skill-workbench/execution-target';
+import { loadServerModelForUserById } from '@/lib/engine/general-agent/server-model-config';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
+import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guards';
+import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
+import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
+import { saveExecutionRecord } from '@/lib/storage/data-service';
+import {
+    ensureEvalExperiment,
+    addEvalExperimentCase,
+    evaluateEvalExperimentCase,
+    startEvalExperimentCases,
+    settleExperimentStatus,
+    type EvalCaseResultRow,
+} from '@/lib/engine/experiment/run-experiment';
+import {
+    abEvaluatorName,
+    forLegacyRowProjection,
+    normalizeAbEvaluators,
+    TASK_COMPLETION_EVALUATOR_ID,
+} from '@/lib/grayscale/ab-evaluator-selection';
+import {
+    evaluateSkillTriggerAnalysis,
+    SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+} from '@/lib/skill-workbench/trigger-evaluator';
+import {
+    getGrayscaleTaskBoundSide,
+    getGrayscaleTaskBoundVersionId,
+    hydrateGrayscaleTaskBinding,
+    isGrayscaleTaskBindingValid,
+    normalizeGrayscaleTaskBinding,
+    type GrayscaleTaskBoundSide,
+} from '@/lib/grayscale/task-binding';
+import { resolveGrayscaleRetryMode, shouldAutoRetryGrayscaleExecution } from '@/lib/grayscale/retry-policy';
+
+export const dynamic = 'force-dynamic';
+
+type Side = 'a' | 'b';
+type CaseStatus = 'pending' | 'running' | 'executed' | 'evaluating' | 'pass' | 'fail';
+type RunFailureType = 'permission_blocked' | 'agent_timeout' | 'question_blocked' | 'agent_error';
+
+interface GrayscaleConfig {
+    skillId?: string;
+    versionAId?: string;
+    versionBId?: string;
+    boundSide?: GrayscaleTaskBoundSide;
+    selectedDatasetId?: string;
+    linkedDatasetIds?: string[];
+    selectedCaseId?: string;
+    selectedCaseIds?: string[];
+    runCount?: number;
+    repeatRounds?: number;
+    agentMaxConcurrency?: number;
+    executionConcurrency?: number;
+    abPairConcurrency?: number;
+    evaluationConcurrency?: number;
+    triggerConcurrency?: number;
+    modelConfigId?: string | null;
+    executionTarget?: SkillExecutionTarget | null;
+    requiresClientExecution?: boolean;
+    skillSnapshots?: { a: SkillExecutionSnapshot | null; b: SkillExecutionSnapshot | null };
+    triggerSkills?: SkillExecutionSnapshot[] | null;
+    modelOptions?: Record<string, unknown>;
+    interactionPolicy?: 'auto-allow' | 'auto-deny';
+    timeoutMs?: number;
+    idleTimeoutMs?: number;
+    retryLimit?: number;
+    autoEval?: boolean;
+    recordTriggerDetails?: boolean;
+    triggerRouting?: boolean;
+    evaluatorId?: string;
+    evaluators?: string[];
+    /** Skill 工作台单组实验只执行当前 Skill（B 侧）；缺省仍保持传统 A/B 双侧。 */
+    executionSides?: Side[];
+    latestResultAt?: string;
+    // 关联到「评测执行」页的批次 ID (evaluatorRunId)。前端通过「+ 新增评测任务」对话框创建,
+    // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append (下一步迭代)。
+    evaluationBatchId?: string;
+    evaluationBatchTitle?: string;
+    evaluationBatchEvaluators?: string[];
+    /** 评测走实验：本 A/B 任务绑定的单组 backing 实验 id（每条 trace 作 case 评测，结果回填双侧）。 */
+    evalExperimentId?: string;
+}
+
+function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
+    const evaluatorIds = normalizeAbEvaluators(config.evaluators || config.evaluationBatchEvaluators, config.evaluatorId);
+    return {
+        ...config,
+        autoEval: true,
+        recordTriggerDetails: true,
+        evaluatorId: evaluatorIds[0] || '',
+        evaluators: evaluatorIds,
+    };
+}
+
+function configuredExecutionSides(config: GrayscaleConfig): Side[] {
+    const sides = Array.isArray(config.executionSides)
+        ? config.executionSides.filter((side): side is Side => side === 'a' || side === 'b')
+        : [];
+    return sides.length ? Array.from(new Set(sides)) : ['a', 'b'];
+}
+
+interface RunResult extends ExecutionIdentity {
+    status: CaseStatus;
+    jobId?: string;
+    experimentCaseId?: string;
+    evaluatorRunId?: string;
+    evaluationResultId?: string;
+    evaluationClaimId?: string;
+    evaluationStartedAt?: string;
+    evaluationTraceId?: string;
+    timeCost?: string;
+    tokenUsage?: number;
+    output?: string;
+    sessionId?: string;
+    score?: number;
+    tier?: 'good' | 'warn' | 'poor';
+    evaluations?: RunEvaluation[];
+    runIndex: number;
+    roundIndex: number;
+    caseId: string;
+    traceIds?: string[];
+    skillTriggered?: boolean;
+    toolCallCount?: number;
+    toolCalls?: string[];
+    executionAttempts?: number;
+    evaluationAttempts?: number;
+    evaluationReserved?: boolean;
+    // 评测失败但"可重试且还有次数"时为 true:此时 status 保持 'evaluating'(显示「评测中/重试中」),
+    // 由编排层的重试循环挑它重跑。失败只在最终确切失败(不可重试/重试用尽)时进 'fail' 终态。
+    evalRetryPending?: boolean;
+    failureType?: RunFailureType;
+    failureCode?: string;
+    failureDetail?: string;
+    completedAt?: string;
+}
+
+type RunEvaluationStatus = 'pending' | 'running' | 'done' | 'failed';
+
+interface RunEvaluation {
+    evaluatorId: string;
+    evaluatorName: string;
+    status: RunEvaluationStatus;
+    evaluatorRunId?: string;
+    evaluationResultId?: string;
+    evaluationTraceId?: string;
+    score?: number;
+    errorMessage?: string;
+    unscored?: boolean;
+    summary?: string;
+}
+
+interface GrayscaleBinding {
+    source: 'grayscale-ab';
+    grayscaleTaskId: string;
+    caseId: string;
+    side: Side;
+    runIndex: number;
+    roundIndex: number;
+    executionTraceId: string;
+    evaluationClaimId: string;
+    evaluationAttempt: number;
+}
+
+interface PerVersionState {
+    status: CaseStatus;
+    jobId?: string;
+    evaluatorRunId?: string;
+    timeCost?: string;
+    tokenUsage?: number;
+    output?: string;
+    sessionId?: string;
+    score?: number;
+    tier?: 'good' | 'warn' | 'poor';
+    evaluations?: RunEvaluation[];
+    runs?: RunResult[];
+    runCount?: number;
+    traceIds?: string[];
+    skillTriggered?: boolean;
+    toolCallCount?: number;
+    toolCalls?: string[];
+}
+
+type CaseStates = Record<string, { a: PerVersionState; b: PerVersionState }>;
+
+interface ActiveGrayscaleRun {
+    taskId: string;
+    runId: string;
+    status: 'running' | 'evaluating';
+    startedAt: number;
+    /**
+     * 任务级 AbortController, 用户点「终止」按钮时调用 .abort() 让所有 in-flight
+     * 子任务尽快收尾。signal 会传给 runGeneralAgent.chatOptions.signal, opencode
+     * 检测到 abort 立即返回; runWithConcurrency 的 worker 循环也会检查并 bail。
+     */
+    abortController?: AbortController;
+}
+
+interface GrayscaleTaskRow {
+    id: string;
+    user: string;
+    skillId: string;
+    skillName: string;
+    skillVersion: number;
+    skillVersionId: string;
+    taskName: string;
+    configJson: string;
+    caseStatesJson: string;
+    createdAt: Date;
+}
+
+interface SkillVersionRow {
+    version: number;
+    Skill?: { name?: string | null } | null;
+}
+
+interface TrajectoryResultRow {
+    id?: string;
+    evaluatorRunId?: string;
+    status?: string;
+    taskId?: string | null;
+    trajectoryScore?: number | null;
+    errorMessage?: string | null;
+    rawAnalysisJson?: string | null;
+    updatedAt?: Date;
+}
+
+interface TrajectoryApiResult {
+    id?: string;
+    evaluatorRunId?: string;
+    status?: string;
+    taskId?: string | null;
+    trajectoryScore?: number | null;
+    resultEvaluationScore?: number | null;
+    errorMessage?: string | null;
+    rawAnalysis?: unknown;
+    updatedAt?: string;
+}
+
+type TrajectoryResultStatus = 'pending' | 'running' | 'done' | 'failed' | string;
+
+interface ExecutionMetricRow {
+    taskId?: string | null;
+    query?: string | null;
+    agentName?: string | null;
+    finalResult?: string | null;
+    skill?: string | null;
+    skillVersion?: number | null;
+    latency?: number | null;
+    tokens?: number | null;
+    toolCallCount?: number | null;
+    timestamp?: Date | string | number | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    cacheReadInputTokens?: number | null;
+    cacheCreationInputTokens?: number | null;
+    reasoningTokens?: number | null;
+}
+
+interface GrayscalePrisma {
+    grayscaleTask: {
+        findFirst(args: { where: { id?: string; user: string; skillName?: string; skillVersion?: number; taskName?: string; NOT?: { id: string } } }): Promise<GrayscaleTaskRow | null>;
+        findMany(args: { select: { id: true; user: true; caseStatesJson: true } }): Promise<Array<{ id: string; user: string; caseStatesJson: string }>>;
+        updateMany(args: { where: { id: string; user: string; caseStatesJson?: string }; data: Record<string, string> }): Promise<{ count: number }>;
+    };
+    skillVersion: {
+        findFirst(args: { where: { id: string; skillId: string }; include: { Skill: true } }): Promise<SkillVersionRow | null>;
+    };
+    trajectoryEvalResult: {
+        findMany(args: { where: Record<string, unknown> }): Promise<TrajectoryResultRow[]>;
+        findFirst(args: { where: Record<string, unknown>; orderBy: { updatedAt: 'desc' } }): Promise<TrajectoryResultRow | null>;
+        updateMany(args: {
+            where: { user?: string; evaluatorRunId?: string; id?: { in: string[] }; status?: { in: string[] }; taskId?: { in: string[] } };
+            data: { status: string; errorMessage?: string };
+        }): Promise<{ count: number }>;
+    };
+    execution: {
+        findMany(args: {
+            where: Record<string, unknown>;
+            select: {
+                taskId: true;
+                query?: true;
+                agentName?: true;
+                finalResult?: true;
+                skill?: true;
+                skillVersion?: true;
+                latency: true;
+                tokens: true;
+                toolCallCount?: true;
+                timestamp?: true;
+                inputTokens: true;
+                outputTokens: true;
+                cacheReadInputTokens: true;
+                cacheCreationInputTokens: true;
+                reasoningTokens: true;
+            };
+        }): Promise<ExecutionMetricRow[]>;
+    };
+}
+
+declare global {
+    var __grayscaleRunStore: Map<string, ActiveGrayscaleRun> | undefined;
+}
+
+const NONE_VERSION_ID = '__NONE__';
+const STALE_EVALUATION_MS = 15 * 60 * 1000;
+// 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
+// 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
+// (eval 进程跟着 server 一起挂了, 永远不会再 progress)。reconcile 用这条
+// 规则比 STALE_EVALUATION_MS=15min 的纯时间阈值更快地恢复, 用户重启后不需要
+// 等 15 分钟看到状态自然修复。globalThis 兜一层避免 dev 热更新 module 重载
+// 把启动时间也重置 (热更不算真重启, 老 eval 可能还在跑)。
+const SERVER_START_TIME: number = (() => {
+    const g = globalThis as { __grayscaleServerStartTime?: number };
+    if (!g.__grayscaleServerStartTime) g.__grayscaleServerStartTime = Date.now();
+    return g.__grayscaleServerStartTime;
+})();
+const MAX_EXECUTION_RETRIES = 2;
+const MAX_EVALUATION_RETRIES = 2;
+const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 10 * 60 * 1000;
+const GRAYSCALE_AGENT_IDLE_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_IDLE_TIMEOUT_MS) || 45 * 1000;
+
+class GrayscaleAgentTimeoutError extends Error {
+    constructor(message = 'agent execution timed out') {
+        super(message);
+        this.name = 'GrayscaleAgentTimeoutError';
+    }
+}
+
+class GrayscaleAgentInteractionError extends Error {
+    readonly failureType: RunFailureType;
+
+    constructor(failureType: RunFailureType, message: string) {
+        super(message);
+        this.name = 'GrayscaleAgentInteractionError';
+        this.failureType = failureType;
+    }
+}
+
+function activeRuns(): Map<string, ActiveGrayscaleRun> {
+    if (!globalThis.__grayscaleRunStore) globalThis.__grayscaleRunStore = new Map();
+    return globalThis.__grayscaleRunStore;
+}
+
+function safeParse<T>(value: string | null | undefined, fallback: T): T {
+    if (!value) return fallback;
+    try {
+        return JSON.parse(value) as T;
+    } catch {
+        return fallback;
+    }
+}
+
+function cloneJson<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildEvaluationClaimId(): string {
+    return `gclaim_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeGrayscaleBinding(value: unknown): GrayscaleBinding | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = value as Record<string, unknown>;
+    const source = String(raw.source || '').trim();
+    const grayscaleTaskId = String(raw.grayscaleTaskId || '').trim();
+    const caseId = String(raw.caseId || '').trim();
+    const side = String(raw.side || '').trim();
+    const executionTraceId = String(raw.executionTraceId || '').trim();
+    const evaluationClaimId = String(raw.evaluationClaimId || '').trim();
+    const runIndex = typeof raw.runIndex === 'number' && Number.isFinite(raw.runIndex)
+        ? Math.floor(raw.runIndex)
+        : Number.NaN;
+    const roundIndex = typeof raw.roundIndex === 'number' && Number.isFinite(raw.roundIndex)
+        ? Math.floor(raw.roundIndex)
+        : Number.NaN;
+    const evaluationAttempt = typeof raw.evaluationAttempt === 'number' && Number.isFinite(raw.evaluationAttempt)
+        ? Math.floor(raw.evaluationAttempt)
+        : Number.NaN;
+    if (
+        source !== 'grayscale-ab'
+        || !grayscaleTaskId
+        || !caseId
+        || (side !== 'a' && side !== 'b')
+        || !executionTraceId
+        || !evaluationClaimId
+        || !Number.isFinite(runIndex)
+        || !Number.isFinite(roundIndex)
+        || !Number.isFinite(evaluationAttempt)
+    ) {
+        return null;
+    }
+    return {
+        source: 'grayscale-ab',
+        grayscaleTaskId,
+        caseId,
+        side: side as Side,
+        runIndex,
+        roundIndex,
+        executionTraceId,
+        evaluationClaimId,
+        evaluationAttempt,
+    };
+}
+
+function readGrayscaleBindingFromRawAnalysisJson(rawAnalysisJson: string | null | undefined): GrayscaleBinding | null {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    return raw && typeof raw === 'object' ? normalizeGrayscaleBinding(raw.grayscaleBinding) : null;
+}
+
+function readGrayscaleBindingFromRaw(rawAnalysis: unknown): GrayscaleBinding | null {
+    return normalizeGrayscaleBinding(
+        rawAnalysis && typeof rawAnalysis === 'object' && !Array.isArray(rawAnalysis)
+            ? (rawAnalysis as Record<string, unknown>).grayscaleBinding
+            : null,
+    );
+}
+
+function matchesGrayscaleBinding(
+    binding: GrayscaleBinding | null,
+    args: {
+        taskId: string;
+        caseId: string;
+        side: Side;
+        run: Pick<RunResult, 'runIndex' | 'roundIndex' | 'sessionId' | 'evaluationClaimId'>;
+        expectedClaimId?: string;
+        allowClaimMismatch?: boolean;
+    },
+): boolean {
+    if (!binding) return false;
+    return binding.source === 'grayscale-ab'
+        && binding.grayscaleTaskId === args.taskId
+        && binding.caseId === args.caseId
+        && binding.side === args.side
+        && binding.runIndex === args.run.runIndex
+        && binding.roundIndex === args.run.roundIndex
+        && binding.executionTraceId === String(args.run.sessionId || '').trim()
+        && (
+            args.allowClaimMismatch === true
+            || binding.evaluationClaimId === String(args.expectedClaimId || args.run.evaluationClaimId || '').trim()
+        );
+}
+
+function buildGrayscaleBindingKey(binding: GrayscaleBinding | null): string {
+    if (!binding) return '';
+    return [
+        binding.grayscaleTaskId,
+        binding.caseId,
+        binding.side,
+        binding.runIndex,
+        binding.roundIndex,
+        binding.executionTraceId,
+    ].join('|');
+}
+
+function buildRunBindingKey(taskId: string, caseId: string, side: Side, run: RunResult): string {
+    const sessionId = String(run.sessionId || '').trim();
+    if (!sessionId) return '';
+    return [
+        taskId,
+        caseId,
+        side,
+        run.runIndex,
+        run.roundIndex,
+        sessionId,
+    ].join('|');
+}
+
+function findRunIndex(runs: RunResult[] | undefined, target: Pick<RunResult, 'runIndex' | 'roundIndex' | 'caseId'>): number {
+    return (runs || []).findIndex(run => (
+        run.runIndex === target.runIndex
+        && run.roundIndex === target.roundIndex
+        && run.caseId === target.caseId
+    ));
+}
+
+function scoreTier(score: number): 'good' | 'warn' | 'poor' {
+    return score >= 80 ? 'good' : score >= 50 ? 'warn' : 'poor';
+}
+
+function getConfiguredDatasetIds(config: GrayscaleConfig): string[] {
+    return Array.from(new Set([
+        ...(Array.isArray(config.linkedDatasetIds) ? config.linkedDatasetIds : []),
+        config.selectedDatasetId || '',
+    ].map(item => String(item || '').trim()).filter(Boolean)));
+}
+
+async function loadConfiguredCaseMap(user: string, config: GrayscaleConfig): Promise<Map<string, { datasetId: string; caseEntry: DatasetCase }>> {
+    const datasetIds = getConfiguredDatasetIds(config);
+    const caseMap = new Map<string, { datasetId: string; caseEntry: DatasetCase }>();
+    for (const datasetId of datasetIds) {
+        const dataset = await findAgentDataset(user, datasetId).catch(() => null);
+        if (!dataset) continue;
+        for (const caseEntry of dataset.cases) {
+            if (!caseMap.has(caseEntry.id)) {
+                caseMap.set(caseEntry.id, { datasetId: dataset.id, caseEntry });
+            }
+        }
+    }
+    return caseMap;
+}
+
+function aggregateEvaluationScore(evaluations: RunEvaluation[] | undefined): number | undefined {
+    const scores = (evaluations || [])
+        .filter(item => item.status === 'done' && typeof item.score === 'number' && Number.isFinite(item.score))
+        .map(item => item.score as number);
+    if (scores.length === 0) return undefined;
+    return Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+}
+
+function getFailedOrMissingEvaluatorIds(run: RunResult, evaluatorIds: string[]): string[] {
+    const existing = new Map((run.evaluations || []).map(item => [item.evaluatorId, item]));
+    return evaluatorIds.filter(id => {
+        const item = existing.get(id);
+        return !item || item.status === 'failed' || item.status === 'pending';
+    });
+}
+
+function pickNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function pickEvaluationResultScore(rawAnalysisJson: string | null | undefined): number | null {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return null;
+    const resultEvaluation = raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
+        ? raw.resultEvaluation as Record<string, unknown>
+        : null;
+    return pickNumber(resultEvaluation?.score) ?? pickNumber(raw.score);
+}
+
+function pickEvaluationTraceId(rawAnalysisJson: string | null | undefined): string {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return '';
+    const resultEvaluation = raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
+        ? raw.resultEvaluation as Record<string, unknown>
+        : null;
+    const candidates = [
+        raw.evaluatorSessionId,
+        resultEvaluation?.evaluatorSessionId,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    return '';
+}
+
+function pickTraceEvaluationTraceId(rawAnalysisJson: string | null | undefined): string {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return '';
+    const candidate = raw.evaluatorSessionId;
+    return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : '';
+}
+
+function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluatorIds?: string[]): RunEvaluation[] {
+    // 只投影 legacy 行能表达的两个评估器（见 ab-evaluator-selection.ts 的 LEGACY_ROW_EVALUATORS）：
+    // 其余评估器的分在 ExperimentEvalResult 里，由 applyExpRowsToRun 落。
+    const selected = forLegacyRowProjection(normalizeAbEvaluators(
+        requestedEvaluatorIds && requestedEvaluatorIds.length > 0
+            ? requestedEvaluatorIds
+            : selectedEvaluators(row.rawAnalysisJson),
+    ));
+    const resultScore = pickEvaluationResultScore(row.rawAnalysisJson);
+    const resultError = pickResultEvaluationError(row.rawAnalysisJson);
+    const resultTraceId = pickEvaluationTraceId(row.rawAnalysisJson);
+    const traceScore = typeof row.trajectoryScore === 'number' ? row.trajectoryScore : null;
+    const traceTraceId = pickTraceEvaluationTraceId(row.rawAnalysisJson);
+    return selected.map(evaluatorId => {
+        if (row.status === 'pending' || row.status === 'running') {
+            return {
+                evaluatorId,
+                evaluatorName: abEvaluatorName(evaluatorId),
+                status: row.status === 'running' ? 'running' : 'pending',
+                evaluatorRunId: row.evaluatorRunId,
+                evaluationResultId: row.id,
+            };
+        }
+        if (evaluatorId === TASK_COMPLETION_EVALUATOR_ID) {
+            const score = typeof resultScore === 'number' ? Math.round(resultScore * 100) : undefined;
+            const failed = row.status === 'failed' || typeof score !== 'number';
+            return {
+                evaluatorId,
+                evaluatorName: abEvaluatorName(evaluatorId),
+                status: failed ? 'failed' : 'done',
+                evaluatorRunId: row.evaluatorRunId,
+                evaluationResultId: row.id,
+                evaluationTraceId: resultTraceId || undefined,
+                score,
+                errorMessage: failed ? (resultError || row.errorMessage || '任务完成度评测失败') : undefined,
+            };
+        }
+        const score = typeof traceScore === 'number' ? Math.round(traceScore * 100) : undefined;
+        const failed = row.status === 'failed' || typeof score !== 'number';
+        return {
+            evaluatorId,
+            evaluatorName: abEvaluatorName(evaluatorId),
+            status: failed ? 'failed' : 'done',
+            evaluatorRunId: row.evaluatorRunId,
+            evaluationResultId: row.id,
+            evaluationTraceId: traceTraceId || undefined,
+            score,
+            errorMessage: failed ? (row.errorMessage || '轨迹质量评测失败') : undefined,
+        };
+    });
+}
+
+function isNewerTrajectoryRow(candidate: TrajectoryResultRow, current: TrajectoryResultRow | undefined): boolean {
+    if (!current) return true;
+    const candidateTime = candidate.updatedAt instanceof Date ? candidate.updatedAt.getTime() : 0;
+    const currentTime = current.updatedAt instanceof Date ? current.updatedAt.getTime() : 0;
+    return candidateTime >= currentTime;
+}
+
+function mergeRunEvaluations(existing: RunEvaluation[] | undefined, incoming: RunEvaluation[]): RunEvaluation[] {
+    const byId = new Map<string, RunEvaluation>();
+    // 保留全部历史条目：这里曾按 2 个 legacy id 过滤，会把实验路径产出的其余评估器结果丢掉。
+    for (const item of existing || []) {
+        if (item.evaluatorId) byId.set(item.evaluatorId, item);
+    }
+    for (const item of incoming) byId.set(item.evaluatorId, item);
+    return Array.from(byId.values());
+}
+
+function getResultEvaluation(rawAnalysisJson: string | null | undefined): Record<string, unknown> | null {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return null;
+    return raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
+        ? raw.resultEvaluation as Record<string, unknown>
+        : null;
+}
+
+function pickResultEvaluationError(rawAnalysisJson: string | null | undefined): string {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    const value = raw && typeof raw === 'object' ? raw.resultEvaluationError : null;
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function selectedEvaluators(rawAnalysisJson: string | null | undefined): string[] {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    const value = raw && typeof raw === 'object' ? raw.selectedEvaluators : null;
+    return Array.isArray(value)
+        ? value.map(item => String(item || '').trim()).filter(Boolean)
+        : [];
+}
+
+function isIncompleteDoneEvaluation(row: TrajectoryResultRow): string {
+    if (row.status !== 'done') return '';
+    const evaluators = selectedEvaluators(row.rawAnalysisJson);
+    const requiresEvaluatorTrace = evaluators.some(id => (
+        id === 'preset-agent-task-completion'
+        || id === 'preset-agent-trace-quality'
+        || id === 'trace-quality-evaluator'
+    ));
+    const hasScore = typeof row.trajectoryScore === 'number'
+        || pickEvaluationResultScore(row.rawAnalysisJson) != null
+        || buildRunEvaluationsFromRow(row).some(item => item.status === 'done' && typeof item.score === 'number');
+    const hasResultEvaluation = Boolean(getResultEvaluation(row.rawAnalysisJson));
+    const hasEvaluationTrace = Boolean(pickEvaluationTraceId(row.rawAnalysisJson));
+    if (requiresEvaluatorTrace && !hasEvaluationTrace) {
+        const detail = pickResultEvaluationError(row.rawAnalysisJson);
+        return detail || '评测完成记录缺少评测 session id';
+    }
+    if (hasScore && (hasResultEvaluation || hasEvaluationTrace)) return '';
+
+    const detail = pickResultEvaluationError(row.rawAnalysisJson);
+    return detail || '评测完成记录缺少评测输出或评测 session id';
+}
+
+function truncateForRunLog(value: unknown, maxLength = 240): string {
+    const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+    if (!text) return '';
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+async function persistGrayscaleFallbackTrace(args: {
+    sessionId: string;
+    user: string;
+    query: string;
+    output: string;
+    agentName: string;
+    skill?: string;
+    skillVersion?: number | null;
+}) {
+    const query = args.query.trim();
+    const output = args.output.trim();
+    if (!args.sessionId || (!query && !output)) return;
+    const timestamp = new Date().toISOString();
+    await saveExecutionRecord({
+        task_id: args.sessionId,
+        upload_id: args.sessionId,
+        query: query || undefined,
+        framework: 'opencode',
+        user: args.user,
+        agent: args.agentName,
+        agentName: args.agentName,
+        final_result: output || undefined,
+        skill: args.skill,
+        skill_version: args.skillVersion ?? undefined,
+        interactions: [
+            ...(query ? [{ role: 'user', content: query, timestamp }] : []),
+            ...(output ? [{ role: 'assistant', content: output, timestamp, agent: args.agentName }] : []),
+        ],
+        skip_evaluation: true,
+        skip_internal_judgment: true,
+        failures: [],
+        skill_issues: [],
+        force_query_update: true,
+        opencode_cli_completed: true,
+    });
+}
+
+function buildGrayscaleExecutionSystem(version: ResolvedVersion): string {
+    const common = [
+        '你当前处于自动化 A/B 灰度测评后台执行环境。',
+        '这是非交互运行：没有用户窗口，也没有人工确认通道。',
+        '禁止向用户提问，禁止请求人工确认，禁止等待外部输入。',
+        '如果某个工具、文件、目录、网络或系统能力不可用，立即停止依赖该能力的路径，直接在最终答案中说明受限原因。',
+        '不要反复重试同一个权限受限、不可读、超时或需要确认的操作。',
+        '不要读取当前任务无关的外部目录或文件；只使用当前 workspace、已加载 Skill、用户输入和可直接访问的信息。',
+        '最终答案必须直接回应用户原始输入；若因环境限制无法完成，给出简短、明确的失败原因。',
+    ].join('\n');
+
+    if (version) {
+        return `${common}\n你是 B 侧 Skill 执行 Agent：必须按已加载 Skill 的流程执行任务。`;
+    }
+    return `${common}\n你是 A 侧基线对照 Agent：不加载任何 Skill，仅基于模型自身知识直接回答用户问题。`;
+}
+
+function summarizeBlockedInteraction(result: Awaited<ReturnType<typeof runGeneralAgent>>): { failureType: RunFailureType; message: string } | null {
+    const permission = result.interactions.find(item => item.kind === 'permission' && item.reply === 'reject');
+    if (permission) {
+        const title = truncateForRunLog(permission.meta?.title || permission.meta?.type || 'permission');
+        const pattern = truncateForRunLog(permission.meta?.pattern || '');
+        return {
+            failureType: 'permission_blocked',
+            message: `permission_blocked: ${title}${pattern ? ` (${pattern})` : ''}`,
+        };
+    }
+
+    const question = result.interactions.find(item => item.kind === 'question');
+    if (question) {
+        return {
+            failureType: 'question_blocked',
+            message: 'question_blocked: background A/B execution cannot answer agent questions',
+        };
+    }
+
+    return null;
+}
+
+function classifyAgentRunError(err: unknown): { failureType: RunFailureType; message: string } {
+    if (err instanceof GrayscaleAgentInteractionError) {
+        return { failureType: err.failureType, message: err.message };
+    }
+    if (err instanceof GrayscaleAgentTimeoutError) {
+        return { failureType: 'agent_timeout', message: err.message };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    if (/timeout|timed out|aborted/i.test(message)) {
+        return { failureType: 'agent_timeout', message };
+    }
+    if (/permission|denied|not allowed|unauthorized|forbidden/i.test(message)) {
+        return { failureType: 'permission_blocked', message };
+    }
+    return { failureType: 'agent_error', message };
+}
+
+function extractTokenUsage(stats: unknown): number {
+    const obj = (stats || {}) as { totalTokens?: unknown; tokenUsage?: unknown; tokens?: unknown; toolCallCount?: unknown };
+    const candidates = [obj.totalTokens, obj.tokenUsage, obj.tokens];
+    for (const value of candidates) {
+        if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+        if (value && typeof value === 'object') {
+            const tokenObj = value as Record<string, unknown>;
+            const sum = ['input', 'output', 'reasoning', 'cache'].reduce((acc, key) => {
+                const n = tokenObj[key];
+                return acc + (typeof n === 'number' && Number.isFinite(n) ? n : 0);
+            }, 0);
+            if (sum > 0) return Math.round(sum);
+        }
+    }
+    return 0;
+}
+
+function normalizeExecutionLatencySeconds(latency: number | null | undefined): number | null {
+    if (typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) return null;
+    return latency / 1000;
+}
+
+function pickExecutionTokenUsage(row: ExecutionMetricRow): number | null {
+    if (typeof row.tokens === 'number' && Number.isFinite(row.tokens) && row.tokens > 0) {
+        return Math.round(row.tokens);
+    }
+    const tokenFields: Array<number | null | undefined> = [
+        row.inputTokens,
+        row.outputTokens,
+        row.cacheReadInputTokens,
+        row.cacheCreationInputTokens,
+        row.reasoningTokens,
+    ];
+    const total = tokenFields.reduce<number>((sum, value) => (
+        sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+    ), 0);
+    return total > 0 ? Math.round(total) : null;
+}
+
+async function loadTask(taskId: string, user: string) {
+    const task = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({ where: { id: taskId, user } });
+    if (!task) return null;
+    const configJson = withDefaultConfig(safeParse<GrayscaleConfig>(task.configJson, {}));
+    const normalizedConfig = hydrateGrayscaleTaskBinding(configJson, task);
+    return {
+        ...task,
+        configJson: normalizedConfig,
+        caseStatesJson: safeParse<CaseStates>(task.caseStatesJson, {}),
+        // 读到的原始 caseStatesJson 串, 用于整份回写时的乐观锁 compare-and-swap。
+        rawCaseStatesJson: task.caseStatesJson,
+    };
+}
+
+/**
+ * 整份回写 caseStatesJson。传 expectedCaseStatesJson 时走乐观锁: 仅当库里的
+ * caseStatesJson 仍等于我们读到的快照才写入, 否则返回 false(说明期间有别的
+ * writer 改过, 我们这份是基于旧快照算的, 不能覆盖)。不传则无条件写(向后兼容)。
+ */
+async function persistTaskState(
+    taskId: string,
+    user: string,
+    config: GrayscaleConfig,
+    states: CaseStates,
+    expectedCaseStatesJson?: string,
+): Promise<boolean> {
+    const res = await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+        where: {
+            id: taskId,
+            user,
+            ...(expectedCaseStatesJson != null ? { caseStatesJson: expectedCaseStatesJson } : {}),
+        },
+        data: {
+            configJson: JSON.stringify(withDefaultConfig(config)),
+            caseStatesJson: JSON.stringify(states),
+        },
+    });
+    return res.count > 0;
+}
+
+/** 构造 GET 响应: 去掉仅供内部乐观锁用的 rawCaseStatesJson, 不外泄到前端 payload。 */
+async function respondTask(
+    task: NonNullable<Awaited<ReturnType<typeof loadTask>>>,
+    activeRun: ActiveGrayscaleRun | null,
+) {
+    const { rawCaseStatesJson, ...rest } = task;
+    void rawCaseStatesJson;
+    const visible = await visibleExperimentTask({ ...rest, activeRun });
+    return visible ? NextResponse.json(visible) : NextResponse.json({ error: 'Task deleted' }, { status: 404 });
+}
+
+async function persistRunStatePatch(args: {
+    taskId: string;
+    user: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    caseId: string;
+    side: Side;
+    nextRun: RunResult;
+    expectedEvaluationClaimId?: string;
+    replaceExecution?: boolean;
+    expectedExecutionClaimId?: string;
+    sidePatch?: Partial<PerVersionState>;
+    touchLatestResultAt?: boolean;
+}): Promise<boolean> {
+    ensureCaseState(args.states, args.caseId);
+    const localSide = args.states[args.caseId][args.side];
+    const localIndex = findRunIndex(localSide.runs, args.nextRun);
+    if (localIndex >= 0) {
+        localSide.runs![localIndex] = cloneJson(args.nextRun);
+    }
+    if (args.sidePatch) Object.assign(localSide, args.sidePatch);
+    args.states[args.caseId][args.side] = rebuildSideAggregate(
+        localSide,
+        localSide.runCount || localSide.runs?.length || 0,
+    );
+
+    const result = await commitRunProgress<RunResult, PerVersionState>({
+        ...args, aggregate: side => rebuildSideAggregate(side, side.runCount || side.runs?.length || 0),
+    });
+    if (!result) {
+        const latest = await loadTask(args.taskId, args.user);
+        if (latest?.caseStatesJson[args.caseId]?.[args.side]) args.states[args.caseId][args.side] = cloneJson(latest.caseStatesJson[args.caseId][args.side]);
+        return false;
+    }
+    Object.assign(args.nextRun, result.run);
+    args.states[args.caseId][args.side] = cloneJson(result.side);
+    return true;
+}
+
+function markLatestGrayResultAt(config: GrayscaleConfig) {
+    config.latestResultAt = new Date().toISOString();
+}
+
+function markRunCompleted(run: RunResult, completedAt = new Date().toISOString()) {
+    run.completedAt = completedAt;
+}
+
+function applyTrajectoryRowToRun(run: RunResult, row: TrajectoryResultRow, fallbackEvaluatorRunId?: string) {
+    const nextEvaluations = mergeRunEvaluations(run.evaluations, buildRunEvaluationsFromRow(row));
+    const nextScore = aggregateEvaluationScore(nextEvaluations);
+    const hasFailedEvaluation = nextEvaluations.some(item => item.status === 'failed');
+    const hasRunningEvaluation = nextEvaluations.some(item => item.status === 'pending' || item.status === 'running');
+    run.evaluatorRunId = row.evaluatorRunId || fallbackEvaluatorRunId || run.evaluatorRunId;
+    run.evaluationResultId = row.id || run.evaluationResultId;
+    run.evaluationTraceId = pickEvaluationTraceId(row.rawAnalysisJson) || pickTraceEvaluationTraceId(row.rawAnalysisJson) || run.evaluationTraceId;
+    run.evaluations = nextEvaluations;
+    run.status = hasRunningEvaluation
+        ? 'evaluating'
+        : hasFailedEvaluation
+            ? 'fail'
+            : typeof nextScore === 'number'
+                ? 'pass'
+                : 'fail';
+    if (typeof nextScore === 'number') {
+        run.score = nextScore;
+        run.tier = scoreTier(nextScore);
+    } else {
+        delete run.score;
+        delete run.tier;
+    }
+    if (run.status === 'fail') {
+        run.output = row.errorMessage
+            || nextEvaluations.find(item => item.status === 'failed')?.errorMessage
+            || run.output
+            || '评测失败';
+    }
+    if (row.status === 'done' || row.status === 'failed') {
+        markRunCompleted(run, row.updatedAt instanceof Date ? row.updatedAt.toISOString() : undefined);
+    }
+}
+
+/**
+ * 把实验引擎同步评测的结果行（EvalCaseResultRow[]）落到 run，逻辑对齐 applyTrajectoryRowToRun：
+ * 实验契约分已是 0-100（无需 ×100）；任一评估器失败 → run 失败，全 done → pass + tier。
+ */
+function applyExpRowsToRun(run: RunResult, rows: EvalCaseResultRow[], evalExperimentId?: string) {
+    const incoming: RunEvaluation[] = rows.map(r => ({
+        evaluatorId: r.evaluatorId,
+        evaluatorName: abEvaluatorName(r.evaluatorId),
+        status: r.status === 'done' ? 'done' : 'failed',
+        evaluatorRunId: evalExperimentId,
+        score: typeof r.score === 'number' ? Math.round(r.score) : undefined,
+        unscored: r.status === 'done' && r.score == null,
+        summary: r.status === 'done' && r.score == null ? (() => {
+            try { return JSON.parse(r.evidenceJson || '{}').md || '评估器未返回分数'; } catch { return '评估器未返回分数'; }
+        })() : undefined,
+        errorMessage: r.status !== 'done' ? (r.errorMessage || '评测失败') : undefined,
+    }));
+    const nextEvaluations = mergeRunEvaluations(run.evaluations, incoming);
+    const nextScore = aggregateEvaluationScore(nextEvaluations);
+    const hasFailed = nextEvaluations.some(item => item.status === 'failed');
+    run.evaluatorRunId = evalExperimentId || run.evaluatorRunId;
+    run.evaluations = nextEvaluations;
+    run.status = hasFailed || nextEvaluations.length === 0 ? 'fail' : 'pass';
+    if (typeof nextScore === 'number') {
+        run.score = nextScore;
+        run.tier = scoreTier(nextScore);
+    } else {
+        delete run.score;
+        delete run.tier;
+    }
+
+    markRunCompleted(run);
+}
+
+function validateTaskSkillBinding(task: Awaited<ReturnType<typeof loadTask>>) {
+    if (!task?.skillId || !task.skillName || !task.skillVersionId || typeof task.skillVersion !== 'number') {
+        throw new Error('task is not bound to a skill version');
+    }
+    const configSkillId = String(task.configJson.skillId || '').trim();
+    if (configSkillId && configSkillId !== task.skillId) {
+        throw new Error('task skill binding cannot be changed');
+    }
+    if (!isGrayscaleTaskBindingValid(task.configJson, task)) {
+        throw new Error('task skill version binding cannot be changed');
+    }
+    task.configJson = normalizeGrayscaleTaskBinding(task.configJson, task);
+}
+
+async function resolveVersion(skillId: string | undefined, versionId: string | undefined) {
+    if (!skillId || !versionId || versionId === NONE_VERSION_ID) return null;
+    const version = await (prisma as unknown as GrayscalePrisma).skillVersion.findFirst({
+        where: { id: versionId, skillId },
+        include: { Skill: true },
+    });
+    if (!version?.Skill?.name) return null;
+    return {
+        skillName: String(version.Skill.name),
+        version: Number(version.version),
+    };
+}
+
+function ensureCaseState(states: CaseStates, caseId: string) {
+    if (!states[caseId]) {
+        states[caseId] = { a: { status: 'pending', runs: [] }, b: { status: 'pending', runs: [] } };
+    }
+    if (!states[caseId].a.runs) states[caseId].a.runs = [];
+    if (!states[caseId].b.runs) states[caseId].b.runs = [];
+}
+
+function hasAnyRunningCaseStates(states: CaseStates): boolean {
+    return Object.values(states).some(state => (
+        (['a', 'b'] as Side[]).some(side => (
+            state[side].status === 'running'
+            || state[side].status === 'evaluating'
+            || (state[side].runs || []).some(run => run.status === 'running' || run.status === 'evaluating')
+        ))
+    ));
+}
+
+function isRecoverableInterruptedRun(run: RunResult): boolean {
+    if (run.status !== 'fail' || run.sessionId) return false;
+    const detail = `${run.failureDetail || ''}\n${run.output || ''}`;
+    return run.failureType === 'agent_error' && /服务重启中断|server .*restart|restarted/i.test(detail);
+}
+
+function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVersionState {
+    const runs = state.runs || [];
+    const expectedRuns = Math.max(0, Number(totalRuns) || 0);
+    const aggregateRuns = expectedRuns > 0 && runs.length > expectedRuns
+        ? runs.slice(-expectedRuns)
+        : runs;
+    const effectiveTotalRuns = expectedRuns || aggregateRuns.length;
+    const finished = aggregateRuns.filter(r => r.status === 'executed' || r.status === 'pass');
+    const executionFinished = aggregateRuns.filter(r => (
+        r.status === 'executed'
+        || r.status === 'evaluating'
+        || r.status === 'pass'
+        || (r.status === 'fail' && Boolean(r.sessionId))
+    ));
+    const failed = aggregateRuns.filter(r => r.status === 'fail');
+    const evaluating = aggregateRuns.some(r => r.status === 'evaluating');
+    const running = aggregateRuns.some(r => r.status === 'running' || r.status === 'pending');
+    const scored = aggregateRuns.filter(r => typeof r.score === 'number');
+    const seconds = executionFinished
+        .map(r => typeof r.timeCost === 'string' ? Number.parseFloat(r.timeCost) : 0)
+        .filter(n => Number.isFinite(n) && n > 0);
+    const avgSeconds = seconds.length > 0 ? seconds.reduce((a, b) => a + b, 0) / seconds.length : 0;
+    const tokenRuns = executionFinished.filter(r => typeof r.tokenUsage === 'number');
+    const avgTokens = tokenRuns.length > 0
+        ? Math.round(tokenRuns.reduce((sum, r) => sum + (r.tokenUsage || 0), 0) / tokenRuns.length)
+        : 0;
+    const avgScore = scored.length > 0
+        ? Math.round(scored.reduce((sum, r) => sum + (r.score || 0), 0) / scored.length)
+        : undefined;
+    const traceIds = executionFinished.map(r => r.sessionId).filter(Boolean) as string[];
+    const toolCallCount = executionFinished.reduce((sum, r) => sum + (r.toolCallCount || 0), 0);
+    const toolCalls = Array.from(new Set(executionFinished.flatMap(r => r.toolCalls || []))).slice(0, 8);
+
+    let status: CaseStatus = 'pending';
+    if (scored.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'pass';
+    else if (failed.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'fail';
+    else if (finished.length + failed.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'executed';
+    else if (evaluating) status = 'evaluating';
+    else if (running || finished.length > 0) status = 'running';
+
+    return {
+        ...state,
+        status,
+        runs,
+        runCount: totalRuns,
+        timeCost: seconds.length > 0 ? `${avgSeconds.toFixed(1)}s` : undefined,
+        tokenUsage: avgTokens || undefined,
+        output: [...executionFinished].reverse()[0]?.output || state.output,
+        sessionId: traceIds[0] || state.sessionId,
+        traceIds,
+        score: avgScore,
+        tier: avgScore == null ? undefined : scoreTier(avgScore),
+        skillTriggered: executionFinished.some(r => r.skillTriggered),
+        toolCallCount,
+        toolCalls,
+    };
+}
+
+async function hydrateExecutionMetrics(states: CaseStates): Promise<boolean> {
+    const sessionIds = Array.from(new Set(
+        Object.values(states)
+            .flatMap(state => (['a', 'b'] as Side[]).flatMap(side => state[side].runs || []))
+            .map(run => run.sessionId)
+            .filter((id): id is string => Boolean(id)),
+    ));
+    if (sessionIds.length === 0) return false;
+
+    const rows = await (prisma as unknown as GrayscalePrisma).execution.findMany({
+        where: { taskId: { in: sessionIds } },
+        select: {
+            taskId: true,
+            latency: true,
+            tokens: true,
+            inputTokens: true,
+            outputTokens: true,
+            cacheReadInputTokens: true,
+            cacheCreationInputTokens: true,
+            reasoningTokens: true,
+        },
+    });
+    if (rows.length === 0) return false;
+
+    const metricsBySessionId = new Map<string, { timeCost?: string; tokenUsage?: number }>();
+    for (const row of rows) {
+        if (!row.taskId) continue;
+        const latencySeconds = normalizeExecutionLatencySeconds(row.latency);
+        const tokenUsage = pickExecutionTokenUsage(row);
+        metricsBySessionId.set(row.taskId, {
+            timeCost: latencySeconds == null ? undefined : `${latencySeconds.toFixed(1)}s`,
+            tokenUsage: tokenUsage == null ? undefined : tokenUsage,
+        });
+    }
+
+    let changed = false;
+    for (const state of Object.values(states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            let sideChanged = false;
+            for (const run of state[side].runs || []) {
+                if (!run.sessionId) continue;
+                const metrics = metricsBySessionId.get(run.sessionId);
+                if (!metrics) continue;
+                if (metrics.timeCost && run.timeCost !== metrics.timeCost) {
+                    run.timeCost = metrics.timeCost;
+                    sideChanged = true;
+                }
+                if (typeof metrics.tokenUsage === 'number' && run.tokenUsage !== metrics.tokenUsage) {
+                    run.tokenUsage = metrics.tokenUsage;
+                    sideChanged = true;
+                }
+            }
+            if (sideChanged) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+function normalizeText(value: unknown): string {
+    return String(value || '').trim();
+}
+
+function timestampMs(value: ExecutionMetricRow['timestamp']): number {
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+}
+
+async function reconcileFinishedExecutions(args: {
+    user: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+}): Promise<boolean> {
+    const caseConfigMap = await loadConfiguredCaseMap(args.user, args.config);
+    if (caseConfigMap.size === 0) return false;
+
+    const pendingTargets: Array<{ caseId: string; side: Side; run: RunResult; query: string; version: ResolvedVersion }> = [];
+    const versionA = await resolveVersion(args.config.skillId, args.config.versionAId);
+    const versionB = await resolveVersion(args.config.skillId, args.config.versionBId);
+    const claimedSessionIds = new Set(
+        Object.values(args.states)
+            .flatMap(state => (['a', 'b'] as Side[]).flatMap(side => state[side].runs || []))
+            .map(run => run.sessionId)
+            .filter((id): id is string => Boolean(id)),
+    );
+
+    for (const [caseId, state] of Object.entries(args.states)) {
+        const query = normalizeText(caseConfigMap.get(caseId)?.caseEntry.input);
+        if (!query) continue;
+        for (const side of ['a', 'b'] as Side[]) {
+            const version = side === 'a' ? versionA : versionB;
+            for (const run of state[side].runs || []) {
+                if (run.sessionId) continue;
+                if (run.status !== 'running' && !isRecoverableInterruptedRun(run)) continue;
+                pendingTargets.push({ caseId, side, run, query, version });
+            }
+        }
+    }
+    if (pendingTargets.length === 0) return false;
+
+    const rows = await (prisma as unknown as GrayscalePrisma).execution.findMany({
+        where: {
+            user: args.user,
+            agentName: { in: ['grayscale-baseline-agent', 'grayscale-skill-agent'] },
+        },
+        select: {
+            taskId: true,
+            query: true,
+            agentName: true,
+            finalResult: true,
+            skill: true,
+            skillVersion: true,
+            latency: true,
+            tokens: true,
+            toolCallCount: true,
+            timestamp: true,
+            inputTokens: true,
+            outputTokens: true,
+            cacheReadInputTokens: true,
+            cacheCreationInputTokens: true,
+            reasoningTokens: true,
+        },
+    });
+    if (rows.length === 0) return false;
+
+    const sortedRows = [...rows].sort((a, b) => timestampMs(b.timestamp) - timestampMs(a.timestamp));
+    let changed = false;
+    for (const target of pendingTargets) {
+        const expectedAgentName = target.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
+        const row = sortedRows.find(candidate => {
+            if (!candidate.taskId || claimedSessionIds.has(candidate.taskId)) return false;
+            if (candidate.agentName !== expectedAgentName) return false;
+            if (normalizeText(candidate.query) !== target.query) return false;
+            if (!target.version) return !normalizeText(candidate.skill);
+            return normalizeText(candidate.skill) === target.version.skillName
+                && Number(candidate.skillVersion) === Number(target.version.version);
+        });
+        if (!row?.taskId) continue;
+
+        target.run.status = 'executed';
+        target.run.sessionId = row.taskId;
+        target.run.traceIds = [row.taskId];
+        target.run.output = row.finalResult || target.run.output || '';
+        const latencySeconds = normalizeExecutionLatencySeconds(row.latency);
+        if (latencySeconds != null) target.run.timeCost = `${latencySeconds.toFixed(1)}s`;
+        const tokenUsage = pickExecutionTokenUsage(row);
+        if (tokenUsage != null) target.run.tokenUsage = tokenUsage;
+        target.run.skillTriggered = Boolean(target.version);
+        target.run.toolCallCount = typeof row.toolCallCount === 'number' ? row.toolCallCount : target.run.toolCallCount;
+        claimedSessionIds.add(row.taskId);
+        changed = true;
+    }
+
+    if (changed) {
+        markLatestGrayResultAt(args.config);
+        for (const state of Object.values(args.states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+            }
+        }
+    }
+    return changed;
+}
+
+async function reconcileFinishedEvaluations(taskId: string, user: string, config: GrayscaleConfig, states: CaseStates): Promise<boolean> {
+    const evaluatorRunIds = Array.from(new Set(
+        Object.values(states)
+            .flatMap(state => (['a', 'b'] as Side[]).flatMap(side => [
+                state[side].evaluatorRunId,
+                ...(state[side].runs || []).map(run => run.evaluatorRunId),
+            ]))
+            .filter((id): id is string => Boolean(id)),
+    ));
+    const evaluationResultIds = Array.from(new Set(
+        Object.values(states)
+            .flatMap(state => (['a', 'b'] as Side[]).flatMap(side =>
+                (state[side].runs || []).map(run => run.evaluationResultId),
+            ))
+            .filter((id): id is string => Boolean(id)),
+    ));
+    if (evaluatorRunIds.length === 0 && evaluationResultIds.length === 0) return false;
+
+    const rowSelectors: Record<string, unknown>[] = [];
+    if (evaluatorRunIds.length > 0) rowSelectors.push({ evaluatorRunId: { in: evaluatorRunIds } });
+    if (evaluationResultIds.length > 0) rowSelectors.push({ id: { in: evaluationResultIds } });
+    const rows = await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.findMany({
+        where: rowSelectors.length === 1
+            ? { user, ...rowSelectors[0] }
+            : { user, OR: rowSelectors },
+    });
+    if (rows.length === 0) return false;
+
+    const staleRows: Array<{ row: typeof rows[number]; reason: string }> = [];
+    for (const row of rows) {
+        const incompleteDoneReason = isIncompleteDoneEvaluation(row);
+        if (incompleteDoneReason) {
+            staleRows.push({ row, reason: incompleteDoneReason });
+            continue;
+        }
+        if (row.status !== 'pending' && row.status !== 'running') continue;
+        const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
+        if (updatedAt <= 0) continue;
+        // 区分两种 stale 原因, 让 errorMessage 更易读 (用户看 modal hover 气泡就懂):
+        //   - 15min 无更新 → 真卡死, 评估器进程还在但 hang 住
+        //   - 早于 SERVER_START_TIME → server 重启遗弃, 评估器进程已经没了
+        if (Date.now() - updatedAt > STALE_EVALUATION_MS) {
+            staleRows.push({ row, reason: `评测超时(>${Math.round(STALE_EVALUATION_MS / 60000)}min 无进展)` });
+        } else if (updatedAt < SERVER_START_TIME) {
+            staleRows.push({ row, reason: '服务重启中断, 请重新评测' });
+        }
+    }
+    if (staleRows.length > 0) {
+        for (const { row, reason } of staleRows) {
+            if (row.status === 'done' && row.id) {
+                await markEvaluatorRowsFailedForce(user, [row.id], reason).catch(() => {});
+            } else if (row.evaluatorRunId && row.taskId) {
+                await markEvaluatorTasksFailed(user, row.evaluatorRunId, [row.taskId], reason).catch(() => {});
+            } else if (row.id) {
+                await markEvaluatorRowsFailed(user, [row.id], reason).catch(() => {});
+            }
+            row.status = 'failed';
+            row.errorMessage = row.errorMessage || reason;
+        }
+    }
+
+    const rowsById = new Map<string, TrajectoryResultRow>();
+    const rowsByClaimId = new Map<string, TrajectoryResultRow>();
+    const rowsByBindingKey = new Map<string, TrajectoryResultRow>();
+    for (const row of rows) {
+        if (row.id) rowsById.set(row.id, row);
+        const binding = readGrayscaleBindingFromRawAnalysisJson(row.rawAnalysisJson);
+        const claimId = binding?.evaluationClaimId || '';
+        if (claimId && isNewerTrajectoryRow(row, rowsByClaimId.get(claimId))) {
+            rowsByClaimId.set(claimId, row);
+        }
+        const bindingKey = buildGrayscaleBindingKey(binding);
+        if (bindingKey && isTerminalTrajectoryStatus(row.status) && isNewerTrajectoryRow(row, rowsByBindingKey.get(bindingKey))) {
+            rowsByBindingKey.set(bindingKey, row);
+        }
+    }
+
+    let changed = false;
+    for (const state of Object.values(states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            for (const run of state[side].runs || []) {
+                if (!run.sessionId) continue;
+                let allowClaimMismatch = false;
+                let row = (run.evaluationResultId ? rowsById.get(run.evaluationResultId) : undefined)
+                    || (run.evaluationClaimId ? rowsByClaimId.get(run.evaluationClaimId) : undefined);
+                if (!row) {
+                    row = rowsByBindingKey.get(buildRunBindingKey(taskId, run.caseId, side, run));
+                    allowClaimMismatch = Boolean(row);
+                }
+                if (!row) continue;
+                const binding = readGrayscaleBindingFromRawAnalysisJson(row.rawAnalysisJson);
+                if (!matchesGrayscaleBinding(binding, { taskId, caseId: run.caseId, side, run, allowClaimMismatch })) {
+                    continue;
+                }
+                const before = JSON.stringify({
+                    status: run.status,
+                    evaluatorRunId: run.evaluatorRunId,
+                    evaluationResultId: run.evaluationResultId,
+                    evaluationTraceId: run.evaluationTraceId,
+                    score: run.score,
+                    tier: run.tier,
+                    evaluations: run.evaluations || [],
+                    output: run.output,
+                    completedAt: run.completedAt,
+                });
+                applyTrajectoryRowToRun(run, row, state[side].evaluatorRunId);
+                if (
+                    before !== JSON.stringify({
+                        status: run.status,
+                        evaluatorRunId: run.evaluatorRunId,
+                        evaluationResultId: run.evaluationResultId,
+                        evaluationTraceId: run.evaluationTraceId,
+                        score: run.score,
+                        tier: run.tier,
+                        evaluations: run.evaluations || [],
+                        output: run.output,
+                        completedAt: run.completedAt,
+                    })
+                ) {
+                    changed = true;
+                }
+            }
+            const next = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+            if (state[side].status !== next.status || state[side].score !== next.score) changed = true;
+            state[side] = next;
+        }
+    }
+
+    if (changed) markLatestGrayResultAt(config);
+
+    return changed;
+}
+
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>, signal?: AbortSignal) {
+    await mapConcurrent(items, concurrency, async (item) => {
+        if (signal?.aborted) return;
+        await worker(item);
+    });
+}
+
+type ResolvedVersion = Awaited<ReturnType<typeof resolveVersion>>;
+type ExecutionTarget = { caseId: string; side: Side; roundIndex: number; runIndex: number; run: RunResult };
+type EvaluationTarget = { caseId: string; side: Side; run: RunResult; evaluatorIds?: string[] };
+
+async function executeSingleAgentRun(args: Parameters<typeof executeSingleAgentRunImpl>[0]) {
+    if (!args.config.evalExperimentId) return executeSingleAgentRunImpl(args);
+    const { withExperimentCancellation } = await import('@/lib/engine/experiment/cancellation-context');
+    return withExperimentCancellation(args.config.evalExperimentId, `dataset:${args.target.caseId}`, (signal) =>
+        executeSingleAgentRunImpl({ ...args, parentSignal: args.parentSignal ? AbortSignal.any([args.parentSignal, signal]) : signal }));
+}
+
+async function executeSingleAgentRunImpl(args: {
+    taskId: string;
+    user: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    caseMap: Map<string, DatasetCase>;
+    totalRunsPerSide: number;
+    version: ResolvedVersion;
+    /**
+     * 对照 skill 名: A/B 任务里"另一侧"的 skill, 用于 baseline 那一侧 (args.version=null)
+     * 在 trace 上挂个 skill 标签, 让"从 Trace"按 skill 过滤能搜到。caller 传两边 skillName
+     * 任一非空即可, 优先 B 侧。args.version 非 null 时不用此参数。
+     */
+    referenceSkillName?: string | null;
+    target: ExecutionTarget;
+    /** 任务级 abort 信号: 用户点终止时, 这里桥接到本次 chat 的 abortController, 让 opencode chat 提前返回。 */
+    parentSignal?: AbortSignal;
+}) {
+    const { target } = args;
+    const state = args.states[target.caseId];
+    const run = target.run;
+    const previousClaim = run.executionClaimId;
+    const reserved = Boolean(previousClaim && !run.executionStartedAt && run.status === 'pending');
+    if (!reserved) {
+        run.executionClaimId = randomUUID();
+        run.executionGeneration = Math.max(run.executionGeneration || 0, run.executionAttempts || 0) + 1;
+        delete run.traceAttemptId;
+        delete run.traceAttemptNo;
+    }
+    run.executionStartedAt = new Date().toISOString();
+    delete run.executionFinishedAt;
+    run.status = 'running';
+    run.executionAttempts = (run.executionAttempts || 0) + 1;
+    delete run.evaluatorRunId;
+    delete run.evaluationResultId;
+    delete run.evaluationTraceId;
+    delete run.score;
+    delete run.tier;
+    delete run.evaluations;
+    delete run.sessionId;
+    delete run.traceIds;
+    delete run.tokenUsage;
+    delete run.skillTriggered;
+    delete run.toolCallCount;
+    delete run.toolCalls;
+    delete run.failureCode;
+    delete run.failureType;
+    delete run.failureDetail;
+    delete run.completedAt;
+    run.output = undefined;
+    run.timeCost = undefined;
+    state[target.side] = rebuildSideAggregate(state[target.side], args.totalRunsPerSide);
+    const started = await persistRunStatePatch({
+        taskId: args.taskId,
+        user: args.user,
+        config: args.config,
+        states: args.states,
+        caseId: target.caseId,
+        side: target.side,
+        nextRun: run,
+        replaceExecution: !reserved,
+        expectedExecutionClaimId: previousClaim,
+    });
+    if (!started) throw Object.assign(new Error('该执行已被新的重试替换'), { code: 'EXECUTION_SUPERSEDED' });
+
+    const startedAt = Date.now();
+    const toolCalls: string[] = [];
+    let lastToolSummary = '';
+    const abortController = new AbortController();
+    // 监听任务级终止信号——用户在 UI 点「终止」按钮触发的 abort 通过这里传到本次 chat
+    if (args.parentSignal) {
+        if (args.parentSignal.aborted) {
+            abortController.abort();
+        } else {
+            const onParentAbort = () => abortController.abort();
+            args.parentSignal.addEventListener('abort', onParentAbort, { once: true });
+        }
+    }
+    let didTimeout = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    // 持有 agentPromise 引用, 让 finally 在超时路径下也能等 ephemeral opencode 清理跑完 (见 finally 注释)。
+    let pendingAgent: Promise<unknown> | undefined;
+    try {
+        const timeoutMs = Math.max(5_000, Number(args.config.timeoutMs) || GRAYSCALE_AGENT_TIMEOUT_MS);
+        if (!args.config.executionTarget && args.config.evalExperimentId && !args.config.triggerRouting) {
+            const experiment = await prisma.experiment.findFirst({ where: { id: args.config.evalExperimentId, user: args.user }, select: { scope: true } });
+            if (experiment?.scope === 'skill-workbench') throw Object.assign(new Error('旧 Skill 实验未冻结真实客户端执行目标，请重新创建实验；不会回退默认模型'), { code: 'EXECUTION_TARGET_REQUIRED' });
+        }
+        if (args.config.executionTarget || args.config.requiresClientExecution) {
+            if (!args.config.executionTarget || !args.config.evalExperimentId || !args.config.skillSnapshots) {
+                throw Object.assign(new Error('缺少冻结的执行目标或 Skill 版本快照，请重新创建实验'), { code: 'EXECUTION_TARGET_REQUIRED' });
+            }
+            const clientResult = await executeSkillCaseOnClient({
+                user: args.user,
+                experimentId: args.config.evalExperimentId,
+                experimentCaseId: run.experimentCaseId,
+                datasetCaseId: target.caseId,
+                datasetId: args.config.linkedDatasetIds?.[0] || args.config.selectedDatasetId || '',
+                executionTarget: args.config.executionTarget,
+                executionConcurrency: args.config.executionConcurrency,
+                skill: args.config.skillSnapshots[target.side],
+                query: args.caseMap.get(target.caseId)!.input,
+                referenceOutput: args.caseMap.get(target.caseId)?.expectedOutput,
+                timeoutMs,
+                signal: abortController.signal,
+                skillRun: { taskId: args.taskId, user: args.user, datasetCaseId: target.caseId, side: target.side, runIndex: target.runIndex, executionClaimId: run.executionClaimId! },
+                onCaseCreated: async (caseId) => {
+                    run.experimentCaseId = caseId;
+                    if (!await persistRunStatePatch({ taskId: args.taskId, user: args.user, config: args.config, states: args.states, caseId: target.caseId, side: target.side, nextRun: run })) {
+                        throw Object.assign(new Error('该执行已被新的重试替换'), { code: 'EXECUTION_SUPERSEDED' });
+                    }
+                },
+                onAttemptCreated: async ({ attemptId, attemptNo }) => {
+                    run.traceAttemptId = attemptId;
+                    run.traceAttemptNo = attemptNo;
+                    return persistRunStatePatch({ taskId: args.taskId, user: args.user, config: args.config, states: args.states, caseId: target.caseId, side: target.side, nextRun: run });
+                },
+            });
+            run.status = 'executed';
+            run.output = clientResult.output;
+            run.sessionId = clientResult.sessionId;
+            run.traceIds = [clientResult.sessionId];
+            run.timeCost = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+            markRunCompleted(run);
+            return;
+        }
+        const idleTimeoutMs = Math.max(5_000, Number(args.config.idleTimeoutMs) || GRAYSCALE_AGENT_IDLE_TIMEOUT_MS);
+        const frozenModel = args.config.modelConfigId
+            ? await loadServerModelForUserById(args.user, args.config.modelConfigId)
+            : null;
+        if (args.config.modelConfigId && !frozenModel) {
+            throw new Error(`frozen model config is unavailable: ${args.config.modelConfigId}`);
+        }
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutTimer = setTimeout(() => {
+                didTimeout = true;
+                abortController.abort();
+                reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(timeoutMs / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
+            }, timeoutMs);
+        });
+        const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
+        const agentPromise = runGeneralAgent({
+            user: args.user,
+            query: args.caseMap.get(target.caseId)!.input,
+            skill: args.version?.skillName,
+            skillVersion: args.version?.version,
+            // 每组按"实际使用情况"绑定 trace 的 skill：本侧用了某 skill 版本就标该版本, 无 skill(baseline)
+            // 就不标任何 skill。不再回退到 referenceSkillName(B 侧 skill)——否则无 skill 的对照组 trace 会被
+            // 错绑到 B 的 skill, 在用例分析按 skill 筛选时和 B 一起冒出来 (期望只出真正用了该 skill 的 trace)。
+            tagSkill: args.version?.skillName ?? undefined,
+            system: buildGrayscaleExecutionSystem(args.version),
+            model: frozenModel || undefined,
+            modelOptions: args.config.modelOptions,
+            interactionPolicy: args.config.interactionPolicy || 'auto-deny',
+            systemAgentName: grayAgentName,
+            // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
+            ephemeralServer: true,
+            // 让 runGeneralAgent 跑完后内部 listMessages + saveExecutionRecord 写 Execution 行。
+            // 不依赖 plugin/OTEL 上报, 避免新 grayscale session 在 DB 里查不到 → trace 详情跳转空跳。
+            // 复用同事 821236e 引入的 recordEvaluatorExecution helper, 写入真实 trajectory。
+            recordTraceAs: grayAgentName,
+            sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
+            workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
+            timeoutMs,
+            chatOptions: {
+                idleTimeoutMs,
+                signal: abortController.signal,
+            },
+            handlers: {
+                onTool: e => {
+                    if (e.phase === 'start' && e.name) toolCalls.push(e.name);
+                    if (e.name) {
+                        const status = e.status || e.phase;
+                        lastToolSummary = `${e.name}:${status}`;
+                    }
+                },
+            },
+        });
+        pendingAgent = agentPromise;
+        void agentPromise.catch(() => {});
+        const result = await Promise.race([agentPromise, timeoutPromise]);
+        if (didTimeout) {
+            throw new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(timeoutMs / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`);
+        }
+        const blocked = summarizeBlockedInteraction(result);
+        if (blocked) {
+            throw new GrayscaleAgentInteractionError(blocked.failureType, blocked.message);
+        }
+        run.status = 'executed';
+        run.output = result.output || '';
+        run.timeCost = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+        run.tokenUsage = extractTokenUsage(result.stats);
+        run.sessionId = result.sessionId;
+        run.traceIds = [result.sessionId];
+        run.skillTriggered = args.version ? toolCalls.includes('load_skill') || result.skillResolved : false;
+        run.toolCallCount = result.stats?.toolCallCount || toolCalls.length;
+        run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
+        markRunCompleted(run);
+        // runGeneralAgent 会尽量写入真实 opencode messages。这里再写一份 query/output
+        // fallback，防止 ephemeral server 的 listMessages 返回空数组时 trace 详情页空白。
+        await persistGrayscaleFallbackTrace({
+            sessionId: result.sessionId,
+            user: args.user,
+            query: args.caseMap.get(target.caseId)!.input,
+            output: result.output || '',
+            agentName: grayAgentName,
+            // 同上: 按本侧实际使用绑定, 无 skill(baseline)不绑, 不回退到 B 侧 skill。
+            skill: args.version?.skillName ?? undefined,
+            skillVersion: args.version?.version,
+        });
+    } catch (err) {
+        const classified = classifyAgentRunError(err);
+        run.status = 'fail';
+        const agentError = err as Partial<AgentRunError>;
+        run.failureCode = agentError.code;
+        if (agentError.runFacts?.traceId) {
+            run.sessionId = agentError.runFacts.traceId;
+            run.traceIds = [agentError.runFacts.traceId];
+        }
+        run.failureType = ['AGENT_TIMEOUT', 'MODEL_START_TIMEOUT'].includes(agentError.code || '') ? 'agent_timeout' : classified.failureType;
+        run.failureDetail = lastToolSummary ? `${classified.message}; last_tool=${lastToolSummary}` : classified.message;
+        run.output = run.failureDetail;
+        run.timeCost = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+        run.toolCallCount = toolCalls.length;
+        run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
+        markRunCompleted(run);
+    } finally {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        // 关键(反孤儿/反泄漏): ephemeral opencode 的真正 kill 在 runGeneralAgent →
+        // runWithEphemeralOpencodeServer 的 finally 里, 只有 agentPromise settle 后才发生。
+        // 超时路径下 Promise.race 已先返回, 若不在这里等 agentPromise, 外层 withBackgroundOpencodeSlot
+        // 会在 opencode 进程被杀掉之前就释放 slot → 超时任务的 opencode 溜到 slot 之外继续活/变孤儿,
+        // 后续任务又 spawn 新的 → 堆叠。这里确保"进程清理在 slot 内完成才放行"。
+        // abort 已触发让 chat 尽快收尾; terminateOpencodeProcess 自带 30s 硬上限, 不会无限等。
+        abortController.abort();
+        if (pendingAgent) { try { await pendingAgent; } catch { /* fn 的错误已在上面 catch 里分类处理过 */ } }
+        run.executionFinishedAt = new Date().toISOString();
+        markLatestGrayResultAt(args.config);
+        state[target.side] = rebuildSideAggregate(state[target.side], args.totalRunsPerSide);
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            nextRun: run,
+            touchLatestResultAt: true,
+        });
+    }
+}
+
+
+/**
+ * "no valid tasks to run" 不是一次真正的评测结果——它是派发器去重判定"这条 trace 已经评过、
+ * 没有新任务可建"。绝不能把它当成 run 的失败(那正是"明明评过却显示失败、重试还失败"的根因)。
+ * 这里把这条 trace 在库里**最近一条真正的评测结果**(done/failed)回填到 run:
+ *   - done   → run = pass + 分数(救活);
+ *   - failed → run = 真失败、可重试(符合"看到的失败一定是真失败");
+ *   - 找不到任何真实结果 → 返回 false, 交给调用方按真失败处理。
+ * 优先本批次(evaluatorRunId)的最近一条; 取不到再放宽到这条 trace 的全局最近一条。
+ */
+async function rehydrateRunFromExistingEval(args: {
+    user: string;
+    run: RunResult;
+    sessionId: string;
+    evaluatorRunId?: string;
+}): Promise<boolean> {
+    const trajectory = (prisma as unknown as GrayscalePrisma).trajectoryEvalResult;
+    const base = { user: args.user, taskId: args.sessionId, status: { in: ['done', 'failed'] } };
+    let row = args.evaluatorRunId
+        ? await trajectory.findFirst({
+            where: { ...base, evaluatorRunId: args.evaluatorRunId },
+            orderBy: { updatedAt: 'desc' },
+        })
+        : null;
+    if (!row) {
+        row = await trajectory.findFirst({ where: base, orderBy: { updatedAt: 'desc' } });
+    }
+    if (!row) return false;
+    // 清掉本次失败/进行中的评测痕迹, 只留已完成的, 让 applyTrajectoryRowToRun 干净地按历史真实结果重算状态。
+    args.run.evaluations = (args.run.evaluations || []).filter(e => e.status === 'done');
+    args.run.failureType = undefined;
+    args.run.failureDetail = undefined;
+    applyTrajectoryRowToRun(args.run, row as unknown as TrajectoryResultRow, args.evaluatorRunId);
+    return true;
+}
+
+/**
+ * 打开任务页时(GET)把"评测失败但库里其实已有真实结果"的 run 用历史结果回填(Q2 根治, 无需重试):
+ * 只动"评测失败(failureType 空=非执行失败)且有 sessionId"的 run; 拿这条 trace 最近一条真实评测结果
+ *   - done   → run = pass + 分(那 5 条卡死的就这样自愈);
+ *   - failed → run = 真失败(保持, 可重试);
+ * 绝不重新派发评测, 纯展示纠偏。
+ */
+async function reconcileFailedRunsFromExistingEval(user: string, config: GrayscaleConfig, states: CaseStates): Promise<boolean> {
+    let changed = false;
+    for (const state of Object.values(states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            let sideChanged = false;
+            for (const run of state[side].runs || []) {
+                if (run.status !== 'fail' || run.failureType || !run.sessionId) continue;
+                const beforeStatus = run.status;
+                const beforeScore = run.score;
+                const ok = await rehydrateRunFromExistingEval({
+                    user,
+                    run,
+                    sessionId: run.sessionId,
+                    evaluatorRunId: config.evaluationBatchId || run.evaluatorRunId,
+                }).catch(() => false);
+                if (ok && (run.status !== beforeStatus || run.score !== beforeScore)) sideChanged = true;
+            }
+            if (sideChanged) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            evaluatorRunId,
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorTasksFailed(user: string, evaluatorRunId: string, taskIds: string[], errorMessage: string) {
+    const scopedTaskIds = Array.from(new Set(taskIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedTaskIds.length === 0) {
+        await markEvaluatorRunFailed(user, evaluatorRunId, errorMessage);
+        return;
+    }
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            evaluatorRunId,
+            taskId: { in: scopedTaskIds },
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMessage: string) {
+    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedRowIds.length === 0) return;
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            id: { in: scopedRowIds },
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorRowsFailedForce(user: string, rowIds: string[], errorMessage: string) {
+    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedRowIds.length === 0) return;
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            id: { in: scopedRowIds },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function evaluateSingleRunTarget(args: {
+    taskId: string;
+    user: string;
+    origin: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    caseDatasetIdByCaseId?: Map<string, string>;
+    evaluatorId?: string;
+    evaluatorIds?: string[];
+    appendToBatch?: boolean;
+    target: EvaluationTarget;
+}) {
+    const { target } = args;
+    let evaluatorRunId: string | undefined;
+    let evaluationResultId: string | undefined;
+    const effectiveEvaluatorIds = normalizeAbEvaluators(args.evaluatorIds || args.config.evaluators, args.evaluatorId || args.config.evaluatorId);
+    const evaluationAttempt = (target.run.evaluationAttempts || 0) + (target.run.evaluationReserved ? 0 : 1);
+    const evaluationClaimId = target.run.evaluationReserved && target.run.evaluationClaimId || buildEvaluationClaimId();
+    delete target.run.evaluationReserved;
+    target.run.status = 'evaluating';
+    delete target.run.evalRetryPending; // 本次(重)评开始,清掉"待重试"标记;失败时再按可重试性重置
+    target.run.evaluationAttempts = evaluationAttempt;
+    target.run.evaluationClaimId = evaluationClaimId;
+    target.run.evaluationStartedAt = new Date().toISOString();
+    target.run.evaluations = mergeRunEvaluations(
+        target.run.evaluations,
+        effectiveEvaluatorIds.map(id => ({
+            ...(target.run.evaluations?.find(item => item.evaluatorId === id) || {}),
+            evaluatorId: id,
+            evaluatorName: abEvaluatorName(id),
+            status: 'running',
+            errorMessage: undefined,
+        })),
+    );
+    delete target.run.evaluationResultId;
+    delete target.run.evaluationTraceId;
+    const claimed = await persistRunStatePatch({
+        taskId: args.taskId,
+        user: args.user,
+        config: args.config,
+        states: args.states,
+        caseId: target.caseId,
+        side: target.side,
+        nextRun: target.run,
+        sidePatch: { evaluatorRunId: undefined },
+        touchLatestResultAt: true,
+    });
+    if (!claimed) return;
+
+    try {
+        if (!args.config.evalExperimentId) throw new Error('评测实验未初始化');
+        // 参考答案：A/B 数据集驱动，任务完成度评估器需要（按 case 归属数据集反查 expectedOutput）
+        const datasetId = args.caseDatasetIdByCaseId?.get(target.caseId);
+        let referenceOutput: string | null = null;
+        let datasetInput: string | null = null;
+        if (datasetId) {
+            const ds = await findAgentDataset(args.user, datasetId).catch(() => null);
+            const datasetCase = ds?.cases.find(c => c.id === target.caseId);
+            referenceOutput = datasetCase?.expectedOutput ?? null;
+            datasetInput = datasetCase?.input ?? null;
+        }
+        // trace 已产生：作为 case 加入 backing 实验、同步跑评估器（引擎按 sessionId 解析 input/output/skill 上下文）
+        const expCaseId = await addEvalExperimentCase(args.config.evalExperimentId, {
+            taskId: target.run.sessionId!, input: '', datasetInput, actualOutput: '', referenceOutput,
+        });
+        const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user, {
+            evaluatorIds: effectiveEvaluatorIds,
+            settleExperiment: false,
+        });
+        evaluatorRunId = args.config.evalExperimentId;
+        applyExpRowsToRun(target.run, rows, evaluatorRunId);
+        args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            nextRun: target.run,
+            expectedEvaluationClaimId: evaluationClaimId,
+            sidePatch: { evaluatorRunId },
+            touchLatestResultAt: true,
+        });
+        await hydrateExecutionMetrics(args.states);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        target.run.status = 'fail';
+        target.run.evaluations = mergeRunEvaluations(
+            target.run.evaluations,
+            effectiveEvaluatorIds.map(id => ({
+                evaluatorId: id,
+                evaluatorName: abEvaluatorName(id),
+                status: 'failed',
+                evaluatorRunId,
+                errorMessage: message,
+            })),
+        );
+        target.run.output = message;
+        markRunCompleted(target.run);
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            nextRun: target.run,
+            expectedEvaluationClaimId: evaluationClaimId,
+            sidePatch: evaluatorRunId ? { evaluatorRunId } : undefined,
+            touchLatestResultAt: true,
+        }).catch(() => {});
+    }
+    // C+D: 评测失败若"可重试且还有重试次数",不进终态——回到「评测中/重试中」并标 evalRetryPending,
+    // 让下面的重试循环挑它重跑。失败只在"最终确切失败(不可重试/重试用尽)"时出现,且此后不再变化。
+    // 仅对"评测失败"生效:run.failureType 是执行失败(另有语义),不在此列。
+    if (target.run.status === 'fail' && !target.run.failureType) {
+        const failMsg = target.run.output
+            || target.run.evaluations?.find(e => e.status === 'failed')?.errorMessage
+            || '';
+        if (shouldRetryGrayscaleEval(failMsg, target.run.evaluationAttempts || 1, MAX_EVALUATION_RETRIES)) {
+            target.run.status = 'evaluating';
+            target.run.evalRetryPending = true;
+            target.run.output = undefined;
+            delete target.run.completedAt; // 重试中不算完成
+            // 把失败的评估器回到 'pending':① getFailedOrMissingEvaluatorIds 据此挑它重评;
+            // ② deriveExecAndEval 把 pending/running 都算「评测中」,所以 UI 显示评测中而不是失败。
+            target.run.evaluations = (target.run.evaluations || []).map(e =>
+                e.status === 'failed' ? { ...e, status: 'pending', errorMessage: undefined } : e,
+            );
+        }
+    }
+    markLatestGrayResultAt(args.config);
+    await persistRunStatePatch({
+        taskId: args.taskId,
+        user: args.user,
+        config: args.config,
+        states: args.states,
+        caseId: target.caseId,
+        side: target.side,
+        nextRun: target.run,
+        expectedEvaluationClaimId: evaluationClaimId,
+        sidePatch: evaluatorRunId ? { evaluatorRunId } : undefined,
+        touchLatestResultAt: true,
+    }).catch(() => {});
+}
+
+function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined): boolean {
+    return status === 'done' || status === 'failed';
+}
+
+async function evaluateRunsAsExperimentBatch(args: {
+    taskId: string;
+    user: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    targets: EvaluationTarget[];
+    evaluatorIds: string[];
+    caseConfigMap: Map<string, { datasetId: string; caseEntry: DatasetCase }>;
+}) {
+    if (!args.config.evalExperimentId) throw new Error('评测实验未初始化');
+    const experimentId = args.config.evalExperimentId;
+    for (const target of args.targets) {
+        target.run.status = 'evaluating';
+        target.run.evaluationAttempts = (target.run.evaluationAttempts || 0) + 1;
+        target.run.evaluationClaimId = buildEvaluationClaimId();
+        target.run.evaluationStartedAt = new Date().toISOString();
+        target.run.evaluations = mergeRunEvaluations(
+            target.run.evaluations,
+            args.evaluatorIds.map(evaluatorId => ({
+                ...(target.run.evaluations?.find(item => item.evaluatorId === evaluatorId) || {}),
+                evaluatorId,
+                evaluatorName: abEvaluatorName(evaluatorId),
+                status: 'running',
+                errorMessage: undefined,
+            })),
+        );
+        delete target.run.evalRetryPending;
+        delete target.run.completedAt;
+    }
+    for (const state of Object.values(args.states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+        }
+    }
+    const claimedTargets: EvaluationTarget[] = [];
+    for (const target of args.targets) {
+        if (await persistRunStatePatch({ ...args, caseId: target.caseId, side: target.side, nextRun: target.run })) claimedTargets.push(target);
+    }
+    if (!claimedTargets.length) return experimentId;
+
+    try {
+        const experimentCases = await Promise.all(claimedTargets.map(async target => {
+            const datasetCase = args.caseConfigMap.get(target.caseId)?.caseEntry;
+            const experimentCaseId = target.run.experimentCaseId || await addEvalExperimentCase(experimentId, {
+                taskId: target.run.sessionId!,
+                input: datasetCase?.input || '',
+                datasetInput: datasetCase?.input || null,
+                actualOutput: target.run.output || '',
+                referenceOutput: datasetCase?.expectedOutput ?? null,
+            });
+            target.run.experimentCaseId = experimentCaseId;
+            return { target, experimentCaseId };
+        }));
+        const batch = await startEvalExperimentCases(
+            experimentId,
+            experimentCases.map(item => item.experimentCaseId),
+            args.user,
+        );
+        if (!batch) throw new Error(`实验 ${experimentId} 不存在`);
+        await batch.completion;
+
+        const resultRows = await prisma.experimentEvalResult.findMany({
+            where: {
+                experimentId,
+                caseId: { in: experimentCases.map(item => item.experimentCaseId) },
+            },
+            select: {
+                caseId: true,
+                evaluatorId: true,
+                status: true,
+                score: true,
+                pointsJson: true,
+                evidenceJson: true,
+                errorMessage: true,
+            },
+        });
+        const rowsByCase = new Map<string, EvalCaseResultRow[]>();
+        for (const row of resultRows) {
+            const rows = rowsByCase.get(row.caseId) || [];
+            rows.push(row);
+            rowsByCase.set(row.caseId, rows);
+        }
+        for (const item of experimentCases) {
+            applyExpRowsToRun(item.target.run, rowsByCase.get(item.experimentCaseId) || [], experimentId);
+            args.states[item.target.caseId][item.target.side].evaluatorRunId = experimentId;
+        }
+        await hydrateExecutionMetrics(args.states);
+        for (const state of Object.values(args.states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+            }
+        }
+        markLatestGrayResultAt(args.config);
+        for (const target of claimedTargets) {
+            await persistRunStatePatch({ ...args, caseId: target.caseId, side: target.side, nextRun: target.run, expectedEvaluationClaimId: target.run.evaluationClaimId, touchLatestResultAt: true });
+        }
+        return experimentId;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        for (const target of args.targets) {
+            applyExpRowsToRun(target.run, args.evaluatorIds.map(evaluatorId => ({
+                evaluatorId,
+                status: 'failed',
+                score: null,
+                pointsJson: null,
+                evidenceJson: null,
+                errorMessage: message,
+            })), experimentId);
+            args.states[target.caseId][target.side] = rebuildSideAggregate(
+                args.states[target.caseId][target.side],
+                args.states[target.caseId][target.side].runCount || args.states[target.caseId][target.side].runs?.length || 0,
+            );
+        }
+        markLatestGrayResultAt(args.config);
+        for (const target of claimedTargets) {
+            await persistRunStatePatch({ ...args, caseId: target.caseId, side: target.side, nextRun: target.run, expectedEvaluationClaimId: target.run.evaluationClaimId, touchLatestResultAt: true }).catch(() => false);
+        }
+        throw error;
+    }
+}
+
+
+// 把稳定批次 id 落到 task.configJson.evaluationBatchId。只更新 configJson(不碰 caseStatesJson),
+// 避免覆盖并发进行的 case 状态写入。落库后,本任务后续所有评测(全量/补评/重试/重启续跑)都能
+// 读到同一个 evaluatorRunId 并 append 进去 → 评测中心(按 evaluatorRunId 聚合)一个 A/B 任务只一条。
+async function persistEvaluationBatchId(taskId: string, user: string, config: GrayscaleConfig, batchId: string) {
+    config.evaluationBatchId = batchId;
+    try {
+        await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+            where: { id: taskId, user },
+            data: { configJson: JSON.stringify(withDefaultConfig(config)) },
+        });
+    } catch (err) {
+        console.warn('[grayscale] persist evaluationBatchId failed:', (err as Error)?.message);
+    }
+}
+
+async function evaluateRunsWithConcurrency(args: {
+    taskId: string;
+    user: string;
+    origin: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    caseIds: string[];
+    evaluatorId?: string;
+    evaluatorIds?: string[];
+    onlyMissingEvaluation?: boolean;
+    parentSignal?: AbortSignal;
+}) {
+    const targets: EvaluationTarget[] = [];
+    const configuredEvaluatorIds = normalizeAbEvaluators(args.evaluatorIds || args.config.evaluators, args.evaluatorId || args.config.evaluatorId);
+    const caseConfigMap = await loadConfiguredCaseMap(args.user, args.config);
+    const caseDatasetIdByCaseId = new Map(Array.from(caseConfigMap.entries()).map(([caseId, info]) => [caseId, info.datasetId] as const));
+    for (const caseId of args.caseIds) {
+        const state = args.states[caseId];
+        if (!state) continue;
+        for (const side of ['a', 'b'] as Side[]) {
+            for (const run of state[side].runs || []) {
+                const targetEvaluatorIds = args.onlyMissingEvaluation
+                    ? getFailedOrMissingEvaluatorIds(run, configuredEvaluatorIds)
+                    : configuredEvaluatorIds;
+                if (args.onlyMissingEvaluation && targetEvaluatorIds.length === 0) {
+                    continue;
+                }
+                // 默认状态白名单: executed / pass。onlyMissingEvaluation 模式下额外接受
+                // 'evaluating' —— 前端行级 retry 会先把 run 标成 evaluating 让 UI 立刻
+                // 显示"评测中"动效, 并把目标评估器置为 pending；旧分保留到新结果提交。
+                // 这里应当被选中重评; 不开 onlyMissing 时不接受 evaluating, 避免抢已经
+                // 在跑的 eval。
+                const eligibleStatus = run.status === 'executed' || run.status === 'pass'
+                    || (args.onlyMissingEvaluation && run.status === 'evaluating');
+                if (eligibleStatus && run.sessionId && !run.failureType) {
+                    targets.push({ caseId, side, run, evaluatorIds: targetEvaluatorIds });
+                }
+            }
+        }
+    }
+    if (targets.length === 0) {
+        if (args.config.evalExperimentId && !args.onlyMissingEvaluation) {
+            await prisma.experiment.updateMany({
+                where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
+                data: { status: 'failed' },
+            });
+        }
+        return null;
+    }
+
+    if (args.config.evalExperimentId) {
+        await prisma.experiment.updateMany({
+            where: { id: args.config.evalExperimentId, user: args.user, deletedAt: null },
+            data: { status: 'running' },
+        });
+    }
+
+    if (!args.onlyMissingEvaluation && args.config.evalExperimentId) {
+        return evaluateRunsAsExperimentBatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            targets,
+            evaluatorIds: configuredEvaluatorIds,
+            caseConfigMap,
+        });
+    }
+
+    const evaluatorRunIds: string[] = [];
+    const concurrency = Math.max(1, Number(args.config.evaluationConcurrency || 4));
+    // 评测器同样进 withBackgroundOpencodeSlot 排队,跟 A/B agent 执行**共享**5 个 slot ——
+    // 也就是说全局后台 opencode 总并发上限就是 5, agent + evaluator 一起算。
+    const runEvaluationBatch = async (batch: EvaluationTarget[]) => {
+        await runWithConcurrency(batch, concurrency, async target => {
+            if (args.parentSignal?.aborted) {
+                target.run.status = 'fail';
+                target.run.output = '用户终止';
+                markRunCompleted(target.run);
+                return;
+            }
+            const beforeRunId = target.run.evaluatorRunId;
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => evaluateSingleRunTarget({
+                        ...args,
+                        target,
+                        caseDatasetIdByCaseId,
+                        evaluatorIds: target.evaluatorIds,
+                        // 一旦本任务有了稳定批次(config.evaluationBatchId),所有 target——含补评/行级重试——
+                        // 都 append 到同一批;没有批次时(seed 那一条)config.evaluationBatchId 为空,
+                        // 评测入口(/api/eval/trajectory/run)自然走"建批次"分支,append 标志不影响。
+                        appendToBatch: true,
+                    }),
+                    {
+                        taskType: 'grayscale-eval',
+                        user: args.user,
+                        label: `eval-${target.side}-${target.caseId}`,
+                        // displayOnly: 这层是 orchestration 只发 HTTP 给 /api/eval/trajectory/run,
+                        // 内部 trajectory + task-completion 各自再走 withBackgroundOpencodeSlot
+                        // 占自己的 slot。如果外层也占 slot, 1 个 case 2 个 side 就要 2(外) +
+                        // 4(2 side × 2 evaluator) = 6 个 slot, 超过默认 max=5, 用户会看到
+                        // "1 评测中 + 1 排队中" 的奇怪现象。displayOnly=true 表示 dashboard
+                        // 上仍能看到这个任务条目, 但不实际占 slot, 杜绝外/内双重计数。
+                        displayOnly: true,
+                        signal: args.parentSignal,
+                        // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
+                        // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
+                        // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务
+                        // 在 dashboard 按 skill 过滤时会看不见,需要在"显示所有"模式才能看到。
+                    },
+                );
+            } catch (err) {
+                if (args.parentSignal?.aborted || (err as Error)?.name === 'AbortError') {
+                    target.run.status = 'fail';
+                    target.run.output = '用户终止';
+                    markRunCompleted(target.run);
+                    return;
+                }
+                throw err;
+            }
+            if (target.run.evaluatorRunId && target.run.evaluatorRunId !== beforeRunId) {
+                evaluatorRunIds.push(target.run.evaluatorRunId);
+            }
+        }, args.parentSignal);
+    };
+
+    // 稳定批次(point 2a): 一个 A/B 任务的所有评测——全量 / 补评 / 行级重试 / 重启续跑——都落到
+    // 同一个 evaluatorRunId。评测中心按 evaluatorRunId 聚合, 故一个任务只显示一条(根治用户看到的
+    // "同名任务散成 9条/5条/一堆1条")。批次 id 落库到 task.configJson.evaluationBatchId, 跨调用/重启稳定。
+    //
+    // 之前刻意"不落库"是怕"重跑 append 到旧批次越积越多";现在展示侧用 latestByCase(同 case 取最新分、
+    // 评测行保留, 即用户要的第 2 点)消解了这个顾虑, 所以这里改为落库, 让一个任务恒等于一条批次。
+    //
+    // 做法: 还没有批次时, 用第一条 target 建出批次(此刻 config.evaluationBatchId 为空 → 走"建批次"分支),
+    // 拿到 evaluatorRunId 后落库, 其余 target append 到同一批; 已有批次(后续评测/补评)直接全员 append。
+    if (!args.config.evaluationBatchId && targets.length > 0) {
+        await runEvaluationBatch([targets[0]]);
+        const seedBatchId = targets[0].run.evaluatorRunId;
+        if (seedBatchId) {
+            await persistEvaluationBatchId(args.taskId, args.user, args.config, seedBatchId);
+        }
+        // seedBatchId 为空(第一条建批次失败)时退回原行为: 其余各自评测, 至少不阻塞。
+        await runEvaluationBatch(targets.slice(1));
+    } else {
+        await runEvaluationBatch(targets);
+    }
+    for (let retry = 1; retry <= MAX_EVALUATION_RETRIES; retry++) {
+        // C+D: 只重跑"待重试"的(evaluateSingleRunTarget 已据可重试性把它们标 evalRetryPending,
+        // 且状态保持 evaluating/评测中);不可重试或重试用尽的留在 'fail' 终态,绝不再动。
+        const retryTargets = targets
+            .filter(target => target.run.evalRetryPending && target.run.sessionId)
+            .map(target => ({
+                ...target,
+                evaluatorIds: getFailedOrMissingEvaluatorIds(target.run, configuredEvaluatorIds),
+            }))
+            .filter(target => (target.evaluatorIds || []).length > 0);
+        if (retryTargets.length === 0) break;
+        await runEvaluationBatch(retryTargets);
+    }
+    // 兜底:循环跑完后仍"待重试"的(理论上不该有——末次尝试 attempts>MAX 已进终态)强制落终态失败,
+    // 避免卡在「评测中」。
+    for (const t of targets.filter(t => t.run.evalRetryPending)) {
+        t.run.evalRetryPending = false;
+        t.run.status = 'fail';
+        markRunCompleted(t.run);
+        await persistRunStatePatch({
+            taskId: args.taskId, user: args.user, config: args.config, states: args.states,
+            caseId: t.caseId, side: t.side, nextRun: t.run, touchLatestResultAt: true,
+        }).catch(() => {});
+    }
+    if (args.config.evalExperimentId && !args.parentSignal?.aborted) {
+        await settleExperimentStatus(args.config.evalExperimentId);
+    }
+    return evaluatorRunIds[evaluatorRunIds.length - 1] || null;
+}
+
+async function runWorkbenchTriggerTask(args: {
+    taskId: string;
+    user: string;
+    caseIds: string[];
+    evaluatorIds?: string[];
+    signal?: AbortSignal;
+    preparedStates?: CaseStates;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        versionBId: task.skillVersionId,
+        evaluators: [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID],
+    };
+    if (!config.evalExperimentId) throw new Error('评测实验未初始化');
+    const caseMap = await loadConfiguredCaseMap(args.user, config);
+    const caseIds = args.caseIds.filter(caseId => caseMap.has(caseId));
+    if (!caseIds.length || caseIds.length !== args.caseIds.length) throw new Error('trigger cases are missing');
+    if (!config.executionTarget || !config.triggerSkills?.length) {
+        throw new Error('触发分析缺少冻结的客户端与 Skill 快照，请重新创建实验');
+    }
+    const executionConcurrency = parseExecutionConcurrency(config.executionConcurrency ?? config.triggerConcurrency);
+    const executionTarget = await validateSkillExecutionTarget(args.user, config.executionTarget, true, executionConcurrency);
+    const signal = args.signal || new AbortController().signal;
+    const experimentCases = args.preparedStates
+        ? new Map(caseIds.map(caseId => [caseId, args.preparedStates![caseId].b.runs![0].experimentCaseId!]))
+        : await ensureTriggerExperimentCases(args.user, config.evalExperimentId,
+            config.linkedDatasetIds![0], caseIds.map((caseId) => caseMap.get(caseId)!.caseEntry));
+    const states: CaseStates = args.preparedStates || {};
+    let targetFailure: string | null = null;
+    for (const [caseId, experimentCaseId] of experimentCases) {
+        if (args.preparedStates) continue;
+        states[caseId] = {
+            a: { status: 'executed', runs: [], runCount: 0, output: '触发分析不运行基线侧' },
+            b: {
+                status: 'pending',
+                runCount: 1,
+                runs: [{ status: 'pending', caseId, experimentCaseId, runIndex: 1, roundIndex: 1 }],
+            },
+        };
+    }
+    if (!args.preparedStates) await persistTaskState(args.taskId, args.user, config, states);
+    await prisma.experiment.updateMany({
+        where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
+        data: { status: 'running' },
+    });
+
+    await mapConcurrent([...experimentCases], executionConcurrency, async ([caseId, experimentCaseId]) => {
+        await withBackgroundOpencodeSlot(async () => {
+            signal.throwIfAborted();
+            const datasetCase = caseMap.get(caseId)!.caseEntry;
+            const shouldTrigger = datasetCase.values?.should_trigger === true;
+            const run = states[caseId].b.runs![0];
+            const startedAt = Date.now();
+            try {
+                if (targetFailure) throw new Error(`执行目标不可用，后续 Case 未执行：${targetFailure}`);
+                const previousClaim = run.executionClaimId;
+                if (!args.preparedStates) {
+                    run.executionClaimId = randomUUID();
+                    run.executionGeneration = Math.max(run.executionGeneration || 0, run.executionAttempts || 0) + 1;
+                }
+                run.executionAttempts = (run.executionAttempts || 0) + 1;
+                run.executionStartedAt = new Date().toISOString();
+                run.status = 'running';
+                if (!await persistRunStatePatch({ taskId: args.taskId, user: args.user, config, states, caseId, side: 'b', nextRun: run, replaceExecution: !args.preparedStates, expectedExecutionClaimId: previousClaim })) return;
+                const generated = await generateExperimentTraces({
+                    user: args.user,
+                    experimentId: config.evalExperimentId!,
+                    ...executionTarget,
+                    timeoutSeconds: Math.round((config.timeoutMs || DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS * 1000) / 1000),
+                    cases: [{ caseId: experimentCaseId, input: datasetCase.input }],
+                    skillExecution: { version: 2, mode: 'trigger', targetSkillName: task.skillName, skills: config.triggerSkills! },
+                    skillRun: { taskId: args.taskId, user: args.user, datasetCaseId: caseId, side: 'b', runIndex: 1, executionClaimId: run.executionClaimId! },
+                    onAttemptCreated: async ({ attemptId, attemptNo }) => {
+                        run.traceAttemptId = attemptId; run.traceAttemptNo = attemptNo;
+                        return persistRunStatePatch({ taskId: args.taskId, user: args.user, config, states, caseId, side: 'b', nextRun: run });
+                    },
+                    signal,
+                }, { forceNewTrace: true });
+                signal.throwIfAborted();
+                if (!generated.readyCaseIds.includes(experimentCaseId)) {
+                    const attempt = await prisma.experimentTraceAttempt.findFirst({
+                        where: { caseId: experimentCaseId }, orderBy: { attemptNo: 'desc' },
+                        select: { failureCode: true, errorMessage: true },
+                    });
+                    if (shouldStopTriggerBatch(attempt?.failureCode)) targetFailure = attempt!.errorMessage || attempt!.failureCode;
+                    throw new Error(attempt?.errorMessage || '客户端运行失败，未生成有效 Trace');
+                }
+                const observation = generated.triggerDecisions?.[experimentCaseId];
+                if (!observation) throw new Error('客户端未返回有效 Skill 路由判定');
+                const exactEvaluation = evaluateSkillTriggerAnalysis({
+                    shouldTrigger,
+                    skillTriggered: observation.triggered,
+                    reason: typeof datasetCase.values?.trigger_rationale === 'string'
+                        ? datasetCase.values.trigger_rationale : datasetCase.evaluationFocus || undefined,
+                    facts: {
+                        runsTriggered: observation.triggered ? 1 : 0,
+                        runsTotal: 1,
+                        triggerRate: observation.triggered ? 1 : 0,
+                        competingSkill: observation.competingSkill,
+                    },
+                });
+                const exactData = {
+                    status: 'done',
+                    score: exactEvaluation.score!,
+                    verdict: exactEvaluation.verdict || null,
+                    summary: exactEvaluation.summary || null,
+                    pointsJson: JSON.stringify(exactEvaluation.points || []),
+                    evidenceJson: exactEvaluation.evidence ? JSON.stringify(exactEvaluation.evidence) : null,
+                    errorMessage: null,
+                    attempts: 1,
+                };
+                const applied = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                    await tx.experimentCase.updateMany({ where: { id: experimentCaseId }, data: { id: experimentCaseId } });
+                    if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: caseId, side: 'b', runIndex: 1, executionClaimId: run.executionClaimId! })) return false;
+                    await tx.experimentCase.update({
+                        where: { id: experimentCaseId },
+                        data: {
+                            caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding({
+                                ...(datasetCase.values || {}),
+                                should_trigger: shouldTrigger,
+                                skill_triggered: observation.triggered,
+                                trigger_rate: observation.triggered ? 1 : 0,
+                                competing_skill: observation.competingSkill,
+                                routing_model: observation.actualModel,
+                            }, { datasetId: config.linkedDatasetIds![0], caseId })),
+                        },
+                    });
+                    await tx.experimentEvalResult.upsert({
+                        where: { caseId_evaluatorId: { caseId: experimentCaseId, evaluatorId: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID } },
+                        create: { experimentId: config.evalExperimentId!, caseId: experimentCaseId, evaluatorId: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID, ...exactData },
+                        update: exactData,
+                    });
+                    return true;
+                });
+                if (!applied) return;
+                run.executionFinishedAt = new Date().toISOString();
+                run.status = 'executed';
+                run.sessionId = observation.sessionId;
+                run.skillTriggered = observation.triggered;
+                run.timeCost = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+                run.output = observation.triggered ? 'Skill 已触发' : 'Skill 未触发';
+                applyExpRowsToRun(run, [{
+                    evaluatorId: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
+                    status: 'done', score: exactData.score,
+                    pointsJson: exactData.pointsJson,
+                    evidenceJson: exactData.evidenceJson,
+                    errorMessage: null,
+                }], config.evalExperimentId);
+            } catch (error) {
+                if (signal.aborted) throw error;
+                const message = error instanceof Error ? error.message : String(error);
+                await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                    await tx.experimentCase.updateMany({ where: { id: experimentCaseId }, data: { id: experimentCaseId } });
+                    if (run.executionClaimId && !await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: caseId, side: 'b', runIndex: 1, executionClaimId: run.executionClaimId })) return;
+                    await tx.experimentCase.update({
+                        where: { id: experimentCaseId },
+                        data: { actualOutput: `执行失败：${message}`, traceGenerationError: message },
+                    });
+                });
+                run.status = 'fail';
+                run.failureType = 'agent_error';
+                run.failureDetail = message;
+                run.output = `执行失败：${message}`;
+                markRunCompleted(run);
+            }
+            await persistRunStatePatch({
+                taskId: args.taskId, user: args.user, config, states, caseId, side: 'b',
+                nextRun: run, touchLatestResultAt: true,
+            });
+        }, { taskType: 'grayscale-trigger', user: args.user, skill: task.skillName,
+            label: `trigger-${caseId}`, signal });
+    });
+    const failed = await prisma.experimentEvalResult.count({
+        where: { experimentId: config.evalExperimentId, status: 'failed' },
+    });
+    const executionFailed = [...experimentCases.keys()].some((caseId) => states[caseId].b.runs?.[0]?.failureType);
+    await prisma.experiment.updateMany({
+        where: { id: config.evalExperimentId, user: args.user, deletedAt: null },
+        data: { status: failed || executionFailed ? 'failed' : 'done' },
+    });
+}
+
+async function runGrayscaleTask(args: {
+    taskId: string;
+    user: string;
+    origin: string;
+    caseIds: string[];
+    evaluatorId?: string;
+    evaluatorIds?: string[];
+    agentMaxConcurrency?: number;
+}) {
+    const { taskId, user, origin, evaluatorId } = args;
+    const storeKey = `${user}:${taskId}`;
+    const task = await loadTask(taskId, user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluatorId: evaluatorId || task.configJson.evaluatorId,
+        evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, evaluatorId || task.configJson.evaluatorId),
+        executionConcurrency: args.agentMaxConcurrency
+            || task.configJson.executionConcurrency
+            || task.configJson.agentMaxConcurrency,
+        agentMaxConcurrency: args.agentMaxConcurrency || task.configJson.agentMaxConcurrency,
+        // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
+    };
+    // 空评估器列表必须在这里截住：往下走会建出 0 个评估器的 backing 实验 → 评测 0 行 →
+    // 每个 run 落 status='fail'、output='评测失败'，用户看不到任何原因。
+    if (config.evaluators.length === 0) throw new Error('evaluators are required');
+    // 评测走实验：建/复用 backing 单组实验（每条 A/B trace 作 case 评测，结果回填双侧；对比仍在 GrayscaleTask 层）
+    config.evalExperimentId = await ensureEvalExperiment({
+        user,
+        name: `A/B · ${task.skillName || 'skill'} · ${taskId.slice(0, 8)}`,
+        agentName: task.skillName || '',
+        evaluatorIds: config.evaluators,
+        existingId: config.evalExperimentId,
+        scope: 'grayscale-ab',
+        skillName: task.skillName || '',
+        skillVersion: typeof task.skillVersion === 'number' ? task.skillVersion : null,
+    });
+    const configuredDatasetIds = getConfiguredDatasetIds(config);
+    if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
+    const caseConfigMap = await loadConfiguredCaseMap(user, config);
+    if (caseConfigMap.size === 0) throw new Error('dataset not found');
+
+    const runCount = Math.max(1, Number(config.runCount || args.caseIds.length || 1));
+    const repeatRounds = Math.max(1, Number(config.repeatRounds || 1));
+    const caseIds = args.caseIds.slice(0, runCount);
+    if (caseIds.length !== runCount) throw new Error(`selected case count ${caseIds.length} does not match runCount ${runCount}`);
+
+    for (const caseId of caseIds) {
+        if (!caseConfigMap.get(caseId)?.caseEntry.input?.trim()) throw new Error(`case ${caseId} not found or missing input`);
+    }
+
+    const versionA = await resolveVersion(config.skillId, config.versionAId);
+    const versionB = await resolveVersion(config.skillId, config.versionBId);
+    const executionSides = configuredExecutionSides(config);
+    const states: CaseStates = {};
+    const totalRunsPerSide = repeatRounds;
+
+    for (const caseId of caseIds) {
+        states[caseId] = {
+            a: { status: executionSides.includes('a') ? 'pending' : 'pass', runs: [], runCount: executionSides.includes('a') ? totalRunsPerSide : 0 },
+            b: { status: executionSides.includes('b') ? 'pending' : 'pass', runs: [], runCount: executionSides.includes('b') ? totalRunsPerSide : 0 },
+        };
+    }
+
+    const work: ExecutionTarget[] = [];
+    for (let roundIndex = 1; roundIndex <= repeatRounds; roundIndex++) {
+        for (const caseId of caseIds) {
+            for (const side of executionSides) {
+                const run: RunResult = {
+                    status: 'pending',
+                    caseId,
+                    runIndex: roundIndex,
+                    roundIndex,
+                };
+                states[caseId][side].runs = [...(states[caseId][side].runs || []), run];
+                work.push({ caseId, side, roundIndex, runIndex: roundIndex, run });
+            }
+        }
+    }
+    for (const caseId of caseIds) {
+        for (const side of ['a', 'b'] as Side[]) {
+            states[caseId][side] = rebuildSideAggregate(
+                states[caseId][side],
+                executionSides.includes(side) ? totalRunsPerSide : 0,
+            );
+            if (!executionSides.includes(side)) {
+                states[caseId][side].status = 'executed';
+                states[caseId][side].output = '未参与本次单组实验';
+            }
+        }
+    }
+    await persistTaskState(taskId, user, config, states);
+
+    const executionConcurrency = Math.max(1, Number(config.executionConcurrency || config.agentMaxConcurrency || 4));
+    // 内层每个 work item 进 withBackgroundOpencodeSlot 排队,跟全局 5 个 opencode 后台任务
+    // 上限对齐——A/B 一把 200 个 work 也只会有 5 个真在跑 opencode,其余在信号量队列等。
+    // 这样不管 user 把 agentMaxConcurrency / repeatRounds 调多大,内存也不会失控。
+    // 任务级 AbortSignal——activeRuns().get(storeKey)?.abortController 在 POST start
+    // 时创建, action='abort' 时 fire。下面 runWithConcurrency / executeSingleAgentRun
+    // 都监听它, 用户点终止后所有 in-flight 都尽快退出。
+    const taskSignal = activeRuns().get(storeKey)?.abortController?.signal;
+    const markRunAborted = (item: ExecutionTarget) => {
+        item.run.status = 'fail';
+        item.run.failureType = 'agent_error';
+        item.run.failureDetail = '用户终止';
+        item.run.output = item.run.output || '用户终止';
+        markRunCompleted(item.run);
+        states[item.caseId][item.side] = rebuildSideAggregate(states[item.caseId][item.side], totalRunsPerSide);
+    };
+    const executeItem = async (item: ExecutionTarget) => {
+            if (taskSignal?.aborted) {
+                markRunAborted(item);
+                return;
+            }
+            const version = item.side === 'a' ? versionA : versionB;
+            // baseline 侧 (version=null) 取另一侧的 skillName 作为 trace 标签;
+            // 两侧都不是 None 时取本侧, 走 input.skill 路径, referenceSkillName 自然不参与。
+            const referenceSkillName = versionB?.skillName || versionA?.skillName || null;
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => executeSingleAgentRun({
+                        taskId,
+                        user,
+                        config,
+                        states,
+                        caseMap: new Map(Array.from(caseConfigMap.entries()).map(([caseId, info]) => [caseId, info.caseEntry] as const)),
+                        totalRunsPerSide,
+                        version,
+                        referenceSkillName,
+                        target: item,
+                        parentSignal: taskSignal,
+                    }),
+                    {
+                        taskType: 'grayscale-ab',
+                        user,
+                        label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}`,
+                        skill: version?.skillName,
+                        skillVersion: version?.version ?? null,
+                        signal: taskSignal,
+                    },
+                );
+            } catch (err) {
+                // 排队中被 abort: semaphore.acquire 抛 AbortError → 标 fail, 不抛
+                if (taskSignal?.aborted || (err as Error)?.name === 'AbortError') {
+                    markRunAborted(item);
+                    return;
+                }
+                throw err;
+            }
+    };
+    const runExecutionBatch = async (batch: ExecutionTarget[]) => {
+        await runWithConcurrency(batch, executionConcurrency, executeItem, taskSignal);
+    };
+
+    await runExecutionBatch(work);
+    for (let retry = 1; retry <= MAX_EXECUTION_RETRIES; retry++) {
+        if (taskSignal?.aborted) break;
+        const failedWork = work.filter(item =>
+            shouldAutoRetryGrayscaleExecution(item.run, Boolean(config.requiresClientExecution || config.executionTarget))
+        );
+        if (failedWork.length === 0) break;
+        await runExecutionBatch(failedWork);
+    }
+
+    if (config.autoEval !== false && !taskSignal?.aborted) {
+        activeRuns().set(storeKey, {
+            taskId,
+            runId: activeRuns().get(storeKey)?.runId || '',
+            status: 'evaluating',
+            startedAt: Date.now(),
+            abortController: activeRuns().get(storeKey)?.abortController,
+        });
+        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId, evaluatorIds: config.evaluators, parentSignal: taskSignal });
+    }
+}
+
+async function prepareExperimentCasesForExecutionRetry(args: {
+    experimentId: string;
+    user: string;
+    runs: RunResult[];
+    taskId: string;
+    caseId: string;
+    sides: Side[];
+    states: CaseStates;
+    expectedCaseStatesJson: string;
+    datasetId: string;
+    datasetCase: DatasetCase;
+    evaluatorIds: string[];
+}) {
+    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const claimed = await tx.grayscaleTask.updateMany({
+            where: { id: args.taskId, user: args.user, caseStatesJson: args.expectedCaseStatesJson },
+            data: { caseStatesJson: args.expectedCaseStatesJson },
+        });
+        if (!claimed.count) throw Object.assign(new Error('该执行已更新，请刷新后重试'), { code: 'EXECUTION_SUPERSEDED' });
+        const experimentCaseIds: string[] = [];
+        for (const run of args.runs) {
+            const oldSessionId = String(run.sessionId || '').trim();
+            const existing = await tx.experimentCase.findFirst({
+                where: {
+                    experimentId: args.experimentId,
+                    ...(run.experimentCaseId
+                        ? { id: run.experimentCaseId }
+                        : oldSessionId ? { taskId: oldSessionId } : { id: '__missing__' }),
+                    experiment: { user: args.user },
+                },
+                select: { id: true },
+            });
+            const caseData = {
+                executionId: null,
+                taskId: null,
+                input: args.datasetCase.input || '',
+                datasetInput: args.datasetCase.input || null,
+                actualOutput: '',
+                traceGenerationError: null,
+                traceGenerationCommandId: null,
+                referenceOutput: args.datasetCase.expectedOutput ?? null,
+                caseValuesJson: JSON.stringify(withExperimentDatasetCaseBinding(args.datasetCase.values, { datasetId: args.datasetId, caseId: args.caseId })),
+            };
+            const experimentCase = existing
+                ? await tx.experimentCase.update({ where: { id: existing.id }, data: caseData, select: { id: true } })
+                : await tx.experimentCase.create({
+                    data: { experimentId: args.experimentId, ...caseData },
+                    select: { id: true },
+                });
+            await tx.experimentEvalResult.deleteMany({
+                where: { caseId: experimentCase.id, evaluatorId: { notIn: args.evaluatorIds } },
+            });
+            for (const evaluatorId of args.evaluatorIds) {
+                await tx.experimentEvalResult.upsert({
+                    where: { caseId_evaluatorId: { caseId: experimentCase.id, evaluatorId } },
+                    create: {
+                        experimentId: args.experimentId,
+                        caseId: experimentCase.id,
+                        evaluatorId,
+                        status: 'pending',
+                    },
+                    update: {
+                        status: 'pending',
+                        verdict: null,
+                        summary: null,
+                        score: null,
+                        pointsJson: null,
+                        evidenceJson: null,
+                        errorMessage: null,
+                        attempts: { increment: 1 },
+                        durationMs: null,
+                        humanScore: null,
+                        humanReason: null,
+                        humanBy: null,
+                        humanAt: null,
+                    },
+                });
+            }
+            experimentCaseIds.push(experimentCase.id);
+        }
+        await tx.experiment.updateMany({
+            where: { id: args.experimentId, user: args.user, deletedAt: null },
+            data: { status: 'running' },
+        });
+        args.sides.forEach((side, index) => {
+            const runIndex = args.runs[index].runIndex;
+            const run = args.states[args.caseId][side].runs!.find(item => item.runIndex === runIndex)!;
+            run.experimentCaseId = experimentCaseIds[index];
+            args.states[args.caseId][side] = rebuildSideAggregate(args.states[args.caseId][side], args.states[args.caseId][side].runCount || 1);
+        });
+        await tx.grayscaleTask.updateMany({ where: { id: args.taskId, user: args.user }, data: { caseStatesJson: JSON.stringify(args.states) } });
+        return experimentCaseIds;
+    });
+}
+
+function resetRunForExecutionRetry(run: RunResult, experimentCaseId: string) {
+    run.experimentCaseId = experimentCaseId;
+    run.status = 'pending';
+    run.executionClaimId = randomUUID();
+    run.executionGeneration = Math.max(run.executionGeneration || 0, run.executionAttempts || 0) + 1;
+    run.progressRevision = (run.progressRevision || 0) + 1;
+    run.progressUpdatedAt = new Date().toISOString();
+    delete run.executionStartedAt;
+    delete run.executionFinishedAt;
+    delete run.traceAttemptId;
+    delete run.traceAttemptNo;
+    delete run.evaluationClaimId;
+    delete run.evaluationReserved;
+    delete run.evaluatorRunId;
+    delete run.evaluationResultId;
+    delete run.evaluationTraceId;
+    delete run.evaluationStartedAt;
+    delete run.evalRetryPending;
+    delete run.score;
+    delete run.tier;
+    delete run.evaluations;
+    delete run.sessionId;
+    delete run.traceIds;
+    delete run.tokenUsage;
+    delete run.skillTriggered;
+    delete run.toolCallCount;
+    delete run.toolCalls;
+    delete run.failureCode;
+    delete run.failureType;
+    delete run.failureDetail;
+    delete run.completedAt;
+    run.output = undefined;
+    run.timeCost = undefined;
+}
+
+async function runGrayscaleExecutionRetry(args: {
+    taskId: string;
+    user: string;
+    caseId: string;
+    targets: Array<{ side: Side; runIndex: number }>;
+    signal: AbortSignal;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluators: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
+    };
+
+    if (!config.evalExperimentId || config.evaluators.length === 0) throw new Error('评测实验配置不完整');
+    const experiment = await prisma.experiment.findFirst({
+        where: {
+            id: config.evalExperimentId,
+            user: args.user,
+            scope: 'skill-workbench',
+            preset: { in: ['trigger', 'use-case', 'skill-ab'] },
+        },
+        select: { id: true, status: true },
+    });
+    if (!experiment) throw new Error('Skill 实验不存在或不支持重新执行');
+    const retryTargets = args.targets.filter((target, index, all) => (
+        all.findIndex(item => item.side === target.side) === index
+    ));
+    if (!retryTargets.length) throw new Error('缺少需要重新执行的侧');
+    const executionSides = configuredExecutionSides(config);
+    if (retryTargets.some(target => !executionSides.includes(target.side))) {
+        throw new Error('所选侧不参与本次实验');
+    }
+
+    const states = task.caseStatesJson || {};
+    const caseConfigMap = await loadConfiguredCaseMap(args.user, config);
+    const datasetCase = caseConfigMap.get(args.caseId)?.caseEntry;
+    if (!datasetCase?.input?.trim()) throw new Error('数据集 Case 不存在或输入为空');
+    const versionA = await resolveVersion(config.skillId, config.versionAId);
+    const versionB = await resolveVersion(config.skillId, config.versionBId);
+    const retryItems = retryTargets.map(({ side, runIndex }) => {
+        const sideState = states[args.caseId]?.[side];
+        const run = sideState?.runs?.find(item => item.runIndex === runIndex);
+        if (!sideState || !run) throw new Error(`找不到需要重新执行的 ${side.toUpperCase()} 侧 Case`);
+        const experimentSettled = experiment.status === 'done'
+            || experiment.status === 'partial'
+            || experiment.status === 'failed'
+            || experiment.status === 'cancelled';
+        if ((!experimentSettled || run.executionClaimId) && (run.status === 'pending' || run.status === 'running' || run.status === 'evaluating')) {
+            throw new Error(`${side.toUpperCase()} 侧 Case 正在执行或评测`);
+        }
+        const version = side === 'a' ? versionA : versionB;
+        const versionId = side === 'a' ? config.versionAId : config.versionBId;
+        if (versionId && versionId !== '__NONE__' && !version) {
+            throw new Error(`${side.toUpperCase()} 侧冻结的 Skill 版本已不可用，无法重新执行`);
+        }
+        return { side, runIndex, sideState, run, priorRun: cloneJson(run), version, experimentCaseId: '' };
+    });
+
+    for (const item of retryItems) resetRunForExecutionRetry(item.run, item.run.experimentCaseId || '');
+    const experimentCaseIds = await prepareExperimentCasesForExecutionRetry({
+        experimentId: experiment.id, user: args.user,
+        taskId: args.taskId, caseId: args.caseId, sides: retryItems.map(item => item.side),
+        states, expectedCaseStatesJson: task.rawCaseStatesJson, datasetId: caseConfigMap.get(args.caseId)!.datasetId,
+        runs: retryItems.map(item => item.priorRun), datasetCase, evaluatorIds: config.evaluators,
+    });
+    for (const [index, item] of retryItems.entries()) {
+        item.experimentCaseId = experimentCaseIds[index];
+        item.run.experimentCaseId = item.experimentCaseId;
+    }
+
+    if (config.triggerRouting) {
+        if (retryItems.length !== 1 || retryItems[0].side !== 'b') throw new Error('触发分析只支持 B 侧重试');
+        return { completion: runWorkbenchTriggerTask({ taskId: args.taskId, user: args.user, caseIds: [args.caseId], signal: args.signal, preparedStates: states }),
+            identities: retryItems.map(item => ({ side: item.side, runIndex: item.run.runIndex, executionClaimId: item.run.executionClaimId, evaluationClaimId: item.run.evaluationClaimId })) };
+    }
+    const completion = (async () => {
+        await Promise.all(retryItems.map(async item => {
+            const target: ExecutionTarget = {
+                caseId: args.caseId,
+                side: item.side,
+                runIndex: item.run.runIndex,
+                roundIndex: item.run.roundIndex,
+                run: item.run,
+            };
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => executeSingleAgentRun({
+                        taskId: args.taskId,
+                        user: args.user,
+                        config,
+                        states,
+                        caseMap: new Map([[args.caseId, datasetCase]]),
+                        totalRunsPerSide: item.sideState.runCount || item.sideState.runs?.length || 1,
+                        version: item.version,
+                        referenceSkillName: versionB?.skillName || versionA?.skillName || null,
+                        target,
+                        parentSignal: args.signal,
+                    }),
+                    {
+                        taskType: 'grayscale-ab',
+                        user: args.user,
+                        label: `retry-${item.side}-${args.caseId}-r${item.run.roundIndex}`,
+                        skill: item.version?.skillName,
+                        skillVersion: item.version?.version ?? null,
+                        signal: args.signal,
+                    },
+                );
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                item.run.status = 'fail';
+                item.run.failureType = 'agent_error';
+                item.run.failureDetail = message;
+                item.run.output = message;
+                markRunCompleted(item.run);
+                await persistRunStatePatch({
+                    taskId: args.taskId,
+                    user: args.user,
+                    config,
+                    states,
+                    caseId: args.caseId,
+                    side: item.side,
+                    nextRun: item.run,
+                    touchLatestResultAt: true,
+                }).catch(() => false);
+            }
+        }));
+
+        const evaluationTargets: EvaluationTarget[] = [];
+        for (const item of retryItems) {
+            if (item.run.status !== 'executed' || !item.run.sessionId) {
+                const message = item.run.failureDetail || item.run.output || 'Agent 执行失败';
+                await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                    if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: args.caseId, side: item.side, runIndex: item.runIndex, executionClaimId: item.run.executionClaimId! })) return;
+                    await tx.experimentCase.update({ where: { id: item.experimentCaseId }, data: { actualOutput: message } });
+                    await tx.experimentEvalResult.updateMany({ where: { caseId: item.experimentCaseId }, data: { status: 'failed', errorMessage: message } });
+                });
+                continue;
+            }
+
+            const execution = await prisma.execution.findFirst({
+                where: { user: args.user, taskId: item.run.sessionId, isSubagent: false },
+                orderBy: { timestamp: 'desc' },
+                select: { id: true },
+            });
+            const owned = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                if (!await ownsSkillExecution(tx, { taskId: args.taskId, user: args.user, datasetCaseId: args.caseId, side: item.side, runIndex: item.runIndex, executionClaimId: item.run.executionClaimId! })) return false;
+                await tx.experimentCase.update({
+                    where: { id: item.experimentCaseId },
+                    data: {
+                        executionId: execution?.id || null,
+                        taskId: item.run.sessionId,
+                        input: datasetCase.input || '',
+                        datasetInput: datasetCase.input || null,
+                        actualOutput: item.run.output || '',
+                        referenceOutput: datasetCase.expectedOutput ?? null,
+                    },
+                });
+                return true;
+            });
+            if (!owned) continue;
+            const currentRun = states[args.caseId]?.[item.side]?.runs
+                ?.find(run => run.runIndex === item.runIndex) || item.run;
+            currentRun.experimentCaseId = item.experimentCaseId;
+            evaluationTargets.push({ caseId: args.caseId, side: item.side, run: currentRun });
+        }
+
+        if (evaluationTargets.length) {
+            const active = activeRuns().get(`${args.user}:${args.taskId}`);
+            if (active) active.status = 'evaluating';
+            await evaluateRunsAsExperimentBatch({
+                taskId: args.taskId,
+                user: args.user,
+                config,
+                states,
+                targets: evaluationTargets,
+                evaluatorIds: config.evaluators,
+                caseConfigMap,
+            });
+        } else {
+            await settleExperimentStatus(experiment.id);
+        }
+    })();
+    return { completion, identities: retryItems.map(item => ({ side: item.side, runIndex: item.run.runIndex, executionClaimId: item.run.executionClaimId, evaluationClaimId: item.run.evaluationClaimId })) };
+}
+
+async function runGrayscaleEvaluationRetry(args: {
+    taskId: string;
+    user: string;
+    caseId: string;
+    targets: Array<{ side: Side; runIndex: number }>;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluators: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
+    };
+    if (config.triggerRouting) throw new Error('触发分析不支持此重评入口');
+    if (!config.evalExperimentId || config.evaluators.length === 0) throw new Error('评测实验配置不完整');
+
+    const experiment = await prisma.experiment.findFirst({
+        where: {
+            id: config.evalExperimentId,
+            user: args.user,
+            scope: 'skill-workbench',
+            preset: { in: ['use-case', 'skill-ab'] },
+        },
+        select: { id: true },
+    });
+    if (!experiment) throw new Error('Skill 实验不存在或不支持重评');
+
+    const states = task.caseStatesJson || {};
+    const retryItems = [];
+    for (const target of args.targets) {
+        const sideState = states[args.caseId]?.[target.side];
+        const run = sideState?.runs?.find(item => item.runIndex === target.runIndex);
+        if (!sideState || !run) throw new Error(`找不到需要重评的 ${target.side.toUpperCase()} 侧 Case`);
+        if (!run.sessionId || run.failureType) {
+            throw new Error(`${target.side.toUpperCase()} 侧缺少可复用 Trace，请重新执行`);
+        }
+        const experimentCase = await prisma.experimentCase.findFirst({
+            where: {
+                experimentId: experiment.id,
+                experiment: { user: args.user },
+                OR: [
+                    ...(run.experimentCaseId ? [{ id: run.experimentCaseId }] : []),
+                    { taskId: run.sessionId },
+                ],
+            },
+            select: { id: true, actualOutput: true },
+        });
+        if (!experimentCase) throw new Error(`${target.side.toUpperCase()} 侧找不到已绑定的评测 Case`);
+        const failedRows = await prisma.experimentEvalResult.findMany({
+            where: { experimentId: experiment.id, caseId: experimentCase.id, status: 'failed' },
+            select: { evaluatorId: true },
+        });
+        const evaluatorIds = Array.from(new Set([
+            ...getFailedOrMissingEvaluatorIds(run, config.evaluators),
+            ...failedRows.map((row: { evaluatorId: string }) => row.evaluatorId),
+        ])).filter(id => config.evaluators.includes(id));
+        if (!evaluatorIds.length) throw new Error(`${target.side.toUpperCase()} 侧没有可重试的失败评估项`);
+        retryItems.push({ ...target, run, evaluatorIds, experimentCase });
+    }
+
+    await prisma.experiment.updateMany({
+        where: { id: experiment.id, user: args.user },
+        data: { status: 'running' },
+    });
+    for (const item of retryItems) {
+        item.run.evaluationAttempts = (item.run.evaluationAttempts || 0) + 1;
+        item.run.evaluationClaimId = buildEvaluationClaimId();
+        item.run.evaluationReserved = true;
+        item.run.evaluationStartedAt = new Date().toISOString();
+        const existing = new Map((item.run.evaluations || []).map(evaluation => [evaluation.evaluatorId, evaluation]));
+        item.run.evaluations = mergeRunEvaluations(
+            item.run.evaluations,
+            item.evaluatorIds.map(evaluatorId => ({
+                ...(existing.get(evaluatorId) || {}),
+                evaluatorId,
+                evaluatorName: existing.get(evaluatorId)?.evaluatorName || abEvaluatorName(evaluatorId),
+                status: 'pending' as const,
+                score: undefined,
+                errorMessage: undefined,
+            })),
+        );
+        item.run.status = 'evaluating';
+        const retainedScore = aggregateEvaluationScore(item.run.evaluations);
+        if (typeof retainedScore === 'number') {
+            item.run.score = retainedScore;
+            item.run.tier = scoreTier(retainedScore);
+        } else {
+            delete item.run.score;
+            delete item.run.tier;
+        }
+        delete item.run.failureType;
+        delete item.run.failureDetail;
+        delete item.run.completedAt;
+        const prepared = await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config,
+            states,
+            caseId: args.caseId,
+            side: item.side,
+            nextRun: item.run,
+            touchLatestResultAt: true,
+        });
+        if (!prepared) throw new Error(`${item.side.toUpperCase()} 侧重评状态保存失败，请稍后重试`);
+    }
+
+    const active = activeRuns().get(`${args.user}:${args.taskId}`);
+    if (active) active.status = 'evaluating';
+    const completion = (async () => {
+        await Promise.all(retryItems.map(async item => {
+            try {
+                const rows = await evaluateEvalExperimentCase(
+                    experiment.id,
+                    item.experimentCase.id,
+                    args.user,
+                    { evaluatorIds: item.evaluatorIds, settleExperiment: false },
+                );
+                applyExpRowsToRun(item.run, rows, experiment.id);
+                if (item.run.status === 'pass' && item.experimentCase.actualOutput) {
+                    item.run.output = item.experimentCase.actualOutput;
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                item.run.evaluations = mergeRunEvaluations(
+                    item.run.evaluations,
+                    item.evaluatorIds.map(evaluatorId => ({
+                        evaluatorId,
+                        evaluatorName: abEvaluatorName(evaluatorId),
+                        status: 'failed' as const,
+                        errorMessage: message,
+                    })),
+                );
+                item.run.status = 'fail';
+                item.run.output = message;
+                markRunCompleted(item.run);
+            }
+            delete item.run.evaluationReserved;
+            await persistRunStatePatch({
+                taskId: args.taskId,
+                user: args.user,
+                config,
+                states,
+                caseId: args.caseId,
+                side: item.side,
+                nextRun: item.run,
+                expectedEvaluationClaimId: item.run.evaluationClaimId,
+                touchLatestResultAt: true,
+            });
+        }));
+        await settleExperimentStatus(experiment.id);
+    })();
+    return { completion, identities: retryItems.map(item => ({ side: item.side, runIndex: item.run.runIndex, executionClaimId: item.run.executionClaimId, evaluationClaimId: item.run.evaluationClaimId })) };
+}
+
+async function runGrayscaleStageRetry(args: {
+    taskId: string;
+    user: string;
+    caseId: string;
+    targets: Array<{ side: Side; runIndex: number }>;
+    signal: AbortSignal;
+}) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    const modes: Partial<Record<Side, 'execution' | 'evaluation'>> = {};
+    const executionTargets: Array<{ side: Side; runIndex: number }> = [];
+    const evaluationTargets: Array<{ side: Side; runIndex: number }> = [];
+    for (const target of args.targets) {
+        const run = task.caseStatesJson[args.caseId]?.[target.side]?.runs
+            ?.find(item => item.runIndex === target.runIndex);
+        if (!run) throw new Error(`找不到需要重试的 ${target.side.toUpperCase()} 侧 Case`);
+        const mode = task.configJson.triggerRouting ? 'execution' : resolveGrayscaleRetryMode(run);
+        modes[target.side] = mode;
+        (mode === 'evaluation' ? evaluationTargets : executionTargets).push(target);
+    }
+
+    const completions: Promise<void>[] = [];
+    const identities: Array<{ side: Side; runIndex: number; executionClaimId?: string; evaluationClaimId?: string }> = [];
+    if (evaluationTargets.length) {
+        const retry = await runGrayscaleEvaluationRetry({ ...args, targets: evaluationTargets });
+        completions.push(retry.completion);
+        identities.push(...retry.identities);
+    }
+    if (executionTargets.length) {
+        const retry = await runGrayscaleExecutionRetry({ ...args, targets: executionTargets });
+        completions.push(retry.completion);
+        identities.push(...retry.identities);
+    }
+    return { modes, identities, completion: Promise.all(completions).then(() => undefined) };
+}
+
+async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; evaluatorIds?: string[]; onlyMissingEvaluation?: boolean }) {
+    const task = await loadTask(args.taskId, args.user);
+    if (!task) throw new Error('task not found');
+    validateTaskSkillBinding(task);
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluatorId: args.evaluatorId || task.configJson.evaluatorId,
+        evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, args.evaluatorId || task.configJson.evaluatorId),
+        // 评测批次标题默认用 A/B 任务名(行级重评等也走同名批次)。
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
+    };
+    const states = task.caseStatesJson || {};
+    const caseIds = args.caseIds.length > 0 ? args.caseIds : Object.keys(states);
+    const evaluatorRunId = await evaluateRunsWithConcurrency({
+        taskId: args.taskId,
+        user: args.user,
+        origin: args.origin,
+        config,
+        states,
+        caseIds,
+        evaluatorId: args.evaluatorId,
+        evaluatorIds: config.evaluators,
+        // 透传给 evaluateRunsWithConcurrency, true 时只选 evaluatorRunId/score 都没的 run,
+        // 避免行级 retry 误评同 case 已 pass 的其他 run。
+        onlyMissingEvaluation: args.onlyMissingEvaluation,
+    });
+    if (!evaluatorRunId) throw new Error('no executed agent sessions to evaluate');
+}
+
+export async function GET(
+    req: NextRequest,
+    { params }: { params: Promise<{ taskId: string }> }
+) {
+    try {
+        const { taskId } = await params;
+        const user = req.nextUrl.searchParams.get('user') || '';
+        if (!user || !taskId) {
+            return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
+        }
+        const task = await loadTask(taskId, user);
+        if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+        const visible = await visibleExperimentTask(task);
+        if (!visible) return NextResponse.json({ error: 'Task deleted' }, { status: 404 });
+        task.caseStatesJson = visible.caseStatesJson;
+        const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
+        const executionsReconciled = await reconcileFinishedExecutions({
+            user,
+            config: task.configJson,
+            states: task.caseStatesJson,
+        });
+        const reconciled = await reconcileFinishedEvaluations(taskId, user, task.configJson, task.caseStatesJson);
+        // Q2: "评测失败但库里其实已有真实结果"的 run 用历史结果回填(no valid tasks 残留自愈, 不重新评测)。
+        const failedRehydrated = await reconcileFailedRunsFromExistingEval(user, task.configJson, task.caseStatesJson);
+
+        // === 孤儿 in-flight 清理 ===
+        // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
+        // 里还有 running/pending/evaluating 但 activeRuns 没有这个 task 的条目,
+        // 那一定是上次进程跑到一半被杀的孤儿——agent / evaluator 子进程都没了,
+        // 不会再有人推进它的状态。先走上面的 reconcileFinishedExecutions 反查
+        // Execution 表回填; 只有仍未被回填的 in-flight run 才能判作真正孤儿。
+        //
+        // 直接走跟 abort 同款的清理: pending/running/evaluating 全标 fail, 然后
+        // rebuildSideAggregate 让 top 跟 runs 一致。
+        const orphanStoreKey = `${user}:${taskId}`;
+        let orphanCleanup = false;
+        if (!activeRuns().get(orphanStoreKey) && hasAnyRunningCaseStates(task.caseStatesJson)) {
+            const states = task.caseStatesJson;
+            for (const cid of Object.keys(states)) {
+                for (const side of ['a', 'b'] as Side[]) {
+                    const sideState = states[cid][side];
+                    if (!sideState) continue;
+                    let patched = false;
+                    for (const run of sideState.runs || []) {
+                        // 同 startup 回收口径:评测被打断(执行已完成)的回到 executed 可重评,真没跑完的才执行失败。
+                        if (reconcileStaleGrayscaleRun(run, '服务重启中断, 请重新评测')) {
+                            patched = true;
+                            orphanCleanup = true;
+                        }
+                    }
+                    if (patched) {
+                        states[cid][side] = rebuildSideAggregate(
+                            sideState,
+                            sideState.runCount || sideState.runs?.length || 0,
+                        );
+                        const rebuilt = states[cid][side];
+                        if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
+                            rebuilt.status = 'fail';
+                            rebuilt.output = rebuilt.output || '服务重启中断';
+                        }
+                    }
+                }
+            }
+        }
+
+        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled || failedRehydrated) {
+            // 乐观锁回写: 这次 reconcile 是基于 task 刚 load 时的快照算的。若期间评测
+            // flow 已经写了更新的状态(CAS 落空), 不能用我们这份旧快照覆盖它 —— 否则
+            // 会把刚落库的 pass 又擦回 evaluating(就是"评完又退回评估中"那个抖动)。
+            // 冲突时直接返回最新已提交状态, 不再用本轮中间态响应, 下一拍 poll 会基于
+            // 最新状态重新 reconcile。
+            const written = await persistTaskState(
+                taskId,
+                user,
+                task.configJson,
+                task.caseStatesJson,
+                task.rawCaseStatesJson,
+            );
+            if (!written) {
+                const fresh = await loadTask(taskId, user);
+                if (fresh) return respondTask(fresh, activeRuns().get(`${user}:${taskId}`) || null);
+            }
+        }
+        const storeKey = `${user}:${taskId}`;
+        const active = activeRuns().get(storeKey);
+        if (active && !hasAnyRunningCaseStates(task.caseStatesJson)) {
+            activeRuns().delete(storeKey);
+        }
+        // 注意: 这里**不再自动补评**崩溃残留的"待评测/中断"积压(原 gray_recover_ 自动重评已移除)。
+        // 解卡(reconcileStaleGrayscaleRun)已把被打断的评测摆成"评测失败(中断) + 「重评」按钮",
+        // 由用户自行点击恢复 —— 避免"打开页面就自己重评起来、还把看着有分的又评一遍"。
+        return respondTask(task, activeRuns().get(`${user}:${taskId}`) || null);
+    } catch (err) {
+        console.error('[GRAYSCALE_TASKS_GET_ONE] Failed:', err);
+        return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
+    }
+}
+
+export async function POST(
+    req: NextRequest,
+    { params }: { params: Promise<{ taskId: string }> }
+) {
+    try {
+        const { taskId } = await params;
+        const body = await req.json().catch(() => ({}));
+        const user = String(body.user || '').trim();
+        const action = String(body.action || 'start');
+        const caseIds = Array.isArray(body.caseIds)
+            ? body.caseIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+            : [];
+        const retryCaseId = typeof body.caseId === 'string' ? body.caseId.trim() : '';
+        const retrySide = body.side === 'a' || body.side === 'b' || body.side === 'both'
+            ? body.side as Side | 'both'
+            : null;
+        const retryRunIndex = typeof body.runIndex === 'number' && Number.isFinite(body.runIndex)
+            ? Math.max(1, Math.floor(body.runIndex))
+            : null;
+        const retryRunIndexes = body.runIndexes && typeof body.runIndexes === 'object'
+            ? body.runIndexes as Partial<Record<Side, unknown>>
+            : {};
+        const evaluatorId = typeof body.evaluatorId === 'string' ? body.evaluatorId.trim() : undefined;
+        const evaluatorIds = normalizeAbEvaluators(body.evaluators, evaluatorId);
+        const agentMaxConcurrency = typeof body.agentMaxConcurrency === 'number' && Number.isFinite(body.agentMaxConcurrency)
+            ? Math.max(1, Math.floor(body.agentMaxConcurrency))
+            : undefined;
+        // 行级 retry 用: true 时 backend 只评估 evaluatorRunId/score 都没有的 run,
+        // 避免把同 case 已 pass 的其他 run 也重评一遍。
+        const onlyMissingEvaluation = body.onlyMissingEvaluation === true;
+        if (!user || !taskId) {
+            return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
+        }
+        if (caseIds.length === 0 && action === 'start') {
+            return NextResponse.json({ error: 'caseIds are required' }, { status: 400 });
+        }
+        const storeKey = `${user}:${taskId}`;
+        const origin = req.nextUrl.origin;
+        const sourceTask = await loadTask(taskId, user);
+        if (sourceTask) for (const datasetId of getConfiguredDatasetIds(sourceTask.configJson)) await guardTraceDataset(req, datasetId, user, true);
+        // === action: abort —— 用户点「终止」按钮 ===
+        if (action === 'abort') {
+            // 双场景:
+            //   A. activeRuns 里有 → 任务真在跑, abort signal + 清 DB + 删 active
+            //   B. activeRuns 里没有 → server 重启等原因丢了 in-memory state, 但
+            //      caseStatesJson 还卡在 running/evaluating (孤儿状态)。前端 UI 因为
+            //      hasRunningStates 还显示「执行中」, 用户点终止 → 必须也能清掉这些
+            //      孤儿, 否则用户被永久锁死。之前直接返回 404, 反而堵了用户唯一的
+            //      自救入口。
+            const active = activeRuns().get(storeKey);
+            if (active) {
+                try { active.abortController?.abort(); } catch { /* already aborted */ }
+            }
+            // 不管 active 在不在, 都 patch DB 把 in-flight 状态推到 fail。
+            // 包括 pending——pending 在 rebuildSideAggregate 里被算作 running 同类
+            // (line 502: runs.some(r => status==='running' || status==='pending')),
+            // 所以哪怕把 running/evaluating 都标了 fail, pending 没动 → rebuild 算出
+            // top='running', 用户看 UI 仍然是「执行中」, abort 失效。
+            let patchedCount = 0;
+            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
+            try {
+                const taskRow = await loadTask(taskId, user);
+                if (taskRow) {
+                    const states = taskRow.caseStatesJson || {};
+                    for (const cid of Object.keys(states)) {
+                        for (const side of ['a', 'b'] as Side[]) {
+                            const sideState = states[cid][side];
+                            if (!sideState) continue;
+                            for (const run of sideState.runs || []) {
+                                if (cancelable.includes(run.status)) {
+                                    run.status = 'fail';
+                                    run.failureType = 'agent_error';
+                                    run.failureDetail = '用户终止';
+                                    run.output = run.output || '用户终止';
+                                    patchedCount++;
+                                }
+                            }
+                            // 主动 rebuild: 让 sideState.status 跟 runs[] 严格一致
+                            // (按上面 patch 完后, 所有 run 要么是 fail/pass/executed 等
+                            // 终态, rebuild 算出来必然不是 'running')
+                            states[cid][side] = rebuildSideAggregate(
+                                sideState,
+                                sideState.runCount || sideState.runs?.length || 0,
+                            );
+                            // 兜底: 万一 rebuild 仍然算成 running/evaluating (例如所有
+                            // run 都是 pass 但 totalRuns 比 runs 长度多), 强行推到 fail
+                            const rebuilt = states[cid][side];
+                            if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
+                                rebuilt.status = 'fail';
+                                rebuilt.output = rebuilt.output || '用户终止';
+                            }
+                        }
+                    }
+                    if (patchedCount > 0) {
+                        await persistTaskState(taskId, user, taskRow.configJson, states);
+                    }
+                    if (taskRow.configJson.evalExperimentId) {
+                        await prisma.experiment.updateMany({
+                            where: { id: taskRow.configJson.evalExperimentId, user },
+                            data: { status: 'cancelled' },
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('[GRAYSCALE_TASKS_ABORT] persist fail patch failed:', e);
+            }
+            if (active) activeRuns().delete(storeKey);
+            return NextResponse.json({
+                ok: true,
+                aborted: true,
+                hadActiveRun: !!active,
+                patchedCount,
+            });
+        }
+
+        if (action === 'retry-run' || action === 'retry-execution') {
+            const retrySides: Side[] = retrySide === 'both' ? ['a', 'b'] : retrySide ? [retrySide] : [];
+            const retryTargets = retrySides.map(side => {
+                const sideRunIndex = retryRunIndexes[side];
+                const runIndex = typeof sideRunIndex === 'number' && Number.isFinite(sideRunIndex)
+                    ? Math.max(1, Math.floor(sideRunIndex))
+                    : retryRunIndex;
+                return { side, runIndex };
+            });
+            if (!retryCaseId || !retrySide || retryTargets.some(target => target.runIndex == null)) {
+                return NextResponse.json({ error: 'caseId, side and runIndex/runIndexes are required' }, { status: 400 });
+            }
+            if (activeRuns().has(storeKey)) {
+                return NextResponse.json({ error: '该实验正在执行或评测，请稍后再试' }, { status: 409 });
+            }
+            const runId = `gray_retry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const abortController = new AbortController();
+            activeRuns().set(storeKey, {
+                taskId,
+                runId,
+                status: 'running',
+                startedAt: Date.now(),
+                abortController,
+            });
+            try {
+                const retry = action === 'retry-run'
+                    ? await runGrayscaleStageRetry({
+                        taskId,
+                        user,
+                        caseId: retryCaseId,
+                        targets: retryTargets as Array<{ side: Side; runIndex: number }>,
+                        signal: abortController.signal,
+                    })
+                    : await runGrayscaleExecutionRetry({
+                        taskId,
+                        user,
+                        caseId: retryCaseId,
+                        targets: retryTargets as Array<{ side: Side; runIndex: number }>,
+                        signal: abortController.signal,
+                    });
+                const retryModes = 'modes' in retry
+                    ? retry.modes as Partial<Record<Side, 'execution' | 'evaluation'>>
+                    : {};
+                void retry.completion
+                    .catch(async err => {
+                        console.error('[GRAYSCALE_TASKS_RETRY] Failed:', err);
+                        const latest = await loadTask(taskId, user).catch(() => null);
+                        if (!latest) return;
+                        const message = err instanceof Error ? err.message : String(err);
+                        for (const target of retryTargets) {
+                            if (target.runIndex == null) continue;
+                            const retryRun = latest.caseStatesJson[retryCaseId]?.[target.side]?.runs
+                                ?.find(item => item.runIndex === target.runIndex);
+                            const identity = retry.identities.find(item => item.side === target.side && item.runIndex === target.runIndex);
+                            if (!retryRun || !identity || retryRun.executionClaimId !== identity.executionClaimId || retryRun.evaluationClaimId !== identity.evaluationClaimId) continue;
+                            if (retryRun.status === 'running' || retryRun.status === 'evaluating' || retryRun.status === 'pending') {
+                                retryRun.status = 'fail';
+                                const retryMode = retryModes[target.side] || 'execution';
+                                if (retryMode === 'evaluation') {
+                                    delete retryRun.failureType;
+                                    delete retryRun.failureDetail;
+                                    retryRun.evaluations = (retryRun.evaluations || []).map(evaluation => (
+                                        evaluation.status === 'pending' || evaluation.status === 'running'
+                                            ? { ...evaluation, status: 'failed', errorMessage: message }
+                                            : evaluation
+                                    ));
+                                } else {
+                                    retryRun.failureType = 'agent_error';
+                                    retryRun.failureDetail = message;
+                                }
+                                retryRun.output = message;
+                                markRunCompleted(retryRun);
+                                await persistRunStatePatch({
+                                    taskId,
+                                    user,
+                                    config: latest.configJson,
+                                    states: latest.caseStatesJson,
+                                    caseId: retryCaseId,
+                                    side: target.side,
+                                    nextRun: retryRun,
+                                    touchLatestResultAt: true,
+                                }).catch(() => false);
+                                if (retryRun.experimentCaseId) {
+                                    await prisma.experimentEvalResult.updateMany({
+                                        where: { caseId: retryRun.experimentCaseId },
+                                        data: { status: 'failed', errorMessage: message },
+                                    }).catch(() => undefined);
+                                }
+                            }
+                        }
+                        if (latest.configJson.evalExperimentId) {
+                            await settleExperimentStatus(latest.configJson.evalExperimentId).catch(() => undefined);
+                        }
+                    })
+                    .finally(() => activeRuns().delete(storeKey));
+                return NextResponse.json({
+                    ok: true,
+                    runId,
+                    action,
+                    ...(Object.keys(retryModes).length ? { modes: retryModes } : {}),
+                }, { status: 202 });
+            } catch (err) {
+                activeRuns().delete(storeKey);
+                const message = err instanceof Error ? err.message : action === 'retry-run' ? '重试失败' : '重新执行失败';
+                const status = message === 'task not found' ? 404 : 409;
+                return NextResponse.json({ error: message }, { status });
+            }
+        }
+
+        // 行级 retry-eval 路径 (action='evaluate' + onlyMissingEvaluation=true)
+        // 跳过 single-instance 守门, 允许多个 retry 并行——只针对 frontend retryEvaluation
+        // 这种"用户点了 N 条失败 case 的 retry, 期望并行重评"的场景。
+        //
+        // 安全性论证: onlyMissingEvaluation=true 时, backend evaluateRunsWithConcurrency
+        // 只选 evaluatorRunId/score 都没的 run; 每条 retry 走 retryEvaluation 时 frontend
+        // 已经清掉了那条 run 的 evaluatorRunId/score, 不同 retry 改的是不同 run。
+        //
+        const isParallelRetryEval = action === 'evaluate' && onlyMissingEvaluation;
+        if (activeRuns().has(storeKey) && !isParallelRetryEval) {
+            return NextResponse.json({ error: 'task is already running' }, { status: 409 });
+        }
+        const task = await loadTask(taskId, user);
+        if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+        try {
+            validateTaskSkillBinding(task);
+        } catch (err) {
+            return NextResponse.json({ error: err instanceof Error ? err.message : 'invalid task skill binding' }, { status: 400 });
+        }
+        if (action === 'start' && task.configJson.evalExperimentId) {
+            await prisma.experiment.updateMany({
+                where: { id: task.configJson.evalExperimentId, user, status: 'draft', deletedAt: null },
+                data: { status: 'running' },
+            });
+        }
+        const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const abortController = new AbortController();
+        // 并行 retry-eval 不占 activeRuns 主槽位 (否则后续 retry 也会被 guard 拒),
+        // 但保留 abortController; 主路径正常占 activeRuns。
+        if (!isParallelRetryEval) activeRuns().set(storeKey, {
+            taskId,
+            runId,
+            status: action === 'evaluate' ? 'evaluating' : 'running',
+            startedAt: Date.now(),
+            abortController,
+        });
+
+        const runJob = () => action === 'evaluate'
+            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, onlyMissingEvaluation })
+            : task.configJson.triggerRouting
+                ? runWorkbenchTriggerTask({ taskId, user, caseIds, evaluatorIds, signal: abortController.signal })
+                : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
+        const { withExperimentCancellation } = await import('@/lib/engine/experiment/cancellation-context');
+        const job = task.configJson.evalExperimentId
+            ? withExperimentCancellation(task.configJson.evalExperimentId, undefined, async (signal) => {
+                const stop = () => abortController.abort(signal.reason);
+                signal.addEventListener('abort', stop, { once: true });
+                try { return await runJob(); } finally { signal.removeEventListener('abort', stop); }
+            }) : runJob();
+
+        void job
+            .catch(async err => {
+                console.error('[GRAYSCALE_TASKS_RUN] Failed:', err);
+                const task = await loadTask(taskId, user).catch(() => null);
+                if (task) {
+                    const states = task.caseStatesJson || {};
+                    for (const caseId of caseIds.length > 0 ? caseIds : Object.keys(states)) {
+                        ensureCaseState(states, caseId);
+                        for (const side of ['a', 'b'] as Side[]) {
+                            if (states[caseId][side].status === 'running' || states[caseId][side].status === 'evaluating') {
+                                states[caseId][side].status = 'fail';
+                                states[caseId][side].output = err instanceof Error ? err.message : String(err);
+                            }
+                        }
+                    }
+                    await persistTaskState(taskId, user, task.configJson, states).catch(() => {});
+                    if (task.configJson.evalExperimentId) {
+                        await prisma.experiment.updateMany({
+                            where: { id: task.configJson.evalExperimentId, user, deletedAt: null },
+                            data: { status: 'failed' },
+                        }).catch(() => undefined);
+                    }
+                }
+            })
+            .finally(() => {
+                // 并行 retry-eval 没占主槽, 也不删它 (别的 retry-eval 可能还在跑)
+                if (!isParallelRetryEval) activeRuns().delete(storeKey);
+            });
+
+        return NextResponse.json({ ok: true, runId });
+    } catch (err) {
+        console.error('[GRAYSCALE_TASKS_POST] Failed:', err);
+        if (err instanceof GenerationError) return generationErrorResponse(err);
+        return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed to start task' }, { status: 500 });
+    }
+}
+
+export async function PATCH(
+    req: NextRequest,
+    { params }: { params: Promise<{ taskId: string }> }
+) {
+    try {
+        const { taskId } = await params;
+        const body = await req.json();
+        const { user, taskName, configJson, caseStatesJson } = body;
+
+        if (!user || !taskId) {
+            return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
+        }
+
+        const data: Record<string, string> = {};
+        const existing = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
+            where: { id: taskId, user },
+        });
+        if (!existing) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+        if (configJson !== undefined) {
+            const existingConfig = withDefaultConfig(safeParse<GrayscaleConfig>(existing.configJson, {}));
+            const existingBoundSide = getGrayscaleTaskBoundSide(existingConfig);
+            const nextConfig = configJson && typeof configJson === 'object' && !Array.isArray(configJson)
+                ? withDefaultConfig({ ...(configJson as GrayscaleConfig) })
+                : {};
+            const nextSkillId = String(nextConfig.skillId || '').trim();
+            if (nextSkillId && nextSkillId !== existing.skillId) {
+                return NextResponse.json({ error: 'task skill binding cannot be changed' }, { status: 400 });
+            }
+            if (nextConfig.boundSide && nextConfig.boundSide !== existingBoundSide) {
+                return NextResponse.json({ error: 'task skill binding side cannot be changed' }, { status: 400 });
+            }
+            nextConfig.boundSide = existingBoundSide;
+            const nextBoundVersionId = getGrayscaleTaskBoundVersionId(nextConfig);
+            if (nextBoundVersionId && nextBoundVersionId !== existing.skillVersionId) {
+                return NextResponse.json({ error: 'task skill version binding cannot be changed' }, { status: 400 });
+            }
+            const normalizedNextConfig = normalizeGrayscaleTaskBinding(nextConfig, existing);
+            for (const datasetId of getConfiguredDatasetIds(normalizedNextConfig)) await guardTraceDataset(req, datasetId, user, true);
+            // E: evaluationBatchId 后端独占 —— 前端 PATCH 不带/带空值时,保留库里已有的稳定批次 id,
+            // 不让前端用空值覆盖。否则一个 A/B 任务的评测会散裂成多个批次(实测 gyc-v0 散成 20 个)。
+            if (!String(normalizedNextConfig.evaluationBatchId || '').trim()) {
+                let existingBatchId = '';
+                try {
+                    existingBatchId = String((JSON.parse(existing.configJson || '{}') as GrayscaleConfig).evaluationBatchId || '').trim();
+                } catch { /* ignore */ }
+                if (existingBatchId) normalizedNextConfig.evaluationBatchId = existingBatchId;
+            }
+            data.configJson = JSON.stringify(normalizedNextConfig);
+        }
+        if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(caseStatesJson);
+        if (typeof taskName === 'string' && taskName.trim()) {
+            const trimmedName = taskName.trim();
+            // 甲(原地改名):同一任务换标签。但唯一键现在含 taskName,改成"同版本里别的任务已占用的名字"
+            // 会撞键,直接 updateMany 会抛 Prisma P2002。先查重,把它变成可读的 409,前端弹"名字已被占用"。
+            if (trimmedName !== existing.taskName) {
+                const clash = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
+                    where: {
+                        user,
+                        skillName: existing.skillName,
+                        skillVersion: existing.skillVersion,
+                        taskName: trimmedName,
+                        NOT: { id: taskId },
+                    },
+                });
+                if (clash) {
+                    return NextResponse.json({ error: '该版本下已存在同名 A/B 任务，请换一个名字' }, { status: 409 });
+                }
+            }
+            data.taskName = trimmedName;
+        }
+
+        if (Object.keys(data).length === 0) {
+            return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
+        }
+
+        await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+            where: { id: taskId, user },
+            data,
+        });
+        const updated = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
+            where: { id: taskId, user },
+        });
+        if (!updated) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+        const updatedConfig = normalizeGrayscaleTaskBinding(
+            withDefaultConfig(JSON.parse(updated.configJson || '{}')),
+            updated,
+        );
+        return NextResponse.json({
+            ...updated,
+            configJson: updatedConfig,
+            caseStatesJson: JSON.parse(updated.caseStatesJson || '{}'),
+        });
+    } catch (err) {
+        console.error('[GRAYSCALE_TASKS_PATCH] Failed:', err);
+        if (err instanceof GenerationError) return generationErrorResponse(err);
+        return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+    }
+}
