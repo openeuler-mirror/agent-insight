@@ -1,3 +1,10 @@
+---
+title: "常见问题"
+description: "汇总页面访问、Trace 采集与展示、模型连接及评测异常的检查方法，并说明问题反馈所需的信息。"
+keywords: ["Agent Insight", "故障排查", "Trace 采集", "模型连接", "评测异常"]
+changefreq: monthly
+---
+
 # 常见问题
 
 ## 页面无法访问

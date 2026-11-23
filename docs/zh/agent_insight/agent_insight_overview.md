@@ -1,3 +1,10 @@
+---
+title: "Agent Insight 用户指南"
+description: "介绍 Agent Insight 的观测与评测能力、部署组成和使用流程，帮助用户选择所需的操作指南。"
+keywords: ["Agent Insight", "Agent 观测", "链路追踪", "评测"]
+changefreq: monthly
+---
+
 # Agent Insight 用户指南
 
 Agent Insight 帮助用户记录 Agent 的执行过程，并通过评估器检查任务结果和执行轨迹。本手册介绍平台安装、Agent 接入、链路追踪和评测操作，适用于具备基本 Linux 操作知识的 Agent 开发者、测试人员和运维人员。

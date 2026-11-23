@@ -1,3 +1,10 @@
+---
+title: "登录和接入 Agent"
+description: "说明平台登录及已有 AcTrail 的 Linux 数据上报配置，帮助用户核对账号归属、接入环境和真实 Trace 采集结果。"
+keywords: ["Agent Insight", "账号登录", "AcTrail", "Agent 接入", "Trace 采集"]
+changefreq: monthly
+---
+
 # 登录和接入 Agent
 
 本章介绍首次登录及通过 AcTrail 上报 Agent 运行数据。**安装指导** 页面提供 AcTrail 的 Linux 接入命令。

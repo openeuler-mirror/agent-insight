@@ -1,3 +1,10 @@
+---
+title: "安装与维护"
+description: "说明在 openEuler 上通过 RPM 安装 Agent Insight、使用 systemd 管理服务，以及配置、备份和升级的方法。"
+keywords: ["Agent Insight", "RPM 安装", "systemd", "服务维护", "备份升级"]
+changefreq: monthly
+---
+
 # 安装与维护
 
 本文介绍在 openEuler 上通过 RPM 安装 Agent Insight，并使用 systemd 启动和管理服务。平台默认使用 SQLite 保存数据。
