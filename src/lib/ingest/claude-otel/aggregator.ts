@@ -415,6 +415,13 @@ function mergeToolCallIntoInteraction(target: any, toolCall: any): void {
     : [...existing, toolCall];
 }
 
+function drainPendingToolCalls(pending: Map<string, any>, target: any): void {
+  for (const [pendingId, pendingCall] of pending) {
+    mergeToolCallIntoInteraction(target, pendingCall);
+    pending.delete(pendingId);
+  }
+}
+
 function toolUseBlocks(content: any[]): any[] {
   return content.filter((block) => block?.type === 'tool_use' && block.id);
 }
@@ -593,6 +600,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   if (ordered.every((event) => event.eventName === CONTEXT_SUPPLEMENT_EVENT)) return null;
 
   const interactions: any[] = [];
+  // 兜底路径给纯工具轮落的空壳 interaction,主循环结束后再决定要不要留下
+  const emptyFallbackTurns = new Set<any>();
   const responseMetaByKey = new Map<string, { request?: ClaudeOtelEvent; body: any; content: any[] }>();
   const toolUseById = new Map<string, any>();
   const subagentSessionByToolId = new Map<string, string>();
@@ -847,12 +856,13 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       if (isInternalClaudeQuerySource(attrs.query_source)) continue;
       if (seen < (usableResponseCountByPrompt.get(key) || 0)) continue;
       const text = asString(attrs.response);
-      if (!text.trim()) continue;
       // 子 agent 内部轮次(message.uuid 命中补传映射):归到对应 scope,不算 root 的一轮。
       // 只有 fallback 路径会走到这里,同机部署(有可读响应体)在上面 seen<usable 就跳过了,
       // 行为不受影响。不动 finalResult / model / root system / root pending —— 那些都是 root 的。
       const mappedToolId = uuidToSubagentToolId.get(asString(attrs['message.uuid']));
       if (mappedToolId) {
+        // 子 agent 无文本轮不单独成条,保持原有归属/补传逻辑不变
+        if (!text.trim()) continue;
         const map = subagentMapByToolId.get(mappedToolId) || {};
         const subagentName = normalizeSubagentType(map.agentType);
         agentNames.add(subagentName);
@@ -891,8 +901,6 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         pendingScopeToolCalls.delete(scope);
         continue;
       }
-      finalResult = text;
-      if (attrs.model) model = String(attrs.model);
       // 跨机场景只有这条兜底路径会跑,system prompt 得在这里发射(root scope —— 本事件
       // 不带 tool_use,分不出子 agent)。同机部署走上面的 api_response_body 路径,不受影响。
       const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
@@ -905,7 +913,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
           supplemented: !systemByPromptKey.has(key),
         });
       }
-      interactions.push({
+      const turn = {
         role: 'assistant',
         content: text,
         timestamp: eventTime(event),
@@ -914,15 +922,22 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         prompt_id: event.promptId,
         model: attrs.model,
         usage: normalizeUsage(undefined, requestEvent?.attributes || {}),
-      });
+      };
+      interactions.push(turn);
+      if (!text.trim()) {
+        // 纯工具调用轮:本轮没有可见文本,但确实发生了一次 LLM 调用。此前直接丢弃,
+        // 该轮 tool_result 只能攒到后面那条带最终回答的记录上 —— 工具归属、usage、
+        // 耗时全错。这里给它落地一条 content 为空、只带本轮 tool_calls 的 interaction。
+        emptyFallbackTurns.add(turn);
+      } else {
+        finalResult = text;
+      }
+      if (attrs.model) model = String(attrs.model);
       // 跨机时 tool_result 可能先于本轮助手消息到达 —— 那会儿还没有任何 assistant 可挂,
       // 工具调用只能滞留在 pendingToolResultById。正常路径靠 api_response_body 分支收口,
       // 而跨机根本不会走那条,不在这里收就整批工具调用凭空消失(trace 只剩对话)。
-      const assistantTurn = interactions[interactions.length - 1];
-      for (const [pendingId, pendingCall] of pendingToolResultById) {
-        mergeToolCallIntoInteraction(assistantTurn, pendingCall);
-        pendingToolResultById.delete(pendingId);
-      }
+      // 每轮落地时把 pending 收进**本轮**,而不是留给后面的最终回答。
+      drainPendingToolCalls(pendingToolResultById, turn);
       continue;
     }
 
@@ -1062,6 +1077,13 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     const fallbackTurn = keptSupplementSubagents.find((turn) => turn.subagent_session_id === scope);
     if (!fallbackTurn) continue;
     for (const pendingCall of calls) mergeToolCallIntoInteraction(fallbackTurn, pendingCall);
+  }
+
+  // 纯工具轮的空壳最终没挂上任何工具调用,只是噪声,去掉
+  for (let i = interactions.length - 1; i >= 0; i--) {
+    const item = interactions[i];
+    if (!emptyFallbackTurns.has(item)) continue;
+    if (!Array.isArray(item.tool_calls) || item.tool_calls.length === 0) interactions.splice(i, 1);
   }
 
   if (!query) query = `Claude Code Session ${sessionId}`;

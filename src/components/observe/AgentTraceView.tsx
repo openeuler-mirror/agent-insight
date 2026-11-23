@@ -208,6 +208,9 @@ interface PromptSnapshotMessage {
     /** Tool calls made on this turn + their results, shown as a list with each
      *  result foldable (the tool_result the model received as context). */
     toolCalls?: { name: string; args: string; output: string }[];
+    /** 工具调用确实发生在本轮可见文本之前(历史混合记录:工具调用被并进了最终回答)。
+     *  为 true 时 Output 先渲染工具调用、再渲染 Response。 */
+    toolsFirst?: boolean;
     source: 'system' | 'compaction' | 'history';
     position: number;
 }
@@ -2154,10 +2157,9 @@ function summarizePromptArgs(raw: unknown): string {
 
 function interactionToPromptText(m: RawInteraction): string {
     const text = typeof m.content === 'string' ? m.content : '';
-    if (text.trim()) return text;
-
+    const hasText = text.trim().length > 0;
     const blocks: string[] = [];
-    if (Array.isArray(m.parts)) {
+    if (!hasText && Array.isArray(m.parts)) {
         const reasoning = m.parts
             .filter(p => (p?.type || '').toLowerCase() === 'reasoning')
             .map(p => (typeof p.text === 'string' ? p.text.trim() : ''))
@@ -2165,6 +2167,7 @@ function interactionToPromptText(m: RawInteraction): string {
             .join('\n\n');
         if (reasoning) blocks.push(`[reasoning]\n${reasoning}`);
     }
+    let toolBlock = '';
     if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
         const lines = m.tool_calls.map(tc => {
             const name = tc.function?.name || tc.name || 'tool';
@@ -2172,9 +2175,14 @@ function interactionToPromptText(m: RawInteraction): string {
             const argSummary = summarizePromptArgs(args);
             return argSummary ? `-> ${name}(${argSummary})` : `-> ${name}()`;
         });
-        blocks.push(`[tool calls x ${m.tool_calls.length}]\n${lines.join('\n')}`);
+        toolBlock = `[tool calls x ${m.tool_calls.length}]\n${lines.join('\n')}`;
     }
-    if (typeof m.content !== 'string' && m.content != null) {
+    // 同一轮既有文本又有工具调用时两者都要保留:历史混合记录里工具先于最终回答执行。
+    const toolsFirst = hasText && !!toolBlock && toolsPrecedeResponse(m);
+    if (toolsFirst) blocks.push(toolBlock);
+    if (hasText) blocks.push(text);
+    if (toolBlock && !toolsFirst) blocks.push(toolBlock);
+    if (!hasText && typeof m.content !== 'string' && m.content != null) {
         blocks.push(JSON.stringify(m.content, null, 2));
     }
     return blocks.join('\n\n');
@@ -2201,6 +2209,27 @@ function interactionContentText(m: RawInteraction): string {
     if (text.trim()) return text;
     if (typeof m.content !== 'string' && m.content != null) return JSON.stringify(m.content, null, 2);
     return '';
+}
+
+function interactionTimestampMs(value: unknown): number | undefined {
+    if (value == null) return undefined;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const parsed = Date.parse(String(value));
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** 工具调用是否早于本轮可见文本 —— 兜底采集/历史混合记录会把前面几轮的工具调用并进
+ *  最终回答,那条 interaction 的 timeInfo.completed 是文本产出时间,工具的 started_at
+ *  却更早。正常的「过渡语 + 工具」轮次里工具有本次响应完成后才开始,不满足这条。 */
+function toolsPrecedeResponse(m: RawInteraction): boolean {
+    if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) return false;
+    const completed = interactionTimestampMs(m.timeInfo?.completed);
+    if (completed == null) return false;
+    const starts = m.tool_calls
+        .map(tc => interactionTimestampMs(tc.timing?.started_at))
+        .filter((v): v is number => v != null);
+    if (starts.length === 0) return false;
+    return Math.min(...starts) < completed;
 }
 
 /** Tool calls of a turn + their results, for the prompt snapshot. OpenCode keeps
@@ -2282,6 +2311,7 @@ function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInterac
             reasoning: hasTools ? extractReasoningText(m) : undefined,
             reasoningTokens: hasTools ? m.usage?.reasoning : undefined,
             toolCalls: calls,
+            toolsFirst: hasTools && toolsPrecedeResponse(m),
             source: 'history',
             position: ++position,
         });
@@ -2589,6 +2619,8 @@ function SnapshotMessageRow({
     const reasoning = (message.reasoning || '').trim();
     const toolCalls = message.toolCalls || [];
     const hasToolCalls = toolCalls.length > 0;
+    // 工具确实先于本轮文本执行(历史混合记录):按真实顺序先工具后回答
+    const toolsFirst = !!message.toolsFirst && hasToolCalls && !!trimmed;
     const hasBody = !!(trimmed || reasoning || hasToolCalls);
     const [expanded, setExpanded] = useState(!!defaultExpanded);
     const [showModal, setShowModal] = useState(false);
@@ -2652,6 +2684,9 @@ function SnapshotMessageRow({
                                 modalTitle={`${rowTitle} · thinking`}
                             />
                         )}
+                        {toolsFirst && hasToolCalls && (
+                            <ToolCallList calls={toolCalls} modalTitle={rowTitle} />
+                        )}
                         {trimmed ? (
                             isAssistant ? (
                                 <DisclosureBar
@@ -2679,7 +2714,7 @@ function SnapshotMessageRow({
                                 </>
                             )
                         ) : null}
-                        {hasToolCalls && (
+                        {hasToolCalls && !toolsFirst && (
                             <ToolCallList calls={toolCalls} modalTitle={rowTitle} />
                         )}
                         {!trimmed && !hasToolCalls && reasoning ? (
@@ -2936,6 +2971,7 @@ function HierarchicalSpanSnapshot({
                             // Tool calls are part of the assistant's response (tool_use
                             // blocks), so they belong in Output — same rendering as input.
                             toolCalls: outputToolCalls,
+                            toolsFirst: toolsPrecedeResponse(event.interaction),
                             source: 'history',
                             position: 1,
                         }}
