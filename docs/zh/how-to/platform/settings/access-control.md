@@ -49,7 +49,7 @@ changefreq: monthly
 - 账号管理页的 **重置密码** 由管理员直接设置新密码，保存后旧密码立即失效；重置不改变账号已有的 API Key。
 - 账号管理页的 **删除** 会移除账号记录，该账号无法再登录、API Key 立即失效；账号名下的历史业务数据（Trace、评测、Skill 等）保留。不能删除当前登录的账号。
 - 存量账号无须初始化即可网页登录：未设置密码的账号首次登录免密，登录后设置密码。管理员身份仍由 `AGENT_INSIGHT_ADMIN_USERS` 决定；未配置时只有 `admin` 是管理员。账号管理页只展示该身份，不修改白名单。
-- 服务启动时会确保 `admin` 账号存在，因此通常不需要额外准备；`node --import tsx scripts/init-admin-account.ts [username]` 仅用于确保指定账号存在。首次启动前设置可选的 `AGENT_INSIGHT_ADMIN_PASSWORD` 可预先指定该账号密码，登录后仍会要求改密。
+- 服务启动时会确保 `admin` 账号存在，因此通常不需要额外准备。首次启动前设置可选的 `AGENT_INSIGHT_ADMIN_PASSWORD` 可预先指定该账号初始密码（未设置时初始密码为 `admin`），登录后仍会要求改密。
 - 同一 IP 和账号在 5 分钟内连续失败 5 次后会暂时拒绝登录。
 - 账号管理、修改密码和密码登录只在 standalone 模式生效；`organization` 与 `idaas_oauth` 行为保持不变。
 
