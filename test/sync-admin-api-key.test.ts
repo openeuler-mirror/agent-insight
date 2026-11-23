@@ -91,7 +91,7 @@ test("syncAdminApiKey preserves a client identity registered by setup", async ()
     port: 3100,
     host: "http://localhost:3100",
     requestLoginMode: async () => "standalone",
-    requestApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
   })
 
   assert.equal(result.preservedClientApiKey, true)
@@ -113,7 +113,7 @@ test("syncAdminApiKey initializes the client key only when none exists", async (
     port: 3200,
     host: "http://localhost:3200",
     requestLoginMode: async () => "standalone",
-    requestApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
   })
 
   assert.equal(result.preservedClientApiKey, false)
@@ -137,7 +137,7 @@ test("syncAdminApiKey skips admin provisioning in IDaaS mode and preserves the c
     port: 3300,
     host: "http://localhost:3300",
     requestLoginMode: async () => "idaas_oauth",
-    requestApiKey: async () => {
+    readAdminApiKey: async () => {
       adminRequestCount += 1
       throw new Error("admin API key must not be requested")
     },
@@ -180,7 +180,7 @@ test("syncAdminApiKey leaves the client key empty when IDaaS has not issued one"
     dataRoot,
     host: "http://localhost:3400",
     requestLoginMode: async () => "idaas_oauth",
-    requestApiKey: async () => {
+    readAdminApiKey: async () => {
       throw new Error("admin API key must not be requested")
     },
   })

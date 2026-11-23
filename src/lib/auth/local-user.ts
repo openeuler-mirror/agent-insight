@@ -17,10 +17,28 @@
 import crypto from 'node:crypto';
 import { db } from '@/lib/storage/prisma';
 
-function isDuplicateUsernameError(error: any): boolean {
+export function isDuplicateUsernameError(error: any): boolean {
   return error?.code === 'P2002'
     || (error?.code === '23505'
       && (error?.constraint?.includes('User_username_key') || error?.detail?.includes('username')));
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const ACCOUNT_USERNAME_MAX_LENGTH = 128;
+
+export function normalizeAccountUsername(raw: unknown): string {
+  return String(raw || '').trim().toLowerCase();
+}
+
+export function validateAccountUsername(username: string): string | null {
+  if (!username) return 'Username is required';
+  if (username.length > ACCOUNT_USERNAME_MAX_LENGTH) {
+    return `Username must be at most ${ACCOUNT_USERNAME_MAX_LENGTH} characters`;
+  }
+  if (username.includes('@') && !EMAIL_PATTERN.test(username)) {
+    return 'Username must be a valid email address';
+  }
+  return null;
 }
 
 interface ExternalAccountStore {

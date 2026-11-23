@@ -17,7 +17,15 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
-import { findOrCreateLocalUser, syncLocalUserExternalAccount } from '@/lib/auth/local-user';
+import { syncLocalUserExternalAccount } from '@/lib/auth/local-user';
+import { isAdminUser } from '@/lib/auth/admin';
+import { verifyPassword } from '@/lib/auth/password';
+import {
+  checkLoginRateLimit,
+  clearLoginFailures,
+  loginRateLimitKey,
+  recordLoginFailure,
+} from '@/lib/auth/login-rate-limit';
 import {
   inspectIdaasRegionAccess,
   describeIdaasRegionAccessError,
@@ -80,12 +88,74 @@ export async function POST(request: Request) {
       });
     }
 
-    const user = await findOrCreateLocalUser(username);
+    const password = typeof body?.password === 'string' ? body.password : '';
 
-    return NextResponse.json({
-      username: user.username,
-      apiKey: user.apiKey,
-    });
+    const rateLimitKey = loginRateLimitKey(request, username);
+    const limit = checkLoginRateLimit(rateLimitKey);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Too many login attempts',
+          code: 'too_many_attempts',
+          retryAfterSeconds: limit.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(limit.retryAfterSeconds),
+            'Cache-Control': 'no-store',
+          },
+        },
+      );
+    }
+
+    const user = await db.findUserByUsername(username);
+    if (!user) {
+      recordLoginFailure(rateLimitKey);
+      return NextResponse.json(
+        { error: 'Invalid username or password' },
+        { status: 401, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    if (!user.passwordHash) {
+      // 首次登录：账号尚未设置密码，只凭用户名进入，并强制先设置密码。
+      clearLoginFailures(rateLimitKey);
+      return NextResponse.json(
+        {
+          username: user.username,
+          apiKey: user.apiKey,
+          isAdmin: isAdminUser(user.username),
+          passwordChangeRequired: true,
+          passwordInitialized: false,
+        },
+        { headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    if (!password) {
+      return NextResponse.json(
+        { error: 'Password is required', code: 'password_required' },
+        { status: 400, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    if (!await verifyPassword(password, user.passwordHash)) {
+      recordLoginFailure(rateLimitKey);
+      return NextResponse.json(
+        { error: 'Invalid username or password' },
+        { status: 401, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+
+    clearLoginFailures(rateLimitKey);
+    return NextResponse.json(
+      {
+        username: user.username,
+        apiKey: user.apiKey,
+        isAdmin: isAdminUser(user.username),
+        passwordChangeRequired: Boolean(user.mustChangePassword),
+        passwordInitialized: true,
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   } catch (err: any) {
     console.error('[Auth/Apikey] Error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -1,0 +1,60 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { NextResponse } from 'next/server';
+import { db } from '@/lib/storage/prisma';
+import { resolveLoginMode } from '@/lib/auth/login-mode';
+import { resolveAdminUser } from '@/lib/auth/admin';
+import { normalizeAccountUsername } from '@/lib/auth/local-user';
+
+const NO_STORE = { 'Cache-Control': 'no-store' };
+
+export async function DELETE(
+    request: Request,
+    { params }: { params: Promise<{ username: string }> },
+) {
+    if (resolveLoginMode() !== 'standalone') {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+
+    const { username: adminUsername, isAdmin } = await resolveAdminUser(request);
+    if (!adminUsername) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+    if (!isAdmin) {
+        return NextResponse.json({ error: 'Admin permission required' }, { status: 403 });
+    }
+
+    const { username: rawUsername } = await params;
+    const username = normalizeAccountUsername(rawUsername);
+    if (!username) {
+        return NextResponse.json({ error: 'Username is required' }, { status: 400 });
+    }
+    if (username === adminUsername) {
+        return NextResponse.json(
+            { error: 'Cannot delete the account you are signed in with' },
+            { status: 400, headers: NO_STORE },
+        );
+    }
+
+    const deleted = await db.deleteUser(username);
+    if (!deleted) {
+        return NextResponse.json({ error: 'Account not found' }, { status: 404 });
+    }
+
+    // 只删除账号本身（登录与 API Key 立即失效），历史业务数据保留。
+    return NextResponse.json({ username }, { headers: NO_STORE });
+}

@@ -30,6 +30,11 @@ export function isAdminUser(username: string | null | undefined): boolean {
     return getAdminUsers().includes(username);
 }
 
+export async function resolveAdminUser(request: Request) {
+    const { username } = await resolveUser(request);
+    return { username, isAdmin: isAdminUser(username) };
+}
+
 export async function resolveTraceReadScope(request: Request) {
     const { username: authenticatedUser, apiKey } = await resolveUser(request);
     const requestedUser = new URL(request.url).searchParams.get('user') || null;

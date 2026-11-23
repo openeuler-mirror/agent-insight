@@ -33,8 +33,15 @@ export interface DatabaseAdapter {
     findUserByApiKey(apiKey: string): Promise<any>;
     findUserByUsername(username: string): Promise<any>;
     findUserByExternalAccount(externalAccount: string): Promise<any>;
+    findUsers(): Promise<any[]>;
     updateUserExternalAccount(username: string, externalAccount: string): Promise<any>;
+    updateUserPassword(username: string, data: {
+        passwordHash: string | null;
+        passwordUpdatedAt: Date | null;
+        mustChangePassword: boolean;
+    }): Promise<any>;
     createUser(data: any): Promise<any>;
+    deleteUser(username: string): Promise<boolean>;
 
     // Skill operations
     findSkill(name: string, user: string | null): Promise<any>;
@@ -138,6 +145,10 @@ class PrismaAdapter implements DatabaseAdapter {
         return this.client.user.findUnique({ where: { externalAccount } });
     }
 
+    async findUsers() {
+        return this.client.user.findMany({ orderBy: { username: 'asc' } });
+    }
+
     async updateUserExternalAccount(username: string, externalAccount: string) {
         return this.client.user.update({
             where: { username },
@@ -145,8 +156,24 @@ class PrismaAdapter implements DatabaseAdapter {
         });
     }
 
+    async updateUserPassword(username: string, data: {
+        passwordHash: string | null;
+        passwordUpdatedAt: Date | null;
+        mustChangePassword: boolean;
+    }) {
+        return this.client.user.update({
+            where: { username },
+            data,
+        });
+    }
+
     async createUser(data: any) {
         return this.client.user.create({ data });
+    }
+
+    async deleteUser(username: string) {
+        const result = await this.client.user.deleteMany({ where: { username } });
+        return result.count > 0;
     }
 
     async findSkill(name: string, user: string | null) {
@@ -477,10 +504,27 @@ class OpenGaussAdapter implements DatabaseAdapter {
         return res.rows[0] || null;
     }
 
+    async findUsers() {
+        const res = await this.query('SELECT * FROM "User" ORDER BY username ASC');
+        return res.rows;
+    }
+
     async updateUserExternalAccount(username: string, externalAccount: string) {
         const res = await this.query(
             'UPDATE "User" SET "externalAccount" = $2 WHERE username = $1 RETURNING *',
             [username, externalAccount],
+        );
+        return res.rows[0] || null;
+    }
+
+    async updateUserPassword(username: string, data: {
+        passwordHash: string | null;
+        passwordUpdatedAt: Date | null;
+        mustChangePassword: boolean;
+    }) {
+        const res = await this.query(
+            'UPDATE "User" SET "passwordHash" = $2, "passwordUpdatedAt" = $3, "mustChangePassword" = $4 WHERE username = $1 RETURNING *',
+            [username, data.passwordHash, data.passwordUpdatedAt, data.mustChangePassword],
         );
         return res.rows[0] || null;
     }
@@ -495,6 +539,11 @@ class OpenGaussAdapter implements DatabaseAdapter {
         const sql = `INSERT INTO "User" (${columns}, id) VALUES (${placeholders}, $${keys.length + 1}) RETURNING *`;
         const res = await this.query(sql, [...values, id]);
         return res.rows[0];
+    }
+
+    async deleteUser(username: string) {
+        const res = await this.query('DELETE FROM "User" WHERE username = $1', [username]);
+        return (res.rowCount ?? 0) > 0;
     }
 
     async findSkill(name: string, user: string | null) {

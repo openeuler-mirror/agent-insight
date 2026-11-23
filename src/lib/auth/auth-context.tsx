@@ -18,19 +18,29 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
-import { apiFetch } from '@/lib/client/api';
+import { apiFetch, getApiUrl } from '@/lib/client/api';
 import type { LoginMode } from '@/lib/auth/login-mode';
 
 interface AuthContextType {
   user: string | null;
   displayName: string | null;
   apiKey: string | null;
+  isAdmin: boolean;
+  passwordChangeRequired: boolean;
+  passwordInitialized: boolean;
   authReady: boolean;
   loginMode: LoginMode | 'invalid' | null;
   loginModeReady: boolean;
   organizationLoginRedirectUrl: string;
-  login: (username: string, apiKey?: string, displayName?: string) => void;
+  login: (
+    username: string,
+    apiKey?: string,
+    displayName?: string,
+    session?: { isAdmin?: boolean; passwordChangeRequired?: boolean; passwordInitialized?: boolean },
+  ) => void;
   logout: () => void;
+  clearPasswordChangeRequired: () => void;
+  markPasswordInitialized: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -56,6 +66,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
+  const [passwordInitialized, setPasswordInitialized] = useState(true);
   const [authReady, setAuthReady] = useState(false);
   const [loginMode, setLoginMode] = useState<LoginMode | 'invalid' | null>(null);
   const [loginModeReady, setLoginModeReady] = useState(false);
@@ -118,6 +131,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setDisplayName(null);
       setApiKey(null);
+      setIsAdmin(false);
+      setPasswordChangeRequired(false);
+      setPasswordInitialized(true);
     };
 
     const waitBeforeRetry = (attempt: number) => new Promise<void>(resolve => {
@@ -139,14 +155,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           if (loginMode === 'organization') {
             response = await apiFetch('/api/auth/organization');
-          } else if (storedUser && (loginMode !== 'idaas_oauth' || storedApiKey)) {
+          } else if (loginMode === 'standalone') {
+            if (!storedUser || !storedApiKey) {
+              clearStoredAuth();
+              return;
+            }
+            // 密码登录后不再用口令换 Key；只校验已保存的 Key 是否仍然有效。
+            response = await apiFetch('/api/auth/session');
+          } else if (storedUser && storedApiKey) {
             response = await apiFetch('/api/auth/apikey', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                ...(loginMode === 'idaas_oauth' && storedApiKey
-                  ? { 'x-witty-api-key': storedApiKey }
-                  : {}),
+                'x-witty-api-key': storedApiKey,
               },
               body: JSON.stringify({ username: storedUser }),
             });
@@ -179,11 +200,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             throw new Error(data?.error || `Authentication refresh failed: ${response.status}`);
           }
 
-          const nextUser = loginMode === 'organization'
-            ? data?.displayName || data?.username
-            : data?.username || storedUser;
-          const nextDisplayName = data?.displayName || nextUser;
-          const nextApiKey = data?.apiKey;
+          let nextUser: string | null;
+          let nextDisplayName: string | null;
+          let nextApiKey: string | null;
+          let nextIsAdmin = false;
+          let nextPasswordChangeRequired = false;
+          let nextPasswordInitialized = true;
+
+          if (loginMode === 'organization') {
+            nextUser = data?.displayName || data?.username;
+            nextDisplayName = data?.displayName || nextUser;
+            nextApiKey = data?.apiKey;
+          } else if (loginMode === 'standalone') {
+            nextUser = data?.username || storedUser;
+            nextDisplayName = nextUser;
+            nextApiKey = storedApiKey;
+            nextIsAdmin = Boolean(data?.isAdmin);
+            nextPasswordChangeRequired = Boolean(data?.passwordChangeRequired);
+            nextPasswordInitialized = data?.passwordInitialized !== false;
+          } else {
+            nextUser = data?.username || storedUser;
+            nextDisplayName = data?.displayName || nextUser;
+            nextApiKey = data?.apiKey;
+          }
           if (!nextUser || !nextApiKey) throw new Error('Authentication refresh response is incomplete');
           if (cancelled) return;
 
@@ -193,6 +232,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(nextUser);
           setDisplayName(nextDisplayName);
           setApiKey(nextApiKey);
+          setIsAdmin(nextIsAdmin);
+          setPasswordChangeRequired(nextPasswordChangeRequired);
+          setPasswordInitialized(nextPasswordInitialized);
           return;
         } catch (err) {
           if (cancelled) return;
@@ -225,11 +267,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push('/login?' + params.toString());
   }, [authReady, idaasRegionError, pathname, router, user]);
 
-  const login = useCallback((username: string, key?: string, nextDisplayName?: string) => {
+  // 管理员重置密码或首次建号后，必须先把密码改掉才能进入其它页面。
+  useEffect(() => {
+    if (!authReady || !user || !passwordChangeRequired) return;
+    if (pathname === '/config/password') return;
+    router.replace('/config/password');
+    // 动态路由（如 /trace）首屏水合时，router.replace 可能被随后提交的页面覆盖；
+    // 兜底补一次硬跳转，确保未设置密码的账号不能停留在业务页。
+    const timer = window.setTimeout(() => {
+      if (!window.location.pathname.endsWith('/config/password')) {
+        window.location.replace(getApiUrl('/config/password'));
+      }
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [authReady, passwordChangeRequired, pathname, router, user]);
+
+  const login = useCallback((
+    username: string,
+    key?: string,
+    nextDisplayName?: string,
+    session?: { isAdmin?: boolean; passwordChangeRequired?: boolean; passwordInitialized?: boolean },
+  ) => {
     setIdaasRegionError(null);
     localStorage.setItem('user_id', username);
     setUser(username);
     setDisplayName(nextDisplayName || username);
+    setIsAdmin(Boolean(session?.isAdmin));
+    setPasswordChangeRequired(Boolean(session?.passwordChangeRequired));
+    setPasswordInitialized(session?.passwordInitialized !== false);
     if (key) {
       localStorage.setItem('api_key', key);
       setApiKey(key);
@@ -239,6 +304,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setAuthReady(true);
     // 深链进入（如客户系统跳转 /trace?taskId=xxx）被登录页拦截时，登录后回原页；直接访问登录页则维持原行为落 /trace。
+    if (session?.passwordChangeRequired) {
+      router.replace('/config/password');
+      return;
+    }
     router.replace(getSafeReturnTo() || '/trace');
   }, [router]);
 
@@ -249,21 +318,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setDisplayName(null);
     setApiKey(null);
+    setIsAdmin(false);
+    setPasswordChangeRequired(false);
+    setPasswordInitialized(true);
     setAuthReady(true);
     router.push('/login');
   }, [router]);
+
+  const clearPasswordChangeRequired = useCallback(() => {
+    setPasswordChangeRequired(false);
+  }, []);
+
+  const markPasswordInitialized = useCallback(() => {
+    setPasswordInitialized(true);
+  }, []);
 
   return (
     <AuthContext.Provider value={{
       user,
       displayName,
       apiKey,
+      isAdmin,
+      passwordChangeRequired,
+      passwordInitialized,
       authReady,
       loginMode,
       loginModeReady,
       organizationLoginRedirectUrl,
       login,
       logout,
+      clearPasswordChangeRequired,
+      markPasswordInitialized,
     }}>
       {children}
     </AuthContext.Provider>

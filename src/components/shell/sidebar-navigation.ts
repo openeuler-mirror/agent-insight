@@ -148,7 +148,18 @@ const USAGE_ITEM: SidebarNavItem = {
     badge: { text: 'ADMIN', kind: 'g' },
 };
 
-export function getSidebarNavigation(showUsage: boolean): SidebarNavItem[] {
+export function getSidebarNavigation(showUsage: boolean, showAccounts = false): SidebarNavItem[] {
+    const configChildren = [...CONFIG_CHILDREN];
+    if (showAccounts) {
+        configChildren.push({
+            key: 'accounts',
+            href: '/config/accounts',
+            labelKey: 'nav.accounts',
+            icon: 'agent',
+        });
+    }
+    if (showUsage) configChildren.push(USAGE_ITEM);
+
     return [
         DASHBOARD_ITEM,
         QUICKSTART_ITEM,
@@ -160,7 +171,7 @@ export function getSidebarNavigation(showUsage: boolean): SidebarNavItem[] {
             key: 'config',
             labelKey: 'nav.configGroup',
             icon: 'config',
-            children: showUsage ? [...CONFIG_CHILDREN, USAGE_ITEM] : CONFIG_CHILDREN,
+            children: configChildren,
         },
     ];
 }

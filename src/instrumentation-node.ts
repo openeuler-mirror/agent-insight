@@ -32,6 +32,7 @@ import { spawn } from 'child_process';
 import { getAgentInsightHome } from '@/lib/env';
 
 export async function setupNodeRuntime(): Promise<void> {
+  await ensureAdminBootstrapCredentials();
   const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
   startExperimentCancellationWatchdog();
   // 注册内置系统 Agent（skill-generator-agent 等）。失败不阻塞启动——惰性注册作为兜底。
@@ -251,4 +252,54 @@ export async function setupNodeRuntime(): Promise<void> {
       .then(({ startTraceDatasetManager }) => startTraceDatasetManager())
       .catch(() => { console.warn('[trace-datasets] generation unavailable'); });
   }).unref();
+}
+
+/**
+ * 本地登录使用账号密码。这里在服务启动时确保 admin 账号存在，并把 Key 写到数据目录，
+ * 供脚本读取。admin 的初始密码为 `admin`（可用 AGENT_INSIGHT_ADMIN_PASSWORD 覆盖），
+ * 首次登录后强制修改密码；其余账号由管理员创建，初始密码与账号名相同。
+ */
+async function ensureAdminBootstrapCredentials(): Promise<void> {
+  try {
+    const { resolveLoginMode } = await import('@/lib/auth/login-mode');
+    if (resolveLoginMode() === 'idaas_oauth') return;
+
+    const { db } = await import('@/lib/storage/prisma');
+    let admin = await db.findUserByUsername('admin');
+    if (!admin) {
+      const crypto = await import('node:crypto');
+      admin = await db.createUser({
+        username: 'admin',
+        apiKey: 'wi_' + crypto.randomBytes(24).toString('hex'),
+      });
+    }
+
+    const keyPath = path.join(getAgentInsightHome(), '.admin_api_key');
+    try {
+      fs.writeFileSync(keyPath, admin.apiKey, { encoding: 'utf8', mode: 0o600 });
+      try { fs.chmodSync(keyPath, 0o600); } catch { /* 非 POSIX 文件系统忽略 */ }
+    } catch (err) {
+      console.warn('[instrumentation] admin api key file write failed:', (err as Error)?.message);
+    }
+
+    if (!admin.passwordHash) {
+      const { hashPassword, validatePasswordPolicy } = await import('@/lib/auth/password');
+      const configured = String(process.env.AGENT_INSIGHT_ADMIN_PASSWORD || '').trim();
+      let initialPassword = configured || 'admin';
+      if (configured) {
+        const policyError = validatePasswordPolicy(configured, admin.username);
+        if (policyError) {
+          console.warn(`[instrumentation] AGENT_INSIGHT_ADMIN_PASSWORD rejected: ${policyError}; using the default initial password`);
+          initialPassword = 'admin';
+        }
+      }
+      await db.updateUserPassword(admin.username, {
+        passwordHash: await hashPassword(initialPassword),
+        passwordUpdatedAt: new Date(),
+        mustChangePassword: true,
+      });
+    }
+  } catch (err) {
+    console.warn('[instrumentation] admin bootstrap failed (non-fatal):', (err as Error)?.message);
+  }
 }
