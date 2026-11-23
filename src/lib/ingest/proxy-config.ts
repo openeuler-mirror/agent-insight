@@ -20,6 +20,16 @@ export interface ProxyConfig {
   customFetch: typeof fetch | undefined;
   proxyUrl: string | undefined;
   rejectUnauthorized: boolean;
+  getRoute: (url: RequestInfo | URL) => ProxyRoute;
+}
+
+export interface ProxyRoute {
+  mode: 'direct' | 'proxy';
+  env?: string;
+  proxyUrl?: string;
+  bypassed: boolean;
+  noProxyConfigured: boolean;
+  rejectUnauthorized: boolean;
 }
 
 let cachedProxyConfig: ProxyConfig | null = null;
@@ -29,13 +39,25 @@ export function getProxyConfig(): ProxyConfig {
     return cachedProxyConfig;
   }
 
-  const proxyUrl = process.env.https_proxy || 
-                   process.env.HTTPS_PROXY || 
-                   process.env.http_proxy || 
-                   process.env.HTTP_PROXY;
+  const proxyEnv = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'].find(name => process.env[name]);
+  const proxyUrl = proxyEnv ? process.env[proxyEnv] : undefined;
 
   const rejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0';
   let customFetch: typeof fetch | undefined = undefined;
+  const noProxy = process.env.no_proxy || process.env.NO_PROXY;
+  const noProxyList = noProxy ? noProxy.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
+  const getRoute = (url: RequestInfo | URL): ProxyRoute => {
+    let bypassed = false;
+    if (proxyUrl && noProxyList.length) {
+      try {
+        const host = new URL(url.toString()).hostname.toLowerCase();
+        bypassed = noProxyList.some(pattern => pattern === '*' || host === pattern ||
+          (pattern.startsWith('.') ? host.endsWith(pattern) : host.endsWith('.' + pattern)));
+      } catch { /* Invalid URLs retain the existing proxy fallback. */ }
+    }
+    return { mode: proxyUrl && !bypassed ? 'proxy' : 'direct', env: proxyEnv, proxyUrl,
+      bypassed, noProxyConfigured: noProxyList.length > 0, rejectUnauthorized };
+  };
 
   if (proxyUrl) {
     console.log('[ProxyConfig] HTTP proxy configured (URL hidden for privacy)');
@@ -55,32 +77,10 @@ export function getProxyConfig(): ProxyConfig {
       connect: { rejectUnauthorized }
     });
 
-    const noProxy = process.env.no_proxy || process.env.NO_PROXY;
-    const noProxyList = noProxy ? noProxy.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : [];
-
     customFetch = ((url: RequestInfo | URL, init?: RequestInit) => {
-      const urlStr = url.toString();
-      let skipProxy = false;
-
-      if (noProxyList.length > 0) {
-        try {
-          const parsedUrl = new URL(urlStr);
-          const host = parsedUrl.hostname.toLowerCase();
-          skipProxy = noProxyList.some(pattern => {
-            if (pattern === '*') return true;
-            if (host === pattern) return true;
-            if (pattern.startsWith('.') && host.endsWith(pattern)) return true;
-            if (!pattern.startsWith('.') && (host === pattern || host.endsWith('.' + pattern))) return true;
-            return false;
-          });
-        } catch {
-          // Fallback if URL parsing fails
-        }
-      }
-
       return undiciFetch(url as any, {
         ...init as any,
-        dispatcher: skipProxy ? fallbackAgent : proxyAgent
+        dispatcher: getRoute(url).mode === 'direct' ? fallbackAgent : proxyAgent
       });
     }) as unknown as typeof fetch;
   } else if (rejectUnauthorized === false) {
@@ -99,7 +99,8 @@ export function getProxyConfig(): ProxyConfig {
   cachedProxyConfig = {
     customFetch,
     proxyUrl,
-    rejectUnauthorized
+    rejectUnauthorized,
+    getRoute,
   };
 
   return cachedProxyConfig;

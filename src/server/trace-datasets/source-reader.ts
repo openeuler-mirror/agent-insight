@@ -24,6 +24,7 @@ import { hash } from '../../lib/trace-datasets/sampling';
 import { type Event } from './normalizer';
 import { normalizeSourceUnits } from './trace-analysis';
 import { processContent } from './content-processor';
+import { retryTransient } from './transaction';
 
 export type FrozenConfig = { mappingVersion?: string; from: string; to: string; platform: string; identities: { framework: string | null; agentId: string | null; agentName: string | null; clientId?: string | null }[] };
 function timestamp(value: string | number | null) {
@@ -35,17 +36,19 @@ const select = { id: true, taskId: true, framework: true, agentId: true, agentNa
 export async function atomicJson(file: string, value: unknown) { await fs.writeFile(`${file}.tmp`, JSON.stringify(value), { mode: 0o600 }); await fs.rename(`${file}.tmp`, file); }
 export async function* lines(file: string) { const stream = createReadStream(file, { encoding: 'utf8' }); const reader = createInterface({ input: stream, crlfDelay: Infinity }); try { for await (const line of reader) if (line) yield JSON.parse(line); } finally { reader.close(); stream.destroy(); } }
 
+// No interactive transaction here: Prisma's SQLite transactions take the write lock immediately, so a
+// multi-second read for a large session would stall every other job; two read digests guard consistency.
+const CHUNK = 4 * 1024 * 1024;
 async function readSource(db: PrismaClient | Prisma.TransactionClient, id: string, owner: string, includeEvents = true) {
-  const read = async (tx: Prisma.TransactionClient) => {
-    const execution = await tx.execution.findFirst({ where: { id, user: owner }, select: { ...select, query: true, finalResult: true, failures: true } });
-    if (!execution?.taskId) return null;
-    const session = await tx.session.findFirst({ where: { taskId: execution.taskId, user: owner }, select: { id: true, endTime: true } });
-    if (!session) return null;
-    const digest = createHash('sha256').update(JSON.stringify(execution));
-    const events: Event[] = [];
-    // SQLite projects only visible message and behavior fields; giant tool results never cross into JS.
-    for (let offset = 0; includeEvents; offset += 128) {
-      const rows = await tx.$queryRawUnsafe<{ role: string | null; content: string | null; channel: string | null; names: string | null; timestamp: string | null; spanId: string | null; traceId: string | null; completedAt: string | null; finishReason: string | null; nonText: number; subagent: number; truncated: number | null; failed: number | null; retry: number | null; delegated: number | null }[]>(`
+  const execution = await db.execution.findFirst({ where: { id, user: owner }, select: { ...select, query: true, finalResult: true, failures: true } });
+  if (!execution?.taskId) return null;
+  const session = await db.session.findFirst({ where: { taskId: execution.taskId, user: owner }, select: { id: true, endTime: true } });
+  if (!session) return null;
+  const digest = createHash('sha256').update(JSON.stringify(execution));
+  const events: Event[] = [];
+  // SQLite projects only visible message and behavior fields; giant tool results never cross into JS.
+  for (let offset = 0; includeEvents; offset += 128) {
+    const rows = await db.$queryRawUnsafe<{ role: string | null; content: string | null; channel: string | null; names: string | null; timestamp: string | null; spanId: string | null; traceId: string | null; completedAt: string | null; finishReason: string | null; nonText: number; subagent: number; truncated: number | null; failed: number | null; retry: number | null; delegated: number | null }[]>(`
         SELECT json_extract(j.value,'$.role') role,
           CASE WHEN json_extract(j.value,'$.role') IN ('user','assistant') THEN
             CASE WHEN json_type(j.value,'$.content')='text' THEN json_extract(j.value,'$.content')
@@ -63,19 +66,17 @@ async function readSource(db: PrismaClient | Prisma.TransactionClient, id: strin
           CASE WHEN json_extract(j.value,'$.status') IN ('error','failed') THEN 1 ELSE 0 END failed,
           json_extract(j.value,'$.retry') retry, json_extract(j.value,'$.delegated') delegated
         FROM Session s, json_each(COALESCE(s.interactions,'[]')) j WHERE s.id=? ORDER BY CAST(j.key AS INTEGER) LIMIT 128 OFFSET ?`, session.id, offset);
-      for (const r of rows) events.push({ role: r.role || '', content: r.content || '', channel: r.channel || '', toolNames: JSON.parse(r.names || '[]').filter(Boolean), timestamp: timestamp(r.timestamp), completedAt: timestamp(r.completedAt), finishReason: r.finishReason || '', nonText: !!r.nonText, subagent: !!r.subagent, spanId: r.spanId || '', traceId: r.traceId || '', truncated: !!r.truncated, failed: !!r.failed, retry: !!r.retry, delegated: !!r.delegated });
-      if (rows.length < 128) break;
-    }
-    for (let offset = 1; ; offset += 65536) {
-      const rows = await tx.$queryRawUnsafe<{ chunk: string | null }[]>('SELECT substr(interactions, ?, 65536) chunk FROM Session WHERE id=?', offset, session.id);
-      const chunk = rows[0]?.chunk || '';
-      digest.update(chunk);
-      if (Array.from(chunk).length < 65536) break;
-    }
-    digest.update(JSON.stringify(session));
-    return { execution, session, events, digest: digest.digest('hex') };
-  };
-  return '$transaction' in db ? db.$transaction(read, { timeout: 120000, maxWait: 30000 }) : read(db);
+    for (const r of rows) events.push({ role: r.role || '', content: r.content || '', channel: r.channel || '', toolNames: JSON.parse(r.names || '[]').filter(Boolean), timestamp: timestamp(r.timestamp), completedAt: timestamp(r.completedAt), finishReason: r.finishReason || '', nonText: !!r.nonText, subagent: !!r.subagent, spanId: r.spanId || '', traceId: r.traceId || '', truncated: !!r.truncated, failed: !!r.failed, retry: !!r.retry, delegated: !!r.delegated });
+    if (rows.length < 128) break;
+  }
+  for (let offset = 1; ; offset += CHUNK) {
+    const rows = await db.$queryRawUnsafe<{ chunk: string | null }[]>('SELECT substr(interactions, ?, ?) chunk FROM Session WHERE id=?', offset, CHUNK, session.id);
+    const chunk = rows[0]?.chunk || '';
+    digest.update(chunk);
+    if (chunk.length < CHUNK) break;
+  }
+  digest.update(JSON.stringify(session));
+  return { execution, session, events, digest: digest.digest('hex') };
 }
 
 export async function captureSources(db: PrismaClient, owner: string, config: FrozenConfig, dir: string, check: () => Promise<void>) {
@@ -84,18 +85,16 @@ export async function captureSources(db: PrismaClient, owner: string, config: Fr
   try { await fs.access(members); } catch {
     const out = await fs.open(`${members}.tmp`, 'w', 0o600);
     try {
-      await db.$transaction(async tx => {
-        let cursor: { timestamp: Date; id: string } | undefined;
-        for (;;) {
-          const rows = await tx.execution.findMany({ where: { user: owner, timestamp: { gte: new Date(config.from), lt: new Date(config.to) }, OR: config.identities, ...(cursor ? { AND: [{ OR: [{ timestamp: { lt: cursor.timestamp } }, { timestamp: cursor.timestamp, id: { gt: cursor.id } }] }] } : {}) }, select, orderBy: [{ timestamp: 'desc' }, { id: 'asc' }], take: 128 });
-          for (const row of rows) {
-            const revision = await readSource(tx, row.id, owner, false);
-            await out.write(`${JSON.stringify({ ...row, sourceDigest: revision?.digest || null })}\n`);
-          }
-          if (rows.length < 128) break;
-          cursor = rows.at(-1)!;
+      let cursor: { timestamp: Date; id: string } | undefined;
+      for (;;) {
+        const rows = await retryTransient(() => db.execution.findMany({ where: { user: owner, timestamp: { gte: new Date(config.from), lt: new Date(config.to) }, OR: config.identities, ...(cursor ? { AND: [{ OR: [{ timestamp: { lt: cursor.timestamp } }, { timestamp: cursor.timestamp, id: { gt: cursor.id } }] }] } : {}) }, select, orderBy: [{ timestamp: 'desc' }, { id: 'asc' }], take: 128 }));
+        for (const row of rows) {
+          const revision = await retryTransient(() => readSource(db, row.id, owner, false));
+          await out.write(`${JSON.stringify({ ...row, sourceDigest: revision?.digest || null })}\n`);
         }
-      }, { timeout: 120000, maxWait: 30000 });
+        if (rows.length < 128) break;
+        cursor = rows.at(-1)!;
+      }
     } finally { await out.close(); }
     await fs.rename(`${members}.tmp`, members);
   }
@@ -111,10 +110,10 @@ export async function captureSources(db: PrismaClient, owner: string, config: Fr
     try { await fs.access(file); continue; } catch { /* incomplete member */ }
     let result: Record<string, unknown> = { reason: 'SOURCE_CHANGED' };
     for (let attempt = 0; attempt < 3; attempt++) {
-      const first = await readSource(db, member.id, owner, true);
+      const first = await retryTransient(() => readSource(db, member.id, owner, true));
       if (!first) { result = { reason: 'SOURCE_UNAVAILABLE' }; break; }
       if (first.digest !== member.sourceDigest) break;
-      const second = await readSource(db, member.id, owner, true);
+      const second = await retryTransient(() => readSource(db, member.id, owner, true));
       if (!second || second.digest !== first.digest) continue;
       let failures: { failure_type?: string }[] = [];
       try { failures = JSON.parse(first.execution.failures || '[]'); } catch { throw new Error('SOURCE_CORRUPT'); }

@@ -1,3 +1,13 @@
+import { startIsolatedControlCore } from './helpers/isolated-control-core';
+let core: Awaited<ReturnType<typeof startIsolatedControlCore>>;
+test.before(async () => { core = await startIsolatedControlCore(['test-only']); });
+test.after(async () => { await core?.dispose(); });
+function authenticatedRequest(url: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('authorization', 'Bearer ' + core.tokens['test-only']);
+  return new Request(url, { ...init, headers });
+}
+
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -48,7 +58,7 @@ test('Custom OpenAI Compatible 支持 headers-only 和无鉴权连接', () => {
   assert.equal(isModelConnectionReady(headersOnly), true);
   assert.equal(isModelConnectionReady(noAuth), true);
   assert.equal(isModelConnectionReady({ ...noAuth, model: '' }), false);
-  assert.equal(isModelConnectionReady({ provider: 'openai', apiKey: '' }), false);
+  assert.equal(isModelConnectionReady({ provider: 'openai', apiKey: '' }), true);
 });
 
 test('自定义请求头会校验名称、值和传输层保留字段', () => {
@@ -73,19 +83,12 @@ test('自定义请求头会校验名称、值和传输层保留字段', () => {
 });
 
 test('OpenAI Compatible 客户端参数透传 headers 且允许空 API Key', () => {
-  assert.deepEqual(
-    getOpenAICompatibleClientConfig({
-      provider: 'custom',
-      apiKey: '',
-      baseUrl: 'https://example.test/v1',
-      headers: { Authorization: 'token' },
-    }),
-    {
-      apiKey: 'no-api-key-required',
-      baseURL: 'https://example.test/v1',
-      defaultHeaders: { Authorization: 'token' },
-    },
-  );
+  const options = getOpenAICompatibleClientConfig({
+    provider: 'custom', apiKey: '', baseUrl: 'https://example.test/v1', headers: { Authorization: 'token' },
+  });
+  assert.equal(options.baseURL, 'https://example.test/v1');
+  assert.equal(options.defaultHeaders.authorization, 'token');
+  assert.equal(options.defaultHeaders['x-api-key'], null);
 });
 
 test('OpenAI 地址依次采用显式配置、环境变量、目录默认值', t => {
@@ -153,6 +156,7 @@ test('连接测试会把 Authorization 等自定义 Header 发送给模型端点
   const oldProxyEnv = Object.fromEntries(proxyEnvNames.map(name => [name, process.env[name]]));
   for (const name of proxyEnvNames) delete process.env[name];
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(_input instanceof Request ? _input.url : String(_input)).origin === core.origin) return originalFetch(_input, init);
     receivedAuthorization = new Headers(init?.headers).get('authorization') ?? '';
     return new Response(JSON.stringify({
       id: 'chatcmpl-test',
@@ -172,7 +176,7 @@ test('连接测试会把 Authorization 等自定义 Header 发送给模型端点
   resetProxyConfigCache();
 
   try {
-    const response = await testModelConnection(new Request('http://localhost/api/eval/settings/test', {
+    const response = await testModelConnection(authenticatedRequest('http://localhost/api/eval/settings/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

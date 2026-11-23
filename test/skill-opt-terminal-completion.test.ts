@@ -24,10 +24,13 @@ import path from 'node:path';
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-opt-completion-'));
 let agent: (options: any) => Promise<any>;
 let bridge: typeof import('@/lib/skill-opt-bridge');
+type VerifyVerdict = { ok: boolean; structural: { ok: boolean; failures: string[] }; failures: string[] };
+let selfVerify: () => Promise<VerifyVerdict>;
 const previous = { verify: process.env.SKILL_OPT_NO_VERIFY, protect: process.env.SKILL_OPT_NO_PROTECT };
 test.before(async () => {
   process.env.SKILL_OPT_NO_VERIFY = '1';
   process.env.SKILL_OPT_NO_PROTECT = '1';
+  selfVerify = async () => ({ ok: true, structural: { ok: true, failures: [] }, failures: [] });
   const stubs: Record<string, unknown> = {
     '@/lib/engine/general-agent': { runGeneralAgent: (options: any) => agent(options) },
     '@/lib/engine/general-agent/concurrency-limiter': { withBackgroundOpencodeSlot: (fn: () => unknown) => fn() },
@@ -40,10 +43,10 @@ test.before(async () => {
     '@/lib/engine/general-agent/skill-opt-prompt': { buildSkillOptSystemPrompt: () => 'test' },
     '@/lib/skill-generator-opencode-bridge': { scanWorkspaceFiles: () => ({ '/workspace/SKILL.md': { content: ['---', 'name: test', '---', 'complete candidate'] } }) },
     '@/lib/engine/skill-opt/edit-scope-guard': {},
-    '@/lib/engine/skill-opt/self-verify': {},
+    '@/lib/engine/skill-opt/self-verify': { runSelfVerification: async () => selfVerify() },
     '@/lib/engine/skill-opt/optimization-context': { installOptimizationOutputLimit: () => {}, optimizationContinuity: async () => '' },
     '@/lib/skill-workbench/optimization-candidate': {},
-    '@/lib/skill-generator/skill-files': {},
+    '@/lib/skill-generator/skill-files': { findSkillMd: () => ({ path: '/workspace/SKILL.md', content: 'candidate', folder: null }) },
   };
   const loader = Module as unknown as { _load: (id: string, ...args: unknown[]) => unknown };
   const load = loader._load;
@@ -59,8 +62,11 @@ test.after(() => {
 });
 const options = (threadId: string, signal?: AbortSignal, send = (_mode: string, _value: unknown) => {}) => ({ user: 'test', threadId, skillName: 'test', baseVersion: 0, checkedIssues: [], userFeedback: 'add computed summary', signal, send });
 
-test('terminal event followed by SDK cleanup must not become a user cancellation', async () => {
+test('terminal event followed by SDK cleanup must not become a user cancellation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const terminal of ['assistant', 'idle']) {
+    let ready!: () => void;
+    const started = new Promise<void>(resolve => { ready = resolve; });
     agent = async (run) => {
       run.handlers.onText?.({ messageID: 'answer', delta: 'candidate complete', fullText: 'candidate complete' });
       if (terminal === 'assistant') run.handlers.onAssistantMessage?.({ status: 'completed', info: { finish: 'stop' } });
@@ -70,11 +76,15 @@ test('terminal event followed by SDK cleanup must not become a user cancellation
         const abort = () => { clearTimeout(timer); reject(Object.assign(new Error('opencode 执行已中止'), { code: 'EXECUTION_CANCELLED' })); };
         if (run.chatOptions.signal?.aborted) abort();
         else run.chatOptions.signal?.addEventListener('abort', abort, { once: true });
+        ready();
       });
       return { workspaceDir: directory, sessionId: 'finished', output: 'candidate complete' };
     };
     const events: string[] = [];
-    await assert.doesNotReject(() => bridge.streamSkillOptOpencode(options('terminal-'+terminal, undefined, mode => events.push(mode))));
+    const completed = assert.doesNotReject(bridge.streamSkillOptOpencode(options('terminal-'+terminal, undefined, mode => events.push(mode))));
+    await Promise.race([started, completed.then(() => { throw new Error('optimization ended before SDK cleanup started'); })]);
+    t.mock.timers.tick(700);
+    await completed;
     assert.ok(events.includes('done'));
   }
 });
@@ -110,4 +120,79 @@ test('a model pause longer than thirty seconds is not an internal cancellation',
   try { t.mock.timers.tick(31000);assert.notEqual(runOptions.chatOptions.signal?.aborted, true);assert.equal(runOptions.chatOptions.idleTimeoutMs, 0);assert.equal(runOptions.chatOptions.streamTimeoutMs, 900000); }
   finally { release(); }
   await assert.doesNotReject(pending);
+});
+
+test('the repair turn keeps the main turn deadline and cancellation contract', async () => {
+  delete process.env.SKILL_OPT_NO_VERIFY;
+  let verifyCalls = 0;
+  selfVerify = async () => ++verifyCalls === 1
+    ? { ok: false, structural: { ok: false, failures: ['missing script'] }, failures: ['missing script'] }
+    : { ok: true, structural: { ok: true, failures: [] }, failures: [] };
+  const controller = new AbortController();
+  type RepairRunOptions = {
+    chatOptions?: { idleTimeoutMs?: number; streamTimeoutMs?: number; signal?: AbortSignal };
+    cancelSignal?: AbortSignal;
+  };
+  let repair: RepairRunOptions | undefined = undefined;
+  agent = async run => {
+    if (!run.sessionTitle?.startsWith('skill-opt repair')) {
+      return { workspaceDir: directory, sessionId: 'main', output: 'candidate' };
+    }
+    repair = run;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 50);
+      run.chatOptions.signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(Object.assign(new Error('opencode 执行已中止'), { code: 'EXECUTION_CANCELLED' }));
+      }, { once: true });
+    });
+    return { workspaceDir: directory, sessionId: 'repair', output: 'repaired' };
+  };
+  const events: string[] = [];
+  try {
+    await assert.doesNotReject(() => bridge.streamSkillOptOpencode(options('repair-contract', controller.signal, mode => events.push(mode))));
+  } finally {
+    process.env.SKILL_OPT_NO_VERIFY = '1';
+  }
+  const observedRepair = repair as RepairRunOptions | undefined;
+  assert.equal(observedRepair?.chatOptions?.idleTimeoutMs, 0);
+  assert.equal(observedRepair?.chatOptions?.streamTimeoutMs, 900000);
+  assert.equal(observedRepair?.chatOptions?.signal, controller.signal);
+  assert.equal(observedRepair?.cancelSignal, controller.signal);
+  assert.ok(events.includes('done'));
+});
+
+test('an explicit deadline is surfaced as a timeout, never as a user cancellation', async () => {
+  const controller = new AbortController();
+  agent = async () => { throw Object.assign(new Error('opencode 执行超过 900000ms'), { code: 'AGENT_TIMEOUT' }); };
+  const events: string[] = [];
+  await assert.rejects(
+    () => bridge.streamSkillOptOpencode(options('deadline', controller.signal, mode => events.push(mode))),
+    /opencode 执行超过 900000ms/,
+  );
+  assert.equal(controller.signal.aborted, false);
+  assert.ok(!events.includes('done'));
+});
+
+test('external cancellation during a repair turn still rejects', async () => {
+  delete process.env.SKILL_OPT_NO_VERIFY;
+  selfVerify = async () => ({ ok: false, structural: { ok: false, failures: ['missing script'] }, failures: ['missing script'] });
+  const controller = new AbortController();
+  agent = async run => {
+    if (run.sessionTitle?.startsWith('skill-opt repair')) {
+      controller.abort(new Error('explicit repair cancellation'));
+      run.cancelSignal.throwIfAborted();
+    }
+    return { workspaceDir: directory, sessionId: 'main', output: 'candidate' };
+  };
+  const events: string[] = [];
+  try {
+    await assert.rejects(
+      () => bridge.streamSkillOptOpencode(options('repair-cancel', controller.signal, mode => events.push(mode))),
+      /explicit repair cancellation/,
+    );
+  } finally {
+    process.env.SKILL_OPT_NO_VERIFY = '1';
+  }
+  assert.ok(!events.includes('done'));
 });

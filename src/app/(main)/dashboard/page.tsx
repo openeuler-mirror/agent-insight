@@ -467,7 +467,7 @@ function ReliabilityTab({
             <section style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                 <div>
                     <div style={{ fontSize: 14, fontWeight: 800, color: "var(--foreground)" }}>可靠性</div>
-                    <div style={{ fontSize: 11, color: "var(--foreground-muted)", marginTop: 3 }}>数据源：链路跟踪中的 RAS anomaly / action_result 事件；无异常（含 unknown）按无故障计。</div>
+                    <div style={{ fontSize: 11, color: "var(--foreground-muted)", marginTop: 3 }}>数据源：链路追踪中的 RAS anomaly / action_result 事件；无异常（含 unknown）按无故障计。</div>
                 </div>
                 <span style={{ flex: 1 }} />
                 <ReliabilitySelect label="平台" value={platform} options={data.filters.platforms} onChange={onPlatformChange} />

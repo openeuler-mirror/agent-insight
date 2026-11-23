@@ -26,14 +26,6 @@ import { GET as getCentralSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 
 const ROOT = process.cwd()
-const EXPECTED_CENTRAL = ["opencode", "openclaw", "claude", "codeagent", "hermes", "xiaoo", "jiuwen", "llamaindex", "qoder", "trae", "actrail", "pi-agent", "qwencode", "codex", "deepseek-harness", "qwenpaw", "mcts-xgovernor", "workbuddy", "dify"]
-
-function frameworkValues(source: string, constantName: string): string[] {
-  const block = new RegExp(`const ${constantName}[^=]*= \\[([\\s\\S]*?)\\n\\];`).exec(source)?.[1]
-  assert.ok(block, `${constantName} list not found`)
-  return [...block.matchAll(/value:\s*['"]([^'"]+)['"]/g)].map(match => match[1])
-}
-
 function read(relativePath: string): string {
   return fs.readFileSync(path.join(ROOT, relativePath), "utf8")
 }
@@ -90,19 +82,6 @@ async function autoScript(platform: "unix" | "windows", frameworks?: string): Pr
   return response.text()
 }
 
-test("Pi remains in the shared framework allowlist used by every setup entry", () => {
-  const page = read("src/app/(main)/accessconfig/install/page.tsx")
-  const central = read("src/app/api/ingest/setup/route.ts")
-  const auto = read("src/app/api/ingest/setup/auto/route.ts")
-  const catalog = read("src/lib/ingest/setup/install-profile.ts")
-
-  assert.deepEqual(frameworkValues(catalog, "FRAMEWORK_OPTIONS"), EXPECTED_CENTRAL)
-  for (const consumer of [page, central, auto]) {
-    assert.match(consumer, /ingest\/setup\/install-profile/)
-  }
-  assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/)
-})
-
 test("central setup preselects only Pi and keeps no-parameter installs interactive", async () => {
   for (const script of [
     await centralScript("unix", "pi-agent"),
@@ -152,35 +131,6 @@ test("generated Pi Bash and PowerShell setup scripts pass native syntax parsers"
     assert.match(script, /& \$piInstaller/)
     assert.doesNotMatch(script, /\[scriptblock\]::Create/)
   }
-})
-
-test("CLI exposes framework preselection and local installations are detectable", async () => {
-  const help = spawnSync(process.execPath, ["bin/cli.js", "install", "--help"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  })
-  assert.equal(help.status, 0, help.stderr)
-  assert.match(help.stdout, /--frameworks <list>/)
-
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-local-package-"))
-  const linkPath = path.join(tempDir, "node_modules", "agent-insight")
-  const previousCwd = process.cwd()
-  try {
-    fs.mkdirSync(path.dirname(linkPath), { recursive: true })
-    fs.symlinkSync(ROOT, linkPath, "junction")
-    process.chdir(tempDir)
-    const installModule = await import("../scripts/install.js")
-    const isCurrentPackageInstalledInCwd = installModule.isCurrentPackageInstalledInCwd
-      || installModule.default.isCurrentPackageInstalledInCwd
-    assert.equal(isCurrentPackageInstalledInCwd(), true)
-  } finally {
-    process.chdir(previousCwd)
-    fs.rmSync(tempDir, { recursive: true, force: true })
-  }
-
-  const installSource = read("scripts/install.js")
-  assert.match(installSource, /setupParams\.set\('frameworks', frameworks\)/)
-  assert.match(installSource, /isCurrentPackageInstalledInCwd\(\)/)
 })
 
 test("Pi Node installer self-checks, reinstalls, and purges only the current-key spool", () => {

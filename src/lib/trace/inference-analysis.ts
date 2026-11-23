@@ -25,6 +25,10 @@ export interface InferenceAnalysisCall {
     model?: string;
     messageId?: string;
     sessionId?: string;
+    /** Exact X-Request-Id returned by the model service for this attempt. */
+    upstreamRequestId?: string;
+    /** Response layer that produced `upstreamRequestId`. */
+    upstreamRequestSource?: string;
 }
 
 export interface InferenceAnalysisTarget {
@@ -41,6 +45,12 @@ export interface InferenceAnalysisTarget {
 }
 
 const text = (value?: string) => value?.trim() || undefined;
+
+/** Unique model-service response header IDs owned by this LLM interaction. */
+export function interactionUpstreamRequestIds(interaction?: RawInteraction): string[] {
+    if (!interaction) return [];
+    return [...new Set(ownedCalls(interaction).map(call => call.upstreamRequestId).filter((id): id is string => !!id))];
+}
 
 function ownedCalls(interaction: RawInteraction): InferenceAnalysisCall[] {
     const calls = new Map<string, InferenceAnalysisCall>();
@@ -62,11 +72,27 @@ function ownedCalls(interaction: RawInteraction): InferenceAnalysisCall[] {
         if (!callId || (requestId && text(attempt.request_id) !== requestId)) continue;
         const startedAt = text(attempt.started_at);
         const state = text(attempt.state);
+        const upstreamRequestId = text(attempt.upstream_request_id);
         calls.set(callId, {
             ...calls.get(callId), callId, ...context,
             ...(startedAt ? { startedAt } : {}),
             ...(Number.isFinite(attempt.status_code) ? { statusCode: attempt.status_code } : {}),
             ...(state ? { state } : {}),
+            ...(upstreamRequestId ? { upstreamRequestId } : {}),
+            ...(upstreamRequestId && text(attempt.upstream_request_id_source)
+                ? { upstreamRequestSource: text(attempt.upstream_request_id_source) }
+                : {}),
+        });
+    }
+    for (const entry of interaction.inference_upstream_request_ids ?? []) {
+        const callId = text(entry.call_id);
+        const upstreamRequestId = text(entry.request_id);
+        // Never attach a service ID to a call this interaction does not own.
+        if (!callId || !upstreamRequestId || !calls.has(callId)) continue;
+        calls.set(callId, {
+            ...calls.get(callId), callId,
+            upstreamRequestId,
+            ...(text(entry.source) ? { upstreamRequestSource: text(entry.source) } : {}),
         });
     }
     return [...calls.values()];
@@ -107,12 +133,14 @@ export function inferenceAnalysisTarget({ framework, scope, rootSessionId, inter
                 const startedAt = text(call.started_at);
                 const state = text(call.state);
                 const sessionId = text(item.inference_session_id);
+                const upstreamRequestId = text(call.upstream_request_id);
                 byId.set(callId, {
                     ...byId.get(callId), callId, unassigned: true,
                     ...(startedAt ? { startedAt } : {}),
                     ...(Number.isFinite(call.status_code) ? { statusCode: call.status_code } : {}),
                     ...(state ? { state } : {}),
                     ...(sessionId ? { sessionId } : {}),
+                    ...(upstreamRequestId ? { upstreamRequestId } : {}),
                 });
             }
         }

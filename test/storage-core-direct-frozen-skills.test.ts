@@ -1,3 +1,4 @@
+import { getModelClientConfig } from '../src/lib/server/model-client';
 import {configuredModelFetchFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -5,7 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import {AsyncLocalStorage} from 'node:async_hooks';
-function moduleAt(path:string,deps:Record<string,unknown>){const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(name:string)=>name==='@/lib/server/configured-model-fetch'?{configuredModelFetch:configuredModelFetchFixture}:deps[name]||{},JSON,structuredClone,Map,Set,console});return module.exports as Record<string,Function>;}
+function moduleAt(path:string,deps:Record<string,unknown>){const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(name:string)=>name==='@/lib/server/model-client'?{getModelClientConfig}:name==='@/lib/server/configured-model-fetch'?{configuredModelFetch:configuredModelFetchFixture}:deps[name]||{},JSON,structuredClone,Map,Set,console});return module.exports as Record<string,Function>;}
 test('direct Skill context and missing-flow parse use frozen catalog and ephemeral parsed flow',async()=>{
  const catalog=moduleAt('src/lib/eval/frozen-skill-catalog.ts',{'node:async_hooks':{AsyncLocalStorage}});let legacy=0;let parses=0;let options:unknown;
  const algorithm=moduleAt('src/lib/engine/evaluation/key-action-trace-analysis.ts',{'@/lib/storage/prisma':{db:new Proxy({},{get(){legacy++;throw Error('Live Skill storage forbidden');}})},'@/lib/eval/frozen-skill-catalog':catalog,'@/lib/engine/observability/skill-scope':{getRootSkillFromInteractions:()=>null},'@/lib/engine/observability/flow-parser':{parseSkillFlow:async(_content:string,_id:string,_version:number,_user:string,config:unknown)=>{parses++;options=config;return {success:true,flow:{steps:[{id:'step',name:'Frozen action',description:'frozen',weight:1}]},mermaidCode:'flowchart TD'};},extractKeyActionsFromFlow:()=>[{id:'action',content:'frozen',weight:1,controlFlowType:'required'}]}});

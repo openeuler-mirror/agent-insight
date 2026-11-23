@@ -16,8 +16,9 @@
 
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatOpenAI } from "@langchain/openai";
-import { getModelFetch, isClaudeFixedSamplingModel } from "@/lib/server/model-fetch";
-import { normalizeModelBaseUrl } from "@/lib/shared/model-connection";
+import { isClaudeFixedSamplingModel } from "@/lib/server/model-fetch";
+import { getModelClientConfig, getModelClientFetch } from "@/lib/server/model-client";
+import { getModelSdkApiKey, getModelAuthHeaders, normalizeModelBaseUrl, type ModelProtocol } from "@/lib/shared/model-connection";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger("skill-generation:model");
@@ -37,6 +38,7 @@ export interface ModelOptions {
    * deepseek"启发式，保证老调用方不破。
    */
   provider?: string;
+  protocol?: ModelProtocol;
 }
 
 /**
@@ -48,6 +50,7 @@ export interface ModelOptions {
  *   env 兜底场景搞坏。
  */
 function shouldUseOpenAICompatible(opts: ModelOptions): boolean {
+  if (opts.protocol) return opts.protocol === 'openai-compatible';
   if (opts.provider) {
     return opts.provider.toLowerCase() !== "anthropic";
   }
@@ -80,8 +83,8 @@ export function createModel(opts: ModelOptions) {
     logger.log("Using OpenAI-compatible model client", { modelId, baseUrl: baseURL ?? "<openai-default>" });
     return new ChatOpenAI({
       modelName: modelId,
-      apiKey: opts.apiKey,
-      configuration: { baseURL, defaultHeaders: opts.headers, fetch: getModelFetch() },
+      apiKey: getModelSdkApiKey(opts),
+      configuration: getModelClientConfig({ ...opts, baseUrl: baseURL }),
       useResponsesApi: /^gpt-6(?:[.-]|$)/i.test(modelId)
         && /^https:\/\/api\.openai\.com(?:\/|$)/i.test(baseURL ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com"),
       temperature,
@@ -92,10 +95,11 @@ export function createModel(opts: ModelOptions) {
   logger.log("Using Anthropic model client", { modelId });
   return new ChatAnthropic({
     model: modelId,
-    anthropicApiKey: opts.apiKey,
+    anthropicApiKey: getModelSdkApiKey(opts),
     // The native SDK appends /v1/messages to its base URL.
     anthropicApiUrl: normalizeModelBaseUrl(opts.baseUrl)?.replace(/\/v1$/i, ""),
-    clientOptions: { fetch: getModelFetch() },
+    clientOptions: { authToken: null, defaultHeaders: { 'x-api-key': null, authorization: null, ...getModelAuthHeaders(opts, 'anthropic') },
+      fetch: getModelClientFetch({ ...opts, protocol: 'anthropic' }) },
     temperature: isClaudeFixedSamplingModel(modelId) ? undefined : temperature,
   });
 }

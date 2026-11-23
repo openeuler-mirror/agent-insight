@@ -374,6 +374,11 @@ class PlatformControls:
                 if len(rows)>MAX_RECORDS:raise StorageError('Collector tag lookup exceeds scope budget')
                 selected=next((data for row in rows if (data:=json.loads(row[0])).get('opencodeSessionId')==session),None)
                 return {'tag':{field:selected.get(field) for field in ('agentName','agentTraceSkill','user')} if selected else None}
+        if action=='builtin_demo_cleanup':
+            if not trusted or preparation or write_prior or self.capability:raise Forbidden('Private demo cleanup required')
+            if body:raise ValueError('Demo cleanup accepts no selectors')
+            from .builtin_demo import cleanup
+            return cleanup(self,token,workspace)
         if action=='agent_delete':
             if not trusted or preparation or write_prior or self.capability:raise Forbidden('Verified Agent deletion producer required')
             if set(body)!={'agent_id','trace_ids'} or not isinstance(body['trace_ids'],list) or len(body['trace_ids'])>MAX_RECORDS:raise ValueError('Bounded Agent deletion required')

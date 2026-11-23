@@ -11,7 +11,7 @@ This reference covers common platform settings. Clients and the Evaluator are se
 
 The launch environment selects `AGENT_INSIGHT_HOME`, defaulting to the runtime user's `~/.agent-insight`; the platform then reads its `.env`. Set the root through the startup command, systemd, or Docker environment. A root's own `.env` cannot select itself.
 
-For npm CLI startup, port precedence is `--port`, process `AGENT_INSIGHT_PORT`, runtime-root `.env`, then `3000`. SQLite `DATABASE_URL` uses the process value before `.env`, with an empty value selecting the default path. Source `scripts/start.sh` preserves these explicit launch overrides too. Do not generalize this precedence to every setting or independent service.
+For npm CLI startup, port precedence is `--port`, process `AGENT_INSIGHT_PORT`, runtime-root `.env`, then `3000`. Database connections belong to the Storage Core configuration; Web does not use `DATABASE_URL` as a legacy application database. Source `scripts/start.sh` preserves these explicit launch overrides too. Do not generalize this precedence to every setting or independent service.
 
 `.env.example` is a template used to initialize missing runtime settings. Editing it does not update an existing runtime `.env`. Platform changes usually require restart; frontend build settings require rebuilding. Evaluation connection hot reload is described below.
 
@@ -21,10 +21,9 @@ For npm CLI startup, port precedence is `--port`, process `AGENT_INSIGHT_PORT`, 
 | --- | --- | --- |
 | `AGENT_INSIGHT_HOME` | Runtime root, default `~/.agent-insight` | Launch environment; prefer an absolute path. Contains `.env` and `data/`, not necessarily the checkout |
 | `AGENT_INSIGHT_PORT` | Platform HTTP port, default `3000` | Platform settings or process environment; integer `1`–`65535`, overridden by `--port` |
-| `DATABASE_URL` | SQLite URL; empty uses root `data/witty_insight.db` | Prefer `file:/absolute/path`; inspect old absolute paths when moving the root |
-| `DB_HOST` | Optional OpenGauss host, no default | Set only for that database deployment and check all connection fields |
-| `DB_PORT` | OpenGauss port | Set explicitly: platform default is `5432`, initialization-script default is `26000`; match the actual instance |
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Template defaults database to `postgres`, user to `omm`, no password default | Store credentials only in actual deployment settings; SQLite copying is not an external-database backup |
+| `AGENT_INSIGHT_STORAGE_CORE_URL` | Required local Core HTTP origin | Transactional and ClickHouse connections belong to Core; see [Storage Core](./storage-core.md) |
+| `AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE` | Private controller credential file | Server-only; must match Core `controller_key_file` |
+| `DATABASE_URL` / `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Legacy database tooling | Explicit offline migration or isolated historical fixtures only; cannot enable single-database runtime storage |
 | `AGENT_INSIGHT_CONFIG_DIR` | Benchmark configuration directory; empty uses installation `config/benchmark/` | Use an absolute override. This is not the runtime root and does not replace its `.env` |
 | `NEXT_PUBLIC_URL_PREFIX` | Frontend URL prefix | Rebuild after changing it. Source startup uses the prefix recorded in the build to check page readiness. |
 
@@ -32,7 +31,7 @@ Removed `AGENT_INSIGHT_DATA_DIR` must become `AGENT_INSIGHT_HOME` while retainin
 
 ## Models and clients
 
-Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1`. Reading later groups stops when a group lacks `NAME`, `PROVIDER`, or `API_KEY`. Explicitly provide `BASE_URL` and `MODEL` rather than assuming every calling path chooses identical provider defaults. Environment-defined models are read-only in the UI; users can add their own through [model registration, Chinese](../../../zh/how-to/platform/settings/model-registry.md).
+Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1`. Reading later groups stops when a group lacks `NAME` or `PROVIDER`. Explicitly provide `BASE_URL` and `MODEL` rather than assuming every calling path chooses identical provider defaults. `API_KEY` may be empty, generating no default authentication header. Optional `PROTOCOL` is `openai-compatible` or `anthropic`; omission keeps legacy behavior. Optional `HEADERS` is a JSON object of custom headers, overriding same-name standard headers. Environment-defined models are read-only in the UI; users can add their own through [model registration, Chinese](../../../zh/how-to/platform/settings/model-registry.md).
 
 See [client installation, Chinese](../../../zh/how-to/platform/settings/access-control.md) for addresses and Keys. Each client has its own environment. Do not share one runtime directory across machines or instances; use separate roots, databases, and ports.
 

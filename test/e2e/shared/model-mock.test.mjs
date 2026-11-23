@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {coreMockReply} from './model-mock.mjs';
 const tools=[{type:'function',function:{name:'shell',parameters:{type:'object',properties:{command:{type:'string'}}}}},{type:'function',function:{name:'skill',parameters:{type:'object',properties:{id:{type:'string'}}}}}];
+test('product model connection probe receives OK from the Mock model',()=>{
+ const r=coreMockReply({model:'deepseek-flash',messages:[{role:'user',content:'Reply with OK.'}],max_tokens:128});assert.equal(r.content,'OK');
+});
 test('native preparation probe returns the requested marker even with tools enabled',()=>{
  const r=coreMockReply({tools,messages:[{role:'user',content:'请只回复 CLIENT-READY-mock-six-001-ras'}]});assert.equal(r.content,'CLIENT-READY-mock-six-001-ras');
 });

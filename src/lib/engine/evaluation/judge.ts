@@ -1,4 +1,3 @@
-import {configuredModelFetch} from '@/lib/server/configured-model-fetch';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -15,6 +14,8 @@ import {configuredModelFetch} from '@/lib/server/configured-model-fetch';
  * limitations under the License.
  */
 
+import { getModelClientConfig } from '@/lib/server/model-client';
+
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 import {randomUUID} from 'node:crypto';
 import {getTrustedCoreAgentContext} from '@/lib/engine/general-agent/trusted-context';
@@ -25,7 +26,6 @@ import fs from 'fs';
 import { OpenAI } from "openai";
 import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
-import { getModelFetch } from '@/lib/server/model-fetch';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import {
     attachFailureAnchors,
@@ -86,7 +86,7 @@ function rethrowCoreJudgmentFailure(error: unknown) {
 async function getLlmClient(user?: string | null):Promise<{client:JudgeLlmClient;model:string}|{client:null;model:null}> {
     const trusted=getTrustedCoreAgentContext();
     if (trusted) {
-        const client=new OpenAI({apiKey:trusted.trustedModel.apiKey||'no-api-key-required',baseURL:trusted.trustedModel.baseURL,defaultHeaders:trusted.trustedModel.headers,fetch:configuredModelFetch(trusted.trustedModel),maxRetries:0});
+        const client=new OpenAI({...getModelClientConfig({ ...trusted.trustedModel, baseUrl: trusted.trustedModel.baseURL }),maxRetries:0});
         const recorded:JudgeLlmClient={apiKey:client.apiKey,chat:{completions:{create:async(body,options)=>executeCoreFlowModelCall(body,async()=>{
             trusted.cancelSignal?.throwIfAborted();
             const startedAt=new Date().toISOString();let response:OpenAI.Chat.Completions.ChatCompletion|undefined;let failure:unknown;let failed=false;
@@ -111,15 +111,11 @@ async function getLlmClient(user?: string | null):Promise<{client:JudgeLlmClient
         return { client: null, model: null };
     }
 
-    const apiKey = config.apiKey || 'no-api-key-required';
     const baseURL = config.baseUrl || "https://api.deepseek.com";
     
     return {
         client: new OpenAI({
-            apiKey, 
-            baseURL,
-            defaultHeaders: config.headers,
-            fetch: configuredModelFetch(config),
+            ...getModelClientConfig({ ...config, baseUrl: baseURL }),
         }),
         model: config.model || "deepseek-chat"
     };

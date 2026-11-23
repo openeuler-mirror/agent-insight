@@ -1,3 +1,4 @@
+import { getModelClientConfig } from '../src/lib/server/model-client';
 import {configuredModelFetchFixture} from './helpers/storage-core-vm';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -6,7 +7,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import {randomUUID,createHash} from 'node:crypto';
 import {AsyncLocalStorage} from 'node:async_hooks';
-function load(file:string,deps:Record<string,unknown>){const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(name:string)=>name==='@/lib/server/configured-model-fetch'?{configuredModelFetch:configuredModelFetchFixture}:deps[name]??{},console,JSON,Buffer,process,Date,Map,Set,URL,Request,Response,fetch,structuredClone,setTimeout,clearTimeout,AbortController,AbortSignal});return module.exports as Record<string,Function>;}
+function load(file:string,deps:Record<string,unknown>){const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module,exports:module.exports,require:(name:string)=>name==='@/lib/server/model-client'?{getModelClientConfig}:name==='@/lib/server/configured-model-fetch'?{configuredModelFetch:configuredModelFetchFixture}:deps[name]??{},console,JSON,Buffer,process,Date,Map,Set,URL,Request,Response,fetch,structuredClone,setTimeout,clearTimeout,AbortController,AbortSignal});return module.exports as Record<string,Function>;}
 function flowFixture(){
  let legacy=0,recorded=0,modelCalls=0;let recorderError=false;const trusted={trustedModel:{modelID:'frozen-model',baseURL:'http://model',apiKey:'key'},recordCoreTrace:async()=>{recorded++;if(recorderError)throw Object.assign(new Error('record unavailable'),{status:503});}};
  class Model{apiKey='key';chat={completions:{create:async()=>{modelCalls++;return {choices:[{message:{content:'{"matches":[],"summary":{"overallScore":1},"problemSteps":[],"skippedExpectedSteps":[]}'}}]};}}};}

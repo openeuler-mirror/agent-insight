@@ -1,3 +1,4 @@
+import { getModelClientConfig } from '../src/lib/server/model-client';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -21,6 +22,7 @@ function harness(options:{core?:boolean;abort?:boolean;recordError?:boolean;chat
   '@/lib/engine/general-agent/trusted-context':trustedContext,
   '@langchain/openai':{ChatOpenAI:class{constructor(value:any){calls.models.push(value);}async invoke(messages:any,invokeOptions:any){calls.direct++;calls.directMessages.push(messages);if(options.core!==false)assert.ok(invokeOptions.signal);if(options.abort)controller.abort(Error('lease lost'));if(options.directError)throw Error('direct provider failed api-secret');return{content:answer,usage_metadata:{input_tokens:4,output_tokens:3,total_tokens:7}};}}},
   '@langchain/core/messages':{HumanMessage:class{constructor(readonly content:any){}},SystemMessage:class{constructor(readonly content:any){}}},
+  '@/lib/server/model-client':{getModelClientConfig},
   '@/lib/server/model-fetch':{getModelFetch:()=>fetch},
   './cancellation-context':{experimentSignal:()=>undefined},
   './evaluation-attempt':{evaluationAttemptSignal:()=>undefined,remainingEvaluationTimeMs:()=>undefined,trackEvaluationRequest:async(action:any)=>action()},

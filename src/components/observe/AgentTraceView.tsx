@@ -20,8 +20,9 @@ import { ScrollContinuation } from './ScrollContinuation';
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
 import { InferenceAnalysisButton } from './InferenceAnalysisButton';
-import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
+import { inferenceAnalysisTarget, interactionUpstreamRequestIds } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
@@ -344,10 +345,10 @@ function getAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
     return roots;
 }
 
-type TraceTreeFilters = { treeKindFilter: string; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
+type TraceTreeFilters = { treeKindFilter: string[]; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
 
 function traceAgentMatchesFilters(node: AgentNode, filters: TraceTreeFilters): boolean {
-    if (filters.treeKindFilter !== 'all' || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
+    if (filters.treeKindFilter.length > 0 || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
     const duration = getAgentActiveDurationMs(node);
     if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
     if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
@@ -361,7 +362,7 @@ function traceEventMatchesFilters(
     const child = event.spawnedChildId ? nodes.get(event.spawnedChildId) : undefined;
     const duration = event.kind === 'task' ? getAgentActiveDurationMs(child)
         : event.startedAt != null && event.completedAt != null ? event.completedAt - event.startedAt : undefined;
-    if (filters.treeKindFilter !== 'all' && event.kind !== filters.treeKindFilter) return false;
+    if (filters.treeKindFilter.length > 0 && !filters.treeKindFilter.includes(event.kind)) return false;
     if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
     if (filters.minTokenK > 0 && (event.usage?.total || 0) < filters.minTokenK * 1000) return false;
     if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
@@ -420,6 +421,8 @@ type SubtreeStats = {
     cacheWriteTokens: number;
     reasoningTokens: number;
     totalTokens: number;
+    /** 至少一次 LLM 调用带回了非零 usage；全 0 且未上报时界面显示「未提供」。 */
+    usageReported: boolean;
 };
 
 const subtreeStatsCache = new WeakMap<AgentNode, SubtreeStats>();
@@ -438,6 +441,7 @@ function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
         cacheWriteTokens: node.stats.cacheWriteTokens,
         reasoningTokens: node.stats.reasoningTokens,
         totalTokens: node.stats.totalTokens,
+        usageReported: node.stats.usageReported === true,
     };
     for (const child of node.children) {
         const c = aggregateSubtreeStats(child);
@@ -452,6 +456,7 @@ function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
         stats.cacheWriteTokens += c.cacheWriteTokens;
         stats.reasoningTokens += c.reasoningTokens;
         stats.totalTokens += c.totalTokens;
+        stats.usageReported = stats.usageReported || c.usageReported;
     }
     subtreeStatsCache.set(node, stats);
     return stats;
@@ -579,7 +584,8 @@ interface TraceCtxValue {
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
-    treeKindFilter: string;
+    treeKindFilter: string[];
+    revealAllSpans: boolean;
     minDurationMs: number;
     minTokenK: number;
     slowOnly: boolean;
@@ -596,7 +602,7 @@ interface TraceCtxValue {
 
 const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
-    treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
+    treeKindFilter: [], revealAllSpans: false, minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
     topNDuration: [], topNTokens: [], slowNodesList: [], rasNodeList: [],
     onSubagentNavigate: undefined,
@@ -778,11 +784,34 @@ export default function AgentTraceView({
     // ── Search + extended filter state ──────────────────────────────────────
     const [searchQuery, setSearchQuery] = useState('');
     const [searchMatchIdx, setSearchMatchIdx] = useState(0);
-    const [treeKindFilter, setTreeKindFilter] = useState('all');
+    const [treeKindFilter, setTreeKindFilter] = useState<string[]>([]);
     const [minDurationMs, setMinDurationMs] = useState(0);
     const [minTokenK, setMinTokenK] = useState(0);
     const [showFilters, setShowFilters] = useState(false);
     const searchInputRef = React.useRef<HTMLInputElement>(null);
+    const spanTraceKey = stableTraceIdentity ?? rootSessionId ?? tree?.id ?? null;
+    const [spanTailTrace, setSpanTailTrace] = useState<string | null>(null);
+    const revealAllSpans = spanTraceKey !== null && spanTailTrace === spanTraceKey;
+    const revealSpanRows = useCallback(() => {
+        if (spanTraceKey !== null) setSpanTailTrace(spanTraceKey);
+    }, [spanTraceKey]);
+    useEffect(() => { setSpanTailTrace(null); }, [spanTraceKey]);
+    const spanViewportRef = React.useRef<TraceSpanViewportHandle>(null);
+    const spanFocusKeyRef = React.useRef<string | null>(null);
+    const spanJumpTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelPendingSpanJump = useCallback(() => {
+        if (spanJumpTimerRef.current !== null) clearTimeout(spanJumpTimerRef.current);
+        spanJumpTimerRef.current = null;
+    }, []);
+    useEffect(() => {
+        spanFocusKeyRef.current = null;
+        return cancelPendingSpanJump;
+    }, [stableTraceIdentity, cancelPendingSpanJump]);
+    const captureSpanContext = useCallback(() => {
+        cancelPendingSpanJump();
+        spanViewportRef.current?.captureAnchor(spanFocusKeyRef.current);
+        revealSpanRows();
+    }, [cancelPendingSpanJump, revealSpanRows]);
 
     const defaultExpandedKeys = useMemo(() => tree ? buildDefaultExpandedKeys(tree) : new Set<string>(), [tree]);
 
@@ -829,7 +858,7 @@ export default function AgentTraceView({
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
-        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0;
+        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0, usageReported = false;
         walkTree(tree, n => {
             agents++;
             tasks += n.stats.taskCalls;
@@ -838,13 +867,17 @@ export default function AgentTraceView({
             skills += n.stats.skillCalls;
             llm += n.stats.llmCalls;
             tokens += n.stats.totalTokens;
+            usageReported = usageReported || n.stats.usageReported === true;
         });
-        return { agents, tasks, chains, tools, skills, llm, tokens };
+        return { agents, tasks, chains, tools, skills, llm, tokens, usageReported };
     }, [tree]);
     const tokenUsageEstimated = useMemo(
         () => interactions.some(interaction => interaction.usage?.estimated === true),
         [interactions],
     );
+    // 汇总为 0 且没有任何一次调用上报 usage 时，说明上游没提供用量；此时不能把
+    // 0 当成有效值展示（CLI 模式丢失 message.updated 的典型表现）。
+    const tokensNotProvided = Boolean(totalStats && totalStats.tokens === 0 && !totalStats.usageReported);
 
     const traceTimeline = useMemo(
         () => resolveTraceTimelineBounds(tree, executionDurationMs),
@@ -1023,6 +1056,8 @@ export default function AgentTraceView({
         return { allSpans: spans, rasNodeList: rasList };
     }, [tree, nodeMap, rasMarkers]);
 
+    const spanContentKeys = useMemo(() => allSpans.map(span => span.key), [allSpans]);
+
     const searchMatches = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
         if (!q) return [];
@@ -1038,16 +1073,21 @@ export default function AgentTraceView({
         setExpandedKeys(prev => {
             const next = new Set(prev);
             searchMatches.forEach(m => m.parentKeys.forEach(pk => next.add(pk)));
-            return next;
+            return sameStringSet(prev, next) ? prev : next;
         });
     }, [searchMatches]);
 
     useEffect(() => {
         if (!activeMatchKey) return;
-        setTimeout(() => {
+        spanFocusKeyRef.current = activeMatchKey;
+        spanViewportRef.current?.pauseFollowing();
+        cancelPendingSpanJump();
+        spanJumpTimerRef.current = setTimeout(() => {
+            spanJumpTimerRef.current = null;
             document.querySelector(`[data-span-key="${activeMatchKey}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
-    }, [activeMatchKey]);
+        return cancelPendingSpanJump;
+    }, [activeMatchKey, cancelPendingSpanJump]);
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
@@ -1073,16 +1113,20 @@ export default function AgentTraceView({
     }, [allSpans]);
 
     const onJumpToKey = (key: string) => {
+        spanFocusKeyRef.current = key;
+        spanViewportRef.current?.pauseFollowing();
+        cancelPendingSpanJump();
         const span = allSpans.find(s => s.key === key);
         if (span) {
             setExpandedKeys(prev => {
                 const next = new Set(prev);
                 span.parentKeys.forEach(pk => next.add(pk));
-                return next;
+                return sameStringSet(prev, next) ? prev : next;
             });
         }
         setSelectedKey(key);
-        setTimeout(() => {
+        spanJumpTimerRef.current = setTimeout(() => {
+            spanJumpTimerRef.current = null;
             document.querySelector(`[data-span-key="${key}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
     };
@@ -1106,14 +1150,18 @@ export default function AgentTraceView({
         framework: framework?.trim().toLowerCase(),
         rootSessionId,
         searchQuery, matchedKeys, activeMatchKey,
-        treeKindFilter, minDurationMs, minTokenK, slowOnly,
+        treeKindFilter, revealAllSpans, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
         onSubagentNavigate: onSubagentNavigate ? navigateToAgentTrace : undefined,
         loadFullContext: ensureAllInteractionsLoaded,
         findEventAnomalies,
     };
 
-    const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
+    const scrollNavigationKey = useMemo(() => ({
+        searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly,
+    }), [searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly]);
+
+    const hasActiveFilters = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0 || slowOnly;
 
     if (!tree || !selectedAgentNode) {
         return (
@@ -1126,7 +1174,7 @@ export default function AgentTraceView({
     return (
         <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
             <TraceCtx.Provider value={ctxValue}>
-            <div className="@container/agent-trace flex min-w-0 flex-col gap-2.5">
+            <div className="@container/agent-trace flex h-full min-h-0 min-w-0 flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1137,7 +1185,7 @@ export default function AgentTraceView({
             )}
             {/* Stats bar */}
             {totalStats && (
-                <div className="flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
+                <div className="flex shrink-0 flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
                     <StatChip label="AGENTS" value={totalStats.agents} />
                     <Sep />
                     <StatChip label="TASK SPAWNS" value={totalStats.tasks} accentClass={KIND_META.task.text} isActive={eventTypeFilter === 'task'} onClick={() => handleStatChipClick('task')} hint={tt('traceTree.filterType') + ' Task'} />
@@ -1148,8 +1196,12 @@ export default function AgentTraceView({
                     <Sep />
                     <StatChip
                         label="TOKENS"
-                        value={`${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
-                        hint={tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                        value={tokensNotProvided
+                            ? tt('traceTree.tokensNotProvided')
+                            : `${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
+                        hint={tokensNotProvided
+                            ? tt('traceTree.tokensNotProvidedHint')
+                            : tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
                     />
                     {eventTypeFilter !== 'all' && (
                         <Button variant="ghost" size="sm" onClick={() => setEventTypeFilter('all')} className="ml-auto h-6 text-xs">
@@ -1159,7 +1211,7 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className="grid min-w-0 grid-cols-1 gap-3 @min-[900px]/agent-trace:min-h-[520px] @min-[900px]/agent-trace:h-[calc(100vh-200px)] @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
+            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
                 {/* ─── Left: Unified Span Tree ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     {['qoder', 'opencode'].includes(ctxValue.framework || '') && (
@@ -1169,7 +1221,7 @@ export default function AgentTraceView({
                     )}
                     {/* Toolbar: expand/collapse + search + filters */}
                     <div className={cn(
-                        'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
+                        'flex shrink-0 flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
                         <TermPopover
@@ -1197,10 +1249,10 @@ export default function AgentTraceView({
                                 ref={searchInputRef}
                                 type="text"
                                 value={searchQuery}
-                                onChange={e => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
+                                onChange={e => { if (searchQuery.trim() && !e.target.value.trim()) captureSpanContext(); setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
                                 onKeyDown={e => {
                                     if (e.key === 'Enter' && !e.nativeEvent.isComposing) setSearchMatchIdx(i => e.shiftKey ? i - 1 : i + 1);
-                                    if (e.key === 'Escape') { setSearchQuery(''); setSearchMatchIdx(0); }
+                                    if (e.key === 'Escape') { if (searchQuery.trim()) captureSpanContext(); setSearchQuery(''); setSearchMatchIdx(0); }
                                 }}
                                 placeholder={tt('traceTree.searchPlaceholder')}
                                 className="flex-1 border-0 bg-transparent outline-none text-xs text-foreground min-w-0"
@@ -1217,7 +1269,7 @@ export default function AgentTraceView({
                                 </>
                             )}
                             {searchQuery && (
-                                <button onClick={() => { setSearchQuery(''); setSearchMatchIdx(0); }} aria-label="Clear" className="px-0.5 bg-transparent border-0 text-foreground-muted hover:text-foreground cursor-pointer text-xs leading-none shrink-0">
+                                <button onClick={() => { captureSpanContext(); setSearchQuery(''); setSearchMatchIdx(0); }} aria-label="Clear" className="px-0.5 bg-transparent border-0 text-foreground-muted hover:text-foreground cursor-pointer text-xs leading-none shrink-0">
                                     <XIcon className="size-3" />
                                 </button>
                             )}
@@ -1227,7 +1279,7 @@ export default function AgentTraceView({
                         <Button
                             variant={slowOnly ? 'default' : 'outline'}
                             size="sm"
-                            onClick={() => setSlowOnly(b => !b)}
+                            onClick={() => { captureSpanContext(); setSlowOnly(b => !b); }}
                             className={cn(
                                 'h-7 text-xs px-2 gap-1',
                                 slowOnly && 'bg-warning text-warning-foreground hover:bg-warning/90 border-warning',
@@ -1260,16 +1312,16 @@ export default function AgentTraceView({
 
                     {/* Extended filter row */}
                     {(showFilters || hasActiveFilters) && (
-                        <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
-                            <FilterPill label={tt('traceTree.filterType')} value={treeKindFilter} options={[
+                        <div className="flex shrink-0 flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
+                            <FilterPill multiple label={tt('traceTree.filterType')} value={treeKindFilter} options={[
                                 { value: 'all', label: tt('traceTree.filterAll') },
+                                { value: 'user', label: 'User' },
                                 { value: 'llm', label: 'LLM', accentClass: KIND_META.llm.text },
                                 { value: 'tool', label: 'Tool', accentClass: KIND_META.tool.text },
                                 { value: 'task', label: 'Task', accentClass: KIND_META.task.text },
                                 ...((totalStats?.chains || 0) > 0 ? [{ value: 'chain', label: 'Chain', accentClass: KIND_META.chain.text }] : []),
                                 { value: 'skill', label: 'Skill', accentClass: KIND_META.skill.text },
-                                { value: 'user', label: 'User' },
-                            ]} onChange={setTreeKindFilter} />
+                            ]} onChange={value => { captureSpanContext(); setTreeKindFilter(value); }} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
@@ -1278,16 +1330,16 @@ export default function AgentTraceView({
                                 { value: '10000', label: '>10s' },
                                 { value: '30000', label: '>30s' },
                                 { value: String(SLOW_MS), label: '>60s' },
-                            ]} onChange={v => setMinDurationMs(Number(v))} />
+                            ]} onChange={v => { if (Number(v) !== minDurationMs) captureSpanContext(); setMinDurationMs(Number(v)); }} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterToken')} value={String(minTokenK)} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
                                 { value: '10', label: '>10k' },
                                 { value: '50', label: '>50k' },
                                 { value: '100', label: '>100k' },
-                            ]} onChange={v => setMinTokenK(Number(v))} />
+                            ]} onChange={v => { if (Number(v) !== minTokenK) captureSpanContext(); setMinTokenK(Number(v)); }} />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={() => { setTreeKindFilter('all'); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={() => { captureSpanContext(); setTreeKindFilter([]); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
                                     <XIcon className="size-3" />{tt('traceTree.resetFilter')}
                                 </Button>
                             )}
@@ -1295,15 +1347,22 @@ export default function AgentTraceView({
                     )}
 
                     {/* Column headers */}
-                    <div className="flex items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
+                    <div className="flex shrink-0 items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
                         <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
                         <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
-                        <span className="w-11 text-right">{tt('traceTree.spanTokens')}</span>
+                        <span className="w-16 text-right">{tt('traceTree.spanTokens')}</span>
                         <span className="w-2" />
                     </div>
 
-                    <div role="tree" className="overflow-y-auto overflow-x-auto flex-1 py-1">
+                    <TraceSpanViewport
+                        key={stableTraceIdentity ?? rootSessionId ?? tree.id}
+                        ref={spanViewportRef}
+                        navigationKey={scrollNavigationKey}
+                        contentKeys={spanContentKeys}
+                        onFollowingLatest={revealSpanRows}
+                        onUserNavigation={cancelPendingSpanJump}
+                    >
                         <UnifiedSpanTree
                             key={stableTraceIdentity ?? 'trace'}
                             node={tree}
@@ -1311,15 +1370,15 @@ export default function AgentTraceView({
                             expandedKeys={expandedKeys}
                             onToggleKey={toggleKey}
                             selectedKey={selectedKey}
-                            onSelect={key => { setSelectedKey(key); }}
+                            onSelect={key => { spanFocusKeyRef.current = key; cancelPendingSpanJump(); spanViewportRef.current?.pauseFollowing(); setSelectedKey(key); }}
                             totalStart={totalStart}
                             totalDuration={totalDuration}
                             depth={0}
                             isLast={true}
                             prefixBits={[]}
                         />
-                        {loadMoreSpans && <ScrollContinuation network onMore={loadMoreSpans} busy={loadingMoreSpans} error={moreSpansError} count={sourceInteractions.length} />}
-                    </div>
+                        {loadMoreSpans && <ScrollContinuation network onMore={() => { spanViewportRef.current?.pauseFollowing(); loadMoreSpans(); }} busy={loadingMoreSpans} error={moreSpansError} count={sourceInteractions.length} />}
+                    </TraceSpanViewport>
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}
@@ -1383,25 +1442,34 @@ export default function AgentTraceView({
 }
 
 // ─── FilterPill ──────────────────────────────────────────────────────────────
-function FilterPill({ label, value, options, onChange, disabled = false }: {
+function FilterPill(props: {
     label: string;
-    value: string;
     options: { value: string; label: string; accentClass?: string }[];
-    onChange: (v: string) => void;
     disabled?: boolean;
-}) {
+} & ({ multiple: true; value: string[]; onChange: (value: string[]) => void }
+    | { multiple?: false; value: string; onChange: (value: string) => void })) {
+    const { label, options, disabled = false } = props;
     return (
         <div className="flex items-center gap-1.5">
             <span className="text-xs text-foreground-muted font-medium shrink-0">{label}:</span>
             <div className="flex border border-border rounded-md overflow-hidden">
                 {options.map((o, idx) => {
-                    const isActive = o.value === value;
+                    const isActive = props.multiple
+                        ? o.value === 'all' ? props.value.length === 0 : props.value.includes(o.value)
+                        : o.value === props.value;
                     return (
                         <button
                             key={o.value}
                             disabled={disabled}
                             aria-pressed={isActive}
-                            onClick={() => onChange(o.value)}
+                            onClick={() => {
+                                if (props.multiple) {
+                                    props.onChange(o.value === 'all' ? []
+                                        : isActive ? props.value.filter(value => value !== o.value) : [...props.value, o.value]);
+                                } else {
+                                    props.onChange(o.value);
+                                }
+                            }}
                             className={cn(
                                 'px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
                                 idx < options.length - 1 && 'border-r border-border',
@@ -1509,12 +1577,13 @@ function UnifiedSpanTree({
     isLast: boolean;
     prefixBits: boolean[];
 }) {
-    const { locale } = useLocale();
+    const { locale, t: tt } = useLocale();
     const aKey = agentKey(node.id);
     const isExpanded = expandedKeys.has(aKey);
     const isSelected = selectedKey === aKey;
     const status = getStatus(node);
     const displayStats = aggregateSubtreeStats(node);
+    const displayTokensNotProvided = displayStats.totalTokens === 0 && !displayStats.usageReported;
 
     // Gantt bar for this agent
     const barLeft = (totalStart != null && totalDuration && node.startedAt != null)
@@ -1534,7 +1603,7 @@ function UnifiedSpanTree({
     // 一次渲染的顶层事件行数。超大 Trace 首屏先给出前几批调用，其余按需追加；
     // 搜索、筛选和跳转到深层节点时自动放开，避免命中的行不在 DOM 里。
     const [eventRenderLimit, setEventRenderLimit] = React.useState(TRACE_EVENT_RENDER_BATCH);
-    const filtersActive = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0
+    const filtersActive = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0
         || ctxSlowOnly || Boolean(searchQuery.trim());
     const eventRootIndexes = React.useMemo(
         () => eventTree.map(entry => entry.eventIndex),
@@ -1549,7 +1618,7 @@ function UnifiedSpanTree({
         return Number.isFinite(index) ? index : null;
     }, [selectedKey, node.id]);
     const renderedEventCount = resolveEventRenderCount(eventRootIndexes, eventRenderLimit, {
-        revealAll: filtersActive,
+        revealAll: filtersActive || ctx.revealAllSpans,
         revealThrough: selectedEventIndex,
     });
     const renderedEventEntries = renderedEventCount >= eventTree.length
@@ -1747,8 +1816,8 @@ function UnifiedSpanTree({
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
                 </span>
-                <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                    {formatTokens(displayStats.totalTokens)}
+                <span className="w-16 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0" title={displayTokensNotProvided ? tt('traceTree.tokensNotProvidedHint') : undefined}>
+                    {displayTokensNotProvided ? tt('traceTree.tokensNotProvided') : formatTokens(displayStats.totalTokens)}
                 </span>
                 <span className="w-2 ml-1 flex items-center justify-center">
                     {status !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[status])} />}
@@ -2895,12 +2964,13 @@ function isErrorToolStatus(status?: string): boolean {
     return /error|fail|cancel|denied|interrupted/i.test(status ?? '');
 }
 
-/** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
+/** 完整本地日期时间，避免跨天会话中的时钟歧义。 */
 function formatClockMs(ts?: number): string | null {
     if (ts == null) return null;
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return null;
-    return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${date} ${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 function eventDetailIdentifier(event: AgentEvent): { label: string; value: string } | null {
@@ -3017,7 +3087,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
                     </span>
                 )}
                 <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(getAgentActiveDurationMs(child))}</b></span>
-                <span>Token <b className="font-semibold text-foreground tabular-nums">{exactTokens(s.totalTokens)}</b></span>
+                <span>Token <b className="font-semibold text-foreground tabular-nums">{s.totalTokens === 0 && !s.usageReported ? (locale === 'zh' ? '未提供' : 'N/A') : exactTokens(s.totalTokens)}</b></span>
                 <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
                 <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>
                 {s.skillCalls > 0 && <span>Skill <b className="font-semibold text-foreground tabular-nums">{s.skillCalls}</b></span>}
@@ -3211,9 +3281,12 @@ function LLMEventBody({ event, responseText, interactions, node }: {
 
     const usage = event.usage;
     const hasUsage = usage && (usage.total || usage.input || usage.output);
+    const upstreamRequestIds = interactionUpstreamRequestIds(it);
+    const hasInferenceIdentity = Boolean(it.inference_call_ids?.length || it.inference_attempts?.length || upstreamRequestIds.length);
 
     const hasParams = modelId || provider || temperature != null || maxTokens != null
-        || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
+        || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null
+        || hasInferenceIdentity;
 
     const snapshot = useMemo(
         () => buildLlmPromptSnapshot(
@@ -3278,6 +3351,19 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                             )}
                             {finishReason && (
                                 <LLMParam label="finish" value={finishReason} />
+                            )}
+                        </div>
+                    )}
+                    {hasInferenceIdentity && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 1rem', alignItems: 'center' }}>
+                            {upstreamRequestIds.length === 1 ? (
+                                <CopyableId label="X-Request-Id" value={upstreamRequestIds[0]} />
+                            ) : (
+                                <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)' }}>
+                                    {upstreamRequestIds.length
+                                        ? (locale === 'zh' ? `X-Request-Id ×${upstreamRequestIds.length}，见推理分析` : `X-Request-Id ×${upstreamRequestIds.length}, see inference analysis`)
+                                        : (locale === 'zh' ? 'X-Request-Id 未提供' : 'X-Request-Id not provided')}
+                                </span>
                             )}
                         </div>
                     )}

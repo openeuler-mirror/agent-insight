@@ -59,6 +59,9 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[], sessionId?
   let toolCallCount = 0
   let toolCallErrorCount = 0
   let maxSingleCallTokens = 0
+  // 只有至少一条 completion 消息真的带了非零 usage，才把这些字段当作有效值。
+  // 否则留 undefined，交给上层区分「上游未提供」与「用量确实为 0」。
+  let usageReported = false
 
   for (const m of interactions || []) {
     if (!m) continue
@@ -83,6 +86,7 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[], sessionId?
     const u = m.usage
     if (u) {
       const t = usageTotals(u)
+      if (t.total > 0) usageReported = true
       totalTokens += t.total
       totalInputTokens += t.input
       totalOutputTokens += t.output
@@ -104,17 +108,18 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[], sessionId?
     model: model || undefined,
     agentName: agentName || undefined,
     final_result: finalResult || undefined,
-    tokens: Math.round(totalTokens),
+    usageReported,
+    tokens: usageReported ? Math.round(totalTokens) : undefined,
     latency: deriveExecutionTiming(interactions, sessionId).activeDurationMs ?? 0,
-    input_tokens: Math.round(totalInputTokens),
-    output_tokens: Math.round(totalOutputTokens),
+    input_tokens: usageReported ? Math.round(totalInputTokens) : undefined,
+    output_tokens: usageReported ? Math.round(totalOutputTokens) : undefined,
     tool_call_count: toolCallCount,
     tool_call_error_count: toolCallErrorCount,
     llm_call_count: llmCallCount,
-    cache_read_input_tokens: Math.round(totalCacheReadInputTokens),
-    cache_creation_input_tokens: Math.round(totalCacheCreationInputTokens),
-    max_single_call_tokens: Math.round(maxSingleCallTokens),
-    reasoning_tokens: Math.round(totalReasoningTokens),
+    cache_read_input_tokens: usageReported ? Math.round(totalCacheReadInputTokens) : undefined,
+    cache_creation_input_tokens: usageReported ? Math.round(totalCacheCreationInputTokens) : undefined,
+    max_single_call_tokens: usageReported ? Math.round(maxSingleCallTokens) : undefined,
+    reasoning_tokens: usageReported ? Math.round(totalReasoningTokens) : undefined,
   }
 }
 

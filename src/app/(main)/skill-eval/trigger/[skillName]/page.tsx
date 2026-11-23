@@ -122,7 +122,8 @@ const VERSION_SOURCE_LABEL: Record<TriggerSetVersionSource, string> = {
  * 编辑器该绑定哪个版本：
  *  - 用户显式选了某历史版本（selectedSetId）→ 直接用 GET 返回的那一个。
  *  - 否则 GET 返回的是 latest；若它是异步起草的 drafting/failed 占位（不可编辑），
- *    退回 versions 里最新的 ready 版本，让编辑器始终拿到真内容。都没有 ready 才退回占位本身。
+ *    退回 versions 里最新的 ready 版本。都没有 ready 时返回 null（编辑器空态），绝不绑定占位：
+ *    占位保存不改 status，且下一次 AI 起草会整行删除占位，手工数据会静默丢失。
  */
 function pickEditableSet(
   incoming: TriggerSet | null,
@@ -131,7 +132,7 @@ function pickEditableSet(
 ): TriggerSet | null {
   if (selectedSetId) return incoming;
   if (incoming && incoming.status !== 'ready') {
-    return versions.find(v => v.status === 'ready') ?? incoming;
+    return versions.find(v => v.status === 'ready') ?? null;
   }
   return incoming;
 }
@@ -361,11 +362,12 @@ export default function SkillEvalTriggerPage() {
   // 正在后台起草的占位（防重入后最多一条新鲜的）；存在即「起草中」。
   const draftingSet = useMemo(() => versions.find(v => v.status === 'drafting') ?? null, [versions]);
   const hasDrafting = draftingSet != null;
-  // 上次起草失败的占位——失败占位永远顶在 version 最大位，所以只看 versions[0]。
-  const failedDraftSet = useMemo(() => {
-    const top = versions[0];
-    return top && top.status === 'failed' ? top : null;
-  }, [versions]);
+  // 上次起草失败的占位——失败占位不一定顶在 versions[0]：无 ready 时保存会新建 version 更大的
+  // manual 版本（上传同理），所以全列表找第一条 failed。
+  const failedDraftSet = useMemo(
+    () => versions.find(v => v.status === 'failed') ?? null,
+    [versions],
+  );
 
   // 起草改异步后，POST 建好 drafting 占位即返回，真正跑完是后台行为。只要还有 drafting 占位，
   // 就每 3s 轮询一次 /trigger 把最新状态拉回来——跑完后占位 flip 成 ready（或 failed），
@@ -477,7 +479,7 @@ export default function SkillEvalTriggerPage() {
         method: 'POST',
         body: JSON.stringify({
           user,
-          // 后端会再校验「必须等于 latest 的 id」，前端 disable 已经挡住非 latest 的保存
+          // 后端会再校验「必须等于最新 ready 的 id」，前端 disable 已经挡住非 latest 的保存
           versionId: set.id || undefined,
           description: set.description,
           items: set.items,
@@ -520,7 +522,16 @@ export default function SkillEvalTriggerPage() {
   const draftRedo = useCallback(async () => {
     if (!user || hasDrafting) return; // 已在起草，按钮本应 disabled，这里双保险防连点
     // 新语义：起草 = 新建一个版本。不再覆盖旧数据，所以只有当已经存在版本时才二次确认。
-    if (hasAnyVersion && !confirm('将基于当前 SKILL.md 生成一个新的 AI 起草版本，旧版本会保留为历史。确认？')) return;
+    // failed 占位不会保留为历史：/draft 会按状态整行删除占位（deletePlaceholderDraftingSets），
+    // 无论占位是否还是最新版本。占位里有数据（如旧逻辑把手工编辑存进了占位）时必须显式确认，
+    // 避免静默删除，所以这里全量扫描而不是只看 failedDraftSet 一条。
+    const placeholderHasData = versions.some(v => v.status === 'failed' && v.items.length > 0);
+    if (hasAnyVersion || placeholderHasData) {
+      const message = placeholderHasData
+        ? '将基于当前 SKILL.md 生成一个新的 AI 起草版本。注意：上次起草失败的占位版本及其中的数据会被删除，其余历史版本保留。确认？'
+        : '将基于当前 SKILL.md 生成一个新的 AI 起草版本，旧版本会保留为历史。确认？';
+      if (!confirm(message)) return;
+    }
     setDrafting(true);
     setErrorMsg(null);
     try {
@@ -547,7 +558,7 @@ export default function SkillEvalTriggerPage() {
     } finally {
       setDrafting(false);
     }
-  }, [user, skillName, draftConfigId, hasAnyVersion, hasDrafting, reload]);
+  }, [user, skillName, draftConfigId, hasAnyVersion, hasDrafting, versions, reload]);
 
   // 上传数据集 —— 选 JSON 文件 → 解析 → POST → 新建版本
   const onUploadFile = useCallback(async (file: File) => {

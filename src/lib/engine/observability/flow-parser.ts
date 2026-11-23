@@ -1,4 +1,3 @@
-import {configuredModelFetch} from '@/lib/server/configured-model-fetch';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  *
@@ -14,6 +13,8 @@ import {configuredModelFetch} from '@/lib/server/configured-model-fetch';
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+import { getModelClientConfig } from '@/lib/server/model-client';
 
 import { isLogEnabled, sanitizeLogValue } from '@/lib/logger/server';
 import { OpenAI } from "openai";
@@ -70,8 +71,7 @@ type FlowLlmClient = {
 async function getLlmClient(user?: string | null,purpose={agentName:'trace-step-extractor',query:'Trace business step extraction'}): Promise<{client: FlowLlmClient; model: string} | {client: null; model: null}> {
   const trusted = getTrustedCoreAgentContext();
   if (trusted) {
-    const client = new OpenAI({apiKey: trusted.trustedModel.apiKey || 'no-api-key-required', baseURL: trusted.trustedModel.baseURL,
-      defaultHeaders: trusted.trustedModel.headers, fetch: configuredModelFetch(trusted.trustedModel),...(getCoreFlowModelDeliveryContext()?{maxRetries:0}:{})});
+    const client = new OpenAI({...getModelClientConfig({ ...trusted.trustedModel, baseUrl: trusted.trustedModel.baseURL }),...(getCoreFlowModelDeliveryContext()?{maxRetries:0}:{})});
     const recorded: FlowLlmClient = {apiKey: client.apiKey, chat: {completions: {create: async (body, options) => {
       return executeCoreFlowModelCall(body,async()=>{
       trusted.cancelSignal?.throwIfAborted();
@@ -99,16 +99,13 @@ async function getLlmClient(user?: string | null,purpose={agentName:'trace-step-
   }
 
   if (!isModelConnectionReady(config)) return { client: null, model: null };
-  const apiKey = config.apiKey || 'no-api-key-required';
+
 
   const baseURL = config.baseUrl || "https://api.deepseek.com";
   
   return {
     client: new OpenAI({
-      apiKey, 
-      baseURL,
-      defaultHeaders: config.headers,
-      fetch: configuredModelFetch(config),
+      ...getModelClientConfig({ ...config, baseUrl: baseURL }),
     }),
     model: config.model || "deepseek-chat"
   };

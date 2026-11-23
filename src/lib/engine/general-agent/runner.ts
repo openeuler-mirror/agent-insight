@@ -48,6 +48,7 @@ import {
 import { deploySkillToWorkspace } from './skill-workspace-deployer';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
+import { getAgentRuntimePreference } from '@/lib/storage/server-config';
 import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/opencode-derived-metrics';
 
 let dispatcherInited = false;
@@ -318,6 +319,15 @@ export async function runGeneralAgent(
   if (!query) throw new Error('query is required');
 
   if(input.recordCoreTrace && !input.trustedModel)input={...input,trustedModel:{...await buildDefaultModel(user),...(input.model||{})}};
+  // 平台内置功能统一从这里进入执行层。运行时默认值只影响新任务；当前只有 OpenCode
+  // 适配器已交付，其他选择必须明确报错，不能静默换回 OpenCode 执行。
+  const preferredRuntime = await getAgentRuntimePreference(user).catch(() => null);
+  if (preferredRuntime && preferredRuntime !== 'opencode') {
+    throw createAgentRunError(
+      'AGENT_RUNTIME_UNAVAILABLE',
+      `当前账号选择的 Agent 运行时为 ${preferredRuntime}，但平台尚未交付其执行适配器。请在「配置 → Agent 运行时」中改选 OpenCode。`,
+    );
+  }
 
   // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
   // 不能复用 cachedClients (会污染下次 shared 模式), 直接 new AgentInsight 用临时 baseURL。
@@ -659,12 +669,14 @@ async function runGeneralAgentWithClient(
       normalizeEvaluatorExecutionInteractions(Array.isArray(rawMessages) ? rawMessages : []),
     );
     tokenStats = {
-      totalTokens: derived.tokens,
+      // 上游未提供 usage 时 derived 为 undefined；本接口的 stats 是数字契约，
+      // 这里保留 0 作为"没有可展示用量"，与 Execution.tokens 的可空语义分开。
+      totalTokens: derived.tokens ?? 0,
       tokens: {
-        input: derived.input_tokens,
-        output: derived.output_tokens,
-        reasoning: derived.reasoning_tokens,
-        cache: { read: derived.cache_read_input_tokens, write: derived.cache_creation_input_tokens },
+        input: derived.input_tokens ?? 0,
+        output: derived.output_tokens ?? 0,
+        reasoning: derived.reasoning_tokens ?? 0,
+        cache: { read: derived.cache_read_input_tokens ?? 0, write: derived.cache_creation_input_tokens ?? 0 },
       },
     };
   } catch (err) {

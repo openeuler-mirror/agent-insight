@@ -225,11 +225,9 @@ async function loadParsedSession(taskId: string, user?: string): Promise<ParsedS
         ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
-    const latency = executionRow
-        ? framework === 'opencode'
-            ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? executionRow.latency ?? null
-            : executionRow.latency ?? null
-        : null;
+    const latency = framework === 'opencode'
+        ? deriveExecutionTiming(interactions, taskId).activeDurationMs ?? executionRow?.latency ?? null
+        : executionRow?.latency ?? null;
     const execution = executionRow ? {
         status: executionRow.executionStatus || undefined,
         sourceKind: executionRow.sourceKind || undefined,

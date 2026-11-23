@@ -18,13 +18,14 @@ export function freezeModelSelection(config:ModelConfig|null):{id:string;provide
  let baseUrl:string|null=null;
  if(config.baseUrl){const url=new URL(config.baseUrl);if(!['http:','https:'].includes(url.protocol))throw Object.assign(new Error('Invalid model connection origin'),{status:503});baseUrl=url.origin+url.pathname;}
  let headers:Array<[string,string]>;try{headers=[...new Headers(config.headers||{})].sort(([left],[right])=>left.localeCompare(right));}catch{throw Object.assign(new Error('Invalid frozen model headers'),{status:503});}
- const connection_hash=createHash('sha256').update(JSON.stringify({provider:config.provider||null,model:config.model||null,baseUrl:config.baseUrl||null,headers})).digest('hex');
+ const connection_hash=createHash('sha256').update(JSON.stringify({provider:config.provider||null,model:config.model||null,baseUrl:config.baseUrl||null,headers,...(config.protocol?{protocol:config.protocol}:{})})).digest('hex');
  return {id:config.id,provider:config.provider||null,model:config.model||null,baseUrl,connection_hash,connection_format:'model-connection/v2'};
 }
 
 export function matchesFrozenModelSelection(config:ModelConfig,selection:Record<string,unknown>):boolean{
  if(config.id!==selection.id)return false;
  if(selection.connection_format==='model-connection/v2')return freezeModelSelection(config)?.connection_hash===selection.connection_hash;
+ if(config.protocol)return false;
  if(selection.connection_format!=null&&selection.connection_format!=='model-connection/v1')return false;
  try{if([...new Headers(config.headers||{})].length)return false;}catch{return false;}
  if(selection.connection_hash)return selection.connection_hash===createHash('sha256').update(JSON.stringify({provider:config.provider||null,model:config.model||null,baseUrl:config.baseUrl||null})).digest('hex');

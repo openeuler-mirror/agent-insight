@@ -43,6 +43,14 @@ export interface InteractionUsage {
     missing_context?: boolean;
 }
 
+/** Whether an interaction actually carries usage. All-zero objects (legacy
+ *  opencode uploads fabricated one per message) must not read as real usage. */
+function usageHasTokens(usage?: InteractionUsage | null): boolean {
+    if (!usage) return false;
+    return [usage.total, usage.input, usage.output, usage.reasoning, usage.cache?.read, usage.cache?.write]
+        .some(value => Number(value) > 0);
+}
+
 export interface ToolCall {
     id?: string;
     type?: string;
@@ -125,12 +133,23 @@ export interface RawInteraction {
     inference_request_id?: string;
     inference_session_id?: string;
     inference_call_ids?: string[];
+    /**
+     * Model-service response header IDs bound to a proven call. The gateway's
+     * own call ID stays in `inference_call_ids`; these are the upstream value
+     * and the response layer that produced it.
+     */
+    inference_upstream_request_ids?: Array<{
+        call_id: string;
+        request_id: string;
+        source?: string;
+    }>;
     inference_unassigned_calls?: Array<{
         call_id: string;
         status_code?: number;
         state?: string;
         started_at?: string;
         completed_at?: string;
+        upstream_request_id?: string;
         reason?: string;
     }>;
     inference_attempts?: Array<{
@@ -141,6 +160,8 @@ export interface RawInteraction {
         status_code?: number;
         error_type?: string;
         state?: string;
+        upstream_request_id?: string;
+        upstream_request_id_source?: string;
     }>;
     trace_kind?: 'chain' | string;
     trace_name?: string;
@@ -214,6 +235,9 @@ export interface AgentNodeStats {
     cacheWriteTokens: number;
     reasoningTokens: number;
     totalTokens: number;
+    /** 至少一次 LLM 调用带回了非零 usage。为 false 且 totalTokens 为 0 时，
+     *  界面应显示「未提供」而不是把 0 当成有效用量。 */
+    usageReported?: boolean;
     durationMs?: number;
     activeDurationMs?: number;
     elapsedDurationMs?: number;
@@ -549,6 +573,7 @@ export function buildAgentCallTree(interactions: RawInteraction[], rootSessionId
             host.stats.cacheWriteTokens += u.cache?.write || 0;
             host.stats.reasoningTokens += u.reasoning || 0;
             host.stats.totalTokens += u.total || 0;
+            if (usageHasTokens(u)) host.stats.usageReported = true;
         }
 
         // Compaction summary: attach as boundary metadata, then bail before
@@ -669,6 +694,7 @@ function makeNode(init: {
             cacheWriteTokens: 0,
             reasoningTokens: 0,
             totalTokens: 0,
+            usageReported: false,
             durationMs: undefined,
         },
         interactionIndices: [],

@@ -65,6 +65,7 @@ function runner(){
  class Client {constructor(){return client}}
  const rec=recorder().module;
  const script=compile('src/lib/engine/general-agent/runner.ts',{
+  '@/lib/storage/server-config':{getAgentRuntimePreference:async()=>null},
   './trusted-context':trustedContext,'node:fs':fs,'node:path':path,'node:crypto':{randomUUID:()=>crypto.randomUUID()},
   './session-cancellation':{withSessionCancellation:async(_signal:unknown,_abort:unknown,action:()=>unknown)=>action()},
   '../../../../scripts/agent-run-diagnostics.cjs':{createAgentRunError:(code:string,message:string,runFacts:unknown)=>Object.assign(new Error(message),{code,runFacts}),sanitizeAgentDiagnostic:(error:unknown)=>String(error)},

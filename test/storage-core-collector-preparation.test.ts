@@ -76,7 +76,9 @@ test('source preparation matches independent original handler portable snapshots
  const previous=new Map<string,any>();
  for(const [index,item] of golden.cases.entries()){
   const data=item.input as any;if(item.name.includes('completion-first')||item.name.includes('completion-creates')){if(item.session)previous.set(data.task_id??data.session_id,{execution:null,session:item.session});continue;}
-  const expected=item.snapshot as any;if(!expected)continue;
+  const expected=structuredClone(item.snapshot) as any;if(!expected)continue;
+  // Upstream now distinguishes missing OpenCode usage from an explicit zero; retain the historical fixture unchanged.
+  if(expected.execution.framework==='opencode' && expected.execution.tokens===0)for(const field of ['tokens','inputTokens','outputTokens','reasoningTokens','cacheReadInputTokens','cacheCreationInputTokens','maxSingleCallTokens'])expected.execution[field]=null;
   const task=String(data.task_id||data.upload_id),prior=previous.get(task);
   const reservation:any={trace_id:task,task_id:task,execution_id:prior?.execution?.id??expected.execution.id,operation_key:item.name,operation:'snapshot',state:'reserved',input_hash:'a'.repeat(64),base_revision:String(index),source_revision:String(index),received_at_ms:Date.parse(!data.timestamp ? expected.execution.timestamp : !data.trace_started_at ? (item as any).session_default_clock??at : at),completed_at_ms:prior?.session?.endTime?Date.parse(prior.session.endTime):null,operation_request:{data},provenance:{legacy_username:'collector-golden-owner',verified_client_id:null,framework:data.framework},snapshot:prior?.execution?prior:null};
 

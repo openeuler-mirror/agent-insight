@@ -25,7 +25,7 @@ test('core existing local user persists the verified external account inside its
  const f=fixture();const user=await f.api.findOrCreateLocalUser('alice','verified-account');
  assert.equal(user.id,'original-user');assert.equal(user.externalAccount,'verified-account');assert.deepEqual(f.counts(),{updates:1,seeds:0});
 });
-test('core new user keeps original seed flow and refuses another user external account',async()=>{
- const fresh=fixture(true);await fresh.api.findOrCreateLocalUser('alice','verified-account');assert.deepEqual(fresh.counts(),{updates:1,seeds:1});
+test('core new user skips demo injection and refuses another user external account',async()=>{
+ const fresh=fixture(true);await fresh.api.findOrCreateLocalUser('alice','verified-account');assert.deepEqual(fresh.counts(),{updates:1,seeds:0});
  const conflict=fixture(true,true);await assert.rejects(conflict.api.findOrCreateLocalUser('alice','verified-account'),/already linked/);assert.deepEqual(conflict.counts(),{updates:0,seeds:0});
 });

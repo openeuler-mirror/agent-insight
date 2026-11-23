@@ -225,7 +225,6 @@ test('start documents force rebuild; db push wrapper rejects arbitrary destructi
 test('db push forwards skip-generate on normal and allowed retry paths, preserving the default', t => {
   const f = fixture(t)
   f.write('scripts/db_push.sh', fs.readFileSync('scripts/db_push.sh', 'utf8'))
-  f.write('scripts/migrations/check-diagnosis-schema.cjs', '')
   f.write('scripts/trace-datasets/remove-legacy-summary.cjs', '')
   const bin = path.join(f.root, 'bin')
   f.write('bin/npx', `#!/bin/sh

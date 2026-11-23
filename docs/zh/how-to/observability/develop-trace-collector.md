@@ -45,7 +45,9 @@ changefreq: monthly
 
 在「客户端安装」页勾选 **Dify** 后，使用同一条 curl 命令配置现有 Docker Compose 部署。脚本备份并维护 `.env` 中的受管配置块，检查 Compose 渲染结果，只重新加载 API、Worker 与已存在的 Agent 服务，再核对容器实际环境及接收端连接。Docker Desktop 本机地址自动适配；Linux Docker 可填写容器可达的上报地址。详细步骤与支持边界见 [Dify 统一接入](../platform/settings/access-control.md#dify-统一接入)。特殊部署可参考下文的两组进程环境变量；安装页仅保留统一 curl 入口。
 
-自建 Dify 可使用已有 OpenTelemetry 导出能力，无需修改 Dify 源码或安装 Agent Insight 采集插件。以下配置已在 Dify 1.18.0 的原生 Workflow（Start → LLM → End）与 DeepSeek 实际调用中验证；它与应用内配置的 Langfuse 观测服务是不同入口。
+Dify 1.14.0 的默认 Compose 未将 `OTEL_EXPORTER_OTLP_TRACES_HEADERS` 传入 API/Worker。安装器会生成仅引用环境变量的 `compose.agent-insight.yaml`，并在 `.env` 的受管配置块中维护 `COMPOSE_FILE`，保留原文件顺序和默认 override；后续在同目录执行 `docker compose up` 仍会带上鉴权头。原 Compose 文件不会被改写，同名非受管文件不会被覆盖，配置校验失败时恢复原配置。若终端已导出 `COMPOSE_FILE` 且没有包含受管文件，自动配置会停止；请先取消该终端变量或按自定义部署方式显式传入鉴权头。
+
+自建 Dify 可使用已有 OpenTelemetry 导出能力，无需修改 Dify 源码或安装 Agent Insight 采集插件。以下配置已在 Dify 1.14.0、1.18.0 的原生 Workflow（Start → LLM → End）与 DeepSeek 实际调用中验证；它与应用内配置的 Langfuse 观测服务是不同入口。1.14.0 使用官方 Compose 镜像和原生签名 DeepSeek 插件，通过已发布 Workflow 服务 API 完成真实调用，自动入库 1 次模型调用、119 Tokens，与 Dify 返回用量一致，浏览器已核对正文与完成状态；重复安装保持配置和容器不变，无效 API Key 返回 401。下述 Agent v2 验收使用 1.18.0，不代表 1.14.0 提供同一能力。
 
 在运行 Dify API 与 Worker 的进程环境中设置，并重启相应进程：
 
@@ -65,9 +67,13 @@ OTEL_SAMPLING_RATE=1.0
 - 使用 `dify:<traceId>` 作为固定聚合键，隔离同 Trace 的其他框架；按 `traceId` 固定分组，分批到达与重复投递使用同一条 Trace；不会按静态 `service.instance.id` 合并不同执行。
 - 保留 Workflow 根 Span 和业务节点，过滤 SQL、Redis、HTTP 等基础设施 Span；只有 `llm` / `tool` 节点分别计入对应调用数。
 - 恢复文本消息角色、模型、Token、工具输入输出及错误，并将控制流节点保留在轨迹树中。Dify 的运行 ID 等系统字段保留于 Start 节点输出。
-- 收到已结束的 Workflow 根 Span，且存在 End 节点或根 Span 显式失败时，记录完成时间。缺少根 Span、缺少结束证据时不推断完成。
+- 同时识别 1.14.0 的 `core.app.apps.workflow.app_runner.WorkflowAppRunner.run` 和新版本的 `services.workflow_run_agg.WorkflowRunAgg.run` 根 Span；收到已结束的根 Span，且存在 End 节点或根 Span 显式失败时，记录完成时间。缺少根 Span、缺少结束证据时不推断完成。
 
-在链路追踪页按 `dify` 框架查看，检查实际消息、调用数与 Token。HTTP 200 仅表示接收成功，还需确认消费和入库。当前通过完整验收的范围包括原生 Workflow 文本模型调用，以及下述原生 Workflow 内两名 Agent v2 的串行编排。补充 Chatflow 两轮真实验证已确认消息角色、历史上下文、回答和 Token 正常；但 Answer 节点未被现有完成判定接受，任务成功后界面仍显示“执行中”，之后变为“观测超时”，该场景尚未通过完整验收。Agent v2 运行环境需要支持 Landlock；本地 Docker Desktop 从 4.41.0 升级至 4.97.0 后，实测内核支持 ABI 8，原生应用验证已解除该环境阻塞。循环/并发/重试、暂停恢复、多模态及失败工作流仍需真实任务验证。工具和错误映射已有合成回归测试。不同 Trace 不会按 `sys.conversation_id` 或 `sys.workflow_run_id` 自动跨 Trace 合并，暂停恢复不在本轮保证范围内。
+在链路追踪页按 `dify` 框架查看，检查实际消息、调用数与 Token。HTTP 200 仅表示接收成功，还需确认消费和入库。当前通过完整验收的范围包括原生 Workflow 文本模型调用，以及下述原生 Workflow 内两名 Agent v2 的串行编排。
+
+1.14.0 另实跑了插件参数错误导致的失败 Workflow：Dify 返回 failed，原生根 Span 保留异常事件，却仍上报成功状态且没有 End 节点；当前适配器保留原始异常，但未将其投影为失败与结束，页面仍显示“执行中”，该失败场景未通过完整验收。
+
+补充 Chatflow 两轮真实验证已确认消息角色、历史上下文、回答和 Token 正常；但 Answer 节点未被现有完成判定接受，任务成功后界面仍显示“执行中”，之后变为“观测超时”，该场景尚未通过完整验收。Agent v2 运行环境需要支持 Landlock；本地 Docker Desktop 从 4.41.0 升级至 4.97.0 后，实测内核支持 ABI 8，原生应用验证已解除该环境阻塞。循环/并发/重试、暂停恢复、多模态及其他失败工作流仍需真实任务验证。工具和错误映射已有合成回归测试。不同 Trace 不会按 `sys.conversation_id` 或 `sys.workflow_run_id` 自动跨 Trace 合并，暂停恢复不在本轮保证范围内。
 
 
 ### Agent 内部执行轨迹

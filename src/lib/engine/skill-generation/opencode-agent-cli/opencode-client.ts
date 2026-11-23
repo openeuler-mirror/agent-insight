@@ -75,6 +75,7 @@ export interface AgentInsightOptions {
 }
 
 export interface ModelConfig {
+  protocol?: import("@/lib/shared/model-connection").ModelProtocol;
   providerID: string;
   modelID: string;
   apiKey?: string;
@@ -685,9 +686,9 @@ export class AgentInsight {
     const { providerID, modelID, apiKey, baseURL, headers, ...modelExtras } = model;
 
     const providerOptions: Record<string, unknown> = {};
-    if (apiKey || baseURL || headers || Object.keys(modelExtras).length > 0) {
+    if (apiKey !== undefined || baseURL || headers || Object.keys(modelExtras).length > 0) {
       providerOptions[providerID] = {
-        ...(apiKey ? { apiKey } : {}),
+        ...(apiKey !== undefined ? { apiKey } : {}),
         ...(baseURL ? { baseURL } : {}),
         ...(headers ? { headers } : {}),
         ...modelExtras,

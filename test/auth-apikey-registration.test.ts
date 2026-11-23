@@ -41,7 +41,7 @@ test.after(async()=>{
  await core.dispose();
 });
 
-test('首次注册通过 Core 注入 Agent、Skill、数据集和 3 条 Trace 示例',async()=>{
+test('首次注册通过 Core 创建账号，不注入内置示例数据',async()=>{
  const response=await register(usernames.seed);assert.equal(response.status,200);
  const {apiKey}=await response.json();
  const counts=await withCoreControlRequest(request(apiKey),async()=>Promise.all([
@@ -49,14 +49,14 @@ test('首次注册通过 Core 注入 Agent、Skill、数据集和 3 条 Trace �
   prisma.skill.count({where:{user:usernames.seed}}),
   prisma.skillVersion.count({where:{Skill:{user:usernames.seed}}}),
  ]));
- assert.deepEqual(counts,[1,1,1]);
+ assert.deepEqual(counts,[0,0,0]);
  const {GET:datasets}=await import('@/app/api/agent-datasets/route');
  const data=await datasets(new Request('http://localhost/api/agent-datasets',{headers:{authorization:'Bearer '+apiKey}}));
- assert.equal(data.status,200);const datasetBody=await data.json();assert.equal(datasetBody.length,2);
+ assert.equal(data.status,200);const datasetBody=await data.json();assert.equal(datasetBody.length,1);assert.ok(datasetBody.every((row: {name:string})=>row.name!=='messages 日志分析（内置示例）'));
  const {GET:traces}=await import('@/app/api/observe/data/route');
  const traceResponse=await traces(new Request('http://localhost/api/observe/data?paginated=1&page=1&pageSize=20&listPart=records',{headers:{authorization:'Bearer '+apiKey}}));
  assert.equal(traceResponse.status,200,await traceResponse.clone().text());
- const page=await traceResponse.json();assert.equal(page.records.length,3);assert.equal(page.hasMore,false);
+ const page=await traceResponse.json();assert.equal(page.records.length,0);assert.equal(page.hasMore,false);
 });
 
 test('用户名大小写归一到同一用户和同一 API key',async()=>{

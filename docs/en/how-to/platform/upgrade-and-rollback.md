@@ -5,13 +5,13 @@ keywords: ["Agent Insight", "version upgrades", "deployment rollback", "data com
 changefreq: "monthly"
 ---
 
-An upgrade changes application version, database schema, and runtime state together. Agent Insight installation and startup can synchronize the database schema. Replacing the binary with an older version does not guarantee compatibility with upgraded data. There is no unified `upgrade` / `rollback` CLI command.
+An upgrade changes application version, database schema, and runtime state together. The runtime requires Storage Core: one transactional backend (SQLite, PostgreSQL, or openGauss) plus ClickHouse. Core uses versioned migrations; Web startup checks readiness and never runs legacy `prisma db push`. Replacing the binary with an older version does not guarantee compatibility with upgraded data. There is no unified `upgrade` / `rollback` CLI command.
 
 ## Before upgrading
 
 1. Record the current package version, source commit or image digest, runtime root, database, external configuration directories, and client versions.
 2. Choose an explicit target release and read its changes and configuration-migration requirements. Retain the current package, runnable source build, or image.
-3. Pause new work and writes, stop the platform and related writers, and [back up](./backup-and-restore.md) before installing. npm `postinstall` can also synchronize the schema.
+3. Pause new work and writes, stop the platform and related writers, and [back up](./backup-and-restore.md) before installing. Include the transactional database, ClickHouse, artifacts, and identity mappings.
 4. Prefer testing the target version against a backup copy, using a separate runtime root, database, and port and isolating real clients and model calls.
 
 Existing `.env` files are not automatically filled with every new template setting. Compare with the target version's template, preserving local secrets and real addresses instead of overwriting the file. See [runtime configuration](../../reference/platform/configuration.md).
@@ -28,7 +28,7 @@ Replace angle-bracket placeholders before executing. Avoid changing deployment m
 
 ## Next.js security upgrade
 
-The dependency baseline is `next` / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.3 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
+The dependency baseline is `next` / `eslint-config-next` 16.4.6. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.6 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
 
 Docker source mode uses dependencies baked into the image. Rebuild the image after changing source dependencies; updating mounted source and restarting is insufficient. The entrypoint checks for missing direct dependencies and mismatches in exact version declarations, including Next.js, and stops with a rebuild instruction. Audit range dependencies separately against the lockfile and final artifact.
 
@@ -49,6 +49,12 @@ A successful installation, reachable port, or health response alone does not pro
 
 After upgrading to a release with OpenCode data isolation, restart the platform and run both AgentDebug and Skill optimization once. The platform initializes a private OpenCode database and creates new sessions for new runs. The user's CLI continues to use its existing database.
 
+## Built-in example data cleanup
+
+Older releases injected example Agents, Skills, datasets, and Traces when a user first logged in. Current releases no longer inject them and, on each startup, clean up migrated demo records within verified Core owner scopes using the fixed identifiers written at injection time (Agent name and description, dataset name, Skill name and description, and the `builtin_msg_` taskId prefix). Agents and Skills with different descriptions, other owners’ data, and read-only datasets remain. Control records are tombstoned and Traces use the deletion barrier. Imported source databases and artifacts are retained; repeated cleanup is idempotent. A `builtin demo cleanup` line in the startup log reports records removed by that run.
+
+Cleanup only covers database records. Client-local files such as `~/.agent-insight/example/messages` are not removed and can be deleted manually.
+
 ## Rollback
 
 1. Stop the new version and related writers. Preserve upgraded data separately, noting which Traces and experiments were created after the upgrade.
@@ -64,6 +70,8 @@ Compatibility across arbitrary versions is not guaranteed. Retain logs, versions
 
 ### SQLite upgrade for evaluation diagnosis
 
+The following tool only prepares an isolated legacy SQLite copy. It is not part of current Web startup. After preparing the historical diagnosis schema, follow the [Storage Core guide](./storage-core.md) for offline import and reconciliation. Never reconnect the legacy single database as a runtime source.
+
 Rehearse on an isolated copy of the deployed database. Quiesce writers and background jobs. Back up external Skill files and report assets alongside the database. Run `python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight.db` for preflight, then add `--apply --backup /backup/diagnosis-before.db` with a new backup path. The script uses SQLite's backup API, validates integrity and foreign keys, and compares every pre-existing column and row before committing. Save the JSON verification report.
 
-Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. Startup requires migration on existing databases. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.
+Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.

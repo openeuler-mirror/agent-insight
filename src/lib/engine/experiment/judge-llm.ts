@@ -33,7 +33,8 @@ import { withSessionCancellation } from '@/lib/engine/general-agent/session-canc
 import { isCoreTraceRecordingError, recordDirectEvaluatorExecution, recordEvaluatorExecution } from '@/lib/engine/evaluation/evaluator-execution-recorder';
 import { MISSING_EVALUATION_MODEL_MESSAGE } from '@/lib/evaluators/model-configuration-error';
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
-import { getModelFetch } from '@/lib/server/model-fetch';
+import { getModelClientConfig } from '@/lib/server/model-client';
+import { getModelSdkApiKey } from '@/lib/shared/model-connection';
 import { experimentSignal } from './cancellation-context';
 import type { ToolCallEvent } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 import { hasEvaluatorExecutionPolicy, withConfiguredEvaluationTimeout } from './evaluator-execution-policy';
@@ -178,7 +179,7 @@ const coreDirectJudgeCaller: JudgeLlmCaller = async (username, req) => {
   const modelId = frozen.modelID;
   const timeoutMs = remainingEvaluationTimeMs() ?? req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const model = new ChatOpenAI({ apiKey: frozen.apiKey || 'no-api-key', model: modelId,
-    configuration: { baseURL: frozen.baseURL, defaultHeaders: frozen.headers, fetch: getModelFetch() },
+    configuration: getModelClientConfig({ ...frozen, baseUrl: frozen.baseURL }),
     ...buildDirectJudgeSamplingOptions(modelId, req.samplingProfile), timeout: timeoutMs,
     maxRetries: remainingEvaluationTimeMs() === undefined ? 2 : 0 });
   req.onModel?.(modelId);

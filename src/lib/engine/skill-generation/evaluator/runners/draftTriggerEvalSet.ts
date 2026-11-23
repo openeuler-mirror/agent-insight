@@ -193,6 +193,7 @@ export async function resolveDraftModelConfig(
   baseUrl?: string;
   headers?: Record<string, string>;
   provider?: string;
+  protocol?: import('@/lib/shared/model-connection').ModelProtocol;
   source: 'explicit' | 'active' | 'env';
 }> {
   // Step 1: 显式 id
@@ -206,6 +207,7 @@ export async function resolveDraftModelConfig(
         baseUrl: cfg.baseUrl,
         headers: cfg.headers,
         provider: cfg.provider,
+        protocol: cfg.protocol,
         source: 'explicit',
       };
     }
@@ -224,6 +226,7 @@ export async function resolveDraftModelConfig(
       baseUrl: active.baseUrl,
       headers: active.headers,
       provider: active.provider,
+        protocol: active.protocol,
       source: 'active',
     };
   }
@@ -275,7 +278,7 @@ export async function draftTriggerEvalSet(args: DraftTriggerEvalSetArgs): Promis
   });
   const systemPrompt=SYSTEM_PROMPT,userPrompt=USER_PROMPT_TEMPLATE(skillName,description,body);
   const perform=async()=>{
-    const model=createModel({modelId:resolved.modelId,apiKey:resolved.apiKey,baseUrl:resolved.baseUrl,headers:resolved.headers,provider:resolved.provider});
+    const model=createModel({modelId:resolved.modelId,apiKey:resolved.apiKey,baseUrl:resolved.baseUrl,headers:resolved.headers,provider:resolved.provider,protocol:resolved.protocol});
     return model.invoke([new SystemMessage(systemPrompt),new HumanMessage(userPrompt)],...(args.coreRuntime?[{signal:args.coreRuntime.signal}]:[]));
   };
   const response=args.coreRuntime?await args.coreRuntime.invoke({systemPrompt,userPrompt},perform):await perform();

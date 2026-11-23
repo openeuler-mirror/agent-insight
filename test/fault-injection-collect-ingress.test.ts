@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createIsolatedDatabase } from './helpers/isolated-database'
+import type { CollectPayload } from '@/lib/fault-injection/engine'
 import { startIsolatedFiCore } from './helpers/isolated-fi-core'
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma']
@@ -25,6 +26,8 @@ let collect: typeof import('@/app/api/fault-injection/runs/[runId]/collect-resul
 let trace: typeof import('@/app/api/fault-injection/runs/[runId]/trace/route')['GET']
 let rejudge: typeof import('@/app/api/fault-injection/runs/[runId]/rejudge/route')['POST']
 let database: ReturnType<typeof createIsolatedDatabase> | undefined
+let store: typeof import('@/lib/fault-injection/store')
+let buildFiTraceMarkers: typeof import('@/lib/fault-injection/trace-markers')['buildFiTraceMarkers']
 let sequence = 0
 const user = 'fi-collect-ingress-' + process.pid
 const apiKey = 'fi-collect-ingress-test-key'
@@ -32,6 +35,8 @@ const apiKey = 'fi-collect-ingress-test-key'
 test.before(async () => {
   database = createIsolatedDatabase()
   ;({ prisma } = await import('@/lib/storage/prisma'))
+  store = await import('@/lib/fault-injection/store')
+  ;({ buildFiTraceMarkers } = await import('@/lib/fault-injection/trace-markers'))
   ;({ POST: collect } = await import('@/app/api/fault-injection/runs/[runId]/collect-result/route'))
   ;({ GET: trace } = await import('@/app/api/fault-injection/runs/[runId]/trace/route'))
   ;({ POST: rejudge } = await import('@/app/api/fault-injection/runs/[runId]/rejudge/route'))
@@ -142,13 +147,13 @@ for (const faultActivated of [true, false]) {
     assert.equal(networkCalls, 0)
     const saved = await prisma.faultInjectionRun.findUniqueOrThrow({ where: { id: data.run.id } })
     assert.equal(saved.faultActivated, faultActivated)
+    assert.equal(saved.sessionTaskId, data.sessionId)
     assert.equal(saved.judgedAt, null)
     assert.equal(saved.judgeRawJson, null)
     assert.equal(saved.outcome, null)
     assert.deepEqual(JSON.parse(saved.markersJson || '[]').map((m: { id: string }) => m.id), ['activation'])
     assert.equal((await prisma.faultInjectionTask.findUniqueOrThrow({ where: { id: data.task.id } })).status, 'completed')
-    assert.equal(await prisma.session.findUnique({ where: { taskId: data.sessionId } }), null)
-    assert.equal(await prisma.execution.count({ where: { taskId: data.sessionId } }), 0)
+    await assertNoSyntheticTrace(data.sessionId)
     assert.equal((await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })).executionId, null)
 
     const messages = [{ role: 'assistant', content: 'independent business trace' }]
@@ -221,3 +226,102 @@ test('legacy FI judgments remain readable, while rejudge returns 410 without mod
   assert.deepEqual(body.judge, { outcome: 'occurred', faultContainmentStatus: 'recovered', reason: 'historical verdict' })
   assert.equal(body.markers.some((m: { kind: string }) => m.kind === 'evaluation'), true)
 })
+
+async function assertNoSyntheticTrace(sessionTaskId: string) {
+  assert.equal(await prisma.session.findUnique({ where: { taskId: sessionTaskId } }), null)
+  assert.equal(await prisma.execution.findFirst({ where: { OR: [{ id: sessionTaskId }, { taskId: sessionTaskId }] } }), null)
+}
+
+test('direct collect completes a running Run without creating Session or Execution', async () => {
+  const data = await fixture()
+  await prisma.faultInjectionRun.update({ where: { id: data.run.id }, data: { status: 'running' } })
+  const payload: CollectPayload = {
+    runId: data.run.runId, taskId: data.sessionId, framework: 'opencode',
+    fault: 'step-omission', injectionMethod: 'skill_inject', faultActivated: false,
+    interactions: [], markers: [],
+  }
+  const collected = await store.persistFiCollectIngress({ runId: data.run.runId, user, payload })
+  assert.equal(collected.sessionTaskId, data.sessionId)
+  assert.equal(collected.status, 'completed')
+  await assertNoSyntheticTrace(data.sessionId)
+})
+
+test('task creation and direct collect retain FI markers and complete progress without Judge or synthetic Trace', async () => {
+  const { task, runs } = await store.createTaskWithRuns({
+    user, name: 'e2e-ingest', platform: 'opencode', agent: 'build',
+    prompt: 'e2e prompt', workspace: '/tmp/fi-e2e-workspace', items: [{ fault: 'step-omission' }],
+  })
+  assert.equal(runs.length, 1)
+  const run = runs[0]
+  const now = Date.now()
+  const payload: CollectPayload = {
+    runId: run.runId, taskId: `ses_fi_e2e_${run.runId}`, framework: 'opencode',
+    fault: 'step-omission', injectionMethod: 'skill_inject', faultActivated: false,
+    faultActivatedAt: now, interactions: [],
+    markers: [{ id: `${run.runId}-activation`, kind: 'fault_activation', label: 'Fault activated', timestamp: now, severity: 'warning', payload: {} }],
+  }
+  assert.equal(payload.interactions.length, 0)
+  assert.equal(payload.faultActivated, false)
+  const collected = await store.persistFiCollectIngress({ runId: run.runId, user, payload })
+  assert.equal(collected.status, 'completed')
+  assert.equal(collected.sessionTaskId, payload.taskId)
+  assert.ok(collected.sessionTaskId)
+  assert.equal(collected.judgedAt, null)
+  assert.equal(collected.judgeRawJson, null)
+  await assertNoSyntheticTrace(collected.sessionTaskId)
+  const markers = buildFiTraceMarkers(JSON.parse(collected.markersJson || '[]'))
+  assert.ok(markers.length >= 1)
+  assert.ok(markers.every(marker => marker.source === 'fi'))
+  const updatedTask = await store.refreshTaskProgress(task.id)
+  assert.ok(updatedTask)
+  assert.equal(updatedTask.status, 'completed')
+})
+
+for (const faultActivated of [true, false]) {
+  test('collection finishes without model requests or waiting for late Trace; activated=' + faultActivated, async () => {
+    const data = await fixture()
+    const realFetch = globalThis.fetch
+    let networkCalls = 0
+    globalThis.fetch = async () => { networkCalls++; throw new Error('FI collection must not call a model') }
+    let response: Response
+    try {
+      response = await upload(data.run.runId, {
+        taskId: data.sessionId, sessionAligned: true, faultActivated,
+        injectionMethod: 'skill_inject', interactions: [{ role: 'assistant', content: 'untrusted trace' }],
+        markers: [
+          { id: 'activation', kind: 'fault_activation', label: 'Fault activation completed' },
+          { id: 'fake-judge', kind: 'evaluation', label: 'Evaluation completed' },
+        ],
+      })
+    } finally { globalThis.fetch = realFetch }
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).status, 'completed')
+    assert.equal(networkCalls, 0)
+    const saved = await prisma.faultInjectionRun.findUniqueOrThrow({ where: { id: data.run.id } })
+    assert.equal(saved.faultActivated, faultActivated)
+    assert.equal(saved.sessionTaskId, data.sessionId)
+    assert.equal(saved.judgedAt, null)
+    assert.equal(saved.judgeRawJson, null)
+    assert.equal(saved.outcome, null)
+    assert.deepEqual(JSON.parse(saved.markersJson || '[]').map((m: { id: string }) => m.id), ['activation'])
+    assert.equal((await prisma.faultInjectionTask.findUniqueOrThrow({ where: { id: data.task.id } })).status, 'completed')
+    await assertNoSyntheticTrace(data.sessionId)
+    assert.equal((await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })).executionId, null)
+
+    const messages = [{ role: 'assistant', content: 'independent business trace' }]
+    await prisma.session.create({ data: { user, taskId: data.sessionId, interactions: JSON.stringify(messages), endTime: new Date() } })
+    await prisma.execution.create({ data: { user, taskId: data.sessionId, agentName: 'build', framework: 'opencode' } })
+    const { awaitFiSessionsAndBindExperimentCases } = await import('@/lib/engine/experiment/fi-orchestrate')
+    const bound = await awaitFiSessionsAndBindExperimentCases({ runIds: [saved.runId], waitForActiveRuns: true })
+    assert.deepEqual(bound.readyRunIds, [saved.runId])
+    assert.ok((await prisma.experimentCase.findUniqueOrThrow({ where: { id: data.row.id } })).executionId)
+    assert.deepEqual(JSON.parse((await prisma.session.findUniqueOrThrow({ where: { taskId: data.sessionId } })).interactions!), messages)
+
+    const viewed = await trace(new Request('http://localhost/api/fault-injection/runs/' + saved.runId + '/trace?user=' + user),
+      { params: Promise.resolve({ runId: saved.runId }) })
+    const body = await viewed.json()
+    assert.equal(body.judge, null)
+    assert.equal(body.markers.some((m: { kind: string }) => m.kind === 'evaluation'), false)
+    assert.equal(body.rasMarkers.length, 0)
+  })
+}

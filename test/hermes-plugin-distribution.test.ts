@@ -163,3 +163,25 @@ test("Hermes plugin retains root snapshots until all subagents finish", () => {
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
+
+test("Hermes plugin preserves native observer tool error details", () => {
+  const pluginPath = path.join(process.cwd(), "scripts/hermes_agent_insight_plugin.py")
+  const script = [
+    "import importlib.util, threading",
+    `spec = importlib.util.spec_from_file_location('hermes_tool_error_test', ${JSON.stringify(pluginPath)})`,
+    "module = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(module)",
+    "collector = module._Collector.__new__(module._Collector)",
+    "collector.lock = threading.RLock()",
+    "collector.max_chars = 1000",
+    "collector.tool_spans = {'call-1': {'span': {}, 'session_id': 's'}}",
+    "captured = {}",
+    "collector._finish_span = lambda span, attrs: captured.update(attrs)",
+    "collector._complete = lambda *args: None",
+    "collector.post_tool_call(tool_name='audit_tool', tool_call_id='call-1', status='error', result='failed', error_message='native failure')",
+    "assert captured['tool.status'] == 'error'",
+    "assert captured['error.message'] == 'native failure'",
+  ].join("\n")
+  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+})

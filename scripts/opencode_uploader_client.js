@@ -740,6 +740,8 @@ function buildState(records) {
           ...(payload.status_code ? { status_code: payload.status_code } : {}),
           ...(payload.error_type ? { error_type: payload.error_type } : {}),
           ...(payload.call_id ? { call_id: payload.call_id } : {}),
+          ...(payload.upstream_request_id ? { upstream_request_id: payload.upstream_request_id,
+            upstream_request_id_source: payload.upstream_request_id_source || 'model-response-header' } : {}),
         })
       }
       inferenceByMessage.set(key, current)
@@ -875,17 +877,49 @@ function buildState(records) {
       const props = ev?.properties || {}
       const mid = props.messageID
       const sid = props.sessionID || r.sessionID
-      const pid = props.partID
+      // `partID` is optional on the wire. Keep a per-message bucket when it is
+      // absent so a CLI stream is still reconstructable.
+      const pid = typeof props.partID === "string" && props.partID ? props.partID : ""
       const field = typeof props.field === "string" && props.field ? props.field : "text"
       const delta = typeof props.delta === "string" ? props.delta : ""
-      if (!sid || !mid || !pid || !delta) continue
+      if (!sid || !mid || !delta) continue
       const eventId = typeof ev?.id === "string" ? ev.id : ""
       if (eventId && seenDeltaEventIds.has(eventId)) continue
       if (eventId) seenDeltaEventIds.add(eventId)
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
-      const key = `${mid}:${pid}:${field}`
+      const bucketId = pid || `delta-${field}`
+      const key = `${mid}:${bucketId}:${field}`
       partDeltas.set(key, `${partDeltas.get(key) || ""}${delta}`)
+
+      // CLI mode (`opencode run`) can exit before the deferred
+      // `message.updated` / `message.part.updated` sync events are published,
+      // while `message.part.delta` is emitted synchronously. Without these
+      // synthetic shells the streamed answer (and its message) would be
+      // dropped entirely by buildMessagesForSession(). A later real
+      // part.updated/message.updated with the same ids merges/overrides them.
+      if (!msgInfo.has(mid)) {
+        msgInfo.set(mid, {
+          id: mid,
+          sessionID: sid,
+          role: "assistant",
+          time: { created: toMsTimestamp(r?.t) ?? Date.now() },
+        })
+      }
+      if (!msgParts.has(mid)) msgParts.set(mid, [])
+      const parts = msgParts.get(mid)
+      if (!parts.some((part) => part?.id === bucketId)) {
+        parts.push({
+          id: bucketId,
+          messageID: mid,
+          sessionID: sid,
+          // The delta protocol does not carry the part type (reasoning deltas
+          // also use field="text"); default to text and let a real snapshot
+          // correct it.
+          type: "text",
+          text: "",
+        })
+      }
       continue
     }
   }
@@ -1069,6 +1103,71 @@ function collectTextPartContent(parts, mid, partText, partDeltas) {
   return buf.join("")
 }
 
+// Deltas without `partID` are accumulated in a synthetic `delta-<field>` part.
+// When OpenCode later flushes the real part snapshot, it carries the same text
+// already completed; keeping both would duplicate the answer in the transcript.
+function isSyntheticDeltaPart(part) {
+  return typeof part?.id === "string" && part.id.startsWith("delta-")
+}
+
+// Compare the streamed bucket with real `text` snapshots by content instead of
+// assuming a snapshot always supersedes it: a partially published snapshot (or
+// a reasoning-only snapshot, which cannot carry the answer) must not truncate
+// the streamed answer.
+function preferRealParts(parts, mid, partText, partDeltas) {
+  const list = parts || []
+  const syntheticParts = list.filter(isSyntheticDeltaPart)
+  if (!syntheticParts.length) return list
+  const realTextParts = list.filter((part) => !isSyntheticDeltaPart(part)
+    && (part?.type || "").toLowerCase() === "text")
+  if (!realTextParts.length) return list
+
+  const dropped = new Set()
+  for (const synthetic of syntheticParts) {
+    const streamed = resolvePartField(synthetic, mid, partText, partDeltas)
+    if (!streamed) { dropped.add(synthetic); continue }
+    for (const real of realTextParts) {
+      const snapshot = resolvePartField(real, mid, partText, partDeltas)
+      if (!snapshot) continue
+      // Snapshot already completed (or contains) the stream: the bucket is a
+      // duplicate. Stream longer than the snapshot: the snapshot is stale, so
+      // drop it and keep the complete stream.
+      if (snapshot.includes(streamed)) dropped.add(synthetic)
+      else if (streamed.includes(snapshot)) dropped.add(real)
+    }
+  }
+  return dropped.size ? list.filter((part) => !dropped.has(part)) : list
+}
+
+// 上游是否真的给了 usage。全 0 的 token 对象（TUI 之外的部分版本、以及 CLI
+// 退出时丢失 message.updated 后由占位逻辑补出来的空对象）不能当成"用量为 0"，
+// 否则界面会把"未提供"显示成有效的 0。
+function hasReportedTokenUsage(tokens) {
+  if (!tokens || typeof tokens !== "object") return false
+  const values = [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+  return values.some((value) => Number(value) > 0)
+}
+
+// CLI 模式可能丢掉带 tokens 的 message.updated，但 step-finish part 里带着同一份
+// usage。把它作为 message 级 usage 的兜底来源。
+function usageFromStepFinishParts(parts) {
+  let found = false
+  const sum = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "step-finish") continue
+    const t = p?.tokens
+    if (!t || typeof t !== "object") continue
+    found = true
+    sum.input += Number(t.input || 0) || 0
+    sum.output += Number(t.output || 0) || 0
+    sum.reasoning += Number(t.reasoning || 0) || 0
+    sum.cache.read += Number(t.cache?.read || 0) || 0
+    sum.cache.write += Number(t.cache?.write || 0) || 0
+  }
+  if (!found || !hasReportedTokenUsage(sum)) return undefined
+  return sum
+}
+
 function buildMessagesForSession(state, sid) {
   const { msgInfo, msgParts, partText, partDeltas, userTextByMsg } = state
   const messages = []
@@ -1078,6 +1177,7 @@ function buildMessagesForSession(state, sid) {
     const role = info?.role
     const created = info?.time?.created
     const completed = info?.time?.completed
+    const rawParts = preferRealParts(msgParts.get(mid) || [], mid, partText, partDeltas)
 
     let content = ""
     if (role === "user") {
@@ -1085,15 +1185,14 @@ function buildMessagesForSession(state, sid) {
       // part may contain the expanded routing prompt instead of what the user
       // typed. Its message id comes from output.message.id on current OpenCode.
       content = userTextByMsg.get(mid) || ""
-      if (!content) content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
+      if (!content) content = collectTextPartContent(rawParts, mid, partText, partDeltas)
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
+      content = collectTextPartContent(rawParts, mid, partText, partDeltas)
     }
 
     const tool_calls = []
-    const parts = msgParts.get(mid) || []
-    for (const p of parts) {
+    for (const p of rawParts) {
       if ((p?.type || "").toLowerCase() !== "tool") continue
       const callID = p?.callID || p?.callId || p?.id
       const tool = p?.tool
@@ -1110,7 +1209,9 @@ function buildMessagesForSession(state, sid) {
       })
     }
 
-    const tokens = info?.tokens
+    const tokens = hasReportedTokenUsage(info?.tokens)
+      ? info.tokens
+      : usageFromStepFinishParts(rawParts)
     const u = tokens
       ? {
           input: tokens.input,
@@ -1126,7 +1227,6 @@ function buildMessagesForSession(state, sid) {
     // and so compaction-trigger user messages (which carry only a "compaction"
     // part with no text) are not silently dropped. messageID/sessionID on each
     // part are redundant with the enclosing message — strip them.
-    const rawParts = msgParts.get(mid) || []
     const partsOut = rawParts.length
       ? rawParts.map((p) => {
           const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
@@ -1178,6 +1278,14 @@ function buildMessagesForSession(state, sid) {
       m.inference_attempts = [...inference.attempts.values()]
       const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
       if (callIds.length) m.inference_call_ids = callIds
+      const upstreamIds = [...new Map(m.inference_attempts
+        .filter(attempt => attempt.call_id && attempt.upstream_request_id)
+        .map(attempt => [`${attempt.call_id}\u0000${attempt.upstream_request_id}`, {
+          call_id: attempt.call_id,
+          request_id: attempt.upstream_request_id,
+          source: attempt.upstream_request_id_source || 'model-response-header',
+        }])).values()]
+      if (upstreamIds.length) m.inference_upstream_request_ids = upstreamIds
       if (!m.error_summary && !m.content && !m.toolCalls?.length) {
         const errors = callIds.map(id => state.inferenceErrors?.get(JSON.stringify([sid, id]))).filter(Boolean)
         if (errors.length === 1) { m.status = 'error'; m.error_summary = errors[0] }
@@ -1234,7 +1342,9 @@ function applyInferenceGatewayRecords(state, insightDir, apiKey) {
         current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: expected,
           ...(lateMessageId ? { transport_request_id: call.request_id } : {}),
           attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
-          status_code: call.status_code, error_type: call.error_type, state: call.state })
+          status_code: call.status_code, error_type: call.error_type, state: call.state,
+          ...(call.upstream_request_id ? { upstream_request_id: call.upstream_request_id,
+            upstream_request_id_source: 'model-response-header' } : {}) })
         state.inferenceByMessage.set(key, current)
       } else {
         const unassigned = state.inferenceUnassigned.get(sid) || []
@@ -1316,6 +1426,9 @@ function deriveFields(interactions) {
   let toolCallCount = 0
   let toolCallErrorCount = 0
   let maxSingleCallTokens = 0
+  // 至少有一条 completion 消息带真实 usage 时才认为上游提供了用量。否则 token
+  // 字段留空（undefined），让服务端/界面区分「未提供」和「确实为 0」。
+  let usageReported = false
 
   for (const m of interactions || []) {
     if (!m) continue
@@ -1330,6 +1443,9 @@ function deriveFields(interactions) {
     llmCallCount++
     const u = m.usage
     if (u) {
+      // 与 server 端 deriveOpencodeExecutionFields / buildAgentCallTree 保持同一判定：
+      // 全 0 的 usage 对象视为「未上报」，不能因此把 tokens 标成有效的 0。
+      if (hasReportedTokenUsage(u)) usageReported = true
       const input = Number(u.input || 0) || 0
       const rawOutput = Number(u.output || 0) || 0
       const cacheRead = Number(u.cache?.read || 0) || 0
@@ -1365,17 +1481,18 @@ function deriveFields(interactions) {
   return {
     model: model || undefined,
     final_result: finalResult || undefined,
-    tokens: Math.round(totalTokens),
+    usageReported,
+    tokens: usageReported ? Math.round(totalTokens) : undefined,
     latency: totalLatencyMs / 1000,
-    input_tokens: Math.round(totalInputTokens),
-    output_tokens: Math.round(totalOutputTokens),
+    input_tokens: usageReported ? Math.round(totalInputTokens) : undefined,
+    output_tokens: usageReported ? Math.round(totalOutputTokens) : undefined,
     tool_call_count: toolCallCount,
     tool_call_error_count: toolCallErrorCount,
     llm_call_count: llmCallCount,
-    cache_read_input_tokens: Math.round(totalCacheReadInputTokens),
-    cache_creation_input_tokens: Math.round(totalCacheCreationInputTokens),
-    max_single_call_tokens: Math.round(maxSingleCallTokens),
-    reasoning_tokens: Math.round(totalReasoningTokens),
+    cache_read_input_tokens: usageReported ? Math.round(totalCacheReadInputTokens) : undefined,
+    cache_creation_input_tokens: usageReported ? Math.round(totalCacheCreationInputTokens) : undefined,
+    max_single_call_tokens: usageReported ? Math.round(maxSingleCallTokens) : undefined,
+    reasoning_tokens: usageReported ? Math.round(totalReasoningTokens) : undefined,
   }
 }
 

@@ -27,19 +27,19 @@ import { resolveTraceTimeRange } from '@/lib/client/trace-time-range';
 const source = fs.readFileSync(new URL('../src/app/(main)/trace/page.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('trace.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
-function findNode(predicate: (node: ts.Node) => boolean, sourceFile = ast): ts.Node {
+function findNode(predicate: (node: ts.Node) => boolean, parsedSource = ast): ts.Node {
     let result: ts.Node | undefined;
     function visit(node: ts.Node) {
         if (!result && predicate(node)) result = node;
         ts.forEachChild(node, visit);
     }
-    visit(sourceFile);
+    visit(parsedSource);
     assert.ok(result, 'production callback must exist');
     return result;
 }
 
-function expression(node: ts.Node, scope: Record<string, unknown>, sourceFile = ast): any {
-    const js = ts.transpileModule(`const value = ${node.getText(sourceFile)};`, {
+function expression(node: ts.Node, scope: Record<string, unknown>, parsedSource = ast): any {
+    const js = ts.transpileModule(`const value = ${node.getText(parsedSource)};`, {
         compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
     return new Function(...Object.keys(scope), `${js}; return value;`)(...Object.values(scope));
@@ -208,7 +208,7 @@ test('statistics refresh independently, avoid overlapping requests and ignore ob
         setStatsError: (value: boolean) => { error = value; },
         setStatsLoading: (value: boolean) => { loading = value; },
         TRACE_STATS_REFRESH_MS: 30_000,
-        document: { visibilityState: 'visible' },
+        document: { visibilityState: 'visible', addEventListener: () => {}, removeEventListener: () => {} },
         window: { setInterval: (callback: () => void) => { tick = callback; return 1; }, clearInterval: () => {} },
         apiFetch: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
     };
@@ -288,7 +288,9 @@ const selectCallback = (selectDeclaration.initializer as ts.CallExpression).argu
 const importSource = fs.readFileSync(new URL('../src/components/trace/trace-batch-import-dialog.tsx', import.meta.url), 'utf8');
 const importAst = ts.createSourceFile('trace-batch-import-dialog.tsx', importSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const importClick = findNode(node => ts.isJsxAttribute(node) && node.name.getText(importAst) === 'onClick'
-    && Boolean(node.initializer?.getText(importAst).includes('item.result?.rootTaskId')), importAst) as ts.JsxAttribute;
+    && Boolean(node.initializer?.getText(importAst).includes('window.open')), importAst) as ts.JsxAttribute;
+const detailPathDeclaration = findNode(node => ts.isVariableDeclaration(node)
+    && node.name.getText(importAst) === 'TRACE_DETAIL_PATH', importAst) as ts.VariableDeclaration;
 
 async function navigationHarness(run: (scope: Record<string, unknown>) => void, initialQuery = '?page=3&status=failed') {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -337,20 +339,23 @@ test('opening a list Trace adds history so Back and Forward retain list filters'
     assert.equal(history.at(-1), '/trace?page=3&status=failed&taskId=trace-123');
 });
 
-test('opening an imported Trace uses its existing separate detail tab and preserves the list URL', () => {
+test('opening a batch-imported Trace uses a separate tab and preserves the filtered list', () => {
     const callback = (importClick.initializer as ts.JsxExpression).expression!;
-    for (const [result, target] of [
-        [{ rootTaskId: 'trace 123', rootExecutionId: 'execution-123' }, 'trace%20123'],
-        [{ rootTaskId: null, rootExecutionId: 'execution-123' }, 'execution-123'],
-        [{}, null],
-    ] as const) {
-        const opened: unknown[][] = [];
-        expression(callback, {
-            item: { result }, basePath: '/insight', TRACE_DETAIL_PATH: '/trace',
-            window: { open: (...args: unknown[]) => { opened.push(args); } },
-        }, importAst)();
-        assert.deepEqual(opened, target ? [[`/insight/trace?taskId=${target}`, '_blank', 'noopener']] : []);
-    }
+    const location = new URL('https://example.test/insight/trace?page=3&status=failed');
+    const calls: unknown[][] = [];
+    const open = (result: { rootTaskId?: string | null; rootExecutionId?: string } | undefined) => expression(callback, {
+        item: { result }, basePath: '/insight',
+        TRACE_DETAIL_PATH: expression(detailPathDeclaration.initializer!, {}, importAst),
+        window: { location, open: (...args: unknown[]) => calls.push(args) },
+    }, importAst)();
+    open({ rootTaskId: 'trace:123 /?&', rootExecutionId: 'execution-123' });
+    assert.deepEqual(calls.pop(), ['/insight/trace?taskId=trace%3A123%20%2F%3F%26', '_blank', 'noopener']);
+    open({ rootTaskId: null, rootExecutionId: 'execution-123' });
+    assert.deepEqual(calls.pop(), ['/insight/trace?taskId=execution-123', '_blank', 'noopener']);
+    open(undefined);
+    open({});
+    assert.equal(calls.length, 0);
+    assert.equal(location.href, 'https://example.test/insight/trace?page=3&status=failed');
 });
 
 test('the in-page return-to-list action replaces detail state instead of adding another entry', async () => {

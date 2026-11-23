@@ -75,3 +75,15 @@ test('a background runtime composes fresh identity scopes after its original HTT
  },{fetcher:async()=>Response.json({principal_id:'p',username:'owner',workspace_id:'w',workspaces:[{workspace_id:'w'}]})});assert.equal(ran,true);
  }finally{if(old===undefined)delete process.env.AGENT_INSIGHT_STORAGE_CORE_URL;else process.env.AGENT_INSIGHT_STORAGE_CORE_URL=old;}
 });
+
+
+test('explicit model protocol is frozen and cannot be replaced on an existing queued selection', async () => {
+ const { freezeModelSelection, matchesFrozenModelSelection } = await import('../src/lib/storage-core/frozen-model');
+ const config={id:'protocol-test',name:'Protocol',provider:'custom',model:'same-model',apiKey:'',baseUrl:'https://gateway.test/v1'};
+ const previous=freezeModelSelection(config)!;
+ assert.equal(matchesFrozenModelSelection(config,previous),true);
+ const native={...config,protocol:'anthropic' as const};
+ assert.notEqual(freezeModelSelection(native)?.connection_hash,previous.connection_hash);
+ assert.equal(matchesFrozenModelSelection(native,previous),false);
+ assert.equal(matchesFrozenModelSelection(native,freezeModelSelection(native)!),true);
+});

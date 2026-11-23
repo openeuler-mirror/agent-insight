@@ -11,7 +11,7 @@ changefreq: "monthly"
 
 平台先从启动环境确定 `AGENT_INSIGHT_HOME`，默认是当前运行用户的 `~/.agent-insight`，然后读取该目录下的 `.env`。`AGENT_INSIGHT_HOME` 应在启动命令、systemd 或 Docker 环境中指定，不能靠运行根内的 `.env` 选择运行根自身。
 
-通过 npm CLI 启动时，平台端口优先级为 `--port`、进程环境 `AGENT_INSIGHT_PORT`、运行根 `.env`、默认 `3000`；SQLite 地址优先使用进程环境中的 `DATABASE_URL`，其次为运行根 `.env`，空值使用默认路径。源码 `scripts/start.sh` 也保留这些显式启动覆盖。其他配置按各读取点处理，不把这一顺序泛化成所有独立服务的统一约定。
+通过 npm CLI 启动时，平台端口优先级为 `--port`、进程环境 `AGENT_INSIGHT_PORT`、运行根 `.env`、默认 `3000`；运行时数据库连接由 Storage Core 配置文件管理，Web 不使用 `DATABASE_URL` 连接旧业务库。源码 `scripts/start.sh` 也保留这些显式启动覆盖。其他配置按各读取点处理，不把这一顺序泛化成所有独立服务的统一约定。
 
 `.env.example` 是模板。首次启动可据此创建运行配置；修改模板不会改变已存在的运行根 `.env`。平台配置修改后通常需重启，前端构建变量还需重新构建。热更新例外见下方评测配置。
 
@@ -21,10 +21,9 @@ changefreq: "monthly"
 | --- | --- | --- |
 | `AGENT_INSIGHT_HOME` | 平台运行根，默认 `~/.agent-insight` | 启动环境；建议绝对路径，包含 `.env` 和 `data/`，不等于仓库目录 |
 | `AGENT_INSIGHT_PORT` | 平台 HTTP 端口，默认 `3000` | 平台配置或启动环境；整数 `1`～`65535`，`--port` 可覆盖 |
-| `DATABASE_URL` | SQLite 地址；空值默认运行根下 `data/witty_insight.db` | 平台配置或启动环境；显式 SQLite 地址使用 `file:/绝对路径`，迁移运行根时检查旧绝对路径 |
-| `DB_HOST` | 可选 OpenGauss 主机，无默认值 | 仅在采用该数据库部署方案时设置；与端口、库名和凭据一起核对 |
-| `DB_PORT` | OpenGauss 端口 | 建议显式设置：平台默认 `5432`，初始化脚本默认 `26000`，需与实例一致 |
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | OpenGauss 库名、用户、密码；模板说明默认库名 `postgres`、用户 `omm`，密码无默认值 | 仅在实际部署配置保存凭据；不能通过复制 SQLite 文件完成该数据库备份 |
+| `AGENT_INSIGHT_STORAGE_CORE_URL` | 必需的本机 Storage Core HTTP 地址 | 事务库与 ClickHouse 的连接配置属于 Core；见 [Storage Core](./storage-core.md) |
+| `AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE` | 私有控制器凭据文件 | 仅服务端读取；与 Core 的 `controller_key_file` 一致 |
+| `DATABASE_URL` / `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | 历史数据库工具配置 | 仅用于显式离线迁移或隔离历史夹具；不能启用在线单库模式 |
 | `AGENT_INSIGHT_CONFIG_DIR` | Benchmark 配置目录；空值使用安装目录的 `config/benchmark/` | 指定时使用绝对路径；不是平台运行根，也不替代运行根 `.env` |
 | `NEXT_PUBLIC_URL_PREFIX` | 前端 URL 前缀 | 修改后须重新构建。源码启动使用构建产物中的前缀探测页面是否就绪。 |
 
@@ -32,7 +31,7 @@ changefreq: "monthly"
 
 ## 模型与客户端
 
-默认模型使用 `DEFAULT_MODEL_<N>_<FIELD>` 连续编号，从 `1` 开始；某组缺少 `NAME`、`PROVIDER` 或 `API_KEY` 时，不再读取后续组。建议同时明确填写 `BASE_URL` 和 `MODEL`，不要假定各调用路径会按提供商自动选择相同默认地址。由环境定义的模型在界面中只读，界面新增模型仍按[模型注册](../../how-to/platform/settings/model-registry.md)处理。
+默认模型使用 `DEFAULT_MODEL_<N>_<FIELD>` 连续编号，从 `1` 开始；某组缺少 `NAME` 或 `PROVIDER` 时，不再读取后续组。建议同时明确填写 `BASE_URL` 和 `MODEL`，不要假定各调用路径会按提供商自动选择相同默认地址。`API_KEY` 可留空，留空不发送默认鉴权头；可选 `PROTOCOL` 为 `openai-compatible` / `anthropic`，缺省保留历史行为；可选 `HEADERS` 为自定义请求头 JSON，例如 `{"X-Tenant":"example"}`，同名头覆盖标准鉴权。由环境定义的模型在界面中只读，界面新增模型仍按[模型注册](../../how-to/platform/settings/model-registry.md)处理。
 
 客户端的服务地址、API Key 和安装配置见[客户端安装](../../how-to/platform/settings/access-control.md)。每台客户端有自己的运行环境；不要把多台机器的运行根映射为同一个共享目录。需要多个平台实例时，每个实例使用独立运行根、数据库和端口。
 

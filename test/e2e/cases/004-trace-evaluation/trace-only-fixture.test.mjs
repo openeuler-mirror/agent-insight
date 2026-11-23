@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { traceBaselineFiles } from './trace-only-contract.mjs';
 
 const script=new URL('./fixtures/trace_root_ssh.py',import.meta.url).pathname;
-const input=path.resolve('public/example/messages');
+const input=path.resolve('test/e2e/fixtures/messages');
 test('004 fixed script returns four actual log facts and original evidence without modifying input',()=>{
  const hash=()=>createHash('sha256').update(fs.readFileSync(input)).digest('hex'),before=hash();
  const result=spawnSync(process.env.E2E_PYTHON||'/opt/homebrew/bin/python3',[script,input],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);

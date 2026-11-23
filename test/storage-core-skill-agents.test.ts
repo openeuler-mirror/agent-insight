@@ -1,3 +1,5 @@
+import * as modelConnection from '../src/lib/shared/model-connection';
+import { getModelClientConfig } from '../src/lib/server/model-client';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -57,7 +59,7 @@ function harness(t:test.TestContext,options:{force?:boolean;directError?:boolean
  };
  function load(file:string){
   const exports:Record<string,any>={};const output=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;
-  vm.runInNewContext(output,{exports,require:(name:string)=>{if(name in deps)return deps[name];if(name.startsWith('node:'))return nativeRequire(name);throw Error('Unexpected dependency '+name);},process,Date,Error,Promise,AbortSignal,AbortController,structuredClone,setTimeout,clearTimeout,Buffer,fetch,console:{log:()=>{},warn:()=>{}}});
+  vm.runInNewContext(output,{exports,require:(name:string)=>{if(name==='@/lib/shared/model-connection')return modelConnection;if(name==='@/lib/server/model-client')return {getModelClientConfig};if(name in deps)return deps[name];if(name.startsWith('node:'))return nativeRequire(name);throw Error('Unexpected dependency '+name);},process,Date,Error,Promise,AbortSignal,AbortController,structuredClone,setTimeout,clearTimeout,Buffer,fetch,console:{log:()=>{},warn:()=>{}}});
   return exports;
  }
  const trajectory=load('src/lib/engine/evaluation/opencode-trajectory-evaluator.ts');const suggestion=load('src/lib/engine/evaluation/skill-suggestion-agent.ts');

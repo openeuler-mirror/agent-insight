@@ -1,6 +1,6 @@
 ---
 title: "入门教程"
-description: "汇集首次接入、运行示例和首次评测的分步教程，帮助用户完成平台入门。"
+description: "汇集首次接入和首次评测的分步教程，帮助用户完成平台入门。"
 keywords: ["Agent Insight", "入门教程", "智能体接入", "首次评测"]
 changefreq: "monthly"
 ---
@@ -12,11 +12,10 @@ changefreq: "monthly"
 ## 平台公共
 
 - [5 分钟上手](./platform/01-quick-start.md)（含 OpenCode 1.x / 2.x 接入与 Skill 实验准备）
-- [内置示例端到端走查](./platform/02-example-walkthrough.md)
 
 ## 观测
 
-- [查看调用树与工具详情](../how-to/observability/view-traces.md#详情页总览)：有明确关联证据的普通 Tool Call 会缩进到对应 LLM 下；Skill、TASK 和子 Agent 保持原有层级。
+- [查看调用树与工具详情](../how-to/observability/view-traces.md#详情页总览)：有明确关联证据的普通 Tool Call 会缩进到对应 LLM 下；Skill、TASK 和子 Agent 保持原有层级。Span 类型支持多选，可同时选择 User 与 LLM 连续回看对话。长会话可点击“跳到底部”跟随更新，上翻历史时暂停跟随。
 
 - 自建 Dify 可在「客户端安装」勾选 Dify，执行同一条 curl 命令自动配置原生 OTLP，并按 [Dify 原生 OTLP 接入](../how-to/observability/develop-trace-collector.md#dify-原生-otlp-接入)运行 Workflow；Agent 运行服务启用独立 trajectory 管线后，可逐步查看模型请求、工具参数与结果、已上报的 reasoning 和 Token。Workflow 详情可按节点执行 ID 关联内部 Agent，点击“立即刷新”查看晚到轨迹。已通过原生 Workflow 内两名 Agent v2 的真实 DeepSeek 运行及浏览器验证（7 次模型调用、4 次工具调用）；并发、重试等场景仍待真实验证。
 

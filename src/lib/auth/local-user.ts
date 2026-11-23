@@ -1,5 +1,4 @@
 import {withCoreControlRequest} from '@/lib/storage-core/control-context';
-import {isStorageCoreEnabled} from '@/lib/storage-core/mode';
 import {bootstrapCoreControlUser} from '@/lib/storage-core/control-auth';
 /*
  * Copyright (c) 2026 Huawei Technologies Co., Ltd.
@@ -17,15 +16,8 @@ import {bootstrapCoreControlUser} from '@/lib/storage-core/control-auth';
  * limitations under the License.
  */
 
-import crypto from 'node:crypto';
 import { db } from '@/lib/storage/prisma';
-import { seedBuiltinExampleForUser } from '@/server/builtin-example/seed';
 
-function isDuplicateUsernameError(error: any): boolean {
-  return error?.code === 'P2002'
-    || (error?.code === '23505'
-      && (error?.constraint?.includes('User_username_key') || error?.detail?.includes('username')));
-}
 
 interface ExternalAccountStore {
   findUserByExternalAccount(externalAccount: string): Promise<any>;
@@ -58,7 +50,6 @@ export async function findOrCreateLocalUser(username: string, rawExternalAccount
     const user=await bootstrapCoreControlUser(username,rawExternalAccount);
     return withCoreControlRequest(new Request('http://localhost/internal/local-user',{headers:{authorization:'Bearer '+user.apiKey}}),async()=>{
       const synced=await syncLocalUserExternalAccount(user,rawExternalAccount);
-      if(user._created)await seedBuiltinExampleForUser(synced.username);
       return synced;
     });
   }
