@@ -33,7 +33,7 @@ Agent RAS on Linux, WSL, or macOS needs Python 3.10+, pip, and shared libpython.
 
 Open the dashboard and sign in using the configured deployment mode:
 
-- Default `LOGIN_MODE=standalone`: enter your account and password on the login page (new accounts start with the username as the initial password; `admin` starts with `admin`), then select **Sign In**. Accounts are created, bulk-imported, or deleted by an administrator under Configuration → Accounts; a password must be changed right after the first sign-in. If sign-in fails, follow the message shown and retry.
+- Default `LOGIN_MODE=standalone`: enter your account and the initial password provided by your administrator on the login page, then select **Sign In**. Accounts are created, bulk-imported, or deleted by an administrator under Configuration → Accounts; set a new password immediately after the first sign-in. If sign-in fails, follow the message shown and retry.
 - `LOGIN_MODE=idaas_oauth`: choose unified identity login and authenticate through IDaaS. Its unique UUID becomes the local account and data owner. The sidebar prefers an account alias when provided, otherwise the UUID. Signing out and back in returns to unified authorization.
 - Legacy `ORGANIZATION_MODE=true`: keep using the existing organization gateway and Cookie flow; this is different from IDaaS OAuth.
 
