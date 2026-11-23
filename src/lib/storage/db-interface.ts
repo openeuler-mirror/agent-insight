@@ -18,6 +18,7 @@ import { loadAgentInsightEnv } from '@/lib/env';
 loadAgentInsightEnv();
 
 import { Pool, QueryResult } from 'pg';
+import { Prisma } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
 
@@ -138,7 +139,14 @@ class PrismaAdapter implements DatabaseAdapter {
     }
     
     async findUserByUsername(username: string) {
-        return this.client.user.findUnique({ where: { username } });
+        const exact = await this.client.user.findUnique({ where: { username } });
+        if (exact) return exact;
+        // 历史数据可能保留大小写；归一化后的登录名再按不区分大小写回退查找。
+        const rows = await this.client.$queryRaw<Array<{ username: string }>>(
+            Prisma.sql`SELECT username FROM "User" WHERE LOWER(username) = LOWER(${username}) LIMIT 1`,
+        );
+        const matched = rows[0]?.username;
+        return matched ? this.client.user.findUnique({ where: { username: matched } }) : null;
     }
 
     async findUserByExternalAccount(externalAccount: string) {
@@ -496,7 +504,13 @@ class OpenGaussAdapter implements DatabaseAdapter {
     
     async findUserByUsername(username: string) {
         const res = await this.query('SELECT * FROM "User" WHERE username = $1', [username]);
-        return res.rows[0] || null;
+        if (res.rows[0]) return res.rows[0];
+        // 历史数据可能保留大小写；归一化后的登录名再按不区分大小写回退查找。
+        const fallback = await this.query(
+            'SELECT * FROM "User" WHERE LOWER(username) = LOWER($1) LIMIT 1',
+            [username],
+        );
+        return fallback.rows[0] || null;
     }
 
     async findUserByExternalAccount(externalAccount: string) {

@@ -51,9 +51,12 @@ let routes: {
   changePassword: (request: Request) => Promise<Response>;
 };
 let prisma: typeof import('@/lib/storage/prisma').prisma;
+let db: typeof import('@/lib/storage/prisma').db;
 let hashPassword: typeof import('@/lib/auth/password').hashPassword;
 let verifyPassword: typeof import('@/lib/auth/password').verifyPassword;
 let resetLoginRateLimits: typeof import('@/lib/auth/login-rate-limit').resetLoginRateLimits;
+let validateAccountUsername: typeof import('@/lib/auth/local-user').validateAccountUsername;
+let normalizeAccountUsername: typeof import('@/lib/auth/local-user').normalizeAccountUsername;
 const previousAdmins = process.env.AGENT_INSIGHT_ADMIN_USERS;
 
 function requestWithKey(url: string, apiKey: string, init?: RequestInit): Request {
@@ -77,7 +80,7 @@ async function login(username: string, password?: string): Promise<Response> {
 
 test.before(async () => {
   process.env.AGENT_INSIGHT_ADMIN_USERS = adminName;
-  const [loginRoute, listRoute, changePasswordRoute, prismaModule, passwordModule, rateLimitModule] =
+  const [loginRoute, listRoute, changePasswordRoute, prismaModule, passwordModule, rateLimitModule, localUserModule] =
     await Promise.all([
       import('@/app/api/auth/apikey/route'),
       import('@/app/api/admin/accounts/route'),
@@ -85,6 +88,7 @@ test.before(async () => {
       import('@/lib/storage/prisma'),
       import('@/lib/auth/password'),
       import('@/lib/auth/login-rate-limit'),
+      import('@/lib/auth/local-user'),
     ]);
   const resetRoute = await import('@/app/api/admin/accounts/[username]/reset-password/route');
   const removeRoute = await import('@/app/api/admin/accounts/[username]/route');
@@ -102,9 +106,12 @@ test.before(async () => {
     changePassword: changePasswordRoute.POST,
   };
   prisma = prismaModule.prisma;
+  db = prismaModule.db;
   hashPassword = passwordModule.hashPassword;
   verifyPassword = passwordModule.verifyPassword;
   resetLoginRateLimits = rateLimitModule.resetLoginRateLimits;
+  validateAccountUsername = localUserModule.validateAccountUsername;
+  normalizeAccountUsername = localUserModule.normalizeAccountUsername;
 
   await prisma.user.create({
     data: {
@@ -234,6 +241,47 @@ test('批量导入创建账号并跳过重复与非法账号', async () => {
   assert.equal(nonAdmin.status, 403);
 });
 
+test('账号名只接受邮箱或受限的普通账号字符', () => {
+  for (const username of ['alice@example.com', 'alice.smith-1', '用户_1', 'team-01']) {
+    assert.equal(validateAccountUsername(normalizeAccountUsername(username)), null, username);
+  }
+  for (const username of [
+    'foo bar',
+    'foo\tbar',
+    'foo\nbar',
+    'foo$bar',
+    'foo|bar',
+    'foo,bar',
+    'foo@bar',
+    'foo/bar',
+    'foo\u0000bar',
+  ]) {
+    assert.ok(validateAccountUsername(normalizeAccountUsername(username)), username);
+  }
+});
+
+test('新建账号拒绝内部空白与控制字符', async () => {
+  for (const username of ['bad name', 'bad$name', 'bad|name']) {
+    const response = await routes.create(requestWithKey('http://localhost/api/admin/accounts', adminKey, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    }));
+    assert.equal(response.status, 400, username);
+  }
+});
+
+test('历史混合大小写账号可按归一化用户名查找', async () => {
+  const mixed = `Legacy-Case-${suffix}`;
+  await prisma.user.create({ data: { username: mixed, apiKey: `wi_${suffix}_case` } });
+  try {
+    assert.equal((await db.findUserByUsername(mixed))?.username, mixed);
+    assert.equal((await db.findUserByUsername(mixed.toLowerCase()))?.username, mixed);
+  } finally {
+    await prisma.user.deleteMany({ where: { username: mixed } });
+  }
+});
+
 test('创建管理员白名单中的账号需要先确认', async () => {
   const username = `created-admin-${suffix}`;
   process.env.AGENT_INSIGHT_ADMIN_USERS = `${adminName},${username}`;
@@ -329,6 +377,31 @@ test('删除账号仅管理员可用，且不能删除当前登录账号', async
   assert.equal(await prisma.user.findUnique({ where: { username: target } }), null);
 
   assert.equal((await remove(adminKey, target)).status, 404);
+});
+
+test('删除账号保留历史业务数据', async () => {
+  const target = `deleted-data-${suffix}`;
+  const taskId = `task-${suffix}`;
+  const skillName = `skill-${suffix}`;
+  await prisma.user.create({ data: { username: target, apiKey: `wi_${suffix}_data` } });
+  await prisma.session.create({ data: { taskId, user: target } });
+  await prisma.skill.create({ data: { name: skillName, user: target } });
+
+  try {
+    const response = await routes.remove(
+      requestWithKey(`http://localhost/api/admin/accounts/${encodeURIComponent(target)}`, adminKey, {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ username: target }) },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(await prisma.user.findUnique({ where: { username: target } }), null);
+    assert.equal(await prisma.session.count({ where: { taskId } }), 1);
+    assert.equal(await prisma.skill.count({ where: { name: skillName } }), 1);
+  } finally {
+    await prisma.session.deleteMany({ where: { taskId } });
+    await prisma.skill.deleteMany({ where: { name: skillName } });
+  }
 });
 
 test('首次设置密码不需要当前密码，之后改密需要原密码且 API Key 保持不变', async () => {

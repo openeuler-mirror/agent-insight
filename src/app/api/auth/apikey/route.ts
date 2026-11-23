@@ -131,13 +131,8 @@ export async function POST(request: Request) {
         { headers: { 'Cache-Control': 'no-store' } },
       );
     }
-    if (!password) {
-      return NextResponse.json(
-        { error: 'Password is required', code: 'password_required' },
-        { status: 400, headers: { 'Cache-Control': 'no-store' } },
-      );
-    }
-    if (!await verifyPassword(password, user.passwordHash)) {
+    // 缺少密码、密码错误与用户不存在统一返回同一条 401，避免通过响应差异枚举账号。
+    if (!password || !await verifyPassword(password, user.passwordHash)) {
       recordLoginFailure(rateLimitKey);
       return NextResponse.json(
         { error: 'Invalid username or password' },

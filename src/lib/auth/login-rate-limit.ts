@@ -17,6 +17,8 @@
 const WINDOW_MS = 5 * 60 * 1000;
 const MAX_FAILURES = 5;
 const PRUNE_THRESHOLD = 1000;
+const MAX_KEY_PART_LENGTH = 128;
+const UNKNOWN_CLIENT_IP = 'unknown';
 
 interface FailureEntry {
     count: number;
@@ -32,17 +34,23 @@ function pruneExpired(now: number) {
     }
 }
 
+function trustProxyHeaders(): boolean {
+    const raw = String(process.env.AGENT_INSIGHT_TRUST_PROXY_HEADERS || '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+// x-forwarded-for / x-real-ip 均可由客户端伪造。只有部署方声明位于可信代理之后
+// （且代理会覆盖这些头）时才采用；否则所有来源共用一个固定桶，避免换头绕过限流。
 export function resolveClientIp(request: Request): string {
+    if (!trustProxyHeaders()) return UNKNOWN_CLIENT_IP;
     const forwarded = request.headers.get('x-forwarded-for');
-    if (forwarded) {
-        const first = forwarded.split(',')[0]?.trim();
-        if (first) return first;
-    }
-    return request.headers.get('x-real-ip') || 'unknown';
+    const first = forwarded?.split(',')[0]?.trim();
+    const candidate = first || request.headers.get('x-real-ip')?.trim() || UNKNOWN_CLIENT_IP;
+    return candidate.slice(0, MAX_KEY_PART_LENGTH);
 }
 
 export function loginRateLimitKey(request: Request, username: string): string {
-    return `${resolveClientIp(request)}|${username.toLowerCase()}`;
+    return `${resolveClientIp(request)}|${username.trim().toLowerCase().slice(0, MAX_KEY_PART_LENGTH)}`;
 }
 
 export function checkLoginRateLimit(key: string): { allowed: boolean; retryAfterSeconds: number } {

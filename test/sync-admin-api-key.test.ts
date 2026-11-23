@@ -28,6 +28,7 @@ const {
   requestLoginMode,
   syncAdminApiKey,
   updateEnvFile,
+  verifyAdminApiKey,
 } = require("../scripts/sync_admin_api_key.js")
 
 test("updateEnvFile replaces upload credentials and preserves unrelated config", () => {
@@ -92,6 +93,7 @@ test("syncAdminApiKey preserves a client identity registered by setup", async ()
     host: "http://localhost:3100",
     requestLoginMode: async () => "standalone",
     readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    verifyAdminApiKey: async () => true,
   })
 
   assert.equal(result.preservedClientApiKey, true)
@@ -114,6 +116,7 @@ test("syncAdminApiKey initializes the client key only when none exists", async (
     host: "http://localhost:3200",
     requestLoginMode: async () => "standalone",
     readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    verifyAdminApiKey: async () => true,
   })
 
   assert.equal(result.preservedClientApiKey, false)
@@ -121,6 +124,58 @@ test("syncAdminApiKey initializes the client key only when none exists", async (
     readEnvValue(path.join(dataRoot, ".env"), "AGENT_INSIGHT_API_KEY"),
     "wi_admin",
   )
+})
+
+test("syncAdminApiKey refuses a stale admin key instead of writing it to env", async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-sync-"))
+  const envPath = path.join(dataRoot, ".env")
+  fs.writeFileSync(envPath, "ORGANIZATION_MODE=false\n")
+
+  await assert.rejects(
+    syncAdminApiKey({
+      dataRoot,
+      port: 3500,
+      host: "http://localhost:3500",
+      requestLoginMode: async () => "standalone",
+      readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_stale" }),
+      verifyAdminApiKey: async () => {
+        throw new Error("admin API key validation returned 401")
+      },
+    }),
+    /validation returned 401/,
+  )
+
+  assert.equal(readEnvValue(envPath, "AGENT_INSIGHT_API_KEY"), "")
+  assert.equal(fs.existsSync(path.join(dataRoot, ".admin_api_key")), false)
+})
+
+test("verifyAdminApiKey accepts a key from the current instance and rejects a stale one", async () => {
+  const expectedKey = "wi_current"
+  const server = http.createServer((request, response) => {
+    assert.equal(request.url, "/api/tags")
+    if (request.headers["x-witty-api-key"] === expectedKey) {
+      response.writeHead(200, { "Content-Type": "application/json" })
+      response.end("[]")
+      return
+    }
+    response.writeHead(401, { "Content-Type": "application/json" })
+    response.end(JSON.stringify({ error: "Missing user identity" }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("test server did not expose a TCP port")
+
+  try {
+    assert.equal(await verifyAdminApiKey(address.port, expectedKey, "127.0.0.1", 1000), true)
+    await assert.rejects(
+      verifyAdminApiKey(address.port, "wi_stale", "127.0.0.1", 1000),
+      /validation returned 401/,
+    )
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
 })
 
 test("syncAdminApiKey skips admin provisioning in IDaaS mode and preserves the client key", async () => {

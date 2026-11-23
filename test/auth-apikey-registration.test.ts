@@ -113,11 +113,13 @@ test('缺少密码时不会为不存在的用户自动创建账号', async () =>
   );
 });
 
-test('已设置密码的账号缺少密码时返回 password_required', async () => {
-  const response = await login(usernames.active);
-  assert.equal(response.status, 400);
-  const body = await response.json();
-  assert.equal(body.code, 'password_required');
+test('已设置密码的账号缺少密码时返回与凭据错误相同的 401', async () => {
+  const missing = await login(usernames.active);
+  assert.equal(missing.status, 401);
+
+  const wrong = await login(usernames.active, 'not-the-password');
+  assert.equal(wrong.status, 401);
+  assert.deepEqual(await missing.json(), await wrong.json());
 });
 
 test('密码错误与用户不存在返回相同的 401 文案', async () => {

@@ -181,11 +181,4 @@ test('凭据错误与限流使用固定文案', async () => {
   const limited = formHarness('person@example.com', Response.json({ code: 'too_many_attempts' }, { status: 429 }));
   await limited.submit();
   assert.equal(limited.error(), 'login.tooManyAttempts');
-
-  const passwordRequired = formHarness(
-    'person@example.com',
-    Response.json({ code: 'password_required' }, { status: 400 }),
-  );
-  await passwordRequired.submit();
-  assert.equal(passwordRequired.error(), 'login.passwordRequiredForAccount');
 });

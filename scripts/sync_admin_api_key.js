@@ -108,6 +108,38 @@ function readAdminApiKeyFile(dataRoot, timeoutMs = 5000) {
   })
 }
 
+function verifyAdminApiKey(port, apiKey, host = 'localhost', timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: host,
+        port,
+        path: '/api/tags',
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'x-witty-api-key': apiKey,
+        },
+      },
+      (res) => {
+        res.resume()
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve(true)
+            return
+          }
+          reject(new Error(`admin API key validation returned ${res.statusCode}`))
+        })
+      },
+    )
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`admin API key validation timed out after ${timeoutMs}ms`))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 function requestLoginMode(port, host = 'localhost', timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -188,7 +220,10 @@ async function syncAdminApiKey(options = {}) {
     }
   }
   const readAdminApiKey = options.readAdminApiKey || readAdminApiKeyFile
+  const verifyApiKey = options.verifyAdminApiKey || verifyAdminApiKey
   const result = await readAdminApiKey(dataRoot, requestTimeoutMs)
+  // 旧文件可能来自上一次部署；先确认 Key 属于当前实例，避免把过期 Key 写进 .env。
+  await verifyApiKey(port, result.apiKey, 'localhost', requestTimeoutMs)
   fs.mkdirSync(dataRoot, { recursive: true })
   fs.writeFileSync(keyFilePath, result.apiKey, 'utf8')
   const envUpdates = {
@@ -247,6 +282,7 @@ module.exports = {
   updateEnvFile,
   readEnvValue,
   readAdminApiKeyFile,
+  verifyAdminApiKey,
   requestLoginMode,
   syncAdminApiKey,
 }

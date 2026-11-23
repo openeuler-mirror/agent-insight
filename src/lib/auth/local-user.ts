@@ -23,7 +23,10 @@ export function isDuplicateUsernameError(error: any): boolean {
       && (error?.constraint?.includes('User_username_key') || error?.detail?.includes('username')));
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+// Unicode 字母/数字 + 少量安全符号；拒绝空白、控制字符、$、|、逗号等会破坏
+// CSV、限流键或日志的字符。邮箱形态单独校验。
+const PLAIN_ACCOUNT_PATTERN = /^[\p{L}\p{N}._-]+$/u;
 export const ACCOUNT_USERNAME_MAX_LENGTH = 128;
 
 export function normalizeAccountUsername(raw: unknown): string {
@@ -35,10 +38,12 @@ export function validateAccountUsername(username: string): string | null {
   if (username.length > ACCOUNT_USERNAME_MAX_LENGTH) {
     return `Username must be at most ${ACCOUNT_USERNAME_MAX_LENGTH} characters`;
   }
-  if (username.includes('@') && !EMAIL_PATTERN.test(username)) {
-    return 'Username must be a valid email address';
+  if (username.includes('@')) {
+    return EMAIL_PATTERN.test(username) ? null : 'Username must be a valid email address';
   }
-  return null;
+  return PLAIN_ACCOUNT_PATTERN.test(username)
+    ? null
+    : 'Username may contain only letters, numbers, dots, underscores, and hyphens';
 }
 
 interface ExternalAccountStore {

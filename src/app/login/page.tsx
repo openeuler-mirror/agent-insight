@@ -144,8 +144,6 @@ export default function LoginPage() {
               passwordChangeRequired: data.passwordChangeRequired,
               passwordInitialized: data.passwordInitialized,
             });
-        } else if (data.code === 'password_required') {
-            setError(t('login.passwordRequiredForAccount'));
         } else if (res.status === 429) {
             setError(t('login.tooManyAttempts'));
         } else if (res.status === 401) {
