@@ -23,6 +23,10 @@ import { readClaudeOtelEventsForSession } from './spool';
 import type { ClaudeOtelAggregationResult, ClaudeOtelEvent } from './types';
 
 const ROOT_AGENT_NAME = 'Claude Code';
+// 一轮结束信号里,只有 StopFailure 按失败收敛,其余(Stop/SessionEnd)都是正常结束。
+// 其余 hook(尤其 SubagentStop)只代表子 agent 结束,不能用来完成整轮。
+const TURN_END_COMPLETION_HOOKS = new Set(['stop', 'sessionend', 'stopfailure']);
+const TURN_END_FAILED_HOOKS = new Set(['stopfailure']);
 const INTERNAL_CLAUDE_QUERY_SOURCES = new Set([
   'generate_session_title',
   'prompt_suggestion',
@@ -459,6 +463,57 @@ function dedupeEvents(events: ClaudeOtelEvent[]): ClaudeOtelEvent[] {
   return out;
 }
 
+function isTurnEndEvent(event: ClaudeOtelEvent): boolean {
+  return event.eventName === CONTEXT_SUPPLEMENT_EVENT && asString(event.attributes?.kind) === 'turn_end';
+}
+
+function traceActivityMs(events: ClaudeOtelEvent[]): number {
+  let latest = 0;
+  for (const event of events) {
+    const attrs = event.attributes || {};
+    if (isTurnEndEvent(event)) continue;
+    // 内部标题/建议类请求不是用户可见的一轮活动,不参与"最后一轮是否已结束"的比较。
+    if (isInternalClaudeQuerySource(attrs.query_source)) continue;
+    const ms = Date.parse(eventTime(event));
+    if (Number.isFinite(ms) && ms > latest) latest = ms;
+  }
+  return latest;
+}
+
+/**
+ * Claude Code 没有会话级结束事件,一轮结束的唯一显式信号是客户端 Stop hook
+ * (StopFailure 表示失败结束)。客户端用 hook 触发时刻作为事件时间上报,所以完成时刻
+ * 取客户端时间而非服务端接收时间,跨机时钟偏差不会把它推到"最后活动之前"。
+ *
+ * 只有信号不早于最后一次活动才算数:用户接着开下一轮后,新活动时间越过上一次 Stop,
+ * 本次聚合就回落为执行中,不会让上一轮的完成信号把新一轮提前置完成。
+ */
+function resolveClaudeTraceCompletion(
+  events: ClaudeOtelEvent[],
+  turnEndSignals: Array<{ ms: number; hookEvent: string }>,
+): { completedAtMs: number | null; executionStatus: 'in_progress' | 'completed' | 'failed' } {
+  // Stop/StopFailure 是"这一轮"的结束点,优先用它;SessionEnd 只在一轮没收到 Stop
+  // (例如进程直接退出)时兜底,免得把用户几小时后关掉会话的时间当成 trace 结束时间。
+  let latestTurn: { ms: number; hookEvent: string } | null = null;
+  let latestSessionEnd: { ms: number; hookEvent: string } | null = null;
+  for (const signal of turnEndSignals) {
+    const hook = signal.hookEvent.trim().toLowerCase();
+    if (!TURN_END_COMPLETION_HOOKS.has(hook)) continue;
+    if (hook === 'sessionend') {
+      if (!latestSessionEnd || signal.ms >= latestSessionEnd.ms) latestSessionEnd = signal;
+    } else if (!latestTurn || signal.ms >= latestTurn.ms) {
+      latestTurn = signal;
+    }
+  }
+  const activityMs = traceActivityMs(events);
+  const candidate = latestTurn && latestTurn.ms >= activityMs
+    ? latestTurn
+    : latestSessionEnd && latestSessionEnd.ms >= activityMs ? latestSessionEnd : null;
+  if (!candidate) return { completedAtMs: null, executionStatus: 'in_progress' };
+  const failed = TURN_END_FAILED_HOOKS.has(candidate.hookEvent.trim().toLowerCase());
+  return { completedAtMs: candidate.ms, executionStatus: failed ? 'failed' : 'completed' };
+}
+
 type SystemPromptState = {
   systemByPromptKey: Map<string, string>;
   /** 客户端补传的 root system prompt。 */
@@ -638,6 +693,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const supplementTurnsByScope = new Map<string, any[]>();
   // 内部工具的 tool_result 先于该 scope 第一轮到达时的暂存
   const pendingScopeToolCalls = new Map<string, any[]>();
+  // 客户端 Stop/StopFailure hook 上报的轮次结束信号;只用于收敛 trace 状态,不产 interaction。
+  const turnEndSignals: Array<{ ms: number; hookEvent: string }> = [];
 
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
   // assistant_response 兜底路径(见下方主循环)要用同一批 api_request 取 usage/时间。
@@ -677,6 +734,10 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         const toolUseId = asString(attrs.tool_use_id);
         const output = normalizeToolResultOutput(attrs.text);
         if (toolUseId && output !== undefined) supplementToolOutputById.set(toolUseId, output);
+      } else if (attrs.kind === 'turn_end') {
+        const hookEvent = asString(attrs.hook_event).trim();
+        const ms = Date.parse(eventTime(event));
+        if (hookEvent && Number.isFinite(ms) && ms > 0) turnEndSignals.push({ ms, hookEvent });
       } else if (attrs.kind === 'subagent_map') {
         // 重传的映射(会话继续跑、映射长大)取并集,晚到的 agentType 覆盖
         const parsed = parseJsonMaybe(attrs.text);
@@ -1071,10 +1132,18 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     finalResult = lastAssistant ? textFromContent(lastAssistant.content) : '';
   }
 
+  const traceCompletion = resolveClaudeTraceCompletion(ordered, turnEndSignals);
+
   return {
     task_id: sessionId,
     query,
     framework: 'claudecode',
+    executionStatus: traceCompletion.executionStatus,
+    // 没等到结束信号(旧版客户端 / 会话仍在跑)就不写完成时间,交给读侧的十分钟无活动兜底,
+    // 避免把"还没有信号"误判成已完成。
+    ...(traceCompletion.completedAtMs !== null
+      ? { trace_completed_at: new Date(traceCompletion.completedAtMs).toISOString() }
+      : {}),
     model,
     tokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
     cost,
