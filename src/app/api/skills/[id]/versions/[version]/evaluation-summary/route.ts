@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from '@/lib/auth/auth';
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 import { isLlmScoredGenerator } from '@/lib/engine/skill-issues/static-evaluator';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
@@ -40,6 +40,13 @@ export async function GET(
     const url = new URL(request.url);
     const explicitUser = url.searchParams.get('user') || undefined;
     const { username } = await resolveUser(request, explicitUser);
+    const { allowed, skill } = await canAccessSkill(id, username);
+    if (!skill) {
+      return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+    }
+    if (!allowed) {
+      return NextResponse.json({ error: 'Unauthorized: Access denied' }, { status: 403 });
+    }
 
     const userFilter = username
       ? { OR: [{ user: username }, { user: null }] }

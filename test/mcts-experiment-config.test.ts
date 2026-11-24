@@ -18,12 +18,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRequire } from 'node:module'
 import { createIsolatedDatabase } from './helpers/isolated-database'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 import { loadRuntimeDefinitions, runtimeInvocationOptions } from '../packages/agent-runtime/loader.cjs'
 const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 
 test('MCTS options survive experiment creation, details, clone, dispatch and Case retry', async t => {
   const database = createIsolatedDatabase()
   const { prisma } = await import('../src/lib/storage/prisma')
+  await ensureTestApiUsers('options-user')
   const { POST: create } = await import('../src/app/api/experiments/route')
   const { GET: detail } = await import('../src/app/api/experiments/[id]/route')
   const { POST: retry } = await import('../src/app/api/experiments/[id]/cases/[caseId]/retry/route')
@@ -61,13 +63,13 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
     hostname: 'fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify(capabilities) } })
   const body = { user: 'options-user', name: 'MCTS options', agentName: 'mcts-coordinator', datasetId: catalog.id, agentTimeoutSeconds: 900,
     traceSource: 'generate', executionTarget: { workerId: 'options-client', platform: 'pi-mcts', agent: 'pi-mcts', agentOptions: options } }
-  const response = await create(new Request('http://fixture.invalid/api/experiments', { method: 'POST',
+  const response = await create(testRequest('http://fixture.invalid/api/experiments', 'options-user', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
   assert.equal(response.status, 201, JSON.stringify(await response.clone().json()))
   const experimentId = (await response.json()).id
   const binding = await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId } })
   assert.deepEqual(JSON.parse(binding.runConfigJson).agentOptions, options)
-  const detailResponse = await detail(new Request(`http://fixture.invalid/api/experiments/${experimentId}?user=options-user`),
+  const detailResponse = await detail(testRequest(`http://fixture.invalid/api/experiments/${experimentId}?user=options-user`, 'options-user'),
     { params: Promise.resolve({ id: experimentId }) })
   assert.equal(detailResponse.status, 200)
   const view = await detailResponse.json()
@@ -89,7 +91,7 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
   assert.equal(JSON.stringify(task).includes('hidden-gold'), false)
   await prisma.benchmarkCaseRun.update({ where: { id: run.id }, data: { status: 'execution_failed' } })
   await prisma.experimentEvalResult.updateMany({ where: { experimentId }, data: { status: 'failed' } })
-  const retryResponse = await retry(new Request(`http://fixture.invalid/api/experiments/${experimentId}/cases/${run.experimentCaseId}/retry?user=options-user`,
+  const retryResponse = await retry(testRequest(`http://fixture.invalid/api/experiments/${experimentId}/cases/${run.experimentCaseId}/retry?user=options-user`, 'options-user',
     { method: 'POST' }), { params: Promise.resolve({ id: experimentId, caseId: run.experimentCaseId }) })
   assert.equal(retryResponse.status, 202, JSON.stringify(await retryResponse.clone().json()))
   const retriedId = (await retryResponse.json()).runId
@@ -105,14 +107,14 @@ test('MCTS options survive experiment creation, details, clone, dispatch and Cas
 
   const nestedOptions = { ...options, values: { permission: { external_directory: { '~/.agent-insight/example/**': 'allow' } },
     routes: [null, false, { label: '5' }] } }
-  const nestedResponse = await create(new Request('http://fixture.invalid/api/experiments', { method: 'POST',
+  const nestedResponse = await create(testRequest('http://fixture.invalid/api/experiments', 'options-user', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, name: 'MCTS independent nested draft',
       executionTarget: { ...body.executionTarget, agentOptions: nestedOptions } }) }))
   assert.equal(nestedResponse.status, 201, JSON.stringify(await nestedResponse.clone().json()))
   const nestedId = (await nestedResponse.json()).id
   const nestedBinding = await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId: nestedId } })
   assert.deepEqual(JSON.parse(nestedBinding.runConfigJson).agentOptions, nestedOptions)
-  const nestedDetail = await detail(new Request(`http://fixture.invalid/api/experiments/${nestedId}?user=options-user`),
+  const nestedDetail = await detail(testRequest(`http://fixture.invalid/api/experiments/${nestedId}?user=options-user`, 'options-user'),
     { params: Promise.resolve({ id: nestedId }) })
   assert.deepEqual((await nestedDetail.json()).executionAgentOptions, nestedOptions)
   await prisma.experiment.update({ where: { id: nestedId }, data: { status: 'running' } })

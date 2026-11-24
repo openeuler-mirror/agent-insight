@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 let prisma: typeof import('@/lib/storage/prisma')['prisma'];
 let getExperiment: typeof import('@/app/api/experiments/[id]/route')['GET'];
@@ -58,6 +59,7 @@ test('触发路由结果直接校验客户端证据，失败和模型不一致�
 test('触发分析开始执行前显示全部 Case，重复准备和删除不会增加或复活 Case', async () => {
   const { triggerExperimentCaseData, ensureTriggerExperimentCases } = await import('@/lib/skill-workbench/trigger-execution');
   const user = 'trigger-prepared-cases';
+  await ensureTestApiUsers(user);
   const datasetId = 'trigger-dataset';
   const cases = Array.from({ length: 18 }, (_, index) => ({ id: `trigger-case-${index}`, input: `input ${index}`, values: { should_trigger: index < 12 } }));
   const experiment = await prisma.experiment.create({ data: {
@@ -68,7 +70,7 @@ test('触发分析开始执行前显示全部 Case，重复准备和删除不会
   await prisma.experimentCase.createMany({ data: triggerExperimentCaseData(experiment.id, datasetId, cases) });
   const prepared = await ensureTriggerExperimentCases(user, experiment.id, datasetId, cases);
   assert.equal(prepared.size, 18);
-  const load = async () => (await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) })).json();
+  const load = async () => (await getExperiment(testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user), { params: Promise.resolve({ id: experiment.id }) })).json();
   const initial = await load();
   assert.equal(initial.caseTotal, 18);
   assert.equal(initial.cases.length, 18);
@@ -145,6 +147,7 @@ test('触发分析已成功退出且有完整输出时不因 Session.endTime 缺
 test('Skill 工作台实验使用冻结工作量，done 与 pending 不会同时出现', async (t) => {
   const stamp = Date.now();
   const user = `workbench-progress-${stamp}`;
+  await ensureTestApiUsers(user);
   const task = await prisma.grayscaleTask.create({
     data: {
       user,
@@ -191,7 +194,7 @@ test('Skill 工作台实验使用冻结工作量，done 与 pending 不会同时
 
   const load = async () => {
     const response = await getExperiment(
-      new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`),
+      testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user),
       { params: Promise.resolve({ id: experiment.id }) },
     );
     return response.json();
@@ -221,6 +224,7 @@ test('Skill 工作台实验使用冻结工作量，done 与 pending 不会同时
 
 test('触发分析返回独立的执行与判定进度', async (t) => {
   const user = `trigger-progress-${Date.now()}`;
+  await ensureTestApiUsers(user);
   const evaluatorId = 'skill-trigger-analyzer';
   const task = await prisma.grayscaleTask.create({ data: {
     user, skillId: 'trigger-progress', skillName: 'trigger-progress', skillVersion: 1,
@@ -239,7 +243,7 @@ test('触发分析返回独立的执行与判定进度', async (t) => {
     await prisma.experiment.deleteMany({ where: { id: experiment.id } });
     await prisma.grayscaleTask.deleteMany({ where: { id: task.id } });
   });
-  const response = await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) });
+  const response = await getExperiment(testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user), { params: Promise.resolve({ id: experiment.id }) });
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.deepEqual(result.executionProgress, { total: 2, succeeded: 2, failed: 0, pending: 0 });
@@ -249,6 +253,7 @@ test('触发分析返回独立的执行与判定进度', async (t) => {
 
 test('A/B 两侧进度与汇总一致，失败评估器旁仍有运行项时保持运行中', async (t) => {
   const user = `ab-progress-${Date.now()}`;
+  await ensureTestApiUsers(user);
   const task = await prisma.grayscaleTask.create({ data: {
     user, skillId: 'ab-progress', skillName: 'ab-progress', skillVersion: 1,
     skillVersionId: 'ab-progress-v1', taskName: '双侧进度',
@@ -268,7 +273,7 @@ test('A/B 两侧进度与汇总一致，失败评估器旁仍有运行项时保�
     await prisma.experiment.deleteMany({ where: { id: experiment.id } });
     await prisma.grayscaleTask.deleteMany({ where: { id: task.id } });
   });
-  const response = await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) });
+  const response = await getExperiment(testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user), { params: Promise.resolve({ id: experiment.id }) });
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.status, 'running');

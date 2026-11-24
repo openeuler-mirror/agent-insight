@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { performance } from 'node:perf_hooks';
 import { createIsolatedDatabase } from './helpers/isolated-database';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 test('computed trace filters preserve results while enriching only the requested page', async context => {
     const database = createIsolatedDatabase();
@@ -46,6 +47,7 @@ test('computed trace filters preserve results while enriching only the requested
         } },
     });
     const { prismaRaw } = await import('@/lib/storage/prisma');
+    await ensureTestApiUsers('computed-pagination', 'duplicate-pagination', 'lifecycle-cutoff');
     const { GET } = await import('@/app/api/observe/data/route');
     const { getTraceLifecycle } = await import('@/lib/observe/trace-lifecycle');
     const { calculateCost, getModelPricing } = await import('@/lib/shared/model-config');
@@ -122,7 +124,7 @@ test('computed trace filters preserve results while enriching only the requested
         });
         const params = new URLSearchParams({ user: 'computed-pagination', fields: 'light', skipAutoEvalReady: '1', paginated: '1', databasePagination: '1', pageSize: '20', ...input, anomaly: input.anomaly ?? 'all', page: String(input.page) });
         const start = performance.now();
-        const response = await GET(new Request(`http://localhost/api/observe/data?${params}`));
+        const response = await GET(testRequest(`http://localhost/api/observe/data?${params}`, 'computed-pagination'));
         const payload = await response.json();
         assert.equal(response.status, 200);
         assert.equal(payload.total, expected.length);
@@ -143,7 +145,7 @@ test('computed trace filters preserve results while enriching only the requested
             { id: 'separate-task', taskId: 'separate-task', user: 'duplicate-pagination', timestamp: new Date(now - 2) },
         ] });
         for (const sort of ['timestamp', 'status']) {
-            const response = await GET(new Request(`http://localhost/api/observe/data?user=duplicate-pagination&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1&sort=${sort}`));
+            const response = await GET(testRequest(`http://localhost/api/observe/data?user=duplicate-pagination&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1&sort=${sort}`, 'duplicate-pagination'));
             const payload = await response.json();
             assert.equal(payload.total, 3);
             assert.equal(payload.records.length, 3);
@@ -158,7 +160,7 @@ test('computed trace filters preserve results while enriching only the requested
         for (const [scope, expected] of [['', 5_000], ['includeSubagents=1', 6_001], ['onlySubagents=1', 1_001]] as const) {
             enrichedRows = 0;
             largestCandidateBatch = 0;
-            const response = await GET(new Request(`http://localhost/api/observe/data?user=computed-pagination&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1&sort=status&pageSize=20&${scope}`));
+            const response = await GET(testRequest(`http://localhost/api/observe/data?user=computed-pagination&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1&sort=status&pageSize=20&${scope}`, 'computed-pagination'));
             const payload = await response.json();
             assert.equal(response.status, 200);
             assert.equal(payload.total, expected, scope);
@@ -181,7 +183,7 @@ test('computed trace filters preserve results while enriching only the requested
             return rows;
         }) as typeof prismaRaw.session.findMany;
         try {
-            const response = await GET(new Request(`http://localhost/api/observe/data?user=${taskId}&status=running&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1`));
+            const response = await GET(testRequest(`http://localhost/api/observe/data?user=${taskId}&status=running&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1`, taskId));
             const payload = await response.json();
             assert.equal(response.status, 200);
             assert.equal(payload.total, 1);

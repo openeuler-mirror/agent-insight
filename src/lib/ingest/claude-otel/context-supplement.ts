@@ -38,9 +38,19 @@ export const MAX_SUBAGENT_MAP_CHARS = 128_000;
  * OTel 事件不带 agent 标识,聚合器靠 messageUuids 匹配 assistant_response 的
  * message.uuid、靠 toolUseIds 匹配 tool_result 的 tool_use_id,把平铺在 root 的
  * 子 agent 内部轮次逐轮归还给 `<session>:<toolUseId>` 那个子 agent 节点。
+ *
+ * turn_end:一轮结束信号。Claude Code 的 OTel 日志没有会话级结束事件,服务端只能等
+ * 十分钟无活动判超时;hook 是唯一的显式结束点。text 为空,只带 hook 事件名与客户端
+ * 采集时间(服务端按事件时间落完成时刻,避免跨机时钟偏差)。
  */
-export const SUPPLEMENT_KINDS = ['system_prompt', 'hook_context', 'tool_output', 'subagent_map'] as const;
+export const SUPPLEMENT_KINDS = ['system_prompt', 'hook_context', 'tool_output', 'subagent_map', 'turn_end'] as const;
 export type SupplementKind = (typeof SUPPLEMENT_KINDS)[number];
+
+/**
+ * 只有这几种 hook 能当整轮结束:Stop/SessionEnd 是正常结束,StopFailure 是失败结束。
+ * SubagentStop 只表示子 agent 结束,整轮可能还在跑,绝不能据此完成 trace。
+ */
+export const TURN_END_HOOK_EVENTS = ['Stop', 'SessionEnd', 'StopFailure'] as const;
 
 export type ContextSupplementItem = {
   kind?: unknown;
@@ -90,6 +100,21 @@ export function buildContextSupplementEvents(
     const item = (raw || {}) as ContextSupplementItem;
     const kind = asTrimmedString(item.kind) as SupplementKind;
     if (!(SUPPLEMENT_KINDS as readonly string[]).includes(kind)) return;
+    if (kind === 'turn_end') {
+      const hookEvent = asTrimmedString(item.hookEvent);
+      if (!(TURN_END_HOOK_EVENTS as readonly string[]).includes(hookEvent)) return;
+      events.push({
+        receivedAt: options.receivedAt,
+        eventName: CONTEXT_SUPPLEMENT_EVENT,
+        eventTimestamp: toIso(item.capturedAt, options.receivedAt),
+        sequence: index,
+        sessionId,
+        promptId: asTrimmedString(item.promptId) || undefined,
+        resource: {},
+        attributes: { kind, hook_event: hookEvent },
+      });
+      return;
+    }
     const rawText = typeof item.text === 'string' ? item.text : '';
     if (!rawText.trim()) return;
     // 工具输出/子 agent 映射没有 tool_use_id 就挂不回任何一次调用,直接丢弃

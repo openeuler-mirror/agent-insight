@@ -33,12 +33,15 @@ import {
 } from '@/app/api/experiments/[id]/comments/route';
 import { PATCH as patchResult } from '@/app/api/experiments/[id]/results/[resultId]/route';
 import { prisma } from '@/lib/storage/prisma';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const TEST_USER = `experiment-api-limits-${Date.now()}`;
+const authRequest = (url: string, init?: RequestInit) => testRequest(url, TEST_USER, init);
 let primaryExperimentId = '';
 let resultId = '';
 
 test.before(async () => {
+  await ensureTestApiUsers(TEST_USER);
   const primary = await prisma.experiment.create({
     data: {
       user: TEST_USER,
@@ -121,7 +124,7 @@ test.after(async () => {
 });
 
 test('实验列表 limit 最大 100', async () => {
-  const response = await listExperiments(new Request(
+  const response = await listExperiments(authRequest(
     `http://localhost/api/experiments?user=${encodeURIComponent(TEST_USER)}&limit=999`,
   ));
   const body = await response.json();
@@ -133,7 +136,7 @@ test('实验列表 limit 最大 100', async () => {
 
 test('实验详情 casePageSize 最大 100', async () => {
   const response = await getExperimentDetail(
-    new Request(`http://localhost/api/experiments/${primaryExperimentId}?user=${encodeURIComponent(TEST_USER)}&casePageSize=999`),
+    authRequest(`http://localhost/api/experiments/${primaryExperimentId}?user=${encodeURIComponent(TEST_USER)}&casePageSize=999`),
     { params: Promise.resolve({ id: primaryExperimentId }) },
   );
   const body = await response.json();
@@ -144,7 +147,7 @@ test('实验详情 casePageSize 最大 100', async () => {
 });
 
 test('评估运行 limit 最大 50', async () => {
-  const response = await listEvalRuns(new Request(
+  const response = await listEvalRuns(authRequest(
     `http://localhost/api/experiments/eval-runs?user=${encodeURIComponent(TEST_USER)}&limit=999`,
   ));
   const body = await response.json();
@@ -154,7 +157,7 @@ test('评估运行 limit 最大 50', async () => {
 });
 
 test('评估结果 limit 最大 500', async () => {
-  const response = await listEvalResults(new Request(
+  const response = await listEvalResults(authRequest(
     `http://localhost/api/experiments/eval-results?user=${encodeURIComponent(TEST_USER)}&runId=${primaryExperimentId}&limit=999`,
   ));
   const body = await response.json();
@@ -163,7 +166,7 @@ test('评估结果 limit 最大 500', async () => {
 });
 
 test('候选 Agent 最多返回 50 个', async () => {
-  const response = await listExperimentAgents(new Request(
+  const response = await listExperimentAgents(authRequest(
     `http://localhost/api/experiments/agents?user=${encodeURIComponent(TEST_USER)}`,
   ));
   const body = await response.json();
@@ -172,7 +175,7 @@ test('候选 Agent 最多返回 50 个', async () => {
 });
 
 test('Trace 查询 pageSize 最大 100', async () => {
-  const response = await listExperimentTraces(new Request(
+  const response = await listExperimentTraces(authRequest(
     `http://localhost/api/experiments/traces?user=${encodeURIComponent(TEST_USER)}&agent=numeric-limit-page-agent&pageSize=999`,
   ));
   const body = await response.json();
@@ -184,7 +187,7 @@ test('Trace 查询 pageSize 最大 100', async () => {
 
 test('评论单次查询最多返回 500 条', async () => {
   const response = await listComments(
-    new Request(`http://localhost/api/experiments/${primaryExperimentId}/comments?user=${encodeURIComponent(TEST_USER)}&scope=all`),
+    authRequest(`http://localhost/api/experiments/${primaryExperimentId}/comments?user=${encodeURIComponent(TEST_USER)}&scope=all`),
     { params: Promise.resolve({ id: primaryExperimentId }) },
   );
   const body = await response.json();
@@ -194,7 +197,7 @@ test('评论单次查询最多返回 500 条', async () => {
 
 test('评论正文截断到 2000 字符', async () => {
   const response = await postComment(
-    new Request(`http://localhost/api/experiments/${primaryExperimentId}/comments`, {
+    authRequest(`http://localhost/api/experiments/${primaryExperimentId}/comments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user: TEST_USER, body: '评'.repeat(2001) }),
@@ -208,7 +211,7 @@ test('评论正文截断到 2000 字符', async () => {
 
 test('人工评分保留 1 位小数，理由截断到 1000 字符', async () => {
   const response = await patchResult(
-    new Request(`http://localhost/api/experiments/${primaryExperimentId}/results/${resultId}`, {
+    authRequest(`http://localhost/api/experiments/${primaryExperimentId}/results/${resultId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user: TEST_USER, humanScore: 88.86, humanReason: '理'.repeat(1001) }),

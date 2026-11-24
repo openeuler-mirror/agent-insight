@@ -17,7 +17,11 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
-import { findOrCreateLocalUser, syncLocalUserExternalAccount } from '@/lib/auth/local-user';
+import {
+  authenticateOrRegisterLocalUser,
+  LocalUserAuthenticationError,
+  syncLocalUserExternalAccount,
+} from '@/lib/auth/local-user';
 import {
   inspectIdaasRegionAccess,
   describeIdaasRegionAccessError,
@@ -80,13 +84,20 @@ export async function POST(request: Request) {
       });
     }
 
-    const user = await findOrCreateLocalUser(username);
+    const apiKey = request.headers.get('x-witty-api-key')?.trim() || null;
+    const user = await authenticateOrRegisterLocalUser(username, apiKey);
 
     return NextResponse.json({
       username: user.username,
       apiKey: user.apiKey,
     });
   } catch (err: any) {
+    if (err instanceof LocalUserAuthenticationError) {
+      return NextResponse.json(
+        { error: 'Existing account requires its API key', code: 'credential_required' },
+        { status: 401 },
+      );
+    }
     console.error('[Auth/Apikey] Error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

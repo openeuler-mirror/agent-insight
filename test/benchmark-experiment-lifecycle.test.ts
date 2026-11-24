@@ -21,6 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { createHash } from 'node:crypto'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-lifecycle-'))
 process.env.AGENT_INSIGHT_HOME = root
@@ -37,6 +38,7 @@ test.before(async () => {
     '--schema', path.resolve('prisma/schema.prisma'), '--skip-generate'], { env: process.env, encoding: 'utf8', timeout: 30_000 })
   assert.equal(schema.status, 0, schema.stderr)
   ;({ prisma } = await import('../src/lib/storage/prisma'))
+  await ensureTestApiUsers('fixture-user')
   lifecycle = await import('../src/lib/benchmark/experiment-lifecycle')
   scheduler = await import('../src/lib/benchmark/scheduler')
   await prisma.agentEvalDataset.create({ data: { id: 'lifecycle-dataset', user: 'fixture-user', name: 'fixture', datasetKind: 'benchmark' } })
@@ -100,7 +102,7 @@ test('experiment detail projects current execution and latest evaluation progres
     } })
   }
   const { GET } = await import('../src/app/api/experiments/[id]/route')
-  const response = await GET(new Request(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`),
+  const response = await GET(testRequest(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`, 'fixture-user'),
     { params: Promise.resolve({ id: f.id }) })
   assert.equal(response.status, 200)
   const detail = await response.json()
@@ -198,7 +200,7 @@ for (const legacy of [false, true]) {
       } })
       await prisma.experimentCase.update({ where: { id: run.experimentCaseId }, data: { taskId: traceId } })
       const { GET } = await import('../src/app/api/experiments/[id]/route')
-      const response = await GET(new Request(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`),
+      const response = await GET(testRequest(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`, 'fixture-user'),
         { params: Promise.resolve({ id: f.id }) })
       assert.equal(response.status, 200)
       const detail = await response.json()
@@ -262,7 +264,7 @@ test('model preflight reason survives completion into Case API and evaluation re
   assert.equal(results[0].errorMessage, failure.message)
   assert.equal(results[0].status, 'failed')
   const { GET } = await import('../src/app/api/experiments/[id]/route')
-  const response = await GET(new Request(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`), { params: Promise.resolve({ id: f.id }) })
+  const response = await GET(testRequest(`http://fixture.invalid/api/experiments/${f.id}?user=fixture-user`, 'fixture-user'), { params: Promise.resolve({ id: f.id }) })
   assert.equal(response.status, 200)
   const detail = await response.json()
   assert.equal(detail.cases[0].benchmark.failure.code, failure.code)

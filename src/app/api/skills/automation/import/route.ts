@@ -60,6 +60,9 @@ export async function POST(request: NextRequest) {
         // Resolve user: API Key header > explicit user field
         const authResult = await resolveUser(request, explicitUser || undefined);
         const user = authResult.username;
+        if (!user) {
+            return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+        }
 
         if (!fs.existsSync(localPath)) {
             return NextResponse.json({ error: 'Path does not exist' }, { status: 404 });

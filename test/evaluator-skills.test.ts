@@ -48,8 +48,13 @@ import { createComparisonExperiment } from '@/lib/engine/experiment/comparison-r
 import { runCustomLlmEvaluator } from '@/lib/engine/evaluation/custom-llm-evaluator';
 import { buildJudgePrompt, parseJudgeText } from '@/lib/evaluators/judge-assembly';
 import { cloneExperimentFromFrozenConfig } from '@/lib/engine/experiment/reuse-config';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const user = `evaluator-skills-${Date.now()}`;
+const authRequest = (url: string, init?: RequestInit) => testRequest(url, user, init);
+test.before(async () => {
+  await ensureTestApiUsers(user);
+});
 const main = (name = 'validator') => Buffer.from(`---\nname: ${name}\ndescription: Verify task results\n---\nVALIDATE-${name} {{not_a_case_variable}}\n`);
 const packageFiles = (name = 'validator'): SkillPackageFile[] => [
   { path: 'SKILL.md', data: main(name) },
@@ -138,25 +143,25 @@ test('保存校验支持库 v0 和本地来源，复用旧快照，省略保留/
   const normalized = await normalizeEvaluatorSkillCards(user, [libraryCard], [], store);
   const binding = normalized[0].llmConfig!.skills![0]; assert.ok('snapshotHash' in binding);
   assert.deepEqual(binding.source, { kind: 'library', owner: user, version: 0 });
-  const response = await libraryVersions(new Request(`http://localhost/api/skills/by-name/library-validator/versions?user=${user}&sourceOwner=${user}&version=0`), { params: Promise.resolve({ name: 'library-validator' }) });
+  const response = await libraryVersions(authRequest(`http://localhost/api/skills/by-name/library-validator/versions?user=${user}&sourceOwner=${user}&version=0`), { params: Promise.resolve({ name: 'library-validator' }) });
   assert.equal(response.status, 200); assert.equal((await response.json()).files.length, 2);
 });
 
 test('本地上传 → 文件预览 → 保存 → 冻结文件查看，全程不创建 Skill 库记录', async () => {
   const count = await prismaRaw.skill.count({ where: { user } });
   const form = new FormData(); form.set('user', user); form.set('kind', 'folder'); form.append('files', new File([main()], 'SKILL.md')); form.append('paths', 'validator/SKILL.md');
-  const response = await importSkill(new Request('http://localhost/api/user-evaluators/skill-imports', { method: 'POST', body: form }));
+  const response = await importSkill(authRequest('http://localhost/api/user-evaluators/skill-imports', { method: 'POST', body: form }));
   assert.equal(response.status, 200); const imported = await response.json();
-  const preview = await previewImport(new Request(`http://localhost/preview?user=${user}&path=SKILL.md`), { params: Promise.resolve({ importToken: imported.importToken }) });
+  const preview = await previewImport(authRequest(`http://localhost/preview?user=${user}&path=SKILL.md`), { params: Promise.resolve({ importToken: imported.importToken }) });
   assert.match((await preview.json()).content, /VALIDATE-validator/);
-  const denied = await previewImport(new Request('http://localhost/preview?user=other'), { params: Promise.resolve({ importToken: imported.importToken }) });
-  assert.equal(denied.status, 404);
+  const denied = await previewImport(authRequest('http://localhost/preview?user=other'), { params: Promise.resolve({ importToken: imported.importToken }) });
+  assert.equal(denied.status, 401);
   const item = card(); item.llmConfig!.skills = [{ kind: 'local', name: imported.name, importToken: imported.importToken, fileCount: 1 }];
-  const saved = await saveEvaluators(new Request('http://localhost/api/user-evaluators', { method: 'PUT', body: JSON.stringify({ user, evaluators: [item] }), headers: { 'Content-Type': 'application/json' } }));
+  const saved = await saveEvaluators(authRequest('http://localhost/api/user-evaluators', { method: 'PUT', body: JSON.stringify({ user, evaluators: [item] }), headers: { 'Content-Type': 'application/json' } }));
   assert.equal(saved.status, 200); const normalized = await saved.json();
   assert.equal(normalized.evaluators[0].llmConfig.skills[0].source.kind, 'local');
   assert.equal(JSON.stringify(normalized).includes(imported.importToken), false);
-  const files = await previewBinding(new Request(`http://localhost/preview?user=${user}&path=SKILL.md`), { params: Promise.resolve({ evaluatorId: item.id, name: 'validator' }) });
+  const files = await previewBinding(authRequest(`http://localhost/preview?user=${user}&path=SKILL.md`), { params: Promise.resolve({ evaluatorId: item.id, name: 'validator' }) });
   assert.equal(files.status, 200); assert.match((await files.json()).content, /VALIDATE/);
   assert.equal(await prismaRaw.skill.count({ where: { user } }), count);
 });
@@ -166,12 +171,12 @@ test('评分点创建后回读、增改删后保存并重新加载，保留 Prom
   item.llmConfig!.skills = [await new EvaluatorSkillStore().publish(user, packageFiles(), { kind: 'local' })];
   await writeUserCustomEvaluators(user, [item]);
   const read = async () => {
-    const response = await getEvaluators(new Request(`http://localhost/api/user-evaluators?user=${user}`));
+    const response = await getEvaluators(authRequest(`http://localhost/api/user-evaluators?user=${user}`));
     assert.equal(response.status, 200);
     return (await response.json() as EvaluatorCard[]).find(candidate => candidate.id === item.id)!;
   };
   const save = async (draft: EvaluatorCard) => {
-    const response = await saveEvaluators(new Request('http://localhost/api/user-evaluators', {
+    const response = await saveEvaluators(authRequest('http://localhost/api/user-evaluators', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user, evaluators: [{ ...draft, pointsDef: normalizeEvaluatorPoints(draft.pointsDef) }] }),
     }));
@@ -195,7 +200,7 @@ test('评分点创建后回读、增改删后保存并重新加载，保留 Prom
 });
 
 test('上传在解析 multipart 前限制实际接收字节，不能省略 Content-Length 绕过限制', async () => {
-  const response = await importSkill(new Request('http://localhost/api/user-evaluators/skill-imports', {
+  const response = await importSkill(authRequest('http://localhost/api/user-evaluators/skill-imports', {
     method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=test' }, body: new Uint8Array(11 * 1024 * 1024 + 1),
   }));
   assert.equal(response.status, 413); assert.match((await response.json()).error, /大小超限/);
@@ -207,19 +212,19 @@ test('本地导入仅接受单个 Skill 文件夹，拒绝 ZIP、单文件和伪
     folder.append('files', new File([new Uint8Array(file.data)], path.basename(file.path)));
     folder.append('paths', `validator/${file.path}`);
   }
-  const accepted = await importSkill(new Request('http://localhost/import', { method: 'POST', body: folder }));
+  const accepted = await importSkill(authRequest('http://localhost/import', { method: 'POST', body: folder }));
   assert.equal(accepted.status, 200); assert.equal((await accepted.json()).files.length, 3);
   const zip = new AdmZip(); zip.addFile('SKILL.md', main());
   for (const kind of ['zip', 'markdown']) {
     const form = new FormData(); form.set('user', user); form.set('kind', kind);
     form.append('files', new File([kind === 'zip' ? new Uint8Array(zip.toBuffer()) : new Uint8Array(main())], kind === 'zip' ? 'validator.zip' : 'SKILL.md'));
-    const response = await importSkill(new Request('http://localhost/import', { method: 'POST', body: form }));
+    const response = await importSkill(authRequest('http://localhost/import', { method: 'POST', body: form }));
     assert.equal(response.status, 400); assert.match((await response.json()).error, /Skill 文件夹/);
   }
   for (const paths of [['SKILL.md'], ['validator/notes.txt'], ['validator/SKILL.md', 'other/notes.txt'], ['validator/../SKILL.md']]) {
     const form = new FormData(); form.set('user', user); form.set('kind', 'folder');
     paths.forEach((relative, index) => { form.append('files', new File([main()], index ? 'notes.txt' : 'SKILL.md')); form.append('paths', relative); });
-    const response = await importSkill(new Request('http://localhost/import', { method: 'POST', body: form }));
+    const response = await importSkill(authRequest('http://localhost/import', { method: 'POST', body: form }));
     assert.equal(response.status, 400);
   }
 });
@@ -234,12 +239,12 @@ test('文件夹上传兼容浏览器 multipart 中的相对路径文件名，但
     }
     return form;
   };
-  const accepted = await importSkill(new Request('http://localhost/import', { method: 'POST', body: makeForm() }));
+  const accepted = await importSkill(authRequest('http://localhost/import', { method: 'POST', body: makeForm() }));
   assert.equal(accepted.status, 200); const imported = await accepted.json();
   assert.deepEqual(imported.files.map((file: { path: string }) => file.path).sort(), packageFiles().map(file => file.path).sort());
-  const preview = await previewImport(new Request(`http://localhost/preview?user=${user}&path=scripts/check.cjs`), { params: Promise.resolve({ importToken: imported.importToken }) });
+  const preview = await previewImport(authRequest(`http://localhost/preview?user=${user}&path=scripts/check.cjs`), { params: Promise.resolve({ importToken: imported.importToken }) });
   assert.equal(preview.status, 200); assert.match((await preview.json()).content, /verified: 42/);
-  const rejected = await importSkill(new Request('http://localhost/import', { method: 'POST', body: makeForm(true) }));
+  const rejected = await importSkill(authRequest('http://localhost/import', { method: 'POST', body: makeForm(true) }));
   assert.equal(rejected.status, 400);
 });
 
@@ -295,7 +300,7 @@ test('真实实验 API 冻结两种来源配置，行执行读取冻结 Prompt�
   item.llmConfig!.systemPrompt = 'ORIGINAL-RUBRIC {{output}}';
   item.llmConfig!.skills = [await new EvaluatorSkillStore().publish(user, packageFiles(), { kind: 'local' })];
   await writeUserCustomEvaluators(user, [item]);
-  const response = await createExperiment(new Request('http://localhost/api/experiments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user, name: 'frozen skills', agentName: 'test-agent', evaluatorIds: [item.id], cases: [{ input: 'task', actualOutput: 'answer' }] }) }));
+  const response = await createExperiment(authRequest('http://localhost/api/experiments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user, name: 'frozen skills', agentName: 'test-agent', evaluatorIds: [item.id], cases: [{ input: 'task', actualOutput: 'answer' }] }) }));
   assert.equal(response.status, 200);
   const { id } = await response.json();
   const backing = await ensureEvalExperiment({ user, name: 'backing', evaluatorIds: [item.id] });
@@ -361,7 +366,7 @@ test('Agent 评估仅在真实会话保存后提供可访问链路，普通 LLM�
   const experiment = await prismaRaw.experiment.create({ data: { user, name: 'trace visibility', agentName: 'fixture', evaluatorIdsJson: '["custom-skills-test"]', cases: { create: { input: 'task', actualOutput: 'answer' } } }, include: { cases: true } });
   const evidence = { json: { type: 'custom-evaluator-runtime-v1', evaluationEvidence: { md: '脚本验证通过' }, customEvaluatorRuntime: { transport: 'opencode', skills: [{ name: 'validator' }], evaluationTraceId: taskId } } };
   const row = await prismaRaw.experimentEvalResult.create({ data: { experimentId: experiment.id, caseId: experiment.cases[0].id, evaluatorId: 'custom-skills-test', status: 'done', score: 100, evidenceJson: JSON.stringify(evidence) } });
-  const read = async () => { const response = await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) }); assert.equal(response.status, 200); return (await response.json()).results[0]; };
+  const read = async () => { const response = await getExperiment(authRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) }); assert.equal(response.status, 200); return (await response.json()).results[0]; };
   assert.equal((await read()).evaluationTraceId, taskId);
   await prismaRaw.execution.update({ where: { id: record.id }, data: { user: `${user}-foreign` } });
   assert.equal((await read()).evaluationTraceId, null);

@@ -28,6 +28,8 @@
  *   3. 工具输出:tool_result 事件通常只给 metadata / 大小,正文要回读请求体 —— 同样跨机拿不到。
  *      顺带解决子 agent:Task 调用的输出补上后,服务端就能重建出子 agent 节点。
  * 三者都只存在于【客户端本机磁盘】,所以由本脚本在每轮结束后捞出来发给平台。
+ * 另外官方 OTel logs 没有会话级结束事件,本脚本顺带在 Stop/StopFailure/SessionEnd 时
+ * 上报 `turn_end` 完成信号,否则 trace 只能靠十分钟无活动兜底判超时。
  *
  * 用法:
  *   node claude_context_uploader.js              # SessionEnd 入队并排空兜底(从 stdin 读 hook 负载)
@@ -61,6 +63,8 @@ const WORKER_START_TOKEN = '.worker-starting';
 const WORKER_START_TOKEN_STALE_MS = 30 * 1000;
 const REALTIME_HOOK_EVENTS = ['Stop', 'SubagentStop', 'StopFailure'];
 const ALL_HOOK_EVENTS = [...REALTIME_HOOK_EVENTS, 'SessionEnd'];
+// 能当"整轮结束"的 hook:SubagentStop 只表示子 agent 结束,整轮可能还在跑。
+const TURN_END_HOOK_EVENTS = ['Stop', 'StopFailure', 'SessionEnd'];
 
 // —— 有界扫描的上限(都可用环境变量覆盖)——
 const LIMITS = {
@@ -468,6 +472,29 @@ function toolOutputItems(scan, limits) {
 /** 只要工具输出时的薄封装(单测和排障用)。 */
 async function collectToolOutputs(transcriptPath, limits) {
   return toolOutputItems(await scanTranscript(transcriptPath, limits), limits);
+}
+
+/**
+ * 一轮结束信号。Claude Code 的 OTel 日志没有会话级结束事件,服务端只能靠十分钟无活动
+ * 判超时;hook 是唯一的显式结束点。StopFailure 由服务端按失败收敛,SubagentStop 只代表
+ * 子 agent 结束(整轮可能还在跑),所以这里不上报。
+ */
+function turnEndItem(payload) {
+  const sessionId = String(payload && payload.session_id || '').trim();
+  const hookEvent = String(payload && payload.hook_event_name || '').trim();
+  if (!sessionId || !TURN_END_HOOK_EVENTS.includes(hookEvent)) return null;
+  // 服务端按事件时间落完成时刻:优先用入队时间(≈hook 触发时刻),直传降级才用当前时间。
+  const queuedAt = String(payload && payload.queued_at || '').trim();
+  const capturedAt = queuedAt && Number.isFinite(Date.parse(queuedAt))
+    ? new Date(Date.parse(queuedAt)).toISOString()
+    : new Date().toISOString();
+  return {
+    kind: 'turn_end',
+    text: '',
+    hookEvent,
+    capturedAt,
+    hash: sha256(`turn_end|${sessionId}|${hookEvent}|${capturedAt}`),
+  };
 }
 
 /**
@@ -1081,6 +1108,9 @@ async function uploadPayload(payload, options = {}) {
       items.push(...sub.items);
     }
   }
+  // 结束信号排最前:服务端单批有条数上限,不能让它排在几百条补传内容后面被挤到后面批次。
+  const turnEnd = turnEndItem(payload);
+  if (turnEnd) items.unshift(turnEnd);
   if (dryRun) {
     // 只报"会传什么",绝不外发,也不动 checkpoint —— 支持同学排障用得上。
     console.log(JSON.stringify({
@@ -1184,6 +1214,7 @@ module.exports = {
   collectSubagentMaps,
   scanTranscript,
   toolOutputItems,
+  turnEndItem,
   flattenSystem,
   flattenToolOutput,
   sessionIdOfBody,

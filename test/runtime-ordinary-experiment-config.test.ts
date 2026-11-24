@@ -18,10 +18,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createIsolatedDatabase } from './helpers/isolated-database'
 import { validateDefinition } from '../packages/agent-runtime/index.cjs'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 test('ordinary runtime parameters are frozen, dispatched, displayed, cloned and retained by retries', async t => {
   const database = createIsolatedDatabase()
   const { prisma } = await import('../src/lib/storage/prisma')
+  await ensureTestApiUsers('ordinary-options')
   const { POST: create, GET: list } = await import('../src/app/api/experiments/route')
   const { GET: detail } = await import('../src/app/api/experiments/[id]/route')
   const { generateExperimentTraces, loadTraceGenerationRetryRequest, assertTraceGenerationTarget } = await import('../src/lib/engine/experiment/trace-generation')
@@ -40,7 +42,7 @@ test('ordinary runtime parameters are frozen, dispatched, displayed, cloned and 
     evaluatorIds: ['preset-agent-trace-quality'], cases: [{ input: 'fixture', actualOutput: '' }],
     configSnapshot: { traceSource: 'generate', agentName: 'build', executionTarget: { timeoutSeconds: 60 } },
     executionTarget: { workerId: 'ordinary-options-client', platform: 'opencode', agent: 'build', agentOptions: options } }
-  const submit = (value: unknown) => create(new Request('http://fixture.invalid/api/experiments', { method: 'POST',
+  const submit = (value: unknown) => create(testRequest('http://fixture.invalid/api/experiments', 'ordinary-options', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }))
   const response = await submit(body)
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()))
@@ -50,7 +52,7 @@ test('ordinary runtime parameters are frozen, dispatched, displayed, cloned and 
   assert.deepEqual(snapshot.executionTarget.agentOptions, options)
   assert.deepEqual(snapshot.executionTarget.agentParameterDefinition, definition)
   assert.equal(snapshot.executionTarget.timeoutSeconds, 60)
-  const view = await (await detail(new Request(`http://fixture.invalid/api/experiments/${experimentId}?user=ordinary-options`),
+  const view = await (await detail(testRequest(`http://fixture.invalid/api/experiments/${experimentId}?user=ordinary-options`, 'ordinary-options'),
     { params: Promise.resolve({ id: experimentId }) })).json()
   assert.deepEqual(view.executionAgentOptions, options)
   assert.deepEqual(view.executionParameterDefinition, definition)
@@ -64,7 +66,7 @@ test('ordinary runtime parameters are frozen, dispatched, displayed, cloned and 
   const invalid = await submit({ ...body, executionTarget: { ...body.executionTarget, agentOptions: { mcts: { maxIters: 2 } } } })
   assert.equal(invalid.status, 400)
   await prisma.experiment.update({ where: { id: experimentId }, data: { status: 'running' } })
-  const listed = await list(new Request('http://fixture.invalid/api/experiments?user=ordinary-options'))
+  const listed = await list(testRequest('http://fixture.invalid/api/experiments?user=ordinary-options', 'ordinary-options'))
   assert.equal(listed.status, 200)
   const { items } = await listed.json()
   assert.equal(items[0].agentName, 'build')

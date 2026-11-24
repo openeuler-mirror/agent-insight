@@ -26,8 +26,13 @@ import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
 import { setFaithfulPresetRunnerForTest } from '@/lib/engine/experiment/faithful-preset-evaluators';
 import { retryResultRow } from '@/lib/engine/experiment/run-experiment';
 import { prisma } from '@/lib/storage/prisma';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const TEST_USER = `eval-traces-context-${Date.now()}`;
+
+test.before(async () => {
+  await ensureTestApiUsers(TEST_USER);
+});
 
 test.after(async () => {
   setJudgeLlmCallerForTest(null);
@@ -67,8 +72,9 @@ test('eval-traces 将 pair 的 Tool/Skill 目录传给评估器并写入 case', 
     availableTools: [{ name: 'search', inputSchema: { type: 'object' } }],
     availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
   };
-  const response = await evaluateTraces(new Request(
+  const response = await evaluateTraces(testRequest(
     'http://localhost/api/experiments/eval-traces',
+    TEST_USER,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -104,8 +110,9 @@ test('eval-traces 批量提交立即预创建全部 case/result，后台完成�
   });
 
   const taskIds = ['batch-trace-1', 'batch-trace-2', 'batch-trace-3'];
-  const responsePromise = evaluateTraces(new Request(
+  const responsePromise = evaluateTraces(testRequest(
     'http://localhost/api/experiments/eval-traces',
+    TEST_USER,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -169,8 +176,9 @@ test('eval-traces 重复提交同一实验和 Trace 时不重复执行结果行'
     return { score: 90, points: [], evidence: { md: 'deduplicated' } };
   });
 
-  const createResponse = await evaluateTraces(new Request(
+  const createResponse = await evaluateTraces(testRequest(
     'http://localhost/api/experiments/eval-traces',
+    TEST_USER,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -185,8 +193,9 @@ test('eval-traces 重复提交同一实验和 Trace 时不重复执行结果行'
   const created = await createResponse.json();
   assert.equal(createResponse.status, 200);
 
-  const submit = () => evaluateTraces(new Request(
+  const submit = () => evaluateTraces(testRequest(
     'http://localhost/api/experiments/eval-traces',
+    TEST_USER,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -240,8 +249,9 @@ test('并行提交多个评测任务时共用同一个行级并发上限', async
   });
 
   const createExperiment = async (name: string) => {
-    const response = await evaluateTraces(new Request(
+    const response = await evaluateTraces(testRequest(
       'http://localhost/api/experiments/eval-traces',
+      TEST_USER,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -259,8 +269,9 @@ test('并行提交多个评测任务时共用同一个行级并发上限', async
     createExperiment('共享并发上限 A'),
     createExperiment('共享并发上限 B'),
   ]);
-  const submit = (experimentId: string, prefix: string) => evaluateTraces(new Request(
+  const submit = (experimentId: string, prefix: string) => evaluateTraces(testRequest(
     'http://localhost/api/experiments/eval-traces',
+    TEST_USER,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -304,8 +315,9 @@ test('运行中单项重评复用已有执行，不会绕过防重护栏', async
     return { score: 88, points: [], evidence: { md: 'retry reuse' } };
   });
 
-  const response = await evaluateTraces(new Request(
+  const response = await evaluateTraces(testRequest(
     'http://localhost/api/experiments/eval-traces',
+    TEST_USER,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
