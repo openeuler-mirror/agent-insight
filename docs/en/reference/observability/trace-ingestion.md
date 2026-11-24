@@ -15,6 +15,8 @@ Use the framework's client installation flow where possible. This reference supp
 | --- | --- |
 | JSON | `Content-Type: application/json`, with the OTLP `resourceSpans` structure |
 | Protobuf | `Content-Type: application/x-protobuf`, with OTLP Trace encoding; the decoder determines other supported types and returns `415` for unsupported types |
+| Content encoding | Both Trace endpoints support `Content-Encoding: gzip` and `identity`; omission means `identity`. Values are case-insensitive and ignore surrounding whitespace. gzip applies to both JSON and Protobuf |
+| Decompression limit | gzip decompressed output is limited to 64 MiB (67,108,864 bytes). Oversized requests are rejected before decoding and spool writes |
 | Platform Key | `x-witty-api-key`; an explicitly supplied unmatched Key returns `401`, without falling back to resource-level user attribution |
 | Langfuse-compatible source | Without an already validated platform Key, Basic `publicKey:secretKey` or `x-langfuse-public-key` / `x-langfuse-secret-key` is checked against the username and that user's API Key |
 | LlamaIndex | Requires a validated platform Key; `resource.user.id` cannot select an arbitrary owner |
@@ -37,10 +39,11 @@ A general success response looks like this. Counts refer to normalized events an
 | Status | Meaning |
 | --- | --- |
 | `200` | Accepted; consumption, aggregation, and projection still follow |
-| `400` | Invalid request or undecodable JSON/Protobuf |
+| `400` | Invalid gzip stream, invalid request, or undecodable JSON/Protobuf |
 | `401` | An explicit Key is invalid, or a source requiring credentials has none |
+| `413` | gzip decompressed output exceeds 64 MiB, the request is rejected |
 | `413` with `status: partial` | The Goal Plus session identity limit was reached; some events may have been accepted. Inspect `received` and `rejected.spool` |
-| `415` | Unsupported content type |
+| `415` | Unsupported content type or unknown `Content-Encoding` |
 | `500` | Processing failed; retain unacknowledged data for the collector's retry policy |
 
 Receipt ACK, spool persistence, consumer storage of Execution/Session, and UI visibility are separate stages. Check them in sequence. Preserve the collector's existing event identity on retries instead of inventing a new ID for the same event.
