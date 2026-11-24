@@ -1,3 +1,10 @@
+---
+title: "快速上手"
+description: "以 Linux 问答任务演示 Agent 数据接入、Trace 核对、模型注册和首次评测，帮助用户验证基本使用流程。"
+keywords: ["Agent Insight", "快速上手", "Agent 接入", "链路追踪", "评测实验"]
+changefreq: monthly
+---
+
 # 快速上手
 
 本章通过一个简单的 Linux 问答任务，串联数据采集、链路查看和单条评测。完整的参数及维护方法见各功能章节。

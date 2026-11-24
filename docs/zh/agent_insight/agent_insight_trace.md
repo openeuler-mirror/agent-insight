@@ -1,3 +1,10 @@
+---
+title: "链路追踪"
+description: "说明 Trace 检索、执行状态、节点输入输出、慢节点定位及链路导入导出，帮助用户核对 Agent 的执行过程。"
+keywords: ["Agent Insight", "链路追踪", "Trace", "Span", "慢节点定位"]
+changefreq: monthly
+---
+
 # 链路追踪
 
 链路追踪记录 Agent 的执行过程，帮助用户查看模型请求、工具调用、Skill 调用和子 Agent 任务，定位耗时较长或出现错误的步骤。
