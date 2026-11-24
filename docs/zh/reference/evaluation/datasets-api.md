@@ -1,6 +1,8 @@
 ---
 title: "评测数据集 HTTP 接口"
 description: "数据集读写、Trace 回流、历史 Trace 自动生成及取消删除的请求和响应。"
+keywords: ["Agent Insight", "评测数据集", "HTTP 接口", "Trace 生成"]
+changefreq: monthly
 ---
 
 本页覆盖当前 `/api/agent-datasets` 前缀下 9 个路由文件的 13 个 HTTP 方法。数据集以 `id` 寻址，`targetSkill` 使用 Skill 名称；通用身份与接口分类见 [HTTP 接口与用户身份](../platform/http-api.md)。界面流程见[评测数据集](../../how-to/evaluation/datasets.md)，创建实验见[实验 HTTP 接口](./experiments-api.md)。基于 Skill 起草样本、Benchmark 管理命令不属于本前缀。

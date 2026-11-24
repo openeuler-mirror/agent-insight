@@ -1,6 +1,8 @@
 ---
 title: "Reliability client and configuration control APIs"
 description: "HTTP contracts for installation tokens, device identity, capabilities, configuration snapshots, and control channels."
+keywords: ["Agent Insight", "reliability client", "HTTP API", "device authentication", "configuration control"]
+changefreq: monthly
 ---
 
 This page covers existing HTTP methods under `/api/reliability/`, plus `/api/agent-ras/config` and `/api/agent-ras/catalog`, at baseline `eabde5b0`. Saving, notification, writing, and RAS loading are separate stages. A successful response does not prove a configuration is effective. See [local installation, Chinese](../../../zh/how-to/reliability/agent-ras/local-install-process.md) and [HTTP APIs and user identity](../platform/http-api.md).
