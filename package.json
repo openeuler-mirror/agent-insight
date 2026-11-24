@@ -94,7 +94,8 @@
     "deepagent:ex1": "node --import tsx src/example/deepagent/01-basic-agent.ts",
     "deepagent:ex2": "node --import tsx src/example/deepagent/02-skills-agent.ts",
     "deepagent:ex3": "node --import tsx src/example/deepagent/03-subagent-agent.ts",
-    "deepagent:ex4": "node --import tsx src/example/deepagent/04-memory-hitl-agent.ts"
+    "deepagent:ex4": "node --import tsx src/example/deepagent/04-memory-hitl-agent.ts",
+    "docs:check-images": "node scripts/check-doc-image-alt.mjs"
   },
   "dependencies": {
     "@ai-sdk/langchain": "^2.0.176",
@@ -197,11 +198,14 @@
     "autoprefixer": "^10.5.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "parse5": "7.3.0",
     "postcss": "^8.5.12",
+    "remark-parse": "11.0.0",
     "tailwind-scrollbar": "^4.0.2",
     "tailwindcss": "^4.2.4",
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.20.5",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "unified": "11.0.5"
   }
 }
