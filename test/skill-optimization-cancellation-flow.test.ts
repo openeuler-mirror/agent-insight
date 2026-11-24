@@ -21,8 +21,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Module from 'node:module';
 import test from 'node:test';
-import { NextRequest } from 'next/server';
 import { withSessionCancellation } from '@/lib/engine/general-agent/session-cancellation';
+import { ensureTestApiUsers, testNextRequest } from './helpers/api-auth';
 
 const directory = mkdtempSync(path.join(tmpdir(), 'issue315-'));
 let prisma: typeof import('@/lib/storage/prisma')['prismaRaw'];
@@ -44,6 +44,7 @@ test.before(async () => {
   };
   try {
     ({ prismaRaw: prisma } = await import('@/lib/storage/prisma'));
+    await ensureTestApiUsers('owner', 'other');
     cancel = await import('@/lib/skill-workbench/optimization-cancellation');
     adapter = await import('@/lib/skill-workbench/optimization-adapter');
     control = await import('@/lib/skill-workbench/optimization-execution-control');
@@ -64,14 +65,14 @@ async function fixture() {
 }
 
 async function stop(sessionId: string, taskId: string, user = 'owner') {
-  return route.POST(new NextRequest('http://localhost/api/skill-workbench/optimization', {
+  return route.POST(testNextRequest('http://localhost/api/skill-workbench/optimization', user, {
     method: 'POST', body: JSON.stringify({ user, action: 'cancel', taskId }),
   }), { params: Promise.resolve({ id: sessionId }) });
 }
 
 test('empty optimization input is rejected before any task or message is created', async () => {
   const before = await prisma.skillWorkbenchTask.count();
-  const response = await chat.POST(new NextRequest('http://localhost/api/skill-opt/chat', {
+  const response = await chat.POST(testNextRequest('http://localhost/api/skill-opt/chat', 'owner', {
     method: 'POST', body: JSON.stringify({ user: 'owner', threadId: 'empty', skillName: 'test', baseVersion: 0, userFeedback: ' \n ', checkedIssues: [{ id: 'blank', summary: ' ' }], mock: true }),
   }));
   assert.equal(response.status, 400);
@@ -166,7 +167,7 @@ test('normal completion does not abort the remote session', async () => {
 test('accepted streaming run can be stopped through the API and is restored as cancelled', async () => {
   const { session, opt, run } = await fixture();
   await cancel.finishOptimizationCancellation(run.taskId);
-  const response = await chat.POST(new NextRequest('http://localhost/api/skill-opt/chat', {
+  const response = await chat.POST(testNextRequest('http://localhost/api/skill-opt/chat', 'owner', {
     method: 'POST', body: JSON.stringify({ user: 'owner', threadId: opt.id, skillName: 'test', baseVersion: 0, userFeedback: '补充失败退出条件', mock: true, runId: 'stream-cancel' }),
   }));
   assert.equal(response.status, 200);

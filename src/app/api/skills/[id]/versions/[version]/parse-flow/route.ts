@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { parseSkillFlow, getParsedFlow } from '@/lib/engine/observability/flow-parser';
-import { db } from '@/lib/storage/prisma';
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 
 interface SkillVersion {
   version: number;
@@ -35,11 +35,14 @@ export async function POST(
   try {
     const { id, version } = await params;
     const body = await request.json().catch(() => ({}));
-    const user = body.user || null;
-    
-    const skill = await db.findSkillById(id) as SkillDetail | null;
+    const { username: user } = await resolveUser(request, typeof body.user === 'string' ? body.user : null);
+    const { allowed, skill: accessSkill } = await canAccessSkill(id, user);
+    const skill = accessSkill as SkillDetail | null;
     if (!skill) {
       return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+    }
+    if (!allowed) {
+      return NextResponse.json({ error: 'Unauthorized: Access denied' }, { status: 403 });
     }
     
     const targetVersion = parseInt(version, 10);
@@ -80,7 +83,14 @@ export async function GET(
   try {
     const { id, version } = await params;
     const searchParams = request.nextUrl.searchParams;
-    const user = searchParams.get('user') || null;
+    const { username: user } = await resolveUser(request, searchParams.get('user'));
+    const { allowed, skill } = await canAccessSkill(id, user);
+    if (!skill) {
+      return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+    }
+    if (!allowed) {
+      return NextResponse.json({ error: 'Unauthorized: Access denied' }, { status: 403 });
+    }
     
     const targetVersion = parseInt(version, 10);
     const parsedFlow = await getParsedFlow(id, targetVersion, user);

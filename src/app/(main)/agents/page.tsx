@@ -1397,7 +1397,8 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
                     style={{ flex: 1 }}
                     onClick={(e) => {
                         e.stopPropagation();
-                        router.push(`/trace?agent=${encodeURIComponent(agent.name)}`);
+                        const scope = agent.layer === 'subagent' ? 'subagent' : 'root';
+                        router.push(`/trace?agent=${encodeURIComponent(agent.name)}&scope=${scope}`);
                     }}
                 >
                     {t('nav.agentTrace')}

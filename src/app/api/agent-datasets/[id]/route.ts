@@ -30,6 +30,7 @@ import {
   decoratePublicBenchmarkDatasets,
   isReadOnlyBenchmarkDataset,
 } from '@/lib/benchmark/public-dataset';
+import { resolveUser } from '@/lib/auth/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +41,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const user = (searchParams.get('user') || '').trim();
     if (!user || !id?.trim()) {
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     await guardTraceDataset(request, id.trim(), user);
@@ -73,6 +78,10 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const idTrim = id?.trim() || '';
     if (!user || !idTrim) {
       return NextResponse.json({ error: 'user and id are required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     const owner = await traceIdentity(request, false);

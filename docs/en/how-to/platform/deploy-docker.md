@@ -1,6 +1,8 @@
 ---
 title: "Deploy the server with Docker"
 description: "Published images, offline imports, mounted source, and persistent runtime storage."
+keywords: ["Agent Insight", "Docker", "server deployment", "persistent storage"]
+changefreq: monthly
 
 ---
 

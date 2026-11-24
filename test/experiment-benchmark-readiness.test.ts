@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createIsolatedDatabase } from './helpers/isolated-database';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const database = createIsolatedDatabase();
 const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/storage/prisma');
@@ -27,6 +28,7 @@ test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 async function fixture(t: import('node:test').TestContext, options: { ready?: boolean; generic?: boolean; offline?: boolean } = {}) {
   const clientId = `readiness-${t.name}`;
+  await ensureTestApiUsers(clientId);
   const config = normalizeExecutionConfig({ profiles: { 'xgovernor-local-docker': {
     sourceRevision: 'a'.repeat(40),
     runtimes: { 'pi-agent': { kind: 'pi', namespace: 'runtime_pi', agents: ['pi-agent'] } },
@@ -49,7 +51,7 @@ async function fixture(t: import('node:test').TestContext, options: { ready?: bo
     }),
   } });
   t.after(async () => { await prisma.reliabilityClient.deleteMany({ where: { clientId } }); });
-  const response = await listAgents(new Request(`http://localhost/api/experiments/agents?user=${encodeURIComponent(clientId)}`));
+  const response = await listAgents(testRequest(`http://localhost/api/experiments/agents?user=${encodeURIComponent(clientId)}`, clientId));
   assert.equal(response.status, 200);
   const body = await response.json();
   const agent = body.agents.find((item: { name: string }) => item.name === 'pi-agent');

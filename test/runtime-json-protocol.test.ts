@@ -37,6 +37,7 @@ import {
 } from '../packages/benchmark-protocol/src/contracts'
 import { getBenchmarkAdapter } from '../src/lib/benchmark/adapter-registry'
 import { createIsolatedDatabase } from './helpers/isolated-database'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 const loadModule = createRequire(import.meta.url)
 const { buildExecutionPlan, createBenchmarkExecutor } = loadModule('../services/executor/src/index.cjs')
@@ -148,6 +149,7 @@ test('v2 business fields are accepted only in the validated JSON namespace and b
 test('platform freezes recursive parameters and retains them through details, cloning and benchmark dispatch', async t => {
   const database = createIsolatedDatabase()
   const { prisma } = await import('../src/lib/storage/prisma')
+  await ensureTestApiUsers('json-user')
   const { POST: create } = await import('../src/app/api/experiments/route')
   const { GET: detail } = await import('../src/app/api/experiments/[id]/route')
   const { cloneExperimentFromFrozenConfig } = await import('../src/lib/engine/experiment/reuse-config')
@@ -175,7 +177,7 @@ test('platform freezes recursive parameters and retains them through details, cl
     publicFingerprint: split.publicFingerprint, privateFingerprint: split.privateFingerprint } })
   await prisma.reliabilityClient.create({ data: { clientId: 'json-platform-client', user: 'json-user', name: 'JSON client',
     hostname: 'fixture', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify(capabilities) } })
-  const response = await create(new Request('http://fixture.invalid/api/experiments', { method: 'POST',
+  const response = await create(testRequest('http://fixture.invalid/api/experiments', 'json-user', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user: 'json-user', name: 'Recursive parameters',
       agentName: 'build', datasetId: catalog.id, traceSource: 'generate',
       executionTarget: { workerId: 'json-platform-client', platform: 'opencode', agent: 'build', agentOptions: options } }) }))
@@ -183,7 +185,7 @@ test('platform freezes recursive parameters and retains them through details, cl
   const experimentId = (await response.json()).id
   const binding = await prisma.benchmarkExperimentBinding.findUniqueOrThrow({ where: { experimentId } })
   assert.deepEqual(JSON.parse(binding.runConfigJson).agentOptions, options)
-  const viewResponse = await detail(new Request(`http://fixture.invalid/api/experiments/${experimentId}?user=json-user`),
+  const viewResponse = await detail(testRequest(`http://fixture.invalid/api/experiments/${experimentId}?user=json-user`, 'json-user'),
     { params: Promise.resolve({ id: experimentId }) })
   assert.equal(viewResponse.status, 200)
   const view = await viewResponse.json()

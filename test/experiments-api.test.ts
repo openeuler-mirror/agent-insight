@@ -29,11 +29,12 @@ import { createWorkbenchExperiment } from '@/lib/skill-workbench/experiment-serv
 import { datasetCaseContentHash } from '@/lib/engine/experiment/dataset-case-snapshot';
 import { normalizeCase } from '@/server/agent_datasets_storage';
 import { POST as createSkillExperiment } from '@/app/api/skill-workbench/skills/[name]/experiments/route';
-import { NextRequest } from 'next/server';
+import { ensureTestApiUsers, testNextRequest, testRequest } from './helpers/api-auth';
 
 const TEST_USER = `exp-smoke-${Date.now()}`;
 
 test.before(async () => {
+  await ensureTestApiUsers(TEST_USER);
   await prisma.agentEvalDataset.create({
     data: {
       id: 'dataset-1', user: TEST_USER, name: '冒烟数据集',
@@ -49,7 +50,8 @@ test.after(async () => {
 });
 
 function postReq(body: unknown): Request {
-  return new Request('http://localhost/api/experiments', {
+  const user = String((body as { user?: unknown } | null)?.user || TEST_USER);
+  return testRequest('http://localhost/api/experiments', user, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -58,6 +60,7 @@ function postReq(body: unknown): Request {
 
 test('Jiuwen experiment list and details keep the frozen Agent label after catalog deletion and configuration reuse', async (t) => {
   const user = `${TEST_USER}-jiuwen-label`;
+  await ensureTestApiUsers(user);
   const agentName = `jiuwen-ee-${'a'.repeat(32)}`;
   const agentLabel = 'Example Agent · workspace · group · jiuwenswarm';
   const clientId = `${user}-client`;
@@ -98,14 +101,14 @@ test('Jiuwen experiment list and details keep the frozen Agent label after catal
   assert.equal(JSON.parse(clone.configSnapshotJson || '{}').agentLabel, agentLabel);
   assert.equal(JSON.parse(clone.configSnapshotJson || '{}').executionTarget.agent, agentName);
   await prisma.experiment.updateMany({ where: { user }, data: { status: 'running' } });
-  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  const listed = await listExperiments(testRequest(`http://localhost/api/experiments?user=${user}`, user));
   assert.equal(listed.status, 200);
   const { items } = await listed.json();
   assert.equal(items.length, 2);
   for (const item of items) {
     assert.equal(item.agentName, agentName);
     assert.equal(item.agentLabel, agentLabel);
-    const response = await getExperiment(new Request(`http://localhost/api/experiments/${item.id}?user=${user}`), { params: Promise.resolve({ id: item.id }) });
+    const response = await getExperiment(testRequest(`http://localhost/api/experiments/${item.id}?user=${user}`, user), { params: Promise.resolve({ id: item.id }) });
     assert.equal(response.status, 200);
     const detail = await response.json();
     assert.equal(detail.agentName, agentName);
@@ -117,6 +120,7 @@ test('Jiuwen experiment list and details keep the frozen Agent label after catal
 
 test('experiment list preserves Agent identities when label snapshots are missing or invalid', async (t) => {
   const user = `${TEST_USER}-legacy-label`;
+  await ensureTestApiUsers(user);
   t.after(() => prisma.experiment.deleteMany({ where: { user } }));
   const snapshots = [null, '{}', '{', 'null', '[]', '{"agentLabel":42}', '{"agentLabel":"  "}'];
   for (const [index, configSnapshotJson] of snapshots.entries()) {
@@ -124,7 +128,7 @@ test('experiment list preserves Agent identities when label snapshots are missin
       user, name: `Legacy ${index}`, agentName: `legacy-agent-${index}`, status: 'running', configSnapshotJson,
     } });
   }
-  const listed = await listExperiments(new Request(`http://localhost/api/experiments?user=${user}`));
+  const listed = await listExperiments(testRequest(`http://localhost/api/experiments?user=${user}`, user));
   assert.equal(listed.status, 200);
   const { items } = await listed.json();
   assert.equal(items.length, snapshots.length);
@@ -134,6 +138,7 @@ test('experiment list preserves Agent identities when label snapshots are missin
 
 test('experiments API stores execution policy and exposes it for reuse; invalid overrides return 400', async (t) => {
   const user = `${TEST_USER}-execution-config`;
+  await ensureTestApiUsers(user);
   t.after(() => prisma.experiment.deleteMany({ where: { user } }));
   const config = { mode: 'system', overrides: { 'preset-result-answer': { attemptTimeoutSeconds: 900, maxRetries: 0 } } };
   const body = { user, name: '配置测试', agentName: 'build', evaluatorIds: ['preset-result-answer'],
@@ -141,7 +146,7 @@ test('experiments API stores execution policy and exposes it for reuse; invalid 
   const response = await createExperiment(postReq(body));
   assert.equal(response.status, 200);
   const { id } = await response.json();
-  const detailResponse = await getExperiment(new Request(`http://localhost/api/experiments/${id}?user=${user}`), { params: Promise.resolve({ id }) });
+  const detailResponse = await getExperiment(testRequest(`http://localhost/api/experiments/${id}?user=${user}`, user), { params: Promise.resolve({ id }) });
   assert.equal(detailResponse.status, 200);
   const detail = await detailResponse.json();
   assert.deepEqual(detail.evaluatorExecutionConfig, config);
@@ -184,7 +189,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
 
   // draft 仅用于创建与启动之间的内部衔接，不出现在用户列表。
   const listRes = await listExperiments(
-    new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments?user=${TEST_USER}`, TEST_USER),
   );
   assert.equal(listRes.status, 200);
   const { items } = await listRes.json();
@@ -192,7 +197,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
 
   await prisma.experiment.update({ where: { id }, data: { status: 'running' } });
   const runningListRes = await listExperiments(
-    new Request(`http://localhost/api/experiments?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments?user=${TEST_USER}`, TEST_USER),
   );
   assert.equal(runningListRes.status, 200);
   const { items: runningItems } = await runningListRes.json();
@@ -207,7 +212,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
 
   // 详情
   const detailRes = await getExperiment(
-    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/${id}?user=${TEST_USER}`, TEST_USER),
     { params: Promise.resolve({ id }) },
   );
   assert.equal(detailRes.status, 200);
@@ -239,6 +244,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
 
 test('experiments API: rollback deletes drafts but never started experiments', async (t) => {
   const user = `exp-rollback-${Date.now()}`;
+  await ensureTestApiUsers(user);
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user } });
   });
@@ -257,7 +263,7 @@ test('experiments API: rollback deletes drafts but never started experiments', a
 
   const draftId = await create('待回滚');
   const deleteDraft = await deleteExperiment(
-    new Request(`http://localhost/api/experiments/${draftId}?user=${user}`, { method: 'DELETE' }),
+    testRequest(`http://localhost/api/experiments/${draftId}?user=${user}`, user, { method: 'DELETE' }),
     { params: Promise.resolve({ id: draftId }) },
   );
   assert.equal(deleteDraft.status, 200);
@@ -266,7 +272,7 @@ test('experiments API: rollback deletes drafts but never started experiments', a
   const runningId = await create('已启动');
   await prisma.experiment.update({ where: { id: runningId }, data: { status: 'running' } });
   const deleteRunning = await deleteExperiment(
-    new Request(`http://localhost/api/experiments/${runningId}?user=${user}`, { method: 'DELETE' }),
+    testRequest(`http://localhost/api/experiments/${runningId}?user=${user}`, user, { method: 'DELETE' }),
     { params: Promise.resolve({ id: runningId }) },
   );
   assert.equal(deleteRunning.status, 409);
@@ -276,6 +282,7 @@ test('experiments API: rollback deletes drafts but never started experiments', a
 
 test('experiments API: global list excludes Skill workbench experiments', async (t) => {
   const user = `exp-scope-${Date.now()}`;
+  await ensureTestApiUsers(user);
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user } });
   });
@@ -303,7 +310,7 @@ test('experiments API: global list excludes Skill workbench experiments', async 
   ]);
 
   const response = await listExperiments(
-    new Request(`http://localhost/api/experiments?user=${user}&limit=100`),
+    testRequest(`http://localhost/api/experiments?user=${user}&limit=100`, user),
   );
   assert.equal(response.status, 200);
   const payload = await response.json();
@@ -315,6 +322,7 @@ test('experiments API: global list excludes Skill workbench experiments', async 
 
 test('experiments API: reliability FI fields stay off evaluatorContextJson', async (t) => {
   const user = `exp-fi-${Date.now()}`;
+  await ensureTestApiUsers(user);
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user } });
   });
@@ -358,7 +366,7 @@ test('experiments API: reliability FI fields stay off evaluatorContextJson', asy
   });
 
   const detailRes = await getExperiment(
-    new Request(`http://localhost/api/experiments/${id}?user=${user}`),
+    testRequest(`http://localhost/api/experiments/${id}?user=${user}`, user),
     { params: Promise.resolve({ id }) },
   );
   assert.equal(detailRes.status, 200);
@@ -433,7 +441,7 @@ test('experiments API: persist and return normalized evaluator configs', async (
   const { id } = await createRes.json();
 
   const detailRes = await getExperiment(
-    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/${id}?user=${TEST_USER}`, TEST_USER),
     { params: Promise.resolve({ id }) },
   );
   assert.equal(detailRes.status, 200);
@@ -455,7 +463,7 @@ test('experiments API: persist and return normalized evaluator configs', async (
   assert.equal(cloneRes.status, 201);
   const cloned = await cloneRes.json();
   const clonedDetailRes = await getExperiment(
-    new Request(`http://localhost/api/experiments/${cloned.id}?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/${cloned.id}?user=${TEST_USER}`, TEST_USER),
     { params: Promise.resolve({ id: cloned.id }) },
   );
   assert.equal(clonedDetailRes.status, 200);
@@ -506,7 +514,7 @@ test('experiments API: evaluatorConfigs 相似度阈值校验与持久化', asyn
 
 test('experiments API: detail 404 for missing experiment', async () => {
   const res = await getExperiment(
-    new Request(`http://localhost/api/experiments/nope?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/nope?user=${TEST_USER}`, TEST_USER),
     { params: Promise.resolve({ id: 'nope' }) },
   );
   assert.equal(res.status, 404);
@@ -596,7 +604,7 @@ test('Skill A/B 和触发分析同配置实验创建独立任务并沿用冻结�
     },
   });
   for (const executionConcurrency of [0, -1, 1.5, '2']) {
-    const response = await createSkillExperiment(new NextRequest('http://localhost/api/skill-workbench/skills/test/experiments', {
+    const response = await createSkillExperiment(testNextRequest('http://localhost/api/skill-workbench/skills/test/experiments', TEST_USER, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user: TEST_USER, version: 1, preset: 'skill-ab', compareVersion: 2, datasetId, executionConcurrency }),
     }), { params: Promise.resolve({ name: skillName }) });
@@ -634,7 +642,7 @@ test('Skill A/B 和触发分析同配置实验创建独立任务并沿用冻结�
   assert.equal(config.runCount, 1);
   assert.equal(config.executionConcurrency, 3);
   assert.equal(source.configSnapshot.executionConcurrency, 3);
-  const detail = await getExperiment(new Request(`http://localhost/api/experiments/${clone.id}?user=${TEST_USER}`), { params: Promise.resolve({ id: clone.id }) });
+  const detail = await getExperiment(testRequest(`http://localhost/api/experiments/${clone.id}?user=${TEST_USER}`, TEST_USER), { params: Promise.resolve({ id: clone.id }) });
   assert.equal((await detail.json()).executionConcurrency, 3);
   assert.match(config.skillSnapshots.a.files['SKILL.md'], /Original/);
   const newExperiment = await prisma.experiment.findUniqueOrThrow({ where: { id: clone.id } });
@@ -677,6 +685,7 @@ test('Skill A/B 两侧无 Skill、V0 与其他版本创建和同配置复用保�
   const { isGrayscaleTaskBindingValid } = await import('@/lib/grayscale/task-binding');
   const { NextRequest } = await import('next/server');
   const user = `ab-binding-${Date.now()}`;
+  await ensureTestApiUsers(user);
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user } });
     await prisma.grayscaleTask.deleteMany({ where: { user } });
@@ -702,7 +711,7 @@ test('Skill A/B 两侧无 Skill、V0 与其他版本创建和同配置复用保�
       runExperimentCase: { version: 1, returnsTraceId: true, skillSnapshotVersion: 4 },
     }] }),
   } });
-  const create = (selection: Record<string, unknown>) => createSkillExperiment(new NextRequest('http://localhost/api/skill-workbench/skills/test/experiments', {
+  const create = (selection: Record<string, unknown>) => createSkillExperiment(testNextRequest('http://localhost/api/skill-workbench/skills/test/experiments', user, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       user, version: 0, preset: 'skill-ab', datasetId, evaluatorIds: ['preset-agent-task-completion'],
       executionTarget: { workerId, host: 'test-host', platform: 'opencode', agent: 'build', model: 'test/model' },

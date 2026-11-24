@@ -34,7 +34,11 @@ function evaluate<Value>(expression: string, scope: Record<string, unknown>): Va
   return new Function(...Object.keys(scope), `${compiled}\nreturn result;`)(...Object.values(scope));
 }
 
-function formHarness(username: string, response = Response.json({ username: 'person@example.com', apiKey: 'test-key' })) {
+function formHarness(
+  username: string,
+  response = Response.json({ username: 'person@example.com', apiKey: 'test-key' }),
+  apiKey = '',
+) {
   let currentUsername = username;
   let error = '';
   let prevented = false;
@@ -43,6 +47,7 @@ function formHarness(username: string, response = Response.json({ username: 'per
   const scope = {
     React,
     username,
+    apiKey,
     error,
     locale: 'zh',
     colors: {},
@@ -96,6 +101,23 @@ test('默认 admin 账号可以通过同一登录表单提交', async () => {
   await harness.submit();
   assert.deepEqual(JSON.parse(String(harness.requests[0].options.body)), { username: 'admin' });
   assert.deepEqual(harness.logins, [['admin', 'admin-test-key']]);
+});
+
+test('已有账号登录时提交 API Key，但首次注册允许留空', async () => {
+  const registered = formHarness('new@example.com');
+  await registered.submit();
+  assert.equal(new Headers(registered.requests[0].options.headers).has('x-witty-api-key'), false);
+
+  const restored = formHarness(
+    'person@example.com',
+    Response.json({ username: 'person@example.com', apiKey: 'existing-key' }),
+    ' existing-key ',
+  );
+  await restored.submit();
+  assert.equal(
+    new Headers(restored.requests[0].options.headers).get('x-witty-api-key'),
+    'existing-key',
+  );
 });
 
 test('登录按钮作为表单提交入口，保留应用已有校验路径', () => {

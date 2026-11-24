@@ -1,6 +1,8 @@
 ---
 title: "Evaluation dataset HTTP API"
 description: "Dataset reads and writes, Trace backflow, historical Trace generation, cancellation, and deletion."
+keywords: ["Agent Insight", "evaluation datasets", "HTTP API", "Trace generation"]
+changefreq: monthly
 ---
 
 This page covers all 13 HTTP methods in the nine route files under `/api/agent-datasets`. Datasets are addressed by `id`; `targetSkill` uses the Skill name. For UI operations, see [evaluation datasets, Chinese](../../../zh/how-to/evaluation/datasets.md); to create an experiment, see the [experiment API](./experiments-api.md). Skill-based sample drafting and Benchmark administration commands are outside this prefix.

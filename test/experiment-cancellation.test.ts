@@ -20,6 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 test('experiment cancellation persists intent, isolates cases, blocks late work and preserves source records', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'experiment-cancellation-'));
@@ -27,6 +28,7 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   await fs.writeFile(path.join(directory, 'test.db'), '');
   execFileSync(path.resolve('node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' });
   const { prismaRaw: prisma } = await import('../src/lib/storage/prisma');
+  await ensureTestApiUsers('owner');
   const { deleteExperimentExecution, reconcileCancellation } = await import('../src/lib/engine/experiment/cancellation-service');
   const { assertExperimentActive, withExperimentCancellation, markExperimentCleanupUnconfirmed } = await import('../src/lib/engine/experiment/cancellation-context');
   t.after(async () => { await prisma.$disconnect(); await fs.rm(directory, { recursive: true, force: true }); });
@@ -104,7 +106,7 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
     cases: { create: [{ id: 'api-case-a' }, { id: 'api-case-b' }] } } });
   const { DELETE: deleteCase } = await import('../src/app/api/experiments/[id]/cases/[caseId]/route');
   const deleteByApi = async (caseId: string) => {
-    const response = await deleteCase(new Request(`http://localhost/api/experiments/${apiExperiment.id}/cases/${caseId}?user=owner`, { method: 'DELETE' }),
+    const response = await deleteCase(testRequest(`http://localhost/api/experiments/${apiExperiment.id}/cases/${caseId}?user=owner`, 'owner', { method: 'DELETE' }),
       { params: Promise.resolve({ id: apiExperiment.id, caseId }) });
     assert.ok(response.ok);
     return response.json();

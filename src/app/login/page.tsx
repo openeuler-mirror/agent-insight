@@ -25,6 +25,7 @@ import { apiFetch, getApiUrl } from '@/lib/client/api';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [isCompletingIdaas, setIsCompletingIdaas] = useState(false);
   const idaasCompletionStarted = useRef(false);
@@ -131,7 +132,10 @@ export default function LoginPage() {
     try {
         const res = await apiFetch('/api/auth/apikey', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(apiKey.trim() ? { 'x-witty-api-key': apiKey.trim() } : {}),
+            },
             body: JSON.stringify({ username: username.trim() })
         });
         
@@ -249,6 +253,19 @@ export default function LoginPage() {
               placeholder={locale === 'zh' ? '请输入邮箱或 admin' : 'Enter your email or admin'}
               value={username}
               onChange={(e) => { setUsername(e.target.value); setError(''); }}
+              style={error ? { borderColor: colors.error } : {}}
+            />
+            <label className="login-label" htmlFor="api-key" style={{ marginTop: '0.75rem' }}>
+              {t('login.apiKeyLabel')}
+            </label>
+            <input
+              className="login-input"
+              id="api-key"
+              type="password"
+              autoComplete="off"
+              placeholder={t('login.apiKeyPlaceholder')}
+              value={apiKey}
+              onChange={(e) => { setApiKey(e.target.value); setError(''); }}
               style={error ? { borderColor: colors.error } : {}}
             />
             {error && (

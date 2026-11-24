@@ -236,6 +236,17 @@ test('成功恢复仍使用服务器返回的身份和凭据', async () => {
   assert.equal(h.state.ready, true);
 });
 
+test('standalone 恢复登录时携带已保存的 API Key', async () => {
+  let headers = new Headers();
+  const h = restoreHarness(async (_url, init) => {
+    headers = new Headers(init?.headers);
+    return Response.json({ username: 'test_person@example.com', apiKey: 'fixture-key' });
+  });
+  h.start();
+  await h.flush();
+  assert.equal(headers.get('x-witty-api-key'), 'fixture-key');
+});
+
 test('登录模式探测遇到瞬时失败会重试，不会把用户当作未登录', async () => {
   let calls = 0;
   const h = loginModeHarness(async () => {

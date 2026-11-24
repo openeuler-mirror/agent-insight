@@ -131,3 +131,42 @@ test("claudecode 子 Agent: 保存 root 时派生两个 child Execution 并刷�
     await prismaRaw.session.deleteMany({ where: { taskId: { in: taskIds } } })
   }
 })
+
+test("claudecode 轮次结束信号: Stop 写 Session.endTime,新一轮活动再清回执行中", async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const executionId = `test-claude-turn-end-${suffix}`
+  const taskId = `20000000-0000-4000-8000-${suffix.replace(/\D/g, "").padEnd(12, "0").slice(0, 12)}`
+  const base = {
+    upload_id: executionId,
+    task_id: taskId,
+    framework: "claudecode",
+    query: "一轮任务",
+    final_result: "做完了。",
+    interactions: [
+      { role: "user", content: "做一件事", timestamp: "2026-08-02T10:00:00.000Z", agent: "Claude Code" },
+      { role: "assistant", content: "做完了。", timestamp: "2026-08-02T10:00:02.000Z", agent: "Claude Code" },
+    ],
+    user: "test",
+    skip_evaluation: true,
+    skip_internal_judgment: true,
+  }
+
+  try {
+    await saveExecutionRecord({
+      ...base,
+      executionStatus: "completed",
+      trace_completed_at: "2026-08-02T10:00:03.000Z",
+    })
+    const completed = await prismaRaw.session.findUnique({ where: { taskId } })
+    assert.equal(completed?.endTime?.toISOString(), "2026-08-02T10:00:03.000Z")
+
+    // 用户接着开下一轮:聚合器发现最后活动晚于上一次 Stop,回落为执行中。
+    await saveExecutionRecord({ ...base, executionStatus: "in_progress" })
+    const running = await prismaRaw.session.findUnique({ where: { taskId } })
+    assert.equal(running?.endTime, null)
+  } finally {
+    await prismaRaw.executionSkill.deleteMany({ where: { executionId } }).catch(() => undefined)
+    await prismaRaw.execution.deleteMany({ where: { id: executionId } })
+    await prismaRaw.session.deleteMany({ where: { taskId } })
+  }
+})

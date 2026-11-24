@@ -35,10 +35,12 @@ const {
 } = require('@/lib/engine/experiment/trace-generation') as typeof import('@/lib/engine/experiment/trace-generation');
 const { GET: getExperiment } = require('@/app/api/experiments/[id]/route') as typeof import('@/app/api/experiments/[id]/route');
 const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/storage/prisma');
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 const TEST_USER = `generic-trace-${Date.now()}`;
 const CLIENT_ID = `generic-client-${Date.now()}`;
+test.before(async () => { await ensureTestApiUsers(TEST_USER); });
 
 test('generic trace generation collects every unbound case with a user input', async (t) => {
   t.after(async () => {
@@ -162,6 +164,7 @@ test('generic trace binding consumes the client Trace ID and never normalizes us
 
 test('experiment detail exposes a failed generic trace generation state', async (t) => {
   const user = `generic-detail-${Date.now()}`;
+  await ensureTestApiUsers(user);
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user } });
   });
@@ -183,7 +186,7 @@ test('experiment detail exposes a failed generic trace generation state', async 
   });
 
   const response = await getExperiment(
-    new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`),
+    testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user),
     { params: Promise.resolve({ id: experiment.id }) },
   );
   const body = await response.json();
@@ -197,6 +200,7 @@ test('experiment detail exposes a failed generic trace generation state', async 
 
 test('experiment detail keeps an automatic retry in pending state', async (t) => {
   const user = `generic-retry-detail-${Date.now()}`;
+  await ensureTestApiUsers(user);
   t.after(async () => {
     await prisma.experiment.deleteMany({ where: { user } });
   });
@@ -231,7 +235,7 @@ test('experiment detail keeps an automatic retry in pending state', async (t) =>
   });
 
   const response = await getExperiment(
-    new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`),
+    testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user),
     { params: Promise.resolve({ id: experiment.id }) },
   );
   const body = await response.json();
@@ -458,6 +462,7 @@ test('ordinary trace generation admits two attempts, refills one slot and keeps 
 test('Skill 执行成功后独立等待入库，超时保留 Trace ID 且不再次下发执行命令', { timeout: 90_000 }, async t => {
   const { generateExperimentTraces } = require('@/lib/engine/experiment/trace-generation');
   const user = `${TEST_USER}-ingest-timeout`;
+  await ensureTestApiUsers(user);
   const clientId = `${user}-client`;
   await prisma.reliabilityClient.create({ data: { clientId, user, name: 'ingest-test', lastSeenAt: new Date() } });
   const experiment = await prisma.experiment.create({ data: { user, name: 'ingest timeout', status: 'running', scope: 'skill-workbench', preset: 'use-case', cases: { create: { input: 'run once' } } }, include: { cases: true } });
@@ -499,7 +504,7 @@ test('Skill 执行成功后独立等待入库，超时保留 Trace ID 且不再�
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     assert.equal(attempt?.status, 'waiting_trace');
-    const detail = await (await getExperiment(new Request(`http://localhost/api/experiments/${experiment.id}?user=${user}`), { params: Promise.resolve({ id: experiment.id }) })).json();
+    const detail = await (await getExperiment(testRequest(`http://localhost/api/experiments/${experiment.id}?user=${user}`, user), { params: Promise.resolve({ id: experiment.id }) })).json();
     assert.equal(detail.traceProgress.waitingTrace, 1);
     await waitForReads(1);
     t.mock.timers.setTime(ingestStartedAt + 59_999);

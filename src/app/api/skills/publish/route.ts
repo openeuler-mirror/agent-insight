@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { resolveUser } from '@/lib/auth/auth';
+import { isPlatformAdmin, resolveUser } from '@/lib/auth/auth';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
@@ -55,6 +55,9 @@ export async function POST(request: NextRequest) {
 
         const authResult = await resolveUser(request, body.user || undefined);
         const user = authResult.username;
+        if (!user) {
+            return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+        }
 
         // Load session files from DB
         const session = await (prismaRaw as any).skillGeneratorSession.findUnique({
@@ -62,6 +65,9 @@ export async function POST(request: NextRequest) {
         });
         if (!session) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+        }
+        if (session.user ? session.user !== user : !isPlatformAdmin(user)) {
+            return NextResponse.json({ error: 'Unauthorized session' }, { status: 403 });
         }
 
         let files: Record<string, any> = {};

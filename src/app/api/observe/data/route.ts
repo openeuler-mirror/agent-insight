@@ -695,6 +695,36 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
     try {
         const target = await request.json();
+        const scope = await resolveTraceReadScope(request);
+        if (!scope.username) {
+            return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        }
+
+        const ownerWhere = target.upload_id
+            ? { id: String(target.upload_id) }
+            : target.task_id
+                ? { taskId: String(target.task_id) }
+                : target.timestamp && target.framework && target.query
+                    ? {
+                        timestamp: new Date(target.timestamp),
+                        framework: String(target.framework),
+                        query: String(target.query),
+                    }
+                    : null;
+        if (!ownerWhere) {
+            return NextResponse.json({ error: 'No valid delete criteria provided' }, { status: 400 });
+        }
+
+        const ownedRows = await prisma.execution.findMany({
+            where: ownerWhere,
+            select: { user: true },
+        });
+        if (ownedRows.length === 0) {
+            return NextResponse.json({ error: 'Trace not found' }, { status: 404 });
+        }
+        if (!scope.canViewAllTraces && ownedRows.some(row => row.user !== scope.username)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
         
         console.log('[Data-API] 🗑️  Delete request:', {
             upload_id: target.upload_id,
@@ -755,6 +785,21 @@ export async function PATCH(request: Request) {
 
         if (!task_id && !upload_id) {
             return NextResponse.json({ error: 'task_id or upload_id is required' }, { status: 400 });
+        }
+
+        const scope = await resolveTraceReadScope(request);
+        if (!scope.username) {
+            return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        }
+        const ownedRows = await prisma.execution.findMany({
+            where: upload_id ? { id: String(upload_id) } : { taskId: String(task_id) },
+            select: { user: true },
+        });
+        if (ownedRows.length === 0) {
+            return NextResponse.json({ error: 'Trace not found' }, { status: 404 });
+        }
+        if (!scope.canViewAllTraces && ownedRows.some(row => row.user !== scope.username)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
 
         // 走到这里说明参数合法、确实是一次用户编辑。PATCH 有多个成功出口

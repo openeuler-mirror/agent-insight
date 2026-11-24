@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 test('all collectors persist receipt time and expose timeout/recovery consistently without writing completion', async context => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-inactivity-'));
@@ -32,6 +33,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'db', 'push', '--skip-generate'], { stdio: 'pipe' });
   const { saveExecutionRecord } = await import('@/lib/storage/data-service');
   const { prismaRaw } = await import('@/lib/storage/prisma');
+  await ensureTestApiUsers('timeout-tester', 'failure-stats-tester');
   const { GET, PATCH } = await import('@/app/api/observe/data/route');
   context.after(async () => {
     await prismaRaw.$disconnect();
@@ -46,7 +48,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
       failures: [{ failure_type: 'goal_plus_pi_session_failed', description: 'aborted', context: '', recovery: '' }],
       interactions: [{ role: 'assistant', content: 'partial output' }], skip_evaluation: true });
     for (const query of ['fields=light&skipAutoEvalReady=1', 'skipAutoEvalReady=0', 'fields=light&skipAutoEvalReady=1&paginated=1&databasePagination=1&status=failed']) {
-      const response = await GET(new Request(`http://localhost/api/observe/data?user=timeout-tester&taskId=${taskId}&${query}`));
+      const response = await GET(testRequest(`http://localhost/api/observe/data?user=timeout-tester&taskId=${taskId}&${query}`, 'timeout-tester'));
       assert.equal(response.status, 200);
       const payload = await response.json();
       const record = (Array.isArray(payload) ? payload : payload.records)[0];
@@ -65,7 +67,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
       }
     }
     for (const status of ['all', 'failed', 'timed_out']) {
-      const response = await GET(new Request(`http://localhost/api/observe/data?user=failure-stats-tester&fields=light&skipAutoEvalReady=1&paginated=1&databasePagination=1&pageSize=1&status=${status}`));
+      const response = await GET(testRequest(`http://localhost/api/observe/data?user=failure-stats-tester&fields=light&skipAutoEvalReady=1&paginated=1&databasePagination=1&pageSize=1&status=${status}`, 'failure-stats-tester'));
       assert.equal(response.status, 200);
       const payload = await response.json();
       assert.equal(payload.total, status === 'all' ? 4 : 2, status);
@@ -78,7 +80,7 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
     const taskId = `timeout-${framework}`;
     await saveExecutionRecord({ task_id: taskId, framework, user: 'timeout-tester', query: taskId, timestamp: new Date(), interactions: [{ role: 'user', content: 'still waiting for the first answer' }], skip_evaluation: true }, { receivedAt });
     for (const query of ['fields=light&skipAutoEvalReady=1', 'skipAutoEvalReady=0', 'fields=light&skipAutoEvalReady=1&paginated=1&databasePagination=1&status=timed_out']) {
-      const response = await GET(new Request(`http://localhost/api/observe/data?user=timeout-tester&taskId=${taskId}&${query}`));
+      const response = await GET(testRequest(`http://localhost/api/observe/data?user=timeout-tester&taskId=${taskId}&${query}`, 'timeout-tester'));
       assert.equal(response.status, 200);
       const payload = await response.json();
       const records = Array.isArray(payload) ? payload : payload.records;
@@ -90,12 +92,12 @@ test('all collectors persist receipt time and expose timeout/recovery consistent
     }
     assert.equal((await prismaRaw.session.findUnique({ where: { taskId } }))?.endTime, null);
   }
-  const metadata = await PATCH(new Request('http://localhost/api/observe/data', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task_id: 'timeout-actrail', label: 'reviewed' }) }));
+  const metadata = await PATCH(testRequest('http://localhost/api/observe/data', 'timeout-tester', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ task_id: 'timeout-actrail', label: 'reviewed' }) }));
   assert.equal(metadata.status, 200);
   assert.equal((await prismaRaw.execution.findFirst({ where: { taskId: 'timeout-actrail' } }))?.lastIngestedAt?.toISOString(), receivedAt.toISOString());
   const fresh = new Date();
   await saveExecutionRecord({ task_id: 'timeout-actrail', framework: 'actrail', user: 'timeout-tester', interactions: [{ role: 'user', content: 'new telemetry arrived' }], skip_evaluation: true }, { receivedAt: fresh });
-  const response = await GET(new Request('http://localhost/api/observe/data?user=timeout-tester&taskId=timeout-actrail&fields=light&skipAutoEvalReady=1'));
+  const response = await GET(testRequest('http://localhost/api/observe/data?user=timeout-tester&taskId=timeout-actrail&fields=light&skipAutoEvalReady=1', 'timeout-tester'));
   assert.equal((await response.json())[0].trace_status, 'running');
   await saveExecutionRecord({ task_id: 'timeout-actrail', framework: 'actrail', user: 'timeout-tester', skip_evaluation: true }, { receivedAt });
   assert.equal((await prismaRaw.execution.findFirst({ where: { taskId: 'timeout-actrail' } }))?.lastIngestedAt?.toISOString(), fresh.toISOString(), 'older background work cannot move the receipt clock backwards');

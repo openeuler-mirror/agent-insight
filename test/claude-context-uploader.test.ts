@@ -414,6 +414,31 @@ test("uploader: 工具输出各种形状都能拍平", () => {
   assert.equal(uploader.flattenToolOutput({ weird: 1 }), '{"weird":1}')
 })
 
+test("uploader: 只有 Stop/StopFailure/SessionEnd 产生轮次结束信号,SubagentStop 不算整轮结束", () => {
+  assert.equal(uploader.turnEndItem({ session_id: SESSION, hook_event_name: "SubagentStop" }), null)
+  assert.equal(uploader.turnEndItem(undefined), null)
+  assert.equal(uploader.turnEndItem({ hook_event_name: "Stop" }), null, "没有 session_id 不上报")
+
+  const stop = uploader.turnEndItem({
+    session_id: SESSION,
+    hook_event_name: "Stop",
+    queued_at: "2026-08-02T10:00:00.000Z",
+  })
+  assert.equal(stop.kind, "turn_end")
+  assert.equal(stop.hookEvent, "Stop")
+  assert.equal(stop.capturedAt, "2026-08-02T10:00:00.000Z")
+  assert.ok(stop.hash)
+  // 同一次 Stop 重复投递 hash 一致,不会重复上报
+  assert.equal(
+    uploader.turnEndItem({ session_id: SESSION, hook_event_name: "Stop", queued_at: "2026-08-02T10:00:00.000Z" }).hash,
+    stop.hash,
+  )
+
+  const failure = uploader.turnEndItem({ session_id: SESSION, hook_event_name: "StopFailure" })
+  assert.equal(failure.hookEvent, "StopFailure")
+  assert.ok(Date.parse(failure.capturedAt) > 0, "没有入队时间时退回当前时间")
+})
+
 test("uploader: host 归一化(补协议 / 去尾斜杠)", () => {
   assert.equal(uploader.normalizeHost("127.0.0.1:3000"), "http://127.0.0.1:3000")
   assert.equal(uploader.normalizeHost("https://example.com/"), "https://example.com")
@@ -919,7 +944,10 @@ test("uploader: --enqueue 子进程不等待网络,detached worker 每轮上传�
   )
 
   const firstKinds = requests[0].items.map((item: any) => item.kind).sort()
-  assert.deepEqual(firstKinds, ["hook_context", "system_prompt", "tool_output"])
+  assert.deepEqual(firstKinds, ["hook_context", "system_prompt", "tool_output", "turn_end"])
+  const firstTurnEnd = requests[0].items.find((item: any) => item.kind === "turn_end")
+  assert.equal(firstTurnEnd.hookEvent, "Stop")
+  assert.ok(Date.parse(firstTurnEnd.capturedAt) > 0)
   const checkpointName = fs.readdirSync(insightDir).find((name) => name.startsWith("claude_context_checkpoint_"))
   assert.ok(checkpointName)
   assert.equal(fs.statSync(path.join(insightDir, checkpointName)).mode & 0o777, 0o600)
@@ -936,8 +964,8 @@ test("uploader: --enqueue 子进程不等待网络,detached worker 每轮上传�
   ].join("\n") + "\n", "utf8")
   await runUploaderChild(script, ["--enqueue"], hookPayload, childEnv)
   await waitUntil(() => requests.length === 2, "detached worker 未收到第二轮任务")
-  assert.deepEqual(requests[1].items.map((item: any) => item.kind), ["tool_output"])
-  assert.equal(requests[1].items[0].toolUseId, "toolu_turn_2")
+  assert.deepEqual(requests[1].items.map((item: any) => item.kind), ["turn_end", "tool_output"])
+  assert.equal(requests[1].items[1].toolUseId, "toolu_turn_2")
   await waitUntil(
     () => fs.readdirSync(queueDir).filter((name) => name.endsWith(".json") || name.includes(".processing-")).length === 0,
     "第二轮 worker 未完成 checkpoint 与队列收尾",
