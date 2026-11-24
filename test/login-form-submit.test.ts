@@ -107,7 +107,34 @@ test('登录表单提交用户名和密码，去除首尾空白并完成登录',
     'person@example.com',
     'test-key',
     undefined,
-    { isAdmin: false, passwordChangeRequired: false, passwordInitialized: undefined },
+    {
+      isAdmin: false,
+      passwordChangeRequired: false,
+      passwordInitialized: undefined,
+      passwordSetupToken: undefined,
+    },
+  ]]);
+});
+
+test('需要改密的登录把改密凭据交给会话，而不是正式 API Key', async () => {
+  const harness = formHarness('person@example.com', Response.json({
+    username: 'person@example.com',
+    isAdmin: false,
+    passwordChangeRequired: true,
+    passwordInitialized: true,
+    passwordSetupToken: 'setup-token',
+  }));
+  await harness.submit();
+  assert.deepEqual(harness.logins, [[
+    'person@example.com',
+    undefined,
+    undefined,
+    {
+      isAdmin: false,
+      passwordChangeRequired: true,
+      passwordInitialized: true,
+      passwordSetupToken: 'setup-token',
+    },
   ]]);
 });
 
@@ -130,7 +157,12 @@ test('默认 admin 账号可以通过同一登录表单提交', async () => {
     'admin',
     'admin-test-key',
     undefined,
-    { isAdmin: true, passwordChangeRequired: true, passwordInitialized: undefined },
+    {
+      isAdmin: true,
+      passwordChangeRequired: true,
+      passwordInitialized: undefined,
+      passwordSetupToken: undefined,
+    },
   ]]);
 });
 
@@ -152,7 +184,7 @@ test('空用户名提交显示现有提示且不发送登录请求', async () =>
   assert.deepEqual(harness.logins, []);
 });
 
-test('空密码提交照常发送请求，由服务端判断是否首次免密登录', async () => {
+test('空密码提交照常发送请求，由服务端统一判定凭据是否有效', async () => {
   const harness = formHarness('person@example.com', undefined, '');
   await harness.submit();
   assert.equal(harness.prevented(), true);

@@ -19,7 +19,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
 import { isAdminUser, resolveAdminUser } from '@/lib/auth/admin';
-import { hashPassword } from '@/lib/auth/password';
+import { generateActivationPassword, hashPassword } from '@/lib/auth/password';
 import {
     isDuplicateUsernameError,
     normalizeAccountUsername,
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
     }
 
     const acknowledgeAdmin = body?.acknowledgeAdmin === true;
-    const created: string[] = [];
+    const created: { username: string; initialPassword: string }[] = [];
     const skipped: { username: string; reason: SkipReason }[] = [];
 
     for (const username of usernames) {
@@ -78,15 +78,15 @@ export async function POST(request: Request) {
             continue;
         }
         try {
+            const initialPassword = generateActivationPassword();
             await db.createUser({
                 username,
                 apiKey: 'wi_' + crypto.randomBytes(24).toString('hex'),
-                // 初始密码与账号名相同，首次登录后强制修改。
-                passwordHash: await hashPassword(username),
+                passwordHash: await hashPassword(initialPassword),
                 passwordUpdatedAt: new Date(),
                 mustChangePassword: true,
             });
-            created.push(username);
+            created.push({ username, initialPassword });
         } catch (error: any) {
             if (isDuplicateUsernameError(error)) {
                 skipped.push({ username, reason: 'exists' });

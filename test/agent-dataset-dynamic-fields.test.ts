@@ -39,6 +39,11 @@ import {
   validateDatasetFieldKeysForWrite,
   validateCasesForKind,
 } from '@/server/agent_datasets_storage';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
+
+test.before(async () => {
+  await ensureTestApiUsers('test-user');
+});
 
 test('builds lightweight dataset projections without trajectory payloads', () => {
   const projection = buildAgentDatasetProjection([normalizeCase({
@@ -168,7 +173,7 @@ test('detects duplicate dataset field names case-insensitively', () => {
 });
 
 test('rejects duplicate field names through the dataset API', async () => {
-  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+  const response = await saveDataset(testRequest('http://localhost/api/agent-datasets', 'test-user', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -202,7 +207,7 @@ test('strict write validation rejects duplicate or invalid field keys', () => {
 });
 
 test('dataset API rejects duplicate keys instead of silently dropping fields', async () => {
-  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+  const response = await saveDataset(testRequest('http://localhost/api/agent-datasets', 'test-user', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -221,7 +226,7 @@ test('dataset API rejects duplicate keys instead of silently dropping fields', a
 });
 
 test('dataset API rejects invalid keys instead of falling back to default fields', async () => {
-  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+  const response = await saveDataset(testRequest('http://localhost/api/agent-datasets', 'test-user', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

@@ -66,6 +66,13 @@ function requestWithKey(url: string, apiKey: string, init?: RequestInit): Reques
   });
 }
 
+function requestWithSetupToken(url: string, token: string, init?: RequestInit): Request {
+  return new Request(url, {
+    ...init,
+    headers: { ...(init?.headers as Record<string, string> | undefined), 'x-witty-password-token': token },
+  });
+}
+
 function loginBody(username: string, password?: string, ip = '10.0.1.1'): Request {
   return new Request('http://localhost/api/auth/apikey', {
     method: 'POST',
@@ -74,8 +81,24 @@ function loginBody(username: string, password?: string, ip = '10.0.1.1'): Reques
   });
 }
 
+function loginWithKeyBody(username: string, apiKey: string): Request {
+  return new Request('http://localhost/api/auth/apikey', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-witty-api-key': apiKey },
+    body: JSON.stringify({ username }),
+  });
+}
+
 async function login(username: string, password?: string): Promise<Response> {
   return routes.login(loginBody(username, password));
+}
+
+async function changePasswordWithSetupToken(token: string, newPassword: string): Promise<Response> {
+  return routes.changePassword(requestWithSetupToken('http://localhost/api/auth/password', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newPassword }),
+  }));
 }
 
 test.before(async () => {
@@ -136,12 +159,9 @@ test.after(async () => {
   else process.env.AGENT_INSIGHT_ADMIN_USERS = previousAdmins;
 
   await prisma.user.deleteMany({ where: { username: { in: [adminName, userName] } } });
-  await prisma.user.deleteMany({ where: { username: { startsWith: 'created-' } } });
-  await prisma.user.deleteMany({ where: { username: { startsWith: 'batch-' } } });
-  await prisma.user.deleteMany({ where: { username: { startsWith: 'reset-' } } });
-  await prisma.user.deleteMany({ where: { username: { startsWith: 'deleted-' } } });
-  await prisma.user.deleteMany({ where: { username: { startsWith: 'change-' } } });
-  await prisma.user.deleteMany({ where: { username: { startsWith: 'setup-' } } });
+  for (const prefix of ['created-', 'batch-', 'reset-', 'deleted-', 'change-', 'setup-', 'legacy-']) {
+    await prisma.user.deleteMany({ where: { username: { startsWith: prefix } } });
+  }
   await prisma.$disconnect();
   fs.rmSync(testHome, { recursive: true, force: true });
 });
@@ -164,11 +184,12 @@ test('账号列表只允许管理员访问，且不返回凭据', async () => {
   const row = body.accounts.find((account: any) => account.username === userName);
   assert.ok(row);
   assert.equal(row.hasPassword, true);
+  assert.equal(row.disabled, false);
   assert.equal('apiKey' in row, false);
   assert.equal('passwordHash' in row, false);
 });
 
-test('新建账号初始密码与账号名相同，首次登录后强制修改密码，重复账号被拒绝', async () => {
+test('新建账号使用随机一次性激活凭据，首次登录只发改密凭据，重复账号被拒绝', async () => {
   const username = `created-${suffix}@example.com`;
   const response = await routes.create(requestWithKey('http://localhost/api/admin/accounts', adminKey, {
     method: 'POST',
@@ -178,20 +199,25 @@ test('新建账号初始密码与账号名相同，首次登录后强制修改�
   assert.equal(response.status, 201);
   const body = await response.json();
   assert.equal(body.username, username);
-  assert.equal('initialPassword' in body, false);
+  assert.equal(typeof body.initialPassword, 'string');
+  assert.ok(body.initialPassword.length >= 8);
+  assert.notEqual(body.initialPassword, username);
 
   const created = await prisma.user.findUnique({ where: { username } });
-  assert.equal(await verifyPassword(username, created?.passwordHash), true);
+  assert.equal(await verifyPassword(body.initialPassword, created?.passwordHash), true);
+  assert.equal(await verifyPassword(username, created?.passwordHash), false);
   assert.equal(created?.mustChangePassword, true);
   assert.ok(created?.passwordUpdatedAt);
 
-  const login = await routes.login(loginBody(username, username));
-  assert.equal(login.status, 200);
-  const loginBodyJson = await login.json();
+  const loginResponse = await routes.login(loginBody(username, body.initialPassword));
+  assert.equal(loginResponse.status, 200);
+  const loginBodyJson = await loginResponse.json();
   assert.equal(loginBodyJson.passwordInitialized, true);
   assert.equal(loginBodyJson.passwordChangeRequired, true);
+  assert.equal(typeof loginBodyJson.passwordSetupToken, 'string');
+  assert.equal('apiKey' in loginBodyJson, false);
 
-  const wrongPassword = await routes.login(loginBody(username, 'not-the-account-name'));
+  const wrongPassword = await routes.login(loginBody(username, username));
   assert.equal(wrongPassword.status, 401);
 
   const duplicate = await routes.create(requestWithKey('http://localhost/api/admin/accounts', adminKey, {
@@ -202,7 +228,55 @@ test('新建账号初始密码与账号名相同，首次登录后强制修改�
   assert.equal(duplicate.status, 409);
 });
 
-test('批量导入创建账号并跳过重复与非法账号', async () => {
+test('改密凭据只能设置新密码，设置完成后才返回正式 API Key', async () => {
+  const username = `created-token-${suffix}@example.com`;
+  const createResponse = await routes.create(requestWithKey('http://localhost/api/admin/accounts', adminKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  }));
+  const { initialPassword } = await createResponse.json();
+  const loginResponse = await routes.login(loginBody(username, initialPassword));
+  const { passwordSetupToken } = await loginResponse.json();
+  assert.ok(passwordSetupToken);
+  const created = await prisma.user.findUnique({ where: { username } });
+  assert.ok(created?.apiKey);
+
+  // 改密凭据不能访问业务或管理接口。
+  const denied = await routes.list(requestWithKey('http://localhost/api/admin/accounts', passwordSetupToken));
+  assert.equal(denied.status, 401);
+
+  const session = await routes.session(
+    requestWithSetupToken('http://localhost/api/auth/session', passwordSetupToken),
+  );
+  assert.equal(session.status, 200);
+  assert.deepEqual(await session.json(), {
+    username,
+    isAdmin: false,
+    passwordChangeRequired: true,
+    passwordInitialized: true,
+  });
+
+  const changed = await changePasswordWithSetupToken(passwordSetupToken, 'FinalPassword123');
+  assert.equal(changed.status, 200);
+  const changedBody = await changed.json();
+  assert.equal(changedBody.ok, true);
+  assert.equal(changedBody.apiKey, created.apiKey);
+
+  // 已改密的凭据不能继续当会话凭据。
+  const expired = await routes.session(
+    requestWithSetupToken('http://localhost/api/auth/session', passwordSetupToken),
+  );
+  assert.equal(expired.status, 401);
+
+  const finalLogin = await routes.login(loginBody(username, 'FinalPassword123'));
+  assert.equal(finalLogin.status, 200);
+  const finalBody = await finalLogin.json();
+  assert.equal(finalBody.apiKey, created.apiKey);
+  assert.equal(finalBody.passwordChangeRequired, false);
+});
+
+test('批量导入创建账号并返回一次性激活凭据，跳过重复与非法账号', async () => {
   const batchUser = `batch-${suffix}@example.com`;
   const batchSecond = `batch-second-${suffix}`;
   const invalid = `batch-invalid-${suffix}@bad`;
@@ -213,17 +287,23 @@ test('批量导入创建账号并跳过重复与非法账号', async () => {
   }));
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.deepEqual(body.created, [batchUser, batchSecond]);
+  assert.deepEqual(body.created.map((entry: any) => entry.username), [batchUser, batchSecond]);
   assert.deepEqual(body.skipped, [{ username: invalid, reason: 'invalid' }]);
+  for (const entry of body.created) {
+    assert.equal(typeof entry.initialPassword, 'string');
+    assert.ok(entry.initialPassword.length >= 8);
+  }
 
   const created = await prisma.user.findMany({
     where: { username: { in: [batchUser, batchSecond] } },
     orderBy: { username: 'asc' },
   });
   assert.equal(created.length, 2);
-  assert.equal(await verifyPassword(created[0].username, created[0].passwordHash), true);
-  assert.equal(await verifyPassword(created[1].username, created[1].passwordHash), true);
-  assert.equal(created[0].mustChangePassword, true);
+  for (const row of created) {
+    const credential = body.created.find((entry: any) => entry.username === row.username);
+    assert.equal(await verifyPassword(credential.initialPassword, row.passwordHash), true);
+    assert.equal(row.mustChangePassword, true);
+  }
 
   const repeated = await routes.batch(requestWithKey('http://localhost/api/admin/accounts/batch', adminKey, {
     method: 'POST',
@@ -300,14 +380,17 @@ test('创建管理员白名单中的账号需要先确认', async () => {
     body: JSON.stringify({ username, acknowledgeAdmin: true }),
   }));
   assert.equal(confirmed.status, 201);
-  assert.equal((await confirmed.json()).adminGranted, true);
+  const confirmedBody = await confirmed.json();
+  assert.equal(confirmedBody.adminGranted, true);
+  assert.equal(typeof confirmedBody.initialPassword, 'string');
 });
 
-test('重置密码直接设置新密码，旧密码立即失效', async () => {
+test('重置密码直接设置新密码，旧密码立即失效，登录只发改密凭据', async () => {
   const resetUser = `reset-${suffix}`;
   const resetKey = `wi_reset_${suffix}`;
   const oldPassword = 'ResetPassword123';
   const newPassword = 'ResetPassword456';
+  const finalPassword = 'ResetPassword789';
   await prisma.user.create({
     data: {
       username: resetUser,
@@ -346,13 +429,23 @@ test('重置密码直接设置新密码，旧密码立即失效', async () => {
   const body = await newLogin.json();
   assert.equal(body.passwordInitialized, true);
   assert.equal(body.passwordChangeRequired, true);
-  assert.equal(body.apiKey, resetKey);
+  assert.equal(typeof body.passwordSetupToken, 'string');
+  assert.equal('apiKey' in body, false);
+
+  const changed = await changePasswordWithSetupToken(body.passwordSetupToken, finalPassword);
+  assert.equal(changed.status, 200);
+  assert.equal((await changed.json()).apiKey, resetKey);
+
+  const finalLogin = await login(resetUser, finalPassword);
+  assert.equal(finalLogin.status, 200);
+  assert.equal((await finalLogin.json()).apiKey, resetKey);
 });
 
-test('删除账号仅管理员可用，且不能删除当前登录账号', async () => {
+test('停用账号仅管理员可用，且不能停用当前登录账号', async () => {
   const target = `deleted-${suffix}`;
+  const oldKey = `wi_deleted_${suffix}`;
   await prisma.user.create({
-    data: { username: target, apiKey: `wi_deleted_${suffix}` },
+    data: { username: target, apiKey: oldKey },
   });
 
   const remove = (apiKey: string, username: string) => routes.remove(
@@ -373,13 +466,29 @@ test('删除账号仅管理员可用，且不能删除当前登录账号', async
 
   const response = await remove(adminKey, target);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { username: target });
-  assert.equal(await prisma.user.findUnique({ where: { username: target } }), null);
+  const body = await response.json();
+  assert.equal(body.username, target);
+  assert.equal(body.disabled, true);
+  assert.ok(body.disabledAt);
 
-  assert.equal((await remove(adminKey, target)).status, 404);
+  const row = await prisma.user.findUnique({ where: { username: target } });
+  assert.ok(row);
+  assert.ok(row?.disabledAt);
+  assert.notEqual(row?.apiKey, oldKey);
+  assert.equal(await db.findUserByApiKey(oldKey), null);
+
+  assert.equal((await login(target, undefined)).status, 401);
+  assert.equal((await remove(adminKey, target)).status, 409);
+
+  const recreate = await routes.create(requestWithKey('http://localhost/api/admin/accounts', adminKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: target }),
+  }));
+  assert.equal(recreate.status, 409);
 });
 
-test('删除账号保留历史业务数据', async () => {
+test('停用账号保留用户名与历史业务数据，历史归属不变', async () => {
   const target = `deleted-data-${suffix}`;
   const taskId = `task-${suffix}`;
   const skillName = `skill-${suffix}`;
@@ -395,16 +504,24 @@ test('删除账号保留历史业务数据', async () => {
       { params: Promise.resolve({ username: target }) },
     );
     assert.equal(response.status, 200);
-    assert.equal(await prisma.user.findUnique({ where: { username: target } }), null);
-    assert.equal(await prisma.session.count({ where: { taskId } }), 1);
-    assert.equal(await prisma.skill.count({ where: { name: skillName } }), 1);
+    const row = await prisma.user.findUnique({ where: { username: target } });
+    assert.ok(row?.disabledAt);
+    assert.equal(await prisma.session.count({ where: { taskId, user: target } }), 1);
+    assert.equal(await prisma.skill.count({ where: { name: skillName, user: target } }), 1);
+
+    const recreate = await routes.create(requestWithKey('http://localhost/api/admin/accounts', adminKey, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: target }),
+    }));
+    assert.equal(recreate.status, 409);
   } finally {
     await prisma.session.deleteMany({ where: { taskId } });
     await prisma.skill.deleteMany({ where: { name: skillName } });
   }
 });
 
-test('首次设置密码不需要当前密码，之后改密需要原密码且 API Key 保持不变', async () => {
+test('修改密码需要原密码且 API Key 保持不变', async () => {
   const changeUser = `change-${suffix}`;
   const changeKey = `wi_change_${suffix}`;
   const changePassword = 'ChangePassword123';
@@ -430,6 +547,7 @@ test('首次设置密码不需要当前密码，之后改密需要原密码且 A
     body: JSON.stringify({ currentPassword: changePassword, newPassword: 'NewPassword123' }),
   }));
   assert.equal(success.status, 200);
+  assert.deepEqual(await success.json(), { ok: true });
 
   const oldLogin = await login(changeUser, changePassword);
   assert.equal(oldLogin.status, 401);
@@ -441,27 +559,45 @@ test('首次设置密码不需要当前密码，之后改密需要原密码且 A
   assert.equal(body.passwordChangeRequired, false);
 });
 
-test('未设置密码的账号首次设置密码无需当前密码', async () => {
+test('未设置密码的存量账号仅凭用户名不能登录，凭已有 Key 设密后才拿到正式 Key', async () => {
   const setupUser = `setup-${suffix}`;
   const setupKey = `wi_setup_${suffix}`;
   await prisma.user.create({
     data: {
       username: setupUser,
       apiKey: setupKey,
-      mustChangePassword: true,
     },
   });
 
-  const response = await routes.changePassword(requestWithKey('http://localhost/api/auth/password', setupKey, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ newPassword: 'SetupPassword123' }),
-  }));
+  // 仅凭用户名不再换取正式 API Key。
+  const usernameOnly = await login(setupUser);
+  assert.equal(usernameOnly.status, 401);
+
+  // 浏览器或 Agent 已持有的旧 Key 仍可用，但改密前只换到改密凭据。
+  const restored = await routes.login(loginWithKeyBody(setupUser, setupKey));
+  assert.equal(restored.status, 200);
+  const restoredBody = await restored.json();
+  assert.equal(restoredBody.passwordChangeRequired, true);
+  assert.equal(restoredBody.passwordInitialized, false);
+  assert.equal(typeof restoredBody.passwordSetupToken, 'string');
+  assert.equal('apiKey' in restoredBody, false);
+
+  const restoredSession = await routes.session(
+    requestWithSetupToken('http://localhost/api/auth/session', restoredBody.passwordSetupToken),
+  );
+  assert.equal(restoredSession.status, 200);
+  assert.equal((await restoredSession.json()).passwordChangeRequired, true);
+
+  const response = await changePasswordWithSetupToken(restoredBody.passwordSetupToken, 'SetupPassword123');
   assert.equal(response.status, 200);
+  const changedBody = await response.json();
+  assert.equal(changedBody.apiKey, setupKey);
 
   const row = await prisma.user.findUnique({ where: { username: setupUser } });
   assert.equal(await verifyPassword('SetupPassword123', row?.passwordHash), true);
   assert.equal(row?.mustChangePassword, false);
+  // 既有 Key 不变，Agent 上报不受影响。
+  assert.equal((await db.findUserByApiKey(setupKey))?.username, setupUser);
 
   const loginResponse = await login(setupUser, 'SetupPassword123');
   assert.equal(loginResponse.status, 200);

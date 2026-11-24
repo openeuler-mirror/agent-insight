@@ -19,6 +19,7 @@ import test from 'node:test';
 import { PrismaClient } from '@prisma/client';
 import { executionBigIntToNumber } from '../src/lib/storage/prisma-client';
 import { createIsolatedDatabase } from './helpers/isolated-database';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 test('Trace page and statistics can be read independently while another transaction is open', async context => {
     const database = createIsolatedDatabase();
@@ -31,6 +32,7 @@ test('Trace page and statistics can be read independently while another transact
     const previous = globalState.prisma;
     globalState.prisma = client;
     const writer = new PrismaClient();
+    await ensureTestApiUsers('split-reader');
     const { GET } = await import('../src/app/api/observe/data/route');
     context.after(async () => {
         await Promise.all([base.$disconnect(), writer.$disconnect()]);
@@ -48,7 +50,7 @@ test('Trace page and statistics can be read independently while another transact
     await client.session.create({ data: { taskId: 'split-0', endTime: new Date(now) } });
     const url = 'http://localhost/api/observe/data?user=split-reader&paginated=1&databasePagination=1&fields=light&skipAutoEvalReady=1&pageSize=7';
     const request = async (query: string) => {
-        const response = await GET(new Request(url + query));
+        const response = await GET(testRequest(url + query, 'split-reader'));
         assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
         return response.json();
     };

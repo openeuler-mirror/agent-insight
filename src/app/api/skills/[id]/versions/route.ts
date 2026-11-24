@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canAccessSkill, canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { db, prismaRaw } from '@/lib/storage/prisma';
@@ -35,7 +35,7 @@ export async function POST(
 
         const { username } = await resolveUser(request, explicitUser);
 
-        const { allowed, skill } = await canAccessSkill(id, username);
+        const { allowed, skill } = await canManageSkill(id, username);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
         }
@@ -98,9 +98,13 @@ export async function GET(
 ) {
     try {
         const { id } = await params;
-        const skill = await db.findSkillById(id);
+        const { username } = await resolveUser(request);
+        const { allowed, skill } = await canAccessSkill(id, username);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+        }
+        if (!allowed) {
+            return NextResponse.json({ error: 'Unauthorized: Access denied' }, { status: 403 });
         }
 
         const versions = skill.versions || [];
@@ -111,22 +115,28 @@ export async function GET(
         const since14d = new Date(now - 14 * 24 * 3600 * 1000);
         const since7d = new Date(now - 7 * 24 * 3600 * 1000);
         let execs: any[] = [];
-        try {
-            execs = await prismaRaw.execution.findMany({
-                where: { skill: skill.name, timestamp: { gte: since14d } },
-                select: {
-                    id: true, taskId: true, timestamp: true, latency: true,
-                    agentName: true, agentId: true, skillVersion: true,
-                    query: true, finalResult: true,
-                    isAnswerCorrect: true, isSkillCorrect: true,
-                    failures: true,
-                },
-                orderBy: { timestamp: 'desc' },
-                take: 800,
-            });
-        } catch (e) {
-            // Execution 表查询失败不致命，降级返回空集合（例如 OpenGauss 适配器尚未完整支持 prismaRaw.execution）。
-            console.warn('[Skill Versions] failed to load executions, falling back to empty:', (e as any)?.message);
+        if (username) {
+            try {
+                execs = await prismaRaw.execution.findMany({
+                    where: {
+                        skill: skill.name,
+                        timestamp: { gte: since14d },
+                        user: username,
+                    },
+                    select: {
+                        id: true, taskId: true, timestamp: true, latency: true,
+                        agentName: true, agentId: true, skillVersion: true,
+                        query: true, finalResult: true,
+                        isAnswerCorrect: true, isSkillCorrect: true,
+                        failures: true,
+                    },
+                    orderBy: { timestamp: 'desc' },
+                    take: 800,
+                });
+            } catch (e) {
+                // Execution 表查询失败不致命，降级返回空集合（例如 OpenGauss 适配器尚未完整支持 prismaRaw.execution）。
+                console.warn('[Skill Versions] failed to load executions, falling back to empty:', (e as any)?.message);
+            }
         }
 
         const versionsList = versions.map((v: any) => {

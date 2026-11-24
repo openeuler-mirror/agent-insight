@@ -71,6 +71,10 @@ async function waitForService(port, maxRetries = 30, retryDelay = 1000) {
 async function getApiKey(port) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify({ username: 'admin' })
+    const keyFile = path.join(getPreferredHomeDataRoot(), '.admin_api_key')
+    const existingApiKey = fs.existsSync(keyFile)
+      ? fs.readFileSync(keyFile, 'utf8').trim()
+      : ''
 
     const options = {
       hostname: 'localhost',
@@ -79,7 +83,8 @@ async function getApiKey(port) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
+        'Content-Length': Buffer.byteLength(postData),
+        ...(existingApiKey ? { 'x-witty-api-key': existingApiKey } : {})
       }
     }
 

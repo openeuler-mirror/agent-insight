@@ -36,11 +36,17 @@ interface AuthContextType {
     username: string,
     apiKey?: string,
     displayName?: string,
-    session?: { isAdmin?: boolean; passwordChangeRequired?: boolean; passwordInitialized?: boolean },
+    session?: {
+      isAdmin?: boolean;
+      passwordChangeRequired?: boolean;
+      passwordInitialized?: boolean;
+      passwordSetupToken?: string;
+    },
   ) => void;
   logout: () => void;
   clearPasswordChangeRequired: () => void;
   markPasswordInitialized: () => void;
+  completePasswordChange: (apiKey?: string, isAdmin?: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -128,6 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const clearStoredAuth = () => {
       localStorage.removeItem('user_id');
       localStorage.removeItem('api_key');
+      localStorage.removeItem('password_setup_token');
       setUser(null);
       setDisplayName(null);
       setApiKey(null);
@@ -146,6 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const storedUser = localStorage.getItem('user_id');
           const storedApiKey = localStorage.getItem('api_key');
+          const storedSetupToken = localStorage.getItem('password_setup_token');
           let response: Response | null = null;
 
           if (loginMode === 'invalid' || !loginMode) {
@@ -156,12 +164,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (loginMode === 'organization') {
             response = await apiFetch('/api/auth/organization');
           } else if (loginMode === 'standalone') {
-            if (!storedUser || !storedApiKey) {
+            // 正式 Key 或改密凭据都可以恢复登录态；改密凭据只用于设置新密码。
+            if (!storedUser || (!storedApiKey && !storedSetupToken)) {
               clearStoredAuth();
               return;
             }
-            // 密码登录后不再用口令换 Key；只校验已保存的 Key 是否仍然有效。
-            response = await apiFetch('/api/auth/session');
+            response = await apiFetch('/api/auth/session', {
+              headers: {
+                ...(storedApiKey ? { 'x-witty-api-key': storedApiKey } : {}),
+                ...(storedSetupToken ? { 'x-witty-password-token': storedSetupToken } : {}),
+              },
+            });
           } else if (storedUser && storedApiKey) {
             response = await apiFetch('/api/auth/apikey', {
               method: 'POST',
@@ -223,12 +236,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             nextDisplayName = data?.displayName || nextUser;
             nextApiKey = data?.apiKey;
           }
-          if (!nextUser || !nextApiKey) throw new Error('Authentication refresh response is incomplete');
+          if (!nextUser) throw new Error('Authentication refresh response is incomplete');
+          if (loginMode !== 'standalone' && !nextApiKey) {
+            throw new Error('Authentication refresh response is incomplete');
+          }
+          if (loginMode === 'standalone' && !nextApiKey && !nextPasswordChangeRequired) {
+            throw new Error('Authentication refresh response is incomplete');
+          }
           if (cancelled) return;
 
           setIdaasRegionError(null);
           localStorage.setItem('user_id', nextUser);
-          localStorage.setItem('api_key', nextApiKey);
+          if (nextApiKey) localStorage.setItem('api_key', nextApiKey);
+          else localStorage.removeItem('api_key');
           setUser(nextUser);
           setDisplayName(nextDisplayName);
           setApiKey(nextApiKey);
@@ -286,7 +306,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     username: string,
     key?: string,
     nextDisplayName?: string,
-    session?: { isAdmin?: boolean; passwordChangeRequired?: boolean; passwordInitialized?: boolean },
+    session?: {
+      isAdmin?: boolean;
+      passwordChangeRequired?: boolean;
+      passwordInitialized?: boolean;
+      passwordSetupToken?: string;
+    },
   ) => {
     setIdaasRegionError(null);
     localStorage.setItem('user_id', username);
@@ -295,6 +320,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAdmin(Boolean(session?.isAdmin));
     setPasswordChangeRequired(Boolean(session?.passwordChangeRequired));
     setPasswordInitialized(session?.passwordInitialized !== false);
+    if (session?.passwordSetupToken) {
+      localStorage.setItem('password_setup_token', session.passwordSetupToken);
+    } else {
+      localStorage.removeItem('password_setup_token');
+    }
     if (key) {
       localStorage.setItem('api_key', key);
       setApiKey(key);
@@ -315,6 +345,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIdaasRegionError(null);
     localStorage.removeItem('user_id');
     localStorage.removeItem('api_key');
+    localStorage.removeItem('password_setup_token');
     setUser(null);
     setDisplayName(null);
     setApiKey(null);
@@ -333,6 +364,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPasswordInitialized(true);
   }, []);
 
+  // 改密完成后服务端才会下发正式 API Key；清掉一次性改密凭据。
+  const completePasswordChange = useCallback((key?: string, nextIsAdmin?: boolean) => {
+    localStorage.removeItem('password_setup_token');
+    if (key) {
+      localStorage.setItem('api_key', key);
+      setApiKey(key);
+    }
+    if (nextIsAdmin !== undefined) setIsAdmin(nextIsAdmin);
+    setPasswordInitialized(true);
+    setPasswordChangeRequired(false);
+  }, []);
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -349,6 +392,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       clearPasswordChangeRequired,
       markPasswordInitialized,
+      completePasswordChange,
     }}>
       {children}
     </AuthContext.Provider>

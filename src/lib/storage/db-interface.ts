@@ -42,7 +42,7 @@ export interface DatabaseAdapter {
         mustChangePassword: boolean;
     }): Promise<any>;
     createUser(data: any): Promise<any>;
-    deleteUser(username: string): Promise<boolean>;
+    disableUser(username: string, data: { apiKey: string; disabledAt: Date }): Promise<any>;
 
     // Skill operations
     findSkill(name: string, user: string | null): Promise<any>;
@@ -135,7 +135,7 @@ class PrismaAdapter implements DatabaseAdapter {
     }
 
     async findUserByApiKey(apiKey: string) {
-        return this.client.user.findUnique({ where: { apiKey } });
+        return this.client.user.findFirst({ where: { apiKey, disabledAt: null } });
     }
     
     async findUserByUsername(username: string) {
@@ -179,9 +179,12 @@ class PrismaAdapter implements DatabaseAdapter {
         return this.client.user.create({ data });
     }
 
-    async deleteUser(username: string) {
-        const result = await this.client.user.deleteMany({ where: { username } });
-        return result.count > 0;
+    async disableUser(username: string, data: { apiKey: string; disabledAt: Date }) {
+        const result = await this.client.user.updateMany({
+            where: { username, disabledAt: null },
+            data,
+        });
+        return result.count > 0 ? this.client.user.findUnique({ where: { username } }) : null;
     }
 
     async findSkill(name: string, user: string | null) {
@@ -498,7 +501,10 @@ class OpenGaussAdapter implements DatabaseAdapter {
     }
 
     async findUserByApiKey(apiKey: string) {
-        const res = await this.query('SELECT * FROM "User" WHERE "apiKey" = $1', [apiKey]);
+        const res = await this.query(
+            'SELECT * FROM "User" WHERE "apiKey" = $1 AND "disabledAt" IS NULL',
+            [apiKey],
+        );
         return res.rows[0] || null;
     }
     
@@ -555,9 +561,12 @@ class OpenGaussAdapter implements DatabaseAdapter {
         return res.rows[0];
     }
 
-    async deleteUser(username: string) {
-        const res = await this.query('DELETE FROM "User" WHERE username = $1', [username]);
-        return (res.rowCount ?? 0) > 0;
+    async disableUser(username: string, data: { apiKey: string; disabledAt: Date }) {
+        const res = await this.query(
+            'UPDATE "User" SET "apiKey" = $2, "disabledAt" = $3 WHERE username = $1 AND "disabledAt" IS NULL RETURNING *',
+            [username, data.apiKey, data.disabledAt],
+        );
+        return res.rows[0] || null;
     }
 
     async findSkill(name: string, user: string | null) {

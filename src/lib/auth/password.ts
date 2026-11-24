@@ -26,6 +26,11 @@ const HASH_PREFIX = 'scrypt';
 export const PASSWORD_MIN_LENGTH = 8;
 export const PASSWORD_MAX_LENGTH = 128;
 
+export function generateActivationPassword(): string {
+    // 与账号名无关的随机一次性凭据；首次设置密码后即被替换。
+    return 'Aa1' + crypto.randomBytes(18).toString('base64url');
+}
+
 function deriveKey(
     password: string,
     salt: Buffer,

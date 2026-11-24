@@ -17,11 +17,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createIsolatedDatabase } from './helpers/isolated-database';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const database = createIsolatedDatabase();
 const { prisma } = require('../src/lib/storage/prisma') as typeof import('../src/lib/storage/prisma');
 const { GET } = require('../src/app/api/experiments/[id]/route') as typeof import('../src/app/api/experiments/[id]/route');
 
+test.before(async () => { await ensureTestApiUsers('case-navigation-user'); });
 test.after(async () => { await prisma.$disconnect(); database.dispose(); });
 
 async function createExperiment(id: string, count = 53) {
@@ -32,7 +34,7 @@ async function createExperiment(id: string, count = 53) {
   return ids;
 }
 async function read(id: string, query = '') {
-  const response = await GET(new Request(`http://fixture.invalid/api/experiments/${id}?user=case-navigation-user&${query}`), { params: Promise.resolve({ id }) });
+  const response = await GET(testRequest(`http://fixture.invalid/api/experiments/${id}?user=case-navigation-user&${query}`, 'case-navigation-user'), { params: Promise.resolve({ id }) });
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   return response.json();
 }

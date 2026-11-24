@@ -25,6 +25,7 @@ import { RuntimeOptionMigration } from '../src/components/eval/RuntimeOptionMigr
 import { RuntimeParameterSnapshot } from '../src/components/eval/RuntimeParameterSnapshot'
 import { readSavedDefinition, runtimeOptionsState, savedOptionsToInputs } from '../src/lib/engine/experiment/runtime-options'
 import { createIsolatedDatabase } from './helpers/isolated-database'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 const current = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 const legacy = validateDefinition({
@@ -90,6 +91,7 @@ test('confirmation is generic across runtimes and never guesses aliases, flatten
 test('historical experiment API still displays its frozen names and reading or previewing reuse never rewrites stored snapshots', async t => {
   const database = createIsolatedDatabase()
   const { prisma } = await import('../src/lib/storage/prisma')
+  await ensureTestApiUsers('history-parameters')
   const { GET } = await import('../src/app/api/experiments/[id]/route')
   t.after(async () => { await prisma.$disconnect(); database.dispose() })
   const saved: AgentOptions = { runtimeKey: 'mcts', definitionDigest: legacy.definitionDigest,
@@ -100,7 +102,7 @@ test('historical experiment API still displays its frozen names and reading or p
   } })
   const experiment = await prisma.experiment.create({ data: { user: 'history-parameters', name: 'Historical parameters',
     agentName: 'mcts-coordinator', type: 'single', evaluatorIdsJson: '[]', configSnapshotJson: frozen } })
-  const response = await GET(new Request(`http://fixture.invalid/api/experiments/${experiment.id}?user=history-parameters`),
+  const response = await GET(testRequest(`http://fixture.invalid/api/experiments/${experiment.id}?user=history-parameters`, 'history-parameters'),
     { params: Promise.resolve({ id: experiment.id }) })
   assert.equal(response.status, 200)
   const detail = await response.json()

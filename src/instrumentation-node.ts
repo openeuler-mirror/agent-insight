@@ -256,8 +256,9 @@ export async function setupNodeRuntime(): Promise<void> {
 
 /**
  * 本地登录使用账号密码。这里在服务启动时确保 admin 账号存在，并把 Key 写到数据目录，
- * 供脚本读取。admin 的初始密码为 `admin`（可用 AGENT_INSIGHT_ADMIN_PASSWORD 覆盖），
- * 首次登录后强制修改密码；其余账号由管理员创建，初始密码与账号名相同。
+ * 供脚本读取。admin 不再使用可预测的默认口令：优先使用 AGENT_INSIGHT_ADMIN_PASSWORD，
+ * 未配置时生成随机一次性激活凭据并写入 `.admin_activation_password`（0600）。
+ * 首次登录后强制修改密码；其余账号由管理员创建，同样使用随机激活凭据。
  */
 async function ensureAdminBootstrapCredentials(): Promise<void> {
   try {
@@ -265,6 +266,9 @@ async function ensureAdminBootstrapCredentials(): Promise<void> {
     if (resolveLoginMode() === 'idaas_oauth') return;
 
     const { db } = await import('@/lib/storage/prisma');
+    const { hashPassword, generateActivationPassword, validatePasswordPolicy, verifyPassword } =
+      await import('@/lib/auth/password');
+
     let admin = await db.findUserByUsername('admin');
     if (!admin) {
       const crypto = await import('node:crypto');
@@ -282,22 +286,50 @@ async function ensureAdminBootstrapCredentials(): Promise<void> {
       console.warn('[instrumentation] admin api key file write failed:', (err as Error)?.message);
     }
 
-    if (!admin.passwordHash) {
-      const { hashPassword, validatePasswordPolicy } = await import('@/lib/auth/password');
+    const activationPath = path.join(getAgentInsightHome(), '.admin_activation_password');
+    const activationFileExists = fs.existsSync(activationPath);
+    const usesLegacyDefault = Boolean(admin.passwordHash)
+      && await verifyPassword('admin', admin.passwordHash);
+
+    if (!admin.passwordHash || usesLegacyDefault) {
       const configured = String(process.env.AGENT_INSIGHT_ADMIN_PASSWORD || '').trim();
-      let initialPassword = configured || 'admin';
+      let initialPassword = configured;
       if (configured) {
         const policyError = validatePasswordPolicy(configured, admin.username);
         if (policyError) {
-          console.warn(`[instrumentation] AGENT_INSIGHT_ADMIN_PASSWORD rejected: ${policyError}; using the default initial password`);
-          initialPassword = 'admin';
+          console.warn(`[instrumentation] AGENT_INSIGHT_ADMIN_PASSWORD rejected: ${policyError}; generating an activation password`);
+          initialPassword = '';
         }
       }
+      if (!initialPassword) initialPassword = generateActivationPassword();
+
       await db.updateUserPassword(admin.username, {
         passwordHash: await hashPassword(initialPassword),
         passwordUpdatedAt: new Date(),
         mustChangePassword: true,
       });
+      try {
+        fs.writeFileSync(activationPath, initialPassword, { encoding: 'utf8', mode: 0o600 });
+        try { fs.chmodSync(activationPath, 0o600); } catch { /* 非 POSIX 文件系统忽略 */ }
+        console.warn(`[instrumentation] admin activation password written to ${activationPath}`);
+      } catch (err) {
+        console.warn('[instrumentation] admin activation password file write failed:', (err as Error)?.message);
+      }
+    } else if (admin.mustChangePassword && !activationFileExists) {
+      // 待改密但激活文件丢失（例如旧版本升级）：轮换一次，保证管理员仍能进入。
+      const initialPassword = generateActivationPassword();
+      await db.updateUserPassword(admin.username, {
+        passwordHash: await hashPassword(initialPassword),
+        passwordUpdatedAt: new Date(),
+        mustChangePassword: true,
+      });
+      try {
+        fs.writeFileSync(activationPath, initialPassword, { encoding: 'utf8', mode: 0o600 });
+        try { fs.chmodSync(activationPath, 0o600); } catch { /* 非 POSIX 文件系统忽略 */ }
+        console.warn(`[instrumentation] admin activation password rotated at ${activationPath}`);
+      } catch (err) {
+        console.warn('[instrumentation] admin activation password file write failed:', (err as Error)?.message);
+      }
     }
   } catch (err) {
     console.warn('[instrumentation] admin bootstrap failed (non-fatal):', (err as Error)?.message);

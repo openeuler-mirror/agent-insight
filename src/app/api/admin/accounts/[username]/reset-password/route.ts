@@ -45,6 +45,12 @@ export async function POST(
     if (!user) {
         return NextResponse.json({ error: 'Account not found' }, { status: 404 });
     }
+    if (user.disabledAt) {
+        return NextResponse.json(
+            { error: 'Disabled accounts cannot be reset', code: 'account_disabled' },
+            { status: 409, headers: NO_STORE },
+        );
+    }
 
     // 重置即由管理员直接设置新密码：旧密码立即失效，不用等对方下次登录。
     const body: any = await request.json().catch(() => ({}));

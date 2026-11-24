@@ -106,12 +106,15 @@ export async function GET(
     const url = new URL(req.url);
     const q = url.searchParams;
     const { username } = await resolveUser(req, q.get('user'));
+    if (!username) {
+      return NextResponse.json({ error: 'user is required' }, { status: 401 });
+    }
     const { casePage: casePageRaw, casePageSize } = casePagination(q.get('casePage'), q.get('casePageSize'));
     const locateCaseId = q.get('locateCaseId') || '';
     const wantCaseId = q.get('caseId') || '';
 
     const experimentMeta = await prisma.experiment.findFirst({
-      where: { id, deletedAt: null, ...(username ? { user: username } : {}) },
+      where: { id, deletedAt: null, user: username },
       select: { id: true, type: true },
     });
     if (!experimentMeta) {
@@ -130,7 +133,7 @@ export async function GET(
 
     // 单组实验：走原聚合路径（响应 shape 不变）
     const experiment = await prisma.experiment.findFirst({
-      where: { id, ...(username ? { user: username } : {}) },
+      where: { id, user: username },
       select: {
         id: true, user: true, name: true, type: true, agentName: true, status: true,
         watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true,

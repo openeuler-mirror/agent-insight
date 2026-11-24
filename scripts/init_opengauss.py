@@ -38,6 +38,7 @@ TABLE_DEFINITIONS = {
             ("passwordHash", "TEXT"),
             ("passwordUpdatedAt", "TIMESTAMP"),
             ("mustChangePassword", "BOOLEAN DEFAULT FALSE"),
+            ("disabledAt", "TIMESTAMP"),
             ("createdAt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
         ],
         "unique_constraints": []

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
@@ -45,16 +46,34 @@ export async function DELETE(
     }
     if (username === adminUsername) {
         return NextResponse.json(
-            { error: 'Cannot delete the account you are signed in with' },
+            { error: 'Cannot disable the account you are signed in with' },
             { status: 400, headers: NO_STORE },
         );
     }
 
-    const deleted = await db.deleteUser(username);
-    if (!deleted) {
+    const existing = await db.findUserByUsername(username);
+    if (!existing) {
+        return NextResponse.json({ error: 'Account not found' }, { status: 404 });
+    }
+    if (existing.disabledAt) {
+        return NextResponse.json(
+            { error: 'Account is already disabled', code: 'account_disabled' },
+            { status: 409, headers: NO_STORE },
+        );
+    }
+
+    // 停用而不是删除：保留用户名与历史业务归属，同时轮换 Key 让旧凭据立即失效。
+    // 这样同名新账号不会继承前一个账号的 Trace。
+    const disabled = await db.disableUser(username, {
+        apiKey: 'wi_revoked_' + crypto.randomBytes(24).toString('hex'),
+        disabledAt: new Date(),
+    });
+    if (!disabled) {
         return NextResponse.json({ error: 'Account not found' }, { status: 404 });
     }
 
-    // 只删除账号本身（登录与 API Key 立即失效），历史业务数据保留。
-    return NextResponse.json({ username }, { headers: NO_STORE });
+    return NextResponse.json(
+        { username, disabled: true, disabledAt: disabled.disabledAt },
+        { headers: NO_STORE },
+    );
 }

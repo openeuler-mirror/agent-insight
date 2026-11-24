@@ -34,14 +34,21 @@ interface Account {
     externalAccount: string | null;
     isAdmin: boolean;
     hasPassword: boolean;
+    disabled: boolean;
+    disabledAt: string | null;
     createdAt: string | null;
     passwordUpdatedAt: string | null;
 }
 
 type SkipReason = 'invalid' | 'exists' | 'admin_confirmation_required';
 
+interface CreatedCredential {
+    username: string;
+    initialPassword: string;
+}
+
 interface ImportResult {
-    created: string[];
+    created: CreatedCredential[];
     skipped: { username: string; reason: SkipReason }[];
 }
 
@@ -83,6 +90,7 @@ export default function AccountsPage() {
     const [importResult, setImportResult] = useState<ImportResult | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [deleting, setDeleting] = useState(false);
+    const [createdCredential, setCreatedCredential] = useState<CreatedCredential | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const load = useCallback(async () => {
@@ -125,6 +133,9 @@ export default function AccountsPage() {
             }
             if (!response.ok) throw new Error(data?.error || t('accounts.createFailed'));
             setNewUsername('');
+            if (data?.initialPassword) {
+                setCreatedCredential({ username, initialPassword: data.initialPassword });
+            }
             await load();
         } catch (err) {
             setError((err as Error).message || t('accounts.createFailed'));
@@ -191,7 +202,11 @@ export default function AccountsPage() {
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data?.error || t('accounts.batchFailed'));
             setImportResult({
-                created: Array.isArray(data?.created) ? data.created : [],
+                created: Array.isArray(data?.created)
+                    ? data.created.filter((entry: unknown): entry is CreatedCredential => (
+                        entry !== null && typeof entry === 'object' && 'username' in entry
+                    ))
+                    : [],
                 skipped: Array.isArray(data?.skipped) ? data.skipped : [],
             });
             await load();
@@ -327,7 +342,9 @@ export default function AccountsPage() {
                                         )}
                                     </td>
                                     <td className="px-3 py-2 text-foreground-muted">
-                                        {account.hasPassword ? t('accounts.initialized') : t('accounts.notInitialized')}
+                                        {account.disabled
+                                            ? t('accounts.disabled')
+                                            : account.hasPassword ? t('accounts.initialized') : t('accounts.notInitialized')}
                                     </td>
                                     <td className="px-3 py-2 text-foreground-muted">{formatTime(account.createdAt)}</td>
                                     <td className="px-3 py-2 text-foreground-muted">{formatTime(account.passwordUpdatedAt)}</td>
@@ -336,7 +353,7 @@ export default function AccountsPage() {
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                disabled={busy || resetBusy}
+                                                disabled={busy || resetBusy || account.disabled}
                                                 onClick={() => {
                                                     setResetNewPassword('');
                                                     setResetConfirmPassword('');
@@ -350,11 +367,11 @@ export default function AccountsPage() {
                                                 variant="outline"
                                                 size="sm"
                                                 className="text-error"
-                                                disabled={busy || deleting || account.username === user}
+                                                disabled={busy || deleting || account.username === user || account.disabled}
                                                 title={account.username === user ? t('accounts.deleteSelf') : undefined}
                                                 onClick={() => setDeleteTarget(account.username)}
                                             >
-                                                {t('accounts.delete')}
+                                                {account.disabled ? t('accounts.disabled') : t('accounts.disable')}
                                             </Button>
                                         </div>
                                     </td>
@@ -382,12 +399,45 @@ export default function AccountsPage() {
                 onConfirm={async () => { await createAccount(true); }}
             />
 
+            <Dialog
+                open={Boolean(createdCredential)}
+                onOpenChange={(open) => { if (!open) setCreatedCredential(null); }}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>{t('accounts.createdTitle')}</DialogTitle>
+                        <DialogDescription>{t('accounts.createdDescription')}</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
+                        <div className="text-foreground">{createdCredential?.username}</div>
+                        <div className="break-all font-mono text-foreground">{createdCredential?.initialPassword}</div>
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                if (!createdCredential) return;
+                                void navigator.clipboard?.writeText(
+                                    `${createdCredential.username}\n${createdCredential.initialPassword}`,
+                                ).catch(() => undefined);
+                            }}
+                        >
+                            {t('common.copy')}
+                        </Button>
+                        <Button type="button" onClick={() => setCreatedCredential(null)}>
+                            {t('common.close')}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
             <ConfirmDialog
                 open={Boolean(deleteTarget)}
                 onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
                 title={t('accounts.deleteConfirmTitle')}
                 description={t('accounts.deleteConfirmDescription', { username: deleteTarget ?? '' })}
-                confirmText={t('accounts.delete')}
+                confirmText={t('accounts.disable')}
                 cancelText={t('common.cancel')}
                 tone="danger"
                 onConfirm={deleteAccount}
@@ -479,6 +529,15 @@ export default function AccountsPage() {
                                     skipped: String(importResult.skipped.length),
                                 })}
                             </p>
+                            {importResult.created.length > 0 && (
+                                <ul className="max-h-40 space-y-1 overflow-y-auto font-mono text-xs text-foreground">
+                                    {importResult.created.map((entry) => (
+                                        <li key={entry.username}>
+                                            {entry.username} · {entry.initialPassword}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
                             {importResult.skipped.length > 0 && (
                                 <ul className="max-h-40 space-y-1 overflow-y-auto text-foreground-muted">
                                     {importResult.skipped.map((entry) => (

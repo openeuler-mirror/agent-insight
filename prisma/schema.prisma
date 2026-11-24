@@ -75,6 +75,7 @@ model User {
   passwordHash           String?
   passwordUpdatedAt      DateTime?
   mustChangePassword     Boolean   @default(false)
+  disabledAt             DateTime?
   createdAt              DateTime  @default(now())
 }
 

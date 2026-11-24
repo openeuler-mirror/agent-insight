@@ -143,6 +143,7 @@ export default function LoginPage() {
               isAdmin: data.isAdmin,
               passwordChangeRequired: data.passwordChangeRequired,
               passwordInitialized: data.passwordInitialized,
+              passwordSetupToken: data.passwordSetupToken,
             });
         } else if (res.status === 429) {
             setError(t('login.tooManyAttempts'));

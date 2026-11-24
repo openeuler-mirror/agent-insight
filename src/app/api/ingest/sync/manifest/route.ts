@@ -15,7 +15,7 @@
  */
 
 
-import { resolveUser } from '@/lib/auth/auth';
+import { resolveUser, skillVisibilityWhere } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -27,15 +27,10 @@ export async function GET(request: NextRequest) {
         const { username } = await resolveUser(request, userParam);
         const urlPrefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
-        const where: any = { isUploaded: true };
-
-        if (username) {
-            where.OR = [
-                { user: username },
-                { user: null },
-                { visibility: 'public' }
-            ];
-        }
+        const where: any = {
+            isUploaded: true,
+            ...skillVisibilityWhere(username),
+        };
 
         const skills = await db.findSkills(where);
 

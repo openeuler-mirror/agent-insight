@@ -29,7 +29,7 @@ process.env.DATABASE_URL = "file:" + testDbPath;
 execFileSync(
   process.execPath,
   [path.resolve(__dirname, "../node_modules/prisma/build/index.js"), "db", "push", "--skip-generate"],
-  { cwd: path.resolve(__dirname, ".."), env: process.env, stdio: "ignore" },
+  { cwd: path.resolve(__dirname, ".."), env: process.env, stdio: 'ignore' },
 );
 
 let POST: (request: Request) => Promise<Response>;
@@ -41,7 +41,10 @@ const suffix = `${Date.now()}-${process.pid}`;
 const usernames = {
   active: `login-active-${suffix}@example.com`,
   uninitialized: `login-uninitialized-${suffix}@example.com`,
+  mustChange: `login-must-change-${suffix}@example.com`,
+  disabled: `login-disabled-${suffix}@example.com`,
   attempts: `login-attempts-${suffix}@example.com`,
+  organization: `login-org-${suffix}@example.com`,
 };
 const idaasUsername = `Employee-UUID-${suffix}-ABCDEF`;
 const password = 'CorrectHorseBattery';
@@ -54,6 +57,34 @@ function login(username: string, submittedPassword?: string): Promise<Response> 
       ? { username }
       : { username, password: submittedPassword }),
   }));
+}
+
+function loginWithKey(username: string, apiKey: string): Promise<Response> {
+  return POST(new Request('http://localhost/api/auth/apikey', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-witty-api-key': apiKey },
+    body: JSON.stringify({ username }),
+  }));
+}
+
+async function withLoginMode<T>(mode: string, run: () => Promise<T>): Promise<T> {
+  const previousLoginMode = process.env.LOGIN_MODE;
+  const previousOrganizationMode = process.env.ORGANIZATION_MODE;
+  if (mode === 'organization') {
+    delete process.env.LOGIN_MODE;
+    process.env.ORGANIZATION_MODE = 'true';
+  } else {
+    process.env.LOGIN_MODE = mode;
+    delete process.env.ORGANIZATION_MODE;
+  }
+  try {
+    return await run();
+  } finally {
+    if (previousLoginMode === undefined) delete process.env.LOGIN_MODE;
+    else process.env.LOGIN_MODE = previousLoginMode;
+    if (previousOrganizationMode === undefined) delete process.env.ORGANIZATION_MODE;
+    else process.env.ORGANIZATION_MODE = previousOrganizationMode;
+  }
 }
 
 test.before(async () => {
@@ -79,13 +110,33 @@ test.before(async () => {
   await prisma.user.create({
     data: { username: usernames.uninitialized, apiKey: `wi_uninit_${suffix}` },
   });
+  await prisma.user.create({
+    data: {
+      username: usernames.mustChange,
+      apiKey: `wi_must_change_${suffix}`,
+      passwordHash: await hashPassword(password),
+      passwordUpdatedAt: new Date(),
+      mustChangePassword: true,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      username: usernames.disabled,
+      apiKey: `wi_disabled_${suffix}`,
+      passwordHash: await hashPassword(password),
+      disabledAt: new Date(),
+    },
+  });
 });
 
 test.after(async () => {
   const candidates = [
     usernames.active,
     usernames.uninitialized,
+    usernames.mustChange,
+    usernames.disabled,
     usernames.attempts,
+    usernames.organization,
     `login-reset-${suffix}@example.com`,
     idaasUsername,
   ];
@@ -145,17 +196,37 @@ test('正确密码返回身份、管理员标记与改密要求', async () => {
   });
 });
 
-test('未设置密码的账号首次登录免密，并要求先设置密码', async () => {
-  const response = await login(usernames.uninitialized);
+test('未设置密码的账号仅凭用户名不能登录，凭已有 Key 只换到改密凭据', async () => {
+  const usernameOnly = await login(usernames.uninitialized);
+  assert.equal(usernameOnly.status, 401);
+
+  const restored = await loginWithKey(usernames.uninitialized, `wi_uninit_${suffix}`);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.headers.get('cache-control'), 'no-store');
+  const body = await restored.json();
+  assert.equal(body.username, usernames.uninitialized);
+  assert.equal(body.isAdmin, false);
+  assert.equal(body.passwordChangeRequired, true);
+  assert.equal(body.passwordInitialized, false);
+  assert.equal(typeof body.passwordSetupToken, 'string');
+  assert.equal('apiKey' in body, false);
+});
+
+test('需要改密的账号即使密码正确也只发改密凭据', async () => {
+  const response = await login(usernames.mustChange, password);
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get('cache-control'), 'no-store');
-  assert.deepEqual(await response.json(), {
-    username: usernames.uninitialized,
-    apiKey: `wi_uninit_${suffix}`,
-    isAdmin: false,
-    passwordChangeRequired: true,
-    passwordInitialized: false,
-  });
+  const body = await response.json();
+  assert.equal(body.passwordChangeRequired, true);
+  assert.equal(body.passwordInitialized, true);
+  assert.equal(typeof body.passwordSetupToken, 'string');
+  assert.equal('apiKey' in body, false);
+});
+
+test('停用账号不能登录，旧 Key 也不再有效', async () => {
+  const response = await login(usernames.disabled, password);
+  assert.equal(response.status, 401);
+  const { db } = await import('@/lib/storage/prisma');
+  assert.equal(await db.findUserByApiKey(`wi_disabled_${suffix}`), null);
 });
 
 test('连续失败达到阈值后返回 429', async () => {
@@ -202,40 +273,48 @@ test('成功登录会清零失败计数', async () => {
   }
 });
 
+test('organization 模式仍要求已有账号用原 API Key 恢复（#654）', async () => {
+  await withLoginMode('organization', async () => {
+    const first = await login(usernames.organization);
+    assert.equal(first.status, 200);
+    const firstBody = await first.json();
+    assert.equal(firstBody.username, usernames.organization);
+    assert.ok(firstBody.apiKey);
+
+    const unauthenticated = await login(usernames.organization);
+    assert.equal(unauthenticated.status, 401);
+    assert.equal((await unauthenticated.json()).code, 'credential_required');
+
+    const restored = await loginWithKey(usernames.organization.toUpperCase(), firstBody.apiKey);
+    assert.equal(restored.status, 200);
+    assert.deepEqual(await restored.json(), {
+      username: usernames.organization,
+      apiKey: firstBody.apiKey,
+    });
+  });
+});
+
 test('IDaaS 恢复登录时保持 UUID 大小写并校验已有 API key', async () => {
   const apiKey = `wi_idaas_restore_${suffix}`;
   await prisma.user.create({
     data: { username: idaasUsername, apiKey },
   });
 
-  const previousLoginMode = process.env.LOGIN_MODE;
-  const previousOrganizationMode = process.env.ORGANIZATION_MODE;
   const previousRegionAccessEnabled = process.env.IDAAS_REGION_ACCESS_ENABLED;
-  process.env.LOGIN_MODE = 'idaas_oauth';
-  delete process.env.ORGANIZATION_MODE;
   process.env.IDAAS_REGION_ACCESS_ENABLED = "false";
 
   try {
-    const response = await POST(new Request('http://localhost/api/auth/apikey', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-witty-api-key': apiKey,
-      },
-      body: JSON.stringify({ username: `  ${idaasUsername}  ` }),
-    }));
+    await withLoginMode('idaas_oauth', async () => {
+      const response = await loginWithKey(`  ${idaasUsername}  `, apiKey);
 
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
-      username: idaasUsername,
-      apiKey,
-      displayName: idaasUsername,
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        username: idaasUsername,
+        apiKey,
+        displayName: idaasUsername,
+      });
     });
   } finally {
-    if (previousLoginMode === undefined) delete process.env.LOGIN_MODE;
-    else process.env.LOGIN_MODE = previousLoginMode;
-    if (previousOrganizationMode === undefined) delete process.env.ORGANIZATION_MODE;
-    else process.env.ORGANIZATION_MODE = previousOrganizationMode;
     if (previousRegionAccessEnabled === undefined) delete process.env.IDAAS_REGION_ACCESS_ENABLED;
     else process.env.IDAAS_REGION_ACCESS_ENABLED = previousRegionAccessEnabled;
   }

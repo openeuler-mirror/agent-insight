@@ -14,13 +14,15 @@
 passwordHash       String?
 passwordUpdatedAt  DateTime?
 mustChangePassword Boolean @default(false)
+disabledAt         DateTime?
 ```
 
 - 旧行保持 `passwordHash = NULL`，不回填，不阻断启动。
 - `passwordHash` 采用自带参数的格式，便于以后调参：
   `scrypt$<N>$<r>$<p>$<saltBase64>$<hashBase64>`。
 - `mustChangePassword` 在管理员新建账号、重置密码时置 `true`，用户完成首次密码设置后置 `false`。
-- 新建账号与批量导入写入与账号名一致的初始密码（`passwordHash = hash(username)`），重置密码时由管理员直接指定新密码；两者都置 `mustChangePassword = true`。
+- 新建账号与批量导入写入服务端生成的随机一次性激活凭据，重置密码时由管理员直接指定新密码；两者都置 `mustChangePassword = true`。
+- `disabledAt` 标记停用账号；停用保留用户名与历史归属，同时轮换 API Key，查询按 Key 认证时排除已停用账号。
 - OpenGauss 初始化脚本 `scripts/init_opengauss.py` 的 `User` 列表同步补列；新增列可空或带默认值，不触发 `scripts/db_push.sh` 的无损白名单。
 
 ## 密码处理
@@ -45,12 +47,15 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 2. 用户名去空白并转小写（与现状一致）。
 3. 按用户名查找用户，不创建。
 4. 用户不存在：`401 { error: 'Invalid username or password' }`，并记录一次登录失败。
-5. 存量账号 `passwordHash` 为空：只凭用户名登录成功，返回
-   `{ username, apiKey, isAdmin, passwordChangeRequired: true, passwordInitialized: false }`。
+5. 存量账号 `passwordHash` 为空：只凭用户名不再登录成功；出示匹配的 `x-witty-api-key` 时返回
+   `{ username, isAdmin, passwordChangeRequired: true, passwordInitialized: false, passwordSetupToken }`，不返回正式 API Key。
 6. 已设置密码的账号缺少密码或密码错误：统一返回
    `401 { error: 'Invalid username or password' }`，并计入失败次数，不区分账号是否存在。
-7. 通过后返回 `{ username, apiKey, isAdmin, passwordChangeRequired, passwordInitialized: true }`。
-8. 响应头 `Cache-Control: no-store`。
+7. 通过后，若账号需要改密（`mustChangePassword` 或尚无密码），只返回
+   `{ username, isAdmin, passwordChangeRequired: true, passwordInitialized, passwordSetupToken }`；
+   否则返回 `{ username, apiKey, isAdmin, passwordChangeRequired: false, passwordInitialized: true }`。
+8. `passwordSetupToken` 是短时 HMAC 凭据，只能调用 `POST /api/auth/password`，不能访问业务或管理接口。
+9. 响应头 `Cache-Control: no-store`。
 
 `idaas_oauth` 分支保持原逻辑：必须携带 `x-witty-api-key` 并做地区校验，不要求密码。
 
@@ -60,9 +65,9 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 
 `GET /api/auth/session`
 
-- 从 `x-witty-api-key` 解析用户（复用 `resolveUser`）。
+- 从 `x-witty-api-key` 或 `x-witty-password-token` 解析用户。
 - 返回 `{ username, isAdmin, passwordChangeRequired, passwordInitialized }`，不返回 API Key。`passwordHash` 为空时 `passwordChangeRequired` 恒为 `true`。
-- API Key 无效返回 401；`passwordHash` 为空时仍返回 200（`passwordInitialized: false`），因为该账号正处于首次登录状态。
+- 两个凭据都无效返回 401；`passwordHash` 为空时仍返回 200（`passwordInitialized: false`），因为该账号正处于首次登录状态。改密凭据只在 `mustChangePassword` 为真时有效。
 - 仅 standalone 使用；`organization`、`idaas_oauth` 恢复链路不变。
 
 前端 `AuthProvider`：
@@ -75,12 +80,12 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 
 `POST /api/auth/password`
 
-- 凭 `x-witty-api-key` 定位用户；无有效凭据返回 401。
+- 凭 `x-witty-api-key` 或 `x-witty-password-token` 定位用户；无有效凭据返回 401。
 - 请求体 `{ currentPassword?, newPassword }`。
-- 账号已有密码时必须校验当前密码（缺失或错误返回 400/401 统一文案）；账号尚无密码时跳过该校验，用于首次登录设置密码。
+- 账号已有密码时必须校验当前密码（缺失或错误返回 400/401 统一文案）；账号尚无密码或使用改密凭据时跳过该校验。
 - 校验新密码策略（不通过返回 400，附具体规则）。
 - 成功后更新 `passwordHash`、`passwordUpdatedAt`，`mustChangePassword = false`。
-- 不轮换 API Key，不上线新会话；返回 `{ ok: true }`。
+- 不轮换 API Key；使用改密凭据时返回 `{ ok: true, apiKey, isAdmin }`，否则返回 `{ ok: true }`。
 - `idaas_oauth` 模式返回 404。
 
 ## 账号管理接口
@@ -88,18 +93,18 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 前缀 `/api/admin/accounts`，所有方法先校验有效 API Key 且 `isAdminUser(username)`，否则 403。仅 standalone 生效。
 
 - `GET /api/admin/accounts`
-  返回 `[{ username, externalAccount, isAdmin, hasPassword, createdAt, passwordUpdatedAt }]`，按用户名排序，不返回 `apiKey` 与 `passwordHash`。
+  返回 `[{ username, externalAccount, isAdmin, hasPassword, disabled, disabledAt, createdAt, passwordUpdatedAt }]`，按用户名排序，不返回 `apiKey` 与 `passwordHash`。
 - `POST /api/admin/accounts`
-  请求 `{ username }`；用户名去空白、转小写，长度上限 128；邮箱形式仅接受 `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`，普通账号仅接受 Unicode 字母/数字与 `._-`，拒绝内部空白、控制字符、`$`、`|`、逗号等。写入与账号名一致的初始密码（`passwordHash = hash(username)`、`mustChangePassword = true`），返回 `{ username, adminGranted }`。重名返回 409。
+  请求 `{ username, password? }`；用户名去空白、转小写，长度上限 128；邮箱形式仅接受 `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`，普通账号仅接受 Unicode 字母/数字与 `._-`，拒绝内部空白、控制字符、`$`、`|`、逗号等。管理员可指定符合策略的密码，未指定时生成随机一次性激活凭据；写入哈希并置 `mustChangePassword = true`，返回 `{ username, adminGranted, initialPassword }`。重名（含已停用账号）返回 409。
   用户名命中管理员白名单且请求未带 `acknowledgeAdmin: true` 时，先返回 `409 { code: 'admin_confirmation_required' }` 且不创建账号；页面二次确认后带该标志重试，避免误建管理员。
 - `POST /api/admin/accounts/batch`
-  请求 `{ usernames: string[] }`，单次最多 200 个；去空白、转小写、去重后逐个创建，逐个跳过非法、已存在和非确认的管理员账号；创建的账号同样写入与账号名一致的初始密码。返回 `{ created, skipped: [{ username, reason }] }`，`reason` 取 `invalid` / `exists` / `admin_confirmation_required`。
+  请求 `{ usernames: string[] }`，单次最多 200 个；去空白、转小写、去重后逐个创建，逐个跳过非法、已存在和非确认的管理员账号；创建的账号同样使用随机一次性激活凭据。返回 `{ created: [{ username, initialPassword }], skipped: [{ username, reason }] }`，`reason` 取 `invalid` / `exists` / `admin_confirmation_required`。
 - `POST /api/admin/accounts/[username]/reset-password`
   请求 `{ password }`；校验密码策略后写入新密码哈希与 `passwordUpdatedAt`，置 `mustChangePassword = true`，旧密码立即失效，返回 `{ username }`。账号不存在返回 404。
 - `DELETE /api/admin/accounts/[username]`
-  删除账号记录，登录与 API Key 立即失效，历史业务数据保留；不能删除当前登录账号。账号不存在返回 404。
+  停用账号：保留账号记录与用户名，写入 `disabledAt` 并轮换 API Key，使登录与旧 Key 立即失效；历史业务数据归属不变，同名账号不能重建。不能停用当前登录账号。账号不存在返回 404，已停用返回 409。
 
-不做禁用、修改用户名、手工指定 API Key；批量导入之外不提供其它批量操作。
+不做修改用户名、手工指定 API Key；批量导入之外不提供其它批量操作。
 
 ## 管理员初始化与启动同步
 
@@ -111,8 +116,8 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 
 管理员网页登录与 API Key 相互独立。服务启动时已确保 `admin` 存在并设置初始密码，因此首次网页登录无需额外准备：
 
-- `admin` 初始密码为 `AGENT_INSIGHT_ADMIN_PASSWORD`，未配置时为 `admin`；仅当 `passwordHash` 为空时写入，首次登录后仍要求改密。
-- 不提供独立的账号初始化脚本；其它账号统一由管理员在账号管理页创建、批量导入或删除。
+- `admin` 优先使用 `AGENT_INSIGHT_ADMIN_PASSWORD`；未配置时生成随机一次性激活凭据并写入 `<数据目录>/.admin_activation_password`（0600）。仅当 `passwordHash` 为空或仍是旧版默认 `admin` 口令时写入，首次登录后仍要求改密。
+- 不提供独立的账号初始化脚本；其它账号统一由管理员在账号管理页创建、批量导入或停用。
 - 已有 API Key 继续有效，Agent 上报不受影响。
 
 `.env.example` 增加 `AGENT_INSIGHT_ADMIN_PASSWORD` 的空值说明。
@@ -137,11 +142,11 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 
 ## 兼容与迁移
 
-- 存量账号：`passwordHash = NULL`，升级后可直接网页登录并设置密码；旧 API Key 继续有效，Agent 上报与已登录浏览器不受影响。
+- 存量账号：`passwordHash = NULL`，升级后不能只凭用户名登录；可凭已保存的 API Key 或管理员重置后的激活凭据完成设密。旧 API Key 继续有效，Agent 上报不受影响。
 - 历史用户名大小写：账号查询先精确匹配，未命中再按不区分大小写回退，兼容历史混合大小写记录。
-- 升级操作：无需额外初始化；存量未设置密码的账号可免密首次登录并设置密码，`admin` 由启动流程写入初始密码。管理员可用账号管理页的重置密码直接为账号设置新密码。
+- 升级操作：无需额外初始化；存量未设置密码的账号凭已有 API Key 或管理员重置后的激活凭据完成设密，`admin` 由启动流程写入随机激活凭据。管理员可用账号管理页的重置密码直接为账号设置新密码。
 - 前端旧缓存：`AuthProvider` 恢复时会话接口不再拒绝未设置密码的账号，登录状态保持，并按 `passwordChangeRequired` 跳转改密页。
-- `POST /api/auth/apikey` 对存量未设置密码的账号直接登录并强制设置密码；已设置密码的账号缺少密码或密码错误统一返回 401。需在发布说明中标注。
+- `POST /api/auth/apikey` 不再对存量未设置密码的账号仅凭用户名登录；已设置密码的账号缺少密码或密码错误统一返回 401。需在发布说明中标注。
 - `local-user.ts` 的 `findOrCreateLocalUser` 仍供 IDaaS callback 使用，standalone 登录保持只查不建。
 
 ## 失败处理
@@ -149,7 +154,8 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 | 场景 | 行为 |
 | - | - |
 | 缺少用户名 | 400，指出缺失字段 |
-| 存量账号未设置密码且缺少密码 | 200，免密登录并返回 `passwordInitialized: false` |
+| 存量账号未设置密码且仅提交用户名 | 401，统一凭据错误文案；需出示已有 API Key 或激活凭据 |
+| 账号需要改密但凭据正确 | 200，返回 `passwordSetupToken`，不返回正式 API Key |
 | 账号已设置密码但缺少密码 | 401，与密码错误、用户不存在同一文案，并计入失败次数 |
 | 用户不存在或密码错误 | 401，统一文案 |
 | 失败次数超限 | 429 `too_many_attempts` |
@@ -161,9 +167,10 @@ standalone 请求体：`{ username, password? }`（密码仅对存量未设置�
 ## 安全边界
 
 - `passwordHash` 与 `apiKey` 都不出现在账号列表响应和日志中。
-- 初始密码由账号名派生（admin 为 admin 或环境变量值），不在页面回显或传输；重置密码由管理员在页面输入后仅保存哈希。
-- 存量未设置密码的账号可被知道用户名的人抢先完成首次登录并设置密码，这是首次免密登录的固有代价；账号只能由管理员创建或批量导入，不开放自助注册。
-- 登录失败不区分缺少密码、密码错误与用户不存在（存量未设置密码的账号按免密规则处理）。
+- 初始激活凭据由服务端随机生成，或由管理员显式设置；只在创建/重置响应中回显一次，存储的始终是哈希。
+- 改密前的登录凭据是短时 HMAC token，只能调用改密接口；不能当业务 API Key 或管理员凭据使用。已有 API Key 在改密前仍可用于 Agent 上报，但浏览器不能凭它绕过改密。
+- 存量未设置密码的账号必须凭已有 API Key 或管理员下发的激活凭据设密，不能再被知道用户名的人抢先占用。
+- 登录失败不区分缺少密码、密码错误与用户不存在。
 - 管理员接口以 API Key 解析出的用户名判定，不信任请求体中的身份。
 - 账号管理页面对命中管理员白名单的用户名做显著提示，避免误建管理员；批量导入默认跳过管理员账号。
 - 本次不改变 API Key 明文存储，相关风险在后续需求单独处理。

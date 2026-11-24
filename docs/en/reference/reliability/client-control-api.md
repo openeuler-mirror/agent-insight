@@ -11,7 +11,7 @@ Fault-injection task creation, stopping, reruns, and legacy Worker APIs under `/
 
 | Caller | Credential and boundary |
 | --- | --- |
-| Platform user | Client lists, installation tokens, and client configuration use `resolveUser`. A nonempty explicit `user` can take precedence over the Key; it is compatibility identity selection, not credential verification. Integrations should send `x-witty-api-key` and avoid an overriding `user` |
+| Platform user | Client lists, installation tokens, and client configuration use `resolveUser`. Identity comes only from `x-witty-api-key` or query `apiKey`; an explicit `user` must match the Key's user or resolution yields an empty identity. Integrations must send a valid Key and cannot rely on `user` alone |
 | Installer | A one-use `installToken` in the registration body. Default lifetime: 600 seconds; `expiresInSeconds` is clamped to 60–3600 seconds. Used tokens return `409`, expired tokens `410`, and invalid tokens `401` |
 | Registered device | `Authorization: Bearer <deviceCredential>`. Device HTTP endpoints optionally accept `x-agent-insight-client-id`; a mismatch returns `403`. The credential is returned only at registration, and its hash is stored. The implementation sets no fixed expiry; revocation or re-registration invalidates the old credential |
 | Internal control service | `x-agent-insight-internal` must match `AGENT_INSIGHT_INTERNAL_TOKEN` (default `local` when unset). It protects the three `control-*` bridges, rather than using a user Key or device credential; failures return `403 INTERNAL_ONLY` |

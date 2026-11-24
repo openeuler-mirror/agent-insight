@@ -384,6 +384,26 @@ test("补传端点:限额与字段映射(超长截断 / 非法 kind 丢弃 / 条
   assert.deepEqual(buildContextSupplementEvents(SESSION, "not-an-array", { receivedAt, maxTextChars: 100 }).events, [])
 })
 
+test("补传:turn_end 只接受 Stop/SessionEnd/StopFailure,子 agent Stop 与空事件被丢弃", () => {
+  const receivedAt = "2026-08-02T10:00:10.000Z"
+  const { events } = buildContextSupplementEvents(
+    SESSION,
+    [
+      { kind: "turn_end", hookEvent: "Stop", capturedAt: "2026-08-02T10:00:05.000Z" },
+      { kind: "turn_end", hookEvent: "StopFailure", capturedAt: "2026-08-02T10:00:06.000Z" },
+      { kind: "turn_end", hookEvent: "SessionEnd", capturedAt: "2026-08-02T10:00:07.000Z" },
+      { kind: "turn_end", hookEvent: "SubagentStop", capturedAt: "2026-08-02T10:00:08.000Z" },
+      { kind: "turn_end" },
+    ],
+    { receivedAt, maxTextChars: 100 },
+  )
+
+  // turn_end 没有正文,不能被"text 为空"的通用规则丢掉
+  assert.deepEqual(events.map((event) => event.attributes.hook_event), ["Stop", "StopFailure", "SessionEnd"])
+  assert.equal(events[0].eventTimestamp, "2026-08-02T10:00:05.000Z")
+  assert.equal(events[0].attributes.kind, "turn_end")
+})
+
 test("补传:hook 上下文挂到节点上,不进时间线事件", () => {
   const record = aggregateClaudeOtelEvents(SESSION, [
     ...crossMachineEvents(),

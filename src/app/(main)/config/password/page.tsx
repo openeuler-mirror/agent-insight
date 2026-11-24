@@ -16,7 +16,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
@@ -30,13 +30,20 @@ import { useLocale } from '@/lib/client/locale-context';
 export default function ChangePasswordPage() {
     const { t } = useLocale();
     const router = useRouter();
-    const { clearPasswordChangeRequired, markPasswordInitialized, passwordInitialized } = useAuth();
+    const { completePasswordChange, passwordInitialized } = useAuth();
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
-    const needsSetup = !passwordInitialized;
+    const [hasSetupToken, setHasSetupToken] = useState(false);
+
+    useEffect(() => {
+        setHasSetupToken(Boolean(localStorage.getItem('password_setup_token')));
+    }, []);
+
+    // 改密凭据已在登录时校验过临时密码，不再重复要求当前密码。
+    const needsSetup = !passwordInitialized || hasSetupToken;
 
     const submit = async (event: React.FormEvent) => {
         event.preventDefault();
@@ -47,9 +54,13 @@ export default function ChangePasswordPage() {
         }
         setBusy(true);
         try {
+            const setupToken = localStorage.getItem('password_setup_token');
             const response = await apiFetch('/api/auth/password', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(setupToken ? { 'x-witty-password-token': setupToken } : {}),
+                },
                 body: JSON.stringify({ currentPassword, newPassword }),
             });
             const data = await response.json().catch(() => ({}));
@@ -64,8 +75,7 @@ export default function ChangePasswordPage() {
                 }
                 return;
             }
-            markPasswordInitialized();
-            clearPasswordChangeRequired();
+            completePasswordChange(data?.apiKey, data?.isAdmin);
             router.replace('/trace');
         } catch {
             setError(t('changePassword.failed'));

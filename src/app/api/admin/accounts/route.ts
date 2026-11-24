@@ -19,7 +19,11 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
 import { isAdminUser, resolveAdminUser } from '@/lib/auth/admin';
-import { hashPassword } from '@/lib/auth/password';
+import {
+    generateActivationPassword,
+    hashPassword,
+    validatePasswordPolicy,
+} from '@/lib/auth/password';
 import {
     isDuplicateUsernameError,
     normalizeAccountUsername,
@@ -34,6 +38,8 @@ function toAccount(user: any) {
         externalAccount: user.externalAccount || null,
         isAdmin: isAdminUser(user.username),
         hasPassword: Boolean(user.passwordHash),
+        disabled: Boolean(user.disabledAt),
+        disabledAt: user.disabledAt || null,
         createdAt: user.createdAt || null,
         passwordUpdatedAt: user.passwordUpdatedAt || null,
     };
@@ -83,12 +89,22 @@ export async function POST(request: Request) {
         );
     }
 
+    // 管理员可指定初始密码；未指定时由服务端生成随机一次性激活凭据，
+    // 不再使用账号名这种可预测的默认密码。
+    const requestedPassword = typeof body?.password === 'string' ? body.password : '';
+    if (requestedPassword) {
+        const policyError = validatePasswordPolicy(requestedPassword, username);
+        if (policyError) {
+            return NextResponse.json({ error: policyError }, { status: 400 });
+        }
+    }
+    const initialPassword = requestedPassword || generateActivationPassword();
+
     try {
         await db.createUser({
             username,
             apiKey: 'wi_' + crypto.randomBytes(24).toString('hex'),
-            // 初始密码与账号名相同，首次登录后强制修改。
-            passwordHash: await hashPassword(username),
+            passwordHash: await hashPassword(initialPassword),
             passwordUpdatedAt: new Date(),
             mustChangePassword: true,
         });
@@ -103,6 +119,8 @@ export async function POST(request: Request) {
         {
             username,
             adminGranted: isAdminUser(username),
+            // 一次性激活凭据只在这里回显一次，用户首次登录改密后即失效。
+            initialPassword,
         },
         { status: 201, headers: NO_STORE },
     );

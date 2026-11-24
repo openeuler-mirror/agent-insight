@@ -32,11 +32,13 @@ import { GET as getExperiment } from '@/app/api/experiments/[id]/route';
 import { POST as runExperiment } from '@/app/api/experiments/[id]/run/route';
 import { POST as rescanExperiment } from '@/app/api/experiments/[id]/rescan/route';
 import { GET as getTraces } from '@/app/api/experiments/traces/route';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 const TEST_USER = `cmp-api-${Date.now()}`;
 const CUSTOM_LLM_ID = 'custom-cmp-api-judge';
 
 test.before(async () => {
+  await ensureTestApiUsers(TEST_USER);
   await writeUserCustomEvaluators(TEST_USER, [{
     id: CUSTOM_LLM_ID, name: 'cmp-api-judge', description: '', evaluatorType: 'LLM',
     source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
@@ -54,7 +56,8 @@ test.after(async () => {
 });
 
 function postReq(url: string, body: unknown): Request {
-  return new Request(url, {
+  const user = String((body as { user?: unknown } | null)?.user || TEST_USER);
+  return testRequest(url, user, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -157,7 +160,7 @@ test('POST /api/experiments/[id]/run type=llm → 分流 startComparisonRun', as
   });
 
   const runRes = await runExperiment(
-    new Request(`http://localhost/api/experiments/${id}/run?user=${TEST_USER}`, { method: 'POST' }),
+    testRequest(`http://localhost/api/experiments/${id}/run?user=${TEST_USER}`, TEST_USER, { method: 'POST' }),
     { params: Promise.resolve({ id }) },
   );
   assert.equal(runRes.status, 200);
@@ -229,7 +232,7 @@ test('POST /api/experiments/[id]/rescan 运行中 → 409', async (t) => {
 
   // 先启动运行（不 await completion）
   await runExperiment(
-    new Request(`http://localhost/api/experiments/${id}/run?user=${TEST_USER}`, { method: 'POST' }),
+    testRequest(`http://localhost/api/experiments/${id}/run?user=${TEST_USER}`, TEST_USER, { method: 'POST' }),
     { params: Promise.resolve({ id }) },
   );
   // 立即 rescan → 409
@@ -268,7 +271,7 @@ test('AC-003: GET /api/experiments/[id] type=llm → 响应含 groups + pairing'
   });
 
   const detailRes = await getExperiment(
-    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/${id}?user=${TEST_USER}`, TEST_USER),
     { params: Promise.resolve({ id }) },
   );
   assert.equal(detailRes.status, 200);
@@ -290,7 +293,7 @@ test('GET /api/experiments/[id] type=single → 响应不含 groups/pairing（AC
   t.after(async () => { await prisma.experiment.delete({ where: { id } }).catch(() => {}); });
 
   const detailRes = await getExperiment(
-    new Request(`http://localhost/api/experiments/${id}?user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/${id}?user=${TEST_USER}`, TEST_USER),
     { params: Promise.resolve({ id }) },
   );
   const detail = await detailRes.json();
@@ -307,7 +310,7 @@ test('GET /api/experiments/traces 加 model 过滤 + 返回 model/skill/skillVer
 
   // 不带 model 过滤：返回全部 + model/skill/skillVersion 字段
   const allRes = await getTraces(
-    new Request(`http://localhost/api/experiments/traces?agent=${agent}&user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/traces?agent=${agent}&user=${TEST_USER}`, TEST_USER),
   );
   const allBody = await allRes.json();
   assert.ok(allBody.items.length >= 2);
@@ -318,7 +321,7 @@ test('GET /api/experiments/traces 加 model 过滤 + 返回 model/skill/skillVer
 
   // 带 model 过滤：只返回匹配的
   const filteredRes = await getTraces(
-    new Request(`http://localhost/api/experiments/traces?agent=${agent}&model=glm-4.7&user=${TEST_USER}`),
+    testRequest(`http://localhost/api/experiments/traces?agent=${agent}&model=glm-4.7&user=${TEST_USER}`, TEST_USER),
   );
   const filteredBody = await filteredRes.json();
   assert.ok(filteredBody.items.length >= 1);

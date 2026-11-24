@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canAccessSkill, canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { NextRequest, NextResponse } from 'next/server';
@@ -34,7 +34,7 @@ export async function DELETE(
 
         const { username } = await resolveUser(request);
 
-        const { allowed, skill } = await canAccessSkill(id, username);
+        const { allowed, skill } = await canManageSkill(id, username);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
         }
@@ -130,6 +130,15 @@ export async function GET(
 
         if (isNaN(version)) {
             return NextResponse.json({ error: 'Invalid version number' }, { status: 400 });
+        }
+
+        const { username } = await resolveUser(request);
+        const { allowed, skill } = await canAccessSkill(id, username);
+        if (!skill) {
+            return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
+        }
+        if (!allowed) {
+            return NextResponse.json({ error: 'Unauthorized: Access denied' }, { status: 403 });
         }
 
         const skillVersion = await db.findSkillVersion(id, version);
