@@ -45,6 +45,7 @@ import {
   isReadOnlyBenchmarkDataset,
 } from '@/lib/benchmark/public-dataset';
 import { resolveUser } from '@/lib/auth/auth';
+import { DatasetJsonlError, parseMultiturnDatasetJsonl } from '@/lib/multiturn-dataset-jsonl';
 
 export const dynamic = 'force-dynamic';
 
@@ -93,15 +94,18 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const user = String(body.user || '').trim();
-    if (!user) {
+    const contentType = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+    const isJsonl = contentType === 'application/x-ndjson';
+    const jsonBody = isJsonl ? null : await request.json();
+    const requestedUser = isJsonl ? null : String(jsonBody.user || '').trim();
+    if (!isJsonl && !requestedUser) {
       return NextResponse.json({ error: 'user is required' }, { status: 400 });
     }
-    const { username } = await resolveUser(request, user);
-    if (!username) {
+    const { username: user } = await resolveUser(request, requestedUser);
+    if (!user) {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
+    const body = isJsonl ? parseMultiturnDatasetJsonl(await request.text()) : jsonBody;
 
     const name = String(body.name || '').trim();
     if (!name) {
@@ -171,6 +175,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, dataset, warnings });
   } catch (error) {
+    if (error instanceof DatasetJsonlError) {
+      return NextResponse.json({ error: error.message, line: error.line, field: error.field }, { status: 422 });
+    }
     if(error instanceof ZodError)return NextResponse.json({error:'逐轮配置无效：'+error.issues.map(issue=>issue.message).join('；')},{status:422});
     if(error instanceof GenerationError)return generationErrorResponse(error);
     console.error('agent-datasets POST error:', error);

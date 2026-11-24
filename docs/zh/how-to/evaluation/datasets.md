@@ -25,6 +25,17 @@ Case 编辑弹窗中可开启 **配置逐轮对话与业务规则**，为每轮�
 
 首版版本管理仅支持 SQLite。OpenGauss 保留原编辑流程，不显示此版本控件。
 
+### 从 JSONL 创建整套多轮评测集
+
+在评测数据集列表选择 **新建评测集 → 从 JSONL 导入**，上传一个 UTF-8 `.jsonl` 文件。首条非空记录描述数据集，后续每行是一条完整的多轮 Case。选择文件后平台校验并创建整集，成功时打开数据项页面。在 SQLite 上，新数据集直接发布为 `v1`，可用于新实验。
+
+```jsonl
+{"type":"dataset","schemaVersion":1,"name":"退款客服多轮回归","description":"验证跨轮记忆和退款查询"}
+{"type":"case","id":"refund-001","turns":[{"input":"记住订单号 A1024。"},{"input":"刚才的订单号是什么？","expectedOutput":"A1024","expectation":{"outputMatch":"contains"}}]}
+```
+
+数据集头包含 `type: "dataset"`、`schemaVersion: 1` 和 `name`，可选 `description`、`tags`。后续各行使用 `type: "case"`，并提供 2～20 轮 `turns`。每轮至少填写 `input`，还可提供 `expectedOutput` 和 `expectation`，用于检查文本匹配、工具调用或 Skill 使用。Case 和轮次的 `id` 可省略，平台会补齐。显式 ID 在其所属数据集或 Case 内必须唯一。任何一行有错时，平台会提示行号及字段，整集不会创建。后续编辑通过原有草稿流程发布新版本。
+
 
 评测数据集用于沉淀离线评测所需的输入样本、预期结果与补充元数据，是评测执行、结果对比与版本回归的基础资产。一套结构稳定、判定标准明确的数据集，能让不同模型版本、不同提示词或不同 Agent 配置在相同输入下被横向比较，从而使评测结果可解释、可复现。
 

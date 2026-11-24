@@ -30,6 +30,69 @@ test.before(async()=>{
 });
 test.after(async()=>{await prisma?.$disconnect();fs.rmSync(home,{recursive:true,force:true});});
 
+const jsonlHeader = { type: 'dataset', schemaVersion: 1, name: '退款客服多轮回归', description: '验证跨轮退款查询', tags: ['回归'] };
+const jsonlCase = {
+  type: 'case', id: 'refund-001',
+  turns: [
+    { input: '记住订单号 A1024。' },
+    { input: '查询这笔订单。', expectedOutput: ' 处理中 ', expectation: {
+      outputMatch: 'contains', requiredTools: [{ name: 'lookup_order', arguments: { order_id: 'A1024' } }], expectedSkill: 'refund-support',
+    } },
+  ],
+};
+
+async function importDatasetJsonl(text: string, authenticated = true) {
+  const { POST } = await import('@/app/api/agent-datasets/route');
+  return POST(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST', body: text,
+    headers: { 'Content-Type': 'application/x-ndjson', ...(authenticated && { 'x-witty-api-key': key }) },
+  }));
+}
+
+test('JSONL 一次创建整套多轮数据集、归属当前用户并发布含逐轮规则的 v1', async () => {
+  const text = '\uFEFF' + [jsonlHeader, jsonlCase, { ...jsonlCase, id: 'refund-002' }].map(row => JSON.stringify(row)).join('\r\n') + '\r\n';
+  assert.equal((await importDatasetJsonl(text, false)).status, 401);
+  const response = await importDatasetJsonl(text);
+  const result = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(result));
+
+  const dataset = await prisma.agentEvalDataset.findUniqueOrThrow({ where: { id: result.dataset.id } });
+  assert.equal(dataset.user, user);
+  assert.equal(dataset.name, jsonlHeader.name);
+  assert.equal(dataset.description, jsonlHeader.description);
+  assert.deepEqual(JSON.parse(dataset.tagsJson), jsonlHeader.tags);
+  const asset = await prisma.evaluationAssetHead.findFirstOrThrow({
+    where: { user, kind: 'dataset', businessId: dataset.id }, include: { versions: true, draft: true },
+  });
+  assert.equal(asset.publishedVersion, 1);
+  assert.equal(asset.draft, null);
+  assert.deepEqual(asset.versions.map((version: { version: number }) => version.version), [1]);
+  const { cases } = JSON.parse(asset.versions[0].contentJson);
+  assert.deepEqual(cases.map((item: { id: string }) => item.id), ['refund-001', 'refund-002']);
+  assert.equal(cases[0].input, jsonlCase.turns[0].input);
+  assert.equal(cases[0].expectedOutput, jsonlCase.turns[1].expectedOutput);
+  assert.equal(cases[0].turns[1].expectation.expectedSkill, 'refund-support');
+  assert.deepEqual(cases[0].turns[1].expectation.requiredTools, jsonlCase.turns[1].expectation?.requiredTools);
+});
+
+test('JSONL 错误指向文件行与字段，前面合法的 Case 不会单独落库', async () => {
+  const before = await Promise.all([prisma.agentEvalDataset.count(), prisma.evaluationAssetHead.count()]);
+  const trial = [
+    { tail: '{broken', field: 'JSON' },
+    { tail: JSON.stringify(jsonlCase), field: 'id' },
+    { tail: JSON.stringify({ ...jsonlCase, id: 'bad', turns: [{ input: '单轮' }] }), field: 'turns' },
+    { tail: JSON.stringify({ ...jsonlCase, id: 'bad', turns: [{ input: '合法' }, { input: ' ' }] }), field: 'turns[2].input' },
+  ];
+  for (const { tail, field } of trial) {
+    const response = await importDatasetJsonl([JSON.stringify(jsonlHeader), JSON.stringify(jsonlCase), '', tail].join('\n'));
+    const body = await response.json();
+    assert.equal(response.status, 422, JSON.stringify(body));
+    assert.equal(body.line, 4);
+    assert.equal(body.field, field);
+  }
+  assert.deepEqual(await Promise.all([prisma.agentEvalDataset.count(), prisma.evaluationAssetHead.count()]), before);
+});
+
 test('新版本API不信任user参数或未认证请求',async()=>{
  const response=await route.GET(new Request('http://localhost/api/evaluation-assets?user='+user+'&kind=dataset&businessId='+datasetId));
  assert.equal(response.status,401);

@@ -60,6 +60,8 @@ When Benchmark evaluation fails, inspect the Case's failure stage and error befo
 
 ## Try versioned multi-turn evaluation (SQLite)
 
+If you have a JSONL file for a full multi-turn dataset, choose **Create dataset → Import from JSONL (从 JSONL 导入)** to create and publish `v1` in one step. Then select that version in step 2. See the [JSONL example, Chinese](../../../zh/how-to/evaluation/datasets.md#从-jsonl-创建整套多轮评测集).
+
 1. Edit each Case in an evaluation dataset. Configure turn inputs, expected text with exact/contains matching, required/forbidden tools and argument checks, and an expected Skill when needed. Save each Case draft, then publish a dataset version.
 2. In the existing experiment wizard, select the dataset and its version. For **Generate Trace**, choose an online OpenCode v2 target, model and Agent version; the client must report multi-turn session-continuation capability.
 3. Select Cases, inspect their read-only turn rules in step 3, and select evaluator versions in step 4, including **Per-turn business rules (逐轮业务规则)**. Evaluator card details also expose saved configurations and version comparisons.
