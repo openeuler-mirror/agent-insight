@@ -1219,9 +1219,9 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className={cn("grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]", framework === 'deepseek-harness' && "@min-[480px]/agent-trace:grid-cols-[minmax(0,55fr)_minmax(0,45fr)]")}>
+            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
                 {/* ─── Left: Unified Span Tree ─── */}
-                <div className={cn("rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0", framework === 'deepseek-harness' && "@min-[480px]/agent-trace:h-full @min-[480px]/agent-trace:min-h-0")}>
+                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     {['qoder', 'opencode'].includes(ctxValue.framework || '') && (
                         <div className="flex justify-end px-2.5 py-1.5 border-b border-border">
                             <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'trace', rootSessionId, interactions: displayInteractions })} />
@@ -1389,7 +1389,7 @@ export default function AgentTraceView({
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}
-                <div className={cn("rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0", framework === 'deepseek-harness' && "@min-[480px]/agent-trace:h-full @min-[480px]/agent-trace:min-h-0")}>
+                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     <HarnessContextTabs entries={harnessRequests} selectedKey={selectedKey} onSelect={onJumpToKey} zh={locale === 'zh'} taskId={rootSessionId}>
                     {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
                         <div className="p-4 space-y-3">

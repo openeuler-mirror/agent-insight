@@ -16,6 +16,7 @@
 
 import { acquireProcessLock } from './process-lock.mjs';
 import { createDshContextSource } from './dsh-context-source.mjs';
+import { splitNativeContextBody } from './dsh-context-details.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync, readFileSync, openSync, closeSync, ftruncateSync, fstatSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -241,6 +242,14 @@ export function registerLiveExporter(ctx, config) {
       const membership = undefined;
       const record = redactTelemetryRecord({ attributes, body: membership
         ? { ...event.data, contextMembership: membership } : event.data }, config);
+      const native = splitNativeContextBody(event.type, record.body, session.id, event.seq, event.time);
+      if (native?.attachment) {
+        const item=native.attachment.items[0];let text='',bytes=0;
+        for(const char of item.text){const size=Buffer.byteLength(char);if(bytes+size>8192)break;text+=char;bytes+=size;}
+        if(text!==item.text)item.bodyStatus='truncated';
+        item.text=text;
+      }
+      if (native) record.body = {...native.body, ...(native.attachment ? {contextBody:native.attachment} : {})};
       const payload = { resourceLogs: [{
         resource: { attributes: [{ key: 'service.name', value: { stringValue: 'deepseek-harness' } }] },
         scopeLogs: [{ scope: { name }, logRecords: [{
@@ -249,6 +258,7 @@ export function registerLiveExporter(ctx, config) {
           body: otlpValue(record.body),
         }] }],
       }] };
+      if (record.body?.contextBody) payload.agentInsightBodyExpiresAt=record.body.contextBody.expiresAt;
       if (membership?.items?.some(item => typeof item.text === 'string')) payload.agentInsightBodyExpiresAt = membership.expiresAt;
       const previews=record.body?.dshContext?.details;
       if(previews?.items?.some(item=>typeof item.text==='string')) payload.agentInsightBodyExpiresAt=previews.expiresAt;
@@ -304,7 +314,8 @@ export function scrubExpiredOutboxBodies(directory, now = Date.now(), onError = 
         const membership = record.body?.kvlistValue?.values?.find(entry => entry.key === 'contextMembership')?.value;
         const projection=record.body?.kvlistValue?.values?.find(entry=>entry.key==='dshContext')?.value;
         const details=projection?.kvlistValue?.values?.find(entry=>entry.key==='details')?.value;
-        const items = [membership,details].flatMap(value=>value?.kvlistValue?.values?.find(entry => entry.key === 'items')?.value?.arrayValue?.values ?? []);
+        const native=record.body?.kvlistValue?.values?.find(entry=>entry.key==='contextBody')?.value;
+        const items = [membership,details,native].flatMap(value=>value?.kvlistValue?.values?.find(entry => entry.key === 'items')?.value?.arrayValue?.values ?? []);
         for (const item of items) if (item.kvlistValue) {
           item.kvlistValue.values = item.kvlistValue.values.filter(entry => entry.key !== 'text');
           for (const entry of item.kvlistValue.values) {

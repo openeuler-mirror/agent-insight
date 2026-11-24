@@ -345,4 +345,4 @@ Dify 原生 Workflow OTLP（非应用内 Langfuse SDK）由 `service.name=langge
 
 ### dsh-context 优先数据源
 
-启用成员采集且本宿主已加载dsh-context 0.85.1与connection服务时，分类Token优先采用facts投影，并标记来源。delta仅显示投影节点/Token变化，精确成员及正文核对仍用补采。插件缺失、不兼容、超时或源忙会回退，正文仍需独立启用，不自动安装第三方插件。源估算和服务商实际用量分开；重启Harness与平台消费者以加载新适配。Headless完整投影兼容和事件/对比人工UX评审仍待验。
+本宿主加载 dsh-context 0.85.1 与 connection 服务时，分类 Token 使用 facts 投影，delta 展示投影节点与 Token 变化。缺失、不兼容、超时或源忙时保留原 Trace，不使用新增成员采样回退，不自动安装第三方插件。原生 compaction/summary 和 compact-checkpoint 文本通过 contextBody 附件进入既有受治理正文侧存储，普通事件仅保留引用；读取复用 Trace 身份、权限、源会话与事件归属校验、脱敏、配额及七天 TTL。摘要文本不证明完整请求成员。投影超时取消独立调用并释放前台占用，最多保留两个未结束底层读取，避免不响应取消的插件造成无限堆积。重启 Harness 加载 collector 新版本，平台消费者同步更新。

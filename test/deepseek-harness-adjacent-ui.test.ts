@@ -23,7 +23,6 @@ test('first captured request keeps explicit missing reason instead of zero',()=>
 });
 test('original detail and independent right scrolling survive missing projection',()=>{
  const html=renderToStaticMarkup(React.createElement(HarnessContextTabs,{entries,selectedKey:'r2',onSelect(){},zh:true,children:React.createElement('p',null,'Existing detail')}));
- assert.match(html,/模型请求 #2 · 2\/1/);assert.match(html,/Existing detail/);assert.match(html,/min-h-0 flex-1 flex-col overflow-y-auto/);assert.match(html,/未采集到相关事件/);
- assert.ok(html.indexOf('Existing detail')<html.indexOf('上下文变化'),'keep original node detail before context event summary as in the approved mockup');
- assert.match(html,/不代表会话总次数/);
+ assert.doesNotMatch(html,/模型请求 #2 · 2\/1/);assert.match(html,/Existing detail/);assert.match(html,/min-h-0 flex-1 flex-col overflow-hidden/);assert.match(html,/role="tab"[^>]*>事件/);
+ assert.doesNotMatch(html,/上下文变化|查看事件详情|未采集到相关事件|不代表会话总次数/);
 });

@@ -1,3 +1,4 @@
+import { splitNativeContextBody } from '../../../../scripts/agent-trace-collectors/deepseek-harness/dsh-context-details.mjs';
 import { acquireProcessLock } from '../../../../scripts/agent-trace-collectors/deepseek-harness/process-lock.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -91,6 +92,30 @@ export function* cleanupHarnessBodies(directory = harnessBodyDirectory(), now = 
 
 export function separateHarnessBodies(events: any[], directory = harnessBodyDirectory()) {
   for (const event of events) {
+    const native = splitNativeContextBody(event.eventType,event.body,event.sourceSessionId,event.sequence,Date.parse(event.eventTimestamp));
+    if (native) {
+      const supplied = event.body.contextBody ?? native.attachment;
+      let meta:any = {source:'harness-native',sourceSessionId:event.sourceSessionId,sourceEventSeq:event.sequence,
+        kind:event.eventType==='compaction/summary'?'compaction-summary':'checkpoint',bodyStorageStatus:'not-collected'};
+      if (Number.isSafeInteger(event.sequence) && supplied?.schemaVersion===1 && supplied.source==='harness-native'
+        && supplied.sourceSessionId===event.sourceSessionId && supplied.sourceEventSeq===event.sequence
+        && supplied.kind===meta.kind && Number.isFinite(Date.parse(supplied.expiresAt)) && Number.isFinite(Date.parse(event.eventTimestamp)) && UUID.test(supplied.attemptId) && Array.isArray(supplied.items) && supplied.items.length===1
+        && supplied.items[0]?.itemId===meta.kind && typeof supplied.items[0]?.text==='string') {
+        const redacted=String(redactAgentTrajectoryPromptValue(supplied.items[0].text));
+        const chars=Array.from(redacted);let text='',bytes=0;
+        for(const char of chars){const size=Buffer.byteLength(char);if(bytes+size>8192)break;text+=char;bytes+=size;}
+        const truncated=text!==redacted || supplied.items[0].bodyStatus==='truncated';
+        const expiresAt=new Date(Math.min(Date.parse(supplied.expiresAt),Date.parse(event.eventTimestamp)+TTL)).toISOString();
+        const item={itemId:meta.kind,sourceEventSeq:event.sequence,text,bodyStatus:truncated?'truncated':'available'};
+        meta={...meta,...(native.body.compactionId||native.body.source?.compactionId?{compactionId:native.body.compactionId??native.body.source.compactionId}:{}),expiresAt,truncated};
+        try {
+          const bodyRef=saveHarnessBody(event.user,{schemaVersion:1,sourceSessionId:event.sourceSessionId,attemptId:supplied.attemptId,
+            response:{sourceSessionId:event.sourceSessionId,eventSequence:event.sequence},expiresAt,items:[item]},directory);
+          meta={...meta,bodyRef,bodyStorageStatus:bodyRef?'stored':'expired'};
+        } catch(error:any) {meta.bodyStorageStatus=error.code==='EEXIST'?'busy':/quota|limit/.test(error.message)?'quota-rejected':'storage-error';}
+      }
+      event.body={...native.body,contextBody:meta};
+    }
     const projection=event.body?.dshContext;
     if(projection?.details) {
       const raw=projection.details;

@@ -82,3 +82,7 @@ facts events 返回 count/grossTokens/from/to/turn/step；detail 返回 nodes/ar
 发现未修复问题：工具 #63→首次结果 #66 为 174ms，裁剪替换 #76 距调用为 228128ms，现有 aggregator 的 tool/result 分支每次覆盖 completed_at，页面显示 3m48s。需区分真实执行完成与上下文替换，不能将事件展示通过升级为原有工具观测全部正确。
 
 本次真实数据自动断言 11 组通过，定向测试 31 项全部通过；未改平台功能代码，未重复全仓。证据与驱动位于 `D:/Projects/Chat/Issue381-live-events-evidence.json`、`verify-issue381-live-events.cjs`、`issue381-native-prune-driver.mjs` 和同名 yml。统一 Word 更新为 `D:/Projects/Chat/Issue-381-Live-Events-Acceptance-20261120.docx`，包含本次八张截图；自动压力裁剪、正文全文页面、工具耗时、更多版本及七天实钟仍待完成。
+
+## 评审修复后的边界
+
+后续实现已将概览重复事件区块移除，事件默认整个会话，上下文按需展开内容；接通已有原生 summary/checkpoint 脱敏正文，并增加投影超时取消、恢复与未结束读取上限。上述早期“正文未接通”结论保留为历史验收记录，当前方案、限制和验证见[评审修复系统方案](./issue-381-review-system-plan.md)。

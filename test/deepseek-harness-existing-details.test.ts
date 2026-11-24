@@ -39,7 +39,7 @@ test('projected previews use governed body storage, redaction, binding and expir
 test('first render never displays preview body before authorized loading',()=>{
  const request:any={sourceSessionId:'s',eventSequence:181,turn:7,step:1,dshContext:validateDshContext(projection(details()),'s',181,7,1)};
  const html=renderToStaticMarkup(React.createElement(DshExistingDetails,{request,taskId:'task',zh:true}));
- assert.match(html,/80 字符/);assert.match(html,/鉴权加载已有片段/);assert.doesNotMatch(html,/private-token/);assert.match(html,/归档替换点/);
+ assert.match(html,/80 字符/);assert.match(html,/上下文内容/);assert.doesNotMatch(html,/鉴权加载已有片段/);assert.doesNotMatch(html,/private-token/);assert.match(html,/已归档/);
 });
 
 test('expired existing-source preview text is scrubbed from queued payloads',async()=>{

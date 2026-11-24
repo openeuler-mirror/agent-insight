@@ -32,3 +32,29 @@ export function normalizeExistingContextDetails(sessionId, event, revision, curr
       tools:(Array.isArray(current.value.viewHeader?.tools)?current.value.viewHeader.tools:[]).slice(0,128).filter(t=>typeof t?.name==='string').map(t=>({name:t.name.slice(0,160),...(typeof t.tokens==='number'?{estimatedTokens:t.tokens}:{}),...(typeof t.plugin==='string'?{plugin:t.plugin.slice(0,160)}:{})}))},
   };
 }
+
+const nativeBodyId = (session, sequence, kind) => {
+  const hex = createHash('sha256').update(JSON.stringify(['native-context-v1',session,sequence,kind])).digest('hex');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-4${hex.slice(13,16)}-8${hex.slice(17,20)}-${hex.slice(20,32)}`;
+};
+
+export function splitNativeContextBody(type, body, session, sequence, timestamp) {
+  body = body && typeof body === 'object' ? body : {};
+  const summary = type === 'compaction/summary';
+  const checkpoint = type === 'user/message' && body?.source?.kind === 'compact-checkpoint';
+  if (!summary && !checkpoint) return null;
+  const clean = {...body};
+  delete clean.contextBody;
+  const content = summary ? body.summary : body.content;
+  if (summary) { delete clean.summary; delete clean.rawOutput; delete clean.llmStreamCall; }
+  else delete clean.content;
+  const text = typeof content === 'string' ? content : Array.isArray(content)
+    ? content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n') : null;
+  const kind = summary ? 'compaction-summary' : 'checkpoint';
+  const compactionId = summary ? body.compactionId : body.source.compactionId;
+  const expires = Number(timestamp) + 7 * 86400000;
+  const meta = {schemaVersion:1, source:'harness-native',sourceSessionId:session,sourceEventSeq:sequence,kind,
+    ...(typeof compactionId === 'string' ? {compactionId:compactionId.slice(0,160)} : {}),
+    attemptId:nativeBodyId(session,sequence,kind),expiresAt:Number.isFinite(expires)?new Date(expires).toISOString():null};
+  return {body:clean,attachment:typeof text === 'string'?{...meta,items:[{itemId:kind,sourceEventSeq:sequence,text,bodyStatus:/\[truncated chars=/.test(text)?'truncated':'available'}]}:null};
+}

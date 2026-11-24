@@ -39,6 +39,11 @@ test('Body API verifies owner and request membership with authenticated identiti
   assert.equal((await GET(new Request(url,{headers:{'x-witty-api-key':'alice-key'}}))).status,200);
   assert.equal((await GET(new Request(url,{headers:{'x-witty-api-key':'bob-key'}}))).status,403);
   assert.equal((await GET(new Request(url.replace('sourceSessionId=s','sourceSessionId=other'),{headers:{'x-witty-api-key':'alice-key'}}))).status,404);
+  (db as any).findSessionByTaskId=async(id:string)=>id===task?{taskId:task,user:'alice',interactions:JSON.stringify([{role:'assistant',content:'response',harnessRequests:[{sourceSessionId:'s',eventSequence:62,turn:3,step:1,contextEvents:[{sourceSessionId:'s',eventSequence:50,eventType:'compaction/summary',body:{contextBody:{source:'harness-native',sourceSessionId:'s',sourceEventSeq:50,kind:'compaction-summary',bodyRef:attempt}}}]}]}])}:null;
+  const native=await GET(new Request(url,{headers:{'x-witty-api-key':'alice-key'}}));assert.equal(native.status,200);assert.equal(native.headers.get('cache-control'),'no-store');
+  assert.equal((await GET(new Request(url,{headers:{'x-witty-api-key':'bob-key'}}))).status,403);
+  assert.equal((await GET(new Request(url.replace('sourceSessionId=s','sourceSessionId=other'),{headers:{'x-witty-api-key':'alice-key'}}))).status,404);
+  assert.equal((await GET(new Request(url.replace(attempt,randomUUID()),{headers:{'x-witty-api-key':'alice-key'}}))).status,404);
   (db as any).findSessionByTaskId=async()=>null;
   assert.equal((await GET(new Request(url,{headers:{'x-witty-api-key':'alice-key'}}))).status,404);
  }finally{

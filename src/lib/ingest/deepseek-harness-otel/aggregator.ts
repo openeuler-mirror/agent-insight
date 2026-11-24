@@ -258,11 +258,12 @@ export function aggregateDeepSeekHarnessOtelEvents(
     const body = event.body || {};
     const source = sourceSessionId(event);
     const isSubagent = source !== rootSourceSessionId;
-    if (['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/prune', 'model/selection'].includes(event.eventType)
+    if ((['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/prune', 'model/selection'].includes(event.eventType)
+      || event.eventType==='user/message' && body.source?.kind==='compact-checkpoint')
       && Number.isSafeInteger(event.sequence)) {
       const collected = contextEvents.get(source) ?? [];
       collected.push({ sourceSessionId: source, eventSequence: event.sequence!, eventType: event.eventType,
-        body: Object.fromEntries(Object.entries(body).filter(([key]) => ['shadowedRange', 'shadowedSeqs', 'shadowedTokenCount', 'provider', 'model', 'reasoningEffort', 'status', 'outcome', 'sourceCommandId'].includes(key))) });
+        body: Object.fromEntries(Object.entries(body).filter(([key]) => ['shadowedRange', 'shadowedSeqs', 'shadowedTokenCount', 'provider', 'model', 'reasoningEffort', 'status', 'outcome', 'sourceCommandId', 'compactionId', 'contextBody'].includes(key))) });
       contextEvents.set(source, collected);
     }
 

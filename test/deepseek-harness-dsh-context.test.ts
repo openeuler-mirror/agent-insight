@@ -66,12 +66,12 @@ test('Unsupported versions and missing connection fail open for the original Tra
  assert.equal((await createDshContextSource({}, {version:'0.85.1'})({id:'s'},event)).status,'connection-unavailable');
 });
 
-test('A timed-out projection cannot accumulate unbounded underlying work',async()=>{
+test('A hung read is isolated and the next session can recover without releasing the old work',async()=>{
  const {createDshContextSource}=await source;let finish:any,calls=0;
- const connection={createPeer(){return{dispose(){}}},createSharedFetchHandler(){return{fetch(){calls++;return new Promise(resolve=>{finish=resolve})}}}};
- const lookup=createDshContextSource({inject(_:any,fn:any){fn({get(){return connection}})}},{version:'0.85.1'});
+ const connection={createPeer(){return{dispose(){}}},createSharedFetchHandler(){return{fetch(){calls++;if(calls>1)return Promise.resolve(Response.json(facts));return new Promise(resolve=>{finish=resolve})}}}};
+ const lookup=createDshContextSource({inject(_:any,fn:any){fn({get(){return connection}})}},{version:'0.85.1',timeoutMs:30});
  assert.equal((await lookup({id:'s'},event)).status,'timeout');
- assert.equal((await lookup({id:'s'},event)).status,'source-busy');assert.equal(calls,1);
+ assert.equal((await lookup({id:'other'},event)).status,'available');assert.equal(calls,4);
  finish(Response.json({ok:false}));
  await new Promise(resolve=>setImmediate(resolve));
 });
@@ -86,4 +86,23 @@ test('Auxiliary context events cannot replace LLM events and bind independently 
  assert.equal(rows.length,1);assert.equal(rows[0].dshContext.total,28);assert.equal(rows[0].providerUsage.input,10);
  const wrong:any=aggregateDeepSeekHarnessOtelEvents('s',[llm,{...extra,sourceSessionId:'wrong'}]);
  assert.equal(wrong.interactions.flatMap((i:any)=>i.harnessRequests??[])[0].dshContext,undefined);
+});
+
+test('Repeated uncooperative timeouts stay bounded to two reads and late completion frees capacity',async()=>{
+ const {createDshContextSource}=await source;const pending:any[]=[];let disposed=0;
+ const connection={createPeer(){return{dispose(){disposed++}}},createSharedFetchHandler(){return{fetch(){return new Promise(resolve=>pending.push(resolve))}}}};
+ const lookup=createDshContextSource({inject(_:any,fn:any){fn({get(){return connection}})}},{version:'0.85.1',timeoutMs:20});
+ assert.equal((await lookup({id:'a'},event)).status,'timeout');assert.equal((await lookup({id:'b'},event)).status,'timeout');
+ for(let i=0;i<5;i++)assert.equal((await lookup({id:'c'},event)).status,'source-busy');
+ assert.equal(pending.length,2);assert.equal(disposed,2);
+ for(const finish of pending)finish(Response.json({ok:false}));await new Promise(resolve=>setImmediate(resolve));
+ const retry=lookup({id:'d'},event);await new Promise(resolve=>setImmediate(resolve));assert.equal(pending.length,3);
+ pending[2](Response.json({ok:false}));assert.equal((await retry).status,'missing-requests');
+});
+test('Cooperative cancellation reaches the carrier and repeated timeouts release capacity',async()=>{
+ const {createDshContextSource}=await source;let aborts=0;
+ const connection={createPeer(){return{dispose(){}}},createSharedFetchHandler(){return{fetch(req:Request){return new Promise((_,reject)=>req.signal.addEventListener('abort',()=>{aborts++;reject(new Error('aborted'))},{once:true}))}}}};
+ const lookup=createDshContextSource({inject(_:any,fn:any){fn({get(){return connection}})}},{version:'0.85.1',timeoutMs:20});
+ for(let i=0;i<4;i++){assert.equal((await lookup({id:String(i)},event)).status,'timeout');await new Promise(resolve=>setImmediate(resolve));}
+ assert.equal(aborts,4);
 });

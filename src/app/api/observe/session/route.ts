@@ -301,14 +301,17 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
         const { session, execution, thread, interactions, langfuseTraceNodes, executionSummary } = parsed;
-        if (!scope.canViewAllTraces && scope.username !== parsed.owner) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        if (!scope.canViewAllTraces && scope.username !== parsed.owner) return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: { 'Cache-Control': 'no-store' } });
         const username = scope.canViewAllTraces ? parsed.owner : scope.username;
         if (view === 'context-body') {
             const attempt = searchParams.get('contextRequestId') || '';
             const source = searchParams.get('sourceSessionId') || '';
             const belongs = interactions.some((interaction: any) => interaction.harnessRequests?.some((reference: any) =>
-                  reference.sourceSessionId === source && (reference.membership?.bodyRef === attempt || reference.dshContext?.details?.bodyRef === attempt)));
-            if (!belongs || !username) return NextResponse.json({ error: 'Context request not found' }, { status: 404 });
+                  reference.sourceSessionId === source && (reference.membership?.bodyRef === attempt || reference.dshContext?.details?.bodyRef === attempt
+                    || reference.contextEvents?.some((event:any)=>event.sourceSessionId===source
+                      && event.body?.contextBody?.sourceSessionId===source && event.body.contextBody.sourceEventSeq===event.eventSequence
+                      && event.body.contextBody.bodyRef===attempt))));
+            if (!belongs || !username) return NextResponse.json({ error: 'Context request not found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
             const body = readHarnessBody(username, source, attempt);
             return NextResponse.json(body || { error: 'Context body unavailable or expired' }, {
                 status: body ? 200 : 410, headers: { 'Cache-Control': 'no-store' },
