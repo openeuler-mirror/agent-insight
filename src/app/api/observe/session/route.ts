@@ -292,7 +292,7 @@ export async function GET(request: Request) {
 
     try {
         const scope = await resolveTraceReadScope(request);
-        if (!scope.username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401 });
+        if (!scope.username) return NextResponse.json({ error: 'Missing user identity' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
         if (view === 'context-body' && !(await resolveUser(request)).username) {
             return NextResponse.json({ error: 'Context bodies require verified user identity' }, { status: 401, headers: { 'Cache-Control': 'no-store' } });
         }

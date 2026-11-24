@@ -40,7 +40,7 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   const snapshotGate = new Promise<void>((resolve) => { resume = resolve; });
   const originalCount = prisma.experimentLocalExecution.count;
   prisma.experimentLocalExecution.count = (async (args: any) => {
-    const count = await originalCount.call(prisma.experimentLocalExecution, args);
+    const count = await Reflect.apply(originalCount, prisma.experimentLocalExecution, [args]);
     if (!held && args.where.experimentId === experiment.id && count > 0) {
       held = true;
       captured();

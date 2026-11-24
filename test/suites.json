@@ -198,6 +198,7 @@
     "test/trace-list-sql-contract.test.ts",
     "test/trace-list-storage-performance.test.ts",
     "test/trace-live-refresh.test.ts",
+    "test/trace-output-order.test.ts",
     "test/trace-parent-agent.test.ts",
     "test/trace-render-budget.test.ts",
     "test/trace-session-lazy-load.test.ts",
