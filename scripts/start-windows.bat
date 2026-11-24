@@ -22,8 +22,10 @@ REM    4. syncs the SQLite schema via scripts\db-push.cjs, the same no-loss
 REM       whitelist every other start entry uses (destructive changes stop startup)
 REM    5. starts the platform from this source checkout
 REM
-REM  Data root : %USERPROFILE%\.agent-insight
-REM  Database  : %USERPROFILE%\.agent-insight\data\witty_insight.db
+REM  Data root : %AGENT_INSIGHT_HOME%, default %USERPROFILE%\.agent-insight
+REM  Database  : <data root>\data\witty_insight.db unless DATABASE_URL is set
+REM  An explicit DATABASE_URL / AGENT_INSIGHT_HOME in the calling environment
+REM  wins over %AGENT_INSIGHT_HOME%\.env and these defaults.
 REM  Evaluator : not started here (needs Linux/WSL2, see scripts/evaluator.sh)
 REM
 REM  NOTE: pure ASCII on purpose (cmd GBK codepage safety).
@@ -77,11 +79,18 @@ if not defined PLATFORM_PORT set "PLATFORM_PORT=3000"
 for /f "delims=0123456789" %%i in ("%PLATFORM_PORT%") do set "PLATFORM_PORT="
 if not defined PLATFORM_PORT goto :bad_port
 
+REM An explicit DATABASE_URL / AGENT_INSIGHT_HOME from the caller must survive
+REM the .env and default handling below. Capture them before anything overwrites.
+set "CALLER_DATABASE_URL="
+if defined DATABASE_URL set "CALLER_DATABASE_URL=%DATABASE_URL%"
+set "APP_HOME=%USERPROFILE%\.agent-insight"
+if defined AGENT_INSIGHT_HOME set "APP_HOME=%AGENT_INSIGHT_HOME%"
+
 echo ========================================
 echo   Agent Insight - local source start
 echo   Mode      : %MODE%
 echo   Platform  : http://localhost:%PLATFORM_PORT%
-echo   Data root : %USERPROFILE%\.agent-insight
+echo   Data root : %APP_HOME%
 echo ========================================
 echo.
 
@@ -106,7 +115,6 @@ echo       Port %PLATFORM_PORT% is available.
 REM ---------- [2/4] Environment and dependencies ----------
 echo.
 echo [2/4] Preparing config and dependencies...
-set "APP_HOME=%USERPROFILE%\.agent-insight"
 if not exist "%APP_HOME%" mkdir "%APP_HOME%"
 if not exist "%APP_HOME%\data" mkdir "%APP_HOME%\data"
 if not exist "%APP_HOME%\logs" mkdir "%APP_HOME%\logs"
@@ -116,9 +124,12 @@ if not exist "%APP_HOME%\.env" (
 )
 
 REM The prisma CLI does not read %APP_HOME%\.env, so pin DATABASE_URL here.
-REM Same rule as the other start entries: strip surrounding quotes, and treat an
-REM empty value or the template default file:../data/witty_insight.db as "not
-REM set", so the database stays under the data root declared above.
+REM Caller-provided DATABASE_URL wins; otherwise the .env value is used, with
+REM surrounding quotes stripped and an empty value or the template default
+REM file:../data/witty_insight.db treated as "not set". Either fallback keeps
+REM the database under the data root declared above.
+set "DATABASE_URL=%CALLER_DATABASE_URL%"
+if defined DATABASE_URL goto :db_ready
 set "ENV_DATABASE_URL="
 for /f "usebackq tokens=1,* delims==" %%a in (`findstr /R /C:"^DATABASE_URL=" "%APP_HOME%\.env" 2^>nul`) do set "ENV_DATABASE_URL=%%b"
 if not defined ENV_DATABASE_URL goto :db_default
@@ -176,20 +187,41 @@ exit /b %RC%
 
 :start_prod
 set "STANDALONE_SERVER=.next\standalone\server.js"
-if "%REBUILD%"=="1" goto :build_prod
-if not exist "%STANDALONE_SERVER%" goto :build_prod
-echo       Reusing the existing production build.
-goto :run_prod
+set "BUILD_STATE=scripts\start-build-state.cjs"
+
+REM Same contract as scripts/start.sh: a build is reusable only when its input
+REM fingerprint and artifacts still match the current source tree. A leftover
+REM .next\standalone\server.js from an older checkout must rebuild, otherwise
+REM the freshly synced schema and the running code drift apart.
+node scripts\benchmark\generate-catalog.cjs
+if errorlevel 1 goto :build_failed
+node scripts\build-trace-dataset-worker.cjs
+if errorlevel 1 goto :build_failed
+set "FORCE_FLAG="
+if "%REBUILD%"=="1" set "FORCE_FLAG=--force-rebuild"
+node "%BUILD_STATE%" check %FORCE_FLAG%
+if errorlevel 2 goto :build_state_failed
+if errorlevel 1 goto :build_prod
+echo       Build inputs and artifacts match; reusing the existing build.
+goto :standalone_ready
 
 :build_prod
 echo       Building production bundle (several minutes)...
+node "%BUILD_STATE%" prepare
+if errorlevel 1 goto :build_failed
 set "NODE_OPTIONS=--max-old-space-size=4096"
 call npm run build
 if errorlevel 1 goto :build_failed
 set "NODE_OPTIONS="
+node "%BUILD_STATE%" record
+if errorlevel 1 goto :build_failed
+
+:standalone_ready
+if not exist "%STANDALONE_SERVER%" goto :build_failed
+node scripts\verify-standalone.cjs .next\standalone
+if errorlevel 1 goto :build_failed
 
 :run_prod
-if not exist "%STANDALONE_SERVER%" goto :build_failed
 set "PORT=%PLATFORM_PORT%"
 set "HOSTNAME=0.0.0.0"
 echo       Open http://localhost:%PLATFORM_PORT% and press Ctrl+C here to stop.
@@ -261,5 +293,11 @@ exit /b 1
 
 :build_failed
 echo   [ERROR] Production build failed.
+pause
+exit /b 1
+
+:build_state_failed
+echo   [ERROR] Cannot verify the production build fingerprint.
+echo           See the message above, then retry with --rebuild.
 pause
 exit /b 1

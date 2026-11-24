@@ -250,6 +250,48 @@ fi
   ])
 })
 
+test('Windows prod start treats an old build artifact as stale after a source change', t => {
+  const f = fixture(t)
+  for (const file of ['start-build-state.cjs', 'verify-standalone.cjs']) {
+    f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
+  }
+  // Mirror the script's own env so the environment fingerprint matches record().
+  const env: NodeJS.ProcessEnv = { ...process.env, ...f.env }
+  for (const key of Object.keys(env)) {
+    if (/^(NEXT_PUBLIC_|PRISMA_|NEXT_)/.test(key) || ['NODE_ENV', 'BABEL_ENV', 'CI'].includes(key)) delete env[key]
+  }
+  const check = () => spawnSync(process.execPath, ['scripts/start-build-state.cjs', 'check'], { cwd: f.root, env, encoding: 'utf8' })
+  f.record()
+  assert.equal(check().status, 0, 'warm build should be reusable')
+  f.write('src/app/page.tsx', 'new source')
+  const stale = check()
+  assert.equal(stale.status, 1, stale.stderr)
+  assert.match(stale.stdout, /changed: source/)
+
+  const script = fs.readFileSync('scripts/start-windows.bat', 'utf8')
+  assert.doesNotMatch(script, /if not exist "%STANDALONE_SERVER%" goto :build_prod/, 'prod start must not reuse on server.js alone')
+  const checkAt = script.indexOf('"%BUILD_STATE%" check')
+  const reuseAt = script.indexOf('reusing the existing build')
+  const recordAt = script.indexOf('"%BUILD_STATE%" record')
+  assert.ok(checkAt > 0 && checkAt < reuseAt && reuseAt < recordAt)
+  const branch = script.slice(checkAt, recordAt)
+  assert.match(branch, /if errorlevel 2 goto :build_state_failed/)
+  assert.match(branch, /if errorlevel 1 goto :build_prod/)
+  assert.match(script, /"%BUILD_STATE%" prepare/)
+  assert.match(script, /verify-standalone\.cjs/)
+})
+
+test('Windows start keeps caller-provided DATABASE_URL and AGENT_INSIGHT_HOME', () => {
+  const script = fs.readFileSync('scripts/start-windows.bat', 'utf8')
+  const dbCapture = script.indexOf('if defined DATABASE_URL set "CALLER_DATABASE_URL=')
+  const homeCapture = script.indexOf('if defined AGENT_INSIGHT_HOME set "APP_HOME=')
+  const pin = script.indexOf('set "DATABASE_URL=%CALLER_DATABASE_URL%"')
+  const defaultHome = script.indexOf('set "APP_HOME=%USERPROFILE%\\.agent-insight"')
+  assert.ok(dbCapture > 0 && homeCapture > dbCapture && pin > homeCapture)
+  assert.ok(defaultHome > 0 && defaultHome < homeCapture, 'default data root must be a fallback, not an override')
+  assert.match(script, /\r?\nif defined DATABASE_URL goto :db_ready/)
+})
+
 test('start.sh integration: first worker generation, reuse, source change, forced and failed rebuilds', { timeout: 90000 }, async t => {
   const f = fixture(t)
   const net = await import('node:net')
