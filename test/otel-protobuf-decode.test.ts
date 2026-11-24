@@ -288,60 +288,64 @@ test("OTLP traces route rejects a mixed batch with an invalid API key without wr
   }
 })
 
-test("Langfuse public OTLP traces route accepts gzip protobuf with matching username and API key", async () => {
-  const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "langfuse-proto-route-"))
-  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
-  const username = "langfuse-auth-test-user"
-  const apiKey = "langfuse-auth-test-api-key"
+for (const contentEncoding of [undefined, "identity", "gzip"] as const) {
+  test(`Langfuse public OTLP traces route accepts ${contentEncoding ?? "omitted encoding"} protobuf with matching username and API key`, async () => {
+    const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "langfuse-proto-route-"))
+    process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+    const username = "langfuse-auth-test-user"
+    const apiKey = "langfuse-auth-test-api-key"
 
-  try {
-    await prismaRaw.user.upsert({
-      where: { username },
-      create: { username, apiKey },
-      update: { apiKey },
-    })
+    try {
+      await prismaRaw.user.upsert({
+        where: { username },
+        create: { username, apiKey },
+        update: { apiKey },
+      })
 
-    const req = new Request("http://localhost/api/public/otel/v1/traces", {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-protobuf",
-        "content-encoding": "gzip",
-        "authorization": `Basic ${Buffer.from(`${username}:${apiKey}`).toString("base64")}`,
-        "x-langfuse-sdk-name": "python",
-        "x-langfuse-public-key": username,
-      },
-      body: new Uint8Array(gzipSync(encodeTraceRequest(buildLangfuseTraceRequest()))),
-    })
+      const req = new Request("http://localhost/api/public/otel/v1/traces", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-protobuf",
+          ...(contentEncoding ? { "content-encoding": contentEncoding } : {}),
+          "authorization": `Basic ${Buffer.from(`${username}:${apiKey}`).toString("base64")}`,
+          "x-langfuse-sdk-name": "python",
+          "x-langfuse-public-key": username,
+        },
+        body: new Uint8Array(contentEncoding === "gzip"
+          ? gzipSync(encodeTraceRequest(buildLangfuseTraceRequest()))
+          : encodeTraceRequest(buildLangfuseTraceRequest())),
+      })
 
-    const res = await postLangfusePublicTraces(req)
-    const body = await res.json()
+      const res = await postLangfusePublicTraces(req)
+      const body = await res.json()
 
-    assert.equal(res.status, 200)
-    assert.equal(body.status, "accepted")
-    assert.equal(body.received, 1)
-    assert.deepEqual(body.sessions, ["11112222333344445555666677778888"])
+      assert.equal(res.status, 200)
+      assert.equal(body.status, "accepted")
+      assert.equal(body.received, 1)
+      assert.deepEqual(body.sessions, ["11112222333344445555666677778888"])
 
-    const files = listOtelTraceSpoolFiles(dir)
-    assert.equal(files.length, 1)
-    const lines = fs.readFileSync(files[0], "utf8").trim().split("\n")
-    assert.equal(lines.length, 1)
-    const event = JSON.parse(lines[0])
-    assert.equal(event.framework, undefined)
-    assert.equal(event.serviceName, "langfuse-langgraph")
-    assert.equal(event.sessionId, "11112222333344445555666677778888")
-    assert.equal(event.attributes["langfuse.internal.session_id"], "langfuse-session")
-    assert.equal(event.user, username)
-    assert.equal(event.kind, "span")
-  } finally {
-    await prismaRaw.user.deleteMany({ where: { username } })
-    if (prevSpoolDir === undefined) {
-      delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
-    } else {
-      process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+      const files = listOtelTraceSpoolFiles(dir)
+      assert.equal(files.length, 1)
+      const lines = fs.readFileSync(files[0], "utf8").trim().split("\n")
+      assert.equal(lines.length, 1)
+      const event = JSON.parse(lines[0])
+      assert.equal(event.framework, undefined)
+      assert.equal(event.serviceName, "langfuse-langgraph")
+      assert.equal(event.sessionId, "11112222333344445555666677778888")
+      assert.equal(event.attributes["langfuse.internal.session_id"], "langfuse-session")
+      assert.equal(event.user, username)
+      assert.equal(event.kind, "span")
+    } finally {
+      await prismaRaw.user.deleteMany({ where: { username } })
+      if (prevSpoolDir === undefined) {
+        delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+      } else {
+        process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+      }
     }
-  }
-})
+  })
+}
 
 test("Langfuse public OTLP traces route rejects missing or mismatched credentials", async () => {
   const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
