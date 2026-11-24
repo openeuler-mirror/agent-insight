@@ -864,3 +864,51 @@ test("Claude OTel: classifies Pi and OpenInference semantic span kinds", () => {
     assert.equal(event.kind, item.expected, item.name)
   }
 })
+
+test("Claude OTel: Execution.latency keeps millisecond units", () => {
+  // 回归 #419：api_request 的 duration_ms 本身就是毫秒，聚合后不应再做秒→毫秒的反向换算。
+  const body = {
+    resourceLogs: [
+      {
+        resource: {
+          attributes: [
+            attr("service.name", "claude-code"),
+            attr("service.version", "2.1.41"),
+          ],
+        },
+        scopeLogs: [
+          {
+            logRecords: [
+              logRecord("user_prompt", {
+                "session.id": "session-latency",
+                "prompt.id": "prompt-latency",
+                "event.sequence": 1,
+                prompt: "how long did it take?",
+              }),
+              ...[2, 3, 4].map(sequence =>
+                logRecord("api_request", {
+                  "session.id": "session-latency",
+                  "prompt.id": "prompt-latency",
+                  "event.sequence": sequence,
+                  model: "claude-sonnet-4-6",
+                  input_tokens: 5,
+                  output_tokens: 5,
+                  duration_ms: 2100,
+                }),
+              ),
+            ],
+          },
+        ],
+      },
+    ],
+  }
+
+  const events = normalizeClaudeOtlpLogs(body)
+  assert.equal(events.length, 4)
+
+  const record = aggregateClaudeOtelEvents("session-latency", events)
+  assert.ok(record)
+  assert.equal(record.llm_call_count, 3)
+  // 3 次 2100ms 的请求：修复前写入的是 6.3（秒被当成毫秒），修复后应为 6300。
+  assert.equal(record.latency, 6300)
+})
