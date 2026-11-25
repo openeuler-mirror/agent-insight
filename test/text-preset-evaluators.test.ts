@@ -42,9 +42,9 @@ function context(actualOutput: string, referenceOutput: string | null): Faithful
 }
 
 describe('文本预置评估器接入', () => {
-  it('三张 Code 卡均登记为结果评估且依赖参考答案', () => {
+  it('四张 Code 卡均登记为结果评估且依赖参考答案', () => {
     assert.equal(TEXT_PRESET_IDS.length, 8);
-    for (const id of ['preset-text-rouge', 'preset-text-exact-match', 'preset-text-entity-f1'] as const) {
+    for (const id of ['preset-text-rouge', 'preset-text-exact-match', 'preset-text-entity-f1', 'preset-text-json-fields'] as const) {
       assert.ok(isTextPresetId(id));
       const card = presetEvaluators.find((candidate) => candidate.id === id);
       assert.ok(card, `${id} 缺少预置卡`);

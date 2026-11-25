@@ -20,11 +20,11 @@ import {
   type EvaluatorOutput,
 } from '@/lib/evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { decodeWorkshopReference } from './reference-envelope';
+import { decodeWorkshopReference, WORKSHOP_RUBRIC_VERSION } from './reference-envelope';
 
 export const TEXT_JSON_FIELDS_PRESET_ID = 'preset-text-json-fields';
 const METRIC = 'json-fields';
-const RUBRIC_VERSION = 'result-workshop-v1';
+const RUBRIC_VERSION = WORKSHOP_RUBRIC_VERSION;
 
 type ScalarValue = string | number | boolean | null;
 type ExpectedFields = Record<string, ScalarValue>;
@@ -60,13 +60,12 @@ export function validateExpectedRules(rules: Record<string, unknown>): ExpectedF
   if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return null;
   const entries = Object.entries(expected as Record<string, unknown>);
   if (entries.length < 1 || entries.length > MAX_FIELDS) return null;
-  const result: ExpectedFields = {};
   for (const [field, value] of entries) {
     if (field.length < 1 || field.length > MAX_FIELD_NAME_LENGTH) return null;
     if (!isScalar(value)) return null;
-    result[field] = value;
   }
-  return result;
+  // 用 Object.fromEntries 而非逐个赋值：后者会触发 __proto__ setter，把合法字段名吞掉。
+  return Object.fromEntries(entries) as ExpectedFields;
 }
 
 function parseActualObject(actualOutput: string): Record<string, unknown> | null {

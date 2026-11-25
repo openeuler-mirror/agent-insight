@@ -152,6 +152,26 @@ describe('结构化信息抽取准确率评估器（实际分发入口）', () =
     assert.equal(evidence.json?.totalFields, 1);
   });
 
+  it('__proto__ 作为普通字段名保留，缺失时计入分母而不是被吞掉', async () => {
+    const reference = encodeReference(Object.fromEntries([['__proto__', 'secret'], ['city', '广州']]));
+
+    const partial = await runTextPreset(
+      'preset-text-json-fields',
+      USER,
+      context('{"city":"广州"}', reference),
+    );
+    assert.equal(partial.score, 50);
+    assert.equal(partial.verdict, 'fail');
+    assert.deepEqual(partial.points?.map((p) => p.label), ['__proto__', 'city']);
+
+    const full = await runTextPreset(
+      'preset-text-json-fields',
+      USER,
+      context('{"__proto__":"secret","city":"广州"}', reference),
+    );
+    assert.equal(full.score, 100);
+  });
+
   it('非法 JSON 与顶层数组按非法实际输出记 0 分', async () => {
     const invalidJson = await runTextPreset(
       'preset-text-json-fields',

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+export const WORKSHOP_RUBRIC_VERSION = 'result-workshop-v1';
+
 export type WorkshopReferenceResult =
   | { ok: true; rules: Record<string, unknown> }
   | { ok: false; reasonCode: 'missing_reference' | 'invalid_reference' };
@@ -22,8 +24,9 @@ export function decodeWorkshopReference(raw: string | null, metric: string): Wor
   if (raw === null || !raw.trim()) return { ok: false, reasonCode: 'missing_reference' };
   const invalid = (): WorkshopReferenceResult => ({ ok: false, reasonCode: 'invalid_reference' });
   const prefix = 'AI-EVAL-REF-V1:';
-  if (!raw.startsWith(prefix)) return invalid();
-  const body = raw.slice(prefix.length);
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith(prefix)) return invalid();
+  const body = trimmed.slice(prefix.length);
   if (!body || body.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(body)) return invalid();
   try {
     const bytes = Buffer.from(body, 'base64');
@@ -32,7 +35,7 @@ export function decodeWorkshopReference(raw: string | null, metric: string): Wor
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return invalid();
     const envelope = payload as Record<string, unknown>;
     if (Object.keys(envelope).some(key => !['rubricVersion', 'metric', 'rules'].includes(key))) return invalid();
-    if (envelope.rubricVersion !== 'result-workshop-v1' || envelope.metric !== metric) return invalid();
+    if (envelope.rubricVersion !== WORKSHOP_RUBRIC_VERSION || envelope.metric !== metric) return invalid();
     if (!envelope.rules || typeof envelope.rules !== 'object' || Array.isArray(envelope.rules)) return invalid();
     return { ok: true, rules: envelope.rules as Record<string, unknown> };
   } catch {

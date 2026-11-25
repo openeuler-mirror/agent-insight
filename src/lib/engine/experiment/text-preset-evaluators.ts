@@ -120,7 +120,7 @@ async function runReferenceTextPreset(
   ctx: FaithfulPresetContext,
   config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
-  if (id === 'preset-text-json-fields') return runTextJsonFieldsPreset(ctx);
+  if (id === TEXT_JSON_FIELDS_PRESET_ID) return runTextJsonFieldsPreset(ctx);
 
   if (ctx.referenceOutput === null || !ctx.referenceOutput.trim()) {
     return missingReference(REFERENCE_TEXT_PRESET_NAMES[id]);

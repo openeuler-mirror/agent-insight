@@ -391,6 +391,7 @@
     "test/task-completion-root-cause-resolution.test.ts",
     "test/task-completion-scoring.test.ts",
     "test/task-insight.test.ts",
+    "test/text-json-fields-evaluator.test.ts",
     "test/text-preset-evaluators.test.ts",
     "test/trace-dataset-flow-ref-sync.test.ts",
     "test/trace-datasets-budgeted-fast.test.ts",

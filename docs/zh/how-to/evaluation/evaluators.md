@@ -175,7 +175,7 @@ Benchmark 评估器在 **预置评估器** 页展示，即使对应数据集尚�
 
 两项工具类评估器要求每条 case 都有可用 Tool/Skill 目录。目录可从带 `available_tools` / `available_skills` 的数据集导入，也可由实验 API 显式提供；trace 只包含已发生调用，系统不会据此反推完整目录。目录缺失时，实验向导会将评估器置灰；显式空目录表示已确认本任务没有可用能力，仍可评估。
 
-四项文本 Code 评估器都要求 case 提供参考答案，并按 0～100 分展示结果，不产生模型调用。ROUGE 先进行 NFKC 与小写归一化；任一侧含汉字时，两边统一按有效 Unicode 字符计算 ROUGE-char，纯英文继续按单词计算。中文结果因此不依赖操作系统词典，仍只计算确定性字符重叠，不做语义相似度推断。实体 F1 的 Agent 输出和参考答案必须是 JSON 字符串数组，例如 `["北京", "上海"]`；Agent 输出格式错误时记 0 分，参考答案格式错误时该项不计分。结构化信息抽取准确率评估器要求参考答案为封装后的 `expected` 键值对（标准值只允许字符串、有限数字、布尔或 null），Agent 输出必须能解析为 JSON 对象，否则记 0 分；标准值含嵌套对象或数组、字段为空或超过 32 个字段时视为非法参考不计分。
+四项文本 Code 评估器都要求 case 提供参考答案，并按 0～100 分展示结果，不产生模型调用。ROUGE 先进行 NFKC 与小写归一化；任一侧含汉字时，两边统一按有效 Unicode 字符计算 ROUGE-char，纯英文继续按单词计算。中文结果因此不依赖操作系统词典，仍只计算确定性字符重叠，不做语义相似度推断。实体 F1 的 Agent 输出和参考答案必须是 JSON 字符串数组，例如 `["北京", "上海"]`；Agent 输出格式错误时记 0 分，参考答案格式错误时该项不计分。结构化信息抽取准确率评估器的参考答案需按统一封装格式填写：`AI-EVAL-REF-V1:` 前缀 + 标准 Base64 编码的 UTF-8 JSON，JSON 固定为 `{"rubricVersion":"result-workshop-v1","metric":"json-fields","rules":{"expected":{"city":"广州","qty":2,"paid":true,"note":null}}}`（标准值只允许字符串、有限数字、布尔或 null）。例如上例编码后为 `AI-EVAL-REF-V1:eyJydWJyaWNWZXJzaW9uIjoicmVzdWx0LXdvcmtzaG9wLXYxIiwibWV0cmljIjoianNvbi1maWVsZHMiLCJydWxlcyI6eyJleHBlY3RlZCI6eyJjaXR5Ijoi5bm/5beeIiwicXR5IjoyLCJwYWlkIjp0cnVlLCJub3RlIjpudWxsfX19`；未加前缀的纯 JSON（如 `{"expected":{...}}`）会被判为非法参考而不计分。Agent 输出必须能解析为 JSON 对象，否则记 0 分；标准值含嵌套对象或数组、字段为空或超过 32 个字段时视为非法参考不计分。
 
 新建实验第 ④ 步中，“完全精确匹配”和“实体 F1 匹配”卡片带有 **配置** 按钮：
 
