@@ -1,6 +1,8 @@
 ---
 title: "Skill 管理 HTTP 接口"
 description: "Skill 资产检索、版本与文件、上传发布及自动化同步的现有接口。"
+keywords: ["Agent Insight", "Skill 管理", "HTTP 接口", "版本管理", "Skill 同步"]
+changefreq: monthly
 ---
 
 本页覆盖 Skill 资产管理的 25 个现有 HTTP 方法。操作流程见 [Skills 管理](../../how-to/optimization/skills/manage.md)。生成与优化会话、优化点、静态评估、Benchmark 生成、流程解析和工作台实验不在本页展开，分别见 [Skill 工作台](../../explanation/optimization/skills/workbench-overview.md)与 [Skill 评估与实验](../../explanation/evaluation/skills/overview.md)；本页不代表所有 Skill 路由的完整契约。

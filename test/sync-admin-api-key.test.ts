@@ -28,6 +28,7 @@ const {
   requestLoginMode,
   syncAdminApiKey,
   updateEnvFile,
+  verifyAdminApiKey,
 } = require("../scripts/sync_admin_api_key.js")
 
 test("updateEnvFile replaces upload credentials and preserves unrelated config", () => {
@@ -91,7 +92,8 @@ test("syncAdminApiKey preserves a client identity registered by setup", async ()
     port: 3100,
     host: "http://localhost:3100",
     requestLoginMode: async () => "standalone",
-    requestApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    verifyAdminApiKey: async () => true,
   })
 
   assert.equal(result.preservedClientApiKey, true)
@@ -113,7 +115,8 @@ test("syncAdminApiKey initializes the client key only when none exists", async (
     port: 3200,
     host: "http://localhost:3200",
     requestLoginMode: async () => "standalone",
-    requestApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_admin" }),
+    verifyAdminApiKey: async () => true,
   })
 
   assert.equal(result.preservedClientApiKey, false)
@@ -123,23 +126,56 @@ test("syncAdminApiKey initializes the client key only when none exists", async (
   )
 })
 
-test("syncAdminApiKey reuses the persisted admin key when refreshing startup metadata", async () => {
+test("syncAdminApiKey refuses a stale admin key instead of writing it to env", async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-sync-"))
-  fs.writeFileSync(path.join(dataRoot, ".admin_api_key"), "wi_existing_admin\n")
-  let presentedKey = ""
+  const envPath = path.join(dataRoot, ".env")
+  fs.writeFileSync(envPath, "ORGANIZATION_MODE=false\n")
 
-  await syncAdminApiKey({
-    dataRoot,
-    port: 3250,
-    host: "http://localhost:3250",
-    requestLoginMode: async () => "standalone",
-    requestApiKey: async (_port: number, _host: string, _timeout: number, apiKey: string) => {
-      presentedKey = apiKey
-      return { username: "admin", apiKey }
-    },
+  await assert.rejects(
+    syncAdminApiKey({
+      dataRoot,
+      port: 3500,
+      host: "http://localhost:3500",
+      requestLoginMode: async () => "standalone",
+      readAdminApiKey: async () => ({ username: "admin", apiKey: "wi_stale" }),
+      verifyAdminApiKey: async () => {
+        throw new Error("admin API key validation returned 401")
+      },
+    }),
+    /validation returned 401/,
+  )
+
+  assert.equal(readEnvValue(envPath, "AGENT_INSIGHT_API_KEY"), "")
+  assert.equal(fs.existsSync(path.join(dataRoot, ".admin_api_key")), false)
+})
+
+test("verifyAdminApiKey accepts a key from the current instance and rejects a stale one", async () => {
+  const expectedKey = "wi_current"
+  const server = http.createServer((request, response) => {
+    assert.equal(request.url, "/api/tags")
+    if (request.headers["x-witty-api-key"] === expectedKey) {
+      response.writeHead(200, { "Content-Type": "application/json" })
+      response.end("[]")
+      return
+    }
+    response.writeHead(401, { "Content-Type": "application/json" })
+    response.end(JSON.stringify({ error: "Missing user identity" }))
   })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("test server did not expose a TCP port")
 
-  assert.equal(presentedKey, "wi_existing_admin")
+  try {
+    assert.equal(await verifyAdminApiKey(address.port, expectedKey, "127.0.0.1", 1000), true)
+    await assert.rejects(
+      verifyAdminApiKey(address.port, "wi_stale", "127.0.0.1", 1000),
+      /validation returned 401/,
+    )
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
 })
 
 test("syncAdminApiKey skips admin provisioning in IDaaS mode and preserves the client key", async () => {
@@ -156,7 +192,7 @@ test("syncAdminApiKey skips admin provisioning in IDaaS mode and preserves the c
     port: 3300,
     host: "http://localhost:3300",
     requestLoginMode: async () => "idaas_oauth",
-    requestApiKey: async () => {
+    readAdminApiKey: async () => {
       adminRequestCount += 1
       throw new Error("admin API key must not be requested")
     },
@@ -199,7 +235,7 @@ test("syncAdminApiKey leaves the client key empty when IDaaS has not issued one"
     dataRoot,
     host: "http://localhost:3400",
     requestLoginMode: async () => "idaas_oauth",
-    requestApiKey: async () => {
+    readAdminApiKey: async () => {
       throw new Error("admin API key must not be requested")
     },
   })

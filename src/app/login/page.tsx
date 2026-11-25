@@ -25,7 +25,7 @@ import { apiFetch, getApiUrl } from '@/lib/client/api';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
-  const [apiKey, setApiKey] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isCompletingIdaas, setIsCompletingIdaas] = useState(false);
   const idaasCompletionStarted = useRef(false);
@@ -128,21 +128,27 @@ export default function LoginPage() {
       setError(t('login.emailRequired'));
       return;
     }
-    
+
     try {
         const res = await apiFetch('/api/auth/apikey', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(apiKey.trim() ? { 'x-witty-api-key': apiKey.trim() } : {}),
-            },
-            body: JSON.stringify({ username: username.trim() })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: username.trim(), password })
         });
         
         const data = await res.json();
         
         if (res.ok) {
-            login(data.username, data.apiKey);
+            login(data.username, data.apiKey, undefined, {
+              isAdmin: data.isAdmin,
+              passwordChangeRequired: data.passwordChangeRequired,
+              passwordInitialized: data.passwordInitialized,
+              passwordSetupToken: data.passwordSetupToken,
+            });
+        } else if (res.status === 429) {
+            setError(t('login.tooManyAttempts'));
+        } else if (res.status === 401) {
+            setError(t('login.invalidCredentials'));
         } else {
             setError(data.error || t('login.loginFailed'));
         }
@@ -244,30 +250,36 @@ export default function LoginPage() {
           <form className="login-form" onSubmit={handleLogin} noValidate>
           <div style={{ marginBottom: '0.875rem' }}>
             <label className="login-label" htmlFor="username">
-              {t('login.emailLabel')}
+              {t('login.usernameLabel')}
             </label>
             <input
               className="login-input"
               id="username"
               type="text"
-              placeholder={locale === 'zh' ? '请输入邮箱或 admin' : 'Enter your email or admin'}
+              autoComplete="username"
+              placeholder={locale === 'zh' ? '请输入用户名或邮箱' : 'Enter your username or email'}
               value={username}
               onChange={(e) => { setUsername(e.target.value); setError(''); }}
               style={error ? { borderColor: colors.error } : {}}
             />
-            <label className="login-label" htmlFor="api-key" style={{ marginTop: '0.75rem' }}>
-              {t('login.apiKeyLabel')}
+          </div>
+          <div style={{ marginBottom: '0.875rem' }}>
+            <label className="login-label" htmlFor="password">
+              {t('login.passwordLabel')}
             </label>
             <input
               className="login-input"
-              id="api-key"
+              id="password"
               type="password"
-              autoComplete="off"
-              placeholder={t('login.apiKeyPlaceholder')}
-              value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value); setError(''); }}
+              autoComplete="current-password"
+              placeholder={t('login.passwordPlaceholder')}
+              value={password}
+              onChange={(e) => { setPassword(e.target.value); setError(''); }}
               style={error ? { borderColor: colors.error } : {}}
             />
+            <div style={{ color: colors.fgMuted, fontSize: '0.75rem', marginTop: '0.375rem' }}>
+              {t('login.passwordHint')}
+            </div>
             {error && (
               <div style={{
                 color: colors.error,

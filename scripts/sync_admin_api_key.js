@@ -81,51 +81,61 @@ function readEnvValue(envPath, targetKey) {
   return ''
 }
 
-function requestAdminApiKey(port, host = 'localhost', timeoutMs = 5000, apiKey = '') {
+function readAdminApiKeyFile(dataRoot, timeoutMs = 5000) {
+  const keyFilePath = path.join(dataRoot, '.admin_api_key')
+  const deadline = Date.now() + timeoutMs
+
   return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({ username: 'admin' })
+    const poll = () => {
+      try {
+        if (fs.existsSync(keyFilePath)) {
+          const apiKey = fs.readFileSync(keyFilePath, 'utf8').trim()
+          if (apiKey) {
+            resolve({ username: 'admin', apiKey })
+            return
+          }
+        }
+      } catch {
+        // 服务正在写文件时继续重试
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error(`admin API key file was not ready: ${keyFilePath}`))
+        return
+      }
+      setTimeout(poll, 200)
+    }
+    poll()
+  })
+}
+
+function verifyAdminApiKey(port, apiKey, host = 'localhost', timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
     const req = http.request(
       {
         hostname: host,
         port,
-        path: '/api/auth/apikey',
-        method: 'POST',
+        path: '/api/tags',
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData),
-          ...(apiKey ? { 'x-witty-api-key': apiKey } : {}),
+          Accept: 'application/json',
+          'x-witty-api-key': apiKey,
         },
       },
       (res) => {
-        let data = ''
-        res.on('data', (chunk) => {
-          data += chunk
-        })
+        res.resume()
         res.on('end', () => {
-          if (res.statusCode !== 200 && res.statusCode !== 201) {
-            reject(new Error(`admin API key request returned ${res.statusCode}: ${data}`))
+          if (res.statusCode === 200) {
+            resolve(true)
             return
           }
-
-          try {
-            const result = JSON.parse(data)
-            if (!result.apiKey) {
-              reject(new Error('admin API key response did not include apiKey'))
-              return
-            }
-            resolve(result)
-          } catch (error) {
-            reject(new Error(`failed to parse admin API key response: ${error.message}`))
-          }
+          reject(new Error(`admin API key validation returned ${res.statusCode}`))
         })
       },
     )
-
     req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`admin API key request timed out after ${timeoutMs}ms`))
+      req.destroy(new Error(`admin API key validation timed out after ${timeoutMs}ms`))
     })
     req.on('error', reject)
-    req.write(postData)
     req.end()
   })
 }
@@ -209,11 +219,11 @@ async function syncAdminApiKey(options = {}) {
       loginMode,
     }
   }
-  const requestApiKey = options.requestApiKey || requestAdminApiKey
-  const existingAdminApiKey = fs.existsSync(keyFilePath)
-    ? fs.readFileSync(keyFilePath, 'utf8').trim()
-    : ''
-  const result = await requestApiKey(port, 'localhost', requestTimeoutMs, existingAdminApiKey)
+  const readAdminApiKey = options.readAdminApiKey || readAdminApiKeyFile
+  const verifyApiKey = options.verifyAdminApiKey || verifyAdminApiKey
+  const result = await readAdminApiKey(dataRoot, requestTimeoutMs)
+  // 旧文件可能来自上一次部署；先确认 Key 属于当前实例，避免把过期 Key 写进 .env。
+  await verifyApiKey(port, result.apiKey, 'localhost', requestTimeoutMs)
   fs.mkdirSync(dataRoot, { recursive: true })
   fs.writeFileSync(keyFilePath, result.apiKey, 'utf8')
   const envUpdates = {
@@ -271,7 +281,8 @@ if (require.main === module) {
 module.exports = {
   updateEnvFile,
   readEnvValue,
-  requestAdminApiKey,
+  readAdminApiKeyFile,
+  verifyAdminApiKey,
   requestLoginMode,
   syncAdminApiKey,
 }

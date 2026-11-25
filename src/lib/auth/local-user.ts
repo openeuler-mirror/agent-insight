@@ -17,10 +17,33 @@
 import crypto from 'node:crypto';
 import { db } from '@/lib/storage/prisma';
 
-function isDuplicateUsernameError(error: any): boolean {
+export function isDuplicateUsernameError(error: any): boolean {
   return error?.code === 'P2002'
     || (error?.code === '23505'
       && (error?.constraint?.includes('User_username_key') || error?.detail?.includes('username')));
+}
+
+const EMAIL_PATTERN = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+// Unicode 字母/数字 + 少量安全符号；拒绝空白、控制字符、$、|、逗号等会破坏
+// CSV、限流键或日志的字符。邮箱形态单独校验。
+const PLAIN_ACCOUNT_PATTERN = /^[\p{L}\p{N}._-]+$/u;
+export const ACCOUNT_USERNAME_MAX_LENGTH = 128;
+
+export function normalizeAccountUsername(raw: unknown): string {
+  return String(raw || '').trim().toLowerCase();
+}
+
+export function validateAccountUsername(username: string): string | null {
+  if (!username) return 'Username is required';
+  if (username.length > ACCOUNT_USERNAME_MAX_LENGTH) {
+    return `Username must be at most ${ACCOUNT_USERNAME_MAX_LENGTH} characters`;
+  }
+  if (username.includes('@')) {
+    return EMAIL_PATTERN.test(username) ? null : 'Username must be a valid email address';
+  }
+  return PLAIN_ACCOUNT_PATTERN.test(username)
+    ? null
+    : 'Username may contain only letters, numbers, dots, underscores, and hyphens';
 }
 
 interface ExternalAccountStore {
@@ -81,6 +104,7 @@ export async function findOrCreateLocalUser(username: string, rawExternalAccount
   }
 
   if (!user) throw new Error('Failed to retrieve or create user');
+  if (user.disabledAt) throw new Error('Local user is disabled');
   user = await syncLocalUserExternalAccount(user, externalAccount);
 
   return user;
@@ -94,6 +118,7 @@ export async function authenticateOrRegisterLocalUser(
   let user = await store.findUserByUsername(username);
 
   if (user) {
+    if (user.disabledAt) throw new LocalUserAuthenticationError();
     if (!apiKey || user.apiKey !== apiKey) throw new LocalUserAuthenticationError();
     return user;
   }

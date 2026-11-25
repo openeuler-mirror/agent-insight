@@ -54,6 +54,9 @@ interface RestoreState {
   user: string | null;
   displayName: string | null;
   apiKey: string | null;
+  isAdmin: boolean;
+  passwordChangeRequired: boolean;
+  passwordInitialized: boolean;
   ready: boolean;
   regionError: string | null;
 }
@@ -64,7 +67,16 @@ function restoreHarness(
   sharedStorage?: Map<string, string>,
 ) {
   const stored = sharedStorage ?? new Map([['user_id', 'test_person@example.com'], ['api_key', 'fixture-key']]);
-  const state: RestoreState = { user: null, displayName: null, apiKey: null, ready: false, regionError: null };
+  const state: RestoreState = {
+    user: null,
+    displayName: null,
+    apiKey: null,
+    isAdmin: false,
+    passwordChangeRequired: false,
+    passwordInitialized: true,
+    ready: false,
+    regionError: null,
+  };
   const timers = createTimers();
   const scope = {
     loginModeReady: true,
@@ -81,6 +93,9 @@ function restoreHarness(
     setUser: (value: string | null) => { state.user = value; },
     setApiKey: (value: string | null) => { state.apiKey = value; },
     setDisplayName: (value: string | null) => { state.displayName = value; },
+    setIsAdmin: (value: boolean) => { state.isAdmin = value; },
+    setPasswordChangeRequired: (value: boolean) => { state.passwordChangeRequired = value; },
+    setPasswordInitialized: (value: boolean) => { state.passwordInitialized = value; },
     setAuthReady: (value: boolean) => { state.ready = value; },
     setIdaasRegionError: (value: string | null) => { state.regionError = value; },
     setTimeout: timers.setTimeout,
@@ -132,14 +147,16 @@ test('登录恢复遇到瞬时中断会重试并最终恢复登录', async () =>
   const h = restoreHarness(async () => {
     calls += 1;
     if (calls === 1) throw new TypeError('Failed to fetch');
-    return Response.json({ username: 'test_person@example.com', apiKey: 'refreshed-fixture-key' });
+    return Response.json({ username: 'test_person@example.com', isAdmin: true, passwordChangeRequired: true });
   });
   h.start();
   await h.flush();
   assert.equal(calls, 2);
   assert.equal(h.state.user, 'test_person@example.com');
-  assert.equal(h.state.apiKey, 'refreshed-fixture-key');
-  assert.equal(h.stored.get('api_key'), 'refreshed-fixture-key');
+  assert.equal(h.state.apiKey, 'fixture-key');
+  assert.equal(h.state.isAdmin, true);
+  assert.equal(h.state.passwordChangeRequired, true);
+  assert.equal(h.stored.get('api_key'), 'fixture-key');
   assert.equal(h.state.ready, true);
 });
 
@@ -226,13 +243,17 @@ test('连续导航打断恢复请求后，新页面仍能恢复同一登录身�
   assert.equal(reloaded.state.ready, true);
 });
 
-test('成功恢复仍使用服务器返回的身份和凭据', async () => {
-  const h = restoreHarness(async () => Response.json({ username: 'test_person@example.com', apiKey: 'refreshed-fixture-key' }));
+test('成功恢复沿用本地保存的凭据，身份以服务端返回为准', async () => {
+  const h = restoreHarness(async () => Response.json({
+    username: 'test_person@example.com',
+    isAdmin: false,
+    passwordChangeRequired: false,
+  }));
   h.start();
   await h.flush();
   assert.equal(h.state.user, 'test_person@example.com');
-  assert.equal(h.state.apiKey, 'refreshed-fixture-key');
-  assert.equal(h.stored.get('api_key'), 'refreshed-fixture-key');
+  assert.equal(h.state.apiKey, 'fixture-key');
+  assert.equal(h.stored.get('api_key'), 'fixture-key');
   assert.equal(h.state.ready, true);
 });
 

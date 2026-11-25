@@ -555,6 +555,7 @@
     "test/trigger-startup-integration.test.ts"
   ],
   "platform": [
+    "test/account-management.test.ts",
     "test/agent-insight-home-integration.test.ts",
     "test/agent-insight-home-types.test.ts",
     "test/agent-insight-home.test.ts",
@@ -587,6 +588,7 @@
     "test/license-packaging.test.ts",
     "test/log-summary.test.ts",
     "test/login-form-submit.test.ts",
+    "test/login-rate-limit.test.ts",
     "test/model-connection-diagnostics.test.ts",
     "test/model-connection-headers.test.ts",
     "test/model-connection-timeout.test.ts",

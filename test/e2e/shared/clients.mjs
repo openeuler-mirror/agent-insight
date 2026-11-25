@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { command, poll, runtimeEnv, writePrivate } from './runtime.mjs';
+import { ensureAccount } from './accounts.mjs';
 
 const sha = data => createHash('sha256').update(data).digest('hex');
 export async function prepareClients(ctx) {
@@ -134,11 +135,7 @@ export async function prepareFixtures(ctx) {
     const resources = [];
     for (let i = 2; i <= 5; i++) {
       const username = ctx.testUsername || `test_e2e_${ctx.runId}_00${i}@example.com`;
-      const headers = { 'content-type': 'application/json' };
-      if (ctx.account?.username === username) headers['x-witty-api-key'] = ctx.account.apiKey;
-      const r = await fetch(ctx.baseUrl + '/api/auth/apikey', { method: 'POST', headers, body: JSON.stringify({ username }) });
-      assert.ok(r.ok, `Fixture account authentication failed: HTTP ${r.status}`);
-      const account = await r.json();ctx.secrets.push(account.apiKey);
+      const account = await ensureAccount(ctx, username);
       writePrivate(path.join(ctx.root, 'private', `account-00${i}.json`), account);
       const root = path.join(ctx.root, `fixture-00${i}`);fs.mkdirSync(path.join(root, 'fixtures'), { recursive: true });
       fs.writeFileSync(path.join(root, 'fixtures/messages'), data);
