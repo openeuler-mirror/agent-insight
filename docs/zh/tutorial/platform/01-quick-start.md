@@ -75,7 +75,7 @@ changefreq: monthly
    </p>
 
 2. 根据部署模式完成登录，进入默认 Workspace。
-   - 默认 `LOGIN_MODE=standalone`：首次使用输入新邮箱并留空 API Key 完成注册；已有账号必须输入该账号的现有 API Key，然后按 Enter 或点击 **Sign In**。API Key 只能凭已有会话、客户端安装信息或部署管理员提供的安全渠道获取，不能通过重新输入用户名换发。
+   - 默认 `LOGIN_MODE=standalone`：在登录页输入账号和管理员提供的一次性激活凭据，点击 **Sign In** 完成登录。账号由管理员在「配置 → 账号管理」中创建、批量导入或停用；首次登录后必须立即修改密码。存量未设置密码的账号可凭浏览器或 Agent 已持有的 API Key 完成设密，也可由管理员重置后使用新的激活凭据。登录失败时按页面提示检查输入后重试。
    - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号和数据归属；人员接口返回账号别名时，侧边栏优先显示该别名，否则显示 UUID；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
    - 历史 `ORGANIZATION_MODE=true`：继续使用原组织网关和 Cookie 登录，不等同于 IDaaS OAuth 登录。
 

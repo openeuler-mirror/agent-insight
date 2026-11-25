@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { writePrivate } from '../../shared/runtime.mjs';
 import { probeModelConnection } from '../../shared/model-probe.mjs';
+import { loginThroughUi } from '../../shared/accounts.mjs';
 
 export async function scenario001(ctx) {
   const { baseUrl, runId, root, key, stage, secrets } = ctx;
@@ -24,7 +25,7 @@ export async function scenario001(ctx) {
     return data;
   };
   try {
-    await stage('login', '测试邮箱经页面登录，刷新后保持相同身份', async () => {
+    await stage('login', '预建账号首次登录并改密，刷新后保持相同身份', async () => {
       const failedResources = [];
       const pageErrors = [];
       const recordResponse = response => {
@@ -37,8 +38,7 @@ export async function scenario001(ctx) {
       page.on('response', recordResponse);
       page.on('pageerror', recordError);
       try {
-        await page.goto(baseUrl + '/login');
-        await page.getByLabel(/邮箱地址|Email Address/i).fill(username);
+        account = await loginThroughUi(ctx, page, username);
       } catch (error) {
         const api = await page.request.get(baseUrl + '/api/eval/config/status?check_login=true', { timeout: 5000 }).catch(() => null);
         const result = await api?.json().catch(() => ({}));
@@ -51,22 +51,16 @@ export async function scenario001(ctx) {
         page.off('response', recordResponse);
         page.off('pageerror', recordError);
       }
-      const loginResponse = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
-      await page.locator('button[type=submit]').click();
-      const response = await loginResponse;
-      assert.equal(response.status(), 200);
-      account = await response.json();
       assert.equal(account.username, username);
       secrets.push(account.apiKey);
       writePrivate(path.join(root, 'private', 'account.json'), account);
-      await page.waitForURL(url => url.pathname !== '/login');
       await page.waitForFunction(expected => localStorage.getItem('user_id') === expected, username);
-      const restored = responseFor(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');
+      const restored = responseFor(r => r.url().endsWith('/api/auth/session') && r.request().method() === 'GET');
       await page.reload();
       assert.equal((await restored).status(), 200);
       await page.getByText(username, { exact: true }).waitFor();
       assert.notEqual(new URL(page.url()).pathname, '/login');
-      return { username, initialLoginMode: 'standalone', persistedSession: true };
+      return { username, initialLoginMode: 'standalone', firstLoginPasswordChanged: true, persistedSession: true };
     });
     await stage('model', '页面真实测试并保存 DeepSeek，刷新后配置和默认模型持久化', async () => {
       const modelName = `e2e-model-${runId}`;

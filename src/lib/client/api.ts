@@ -16,15 +16,18 @@
 
 const URL_PREFIX = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const API_PATH_PREFIX = '/api/';
+// 登录入口不自动带上旧 Key；其余 /api 请求（含会话恢复与改密）使用本地凭据。
+const NO_API_KEY_AUTH_PATHS = ['auth/apikey', 'auth/idaas-oauth'];
 
 function isApiRequest(url: string): boolean {
   try {
     const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
     const target = new URL(URL_PREFIX + url, base);
     const apiRoot = new URL(`${URL_PREFIX}${API_PATH_PREFIX}`, base);
+    const relativePath = target.pathname.slice(apiRoot.pathname.length);
     return target.origin === apiRoot.origin
       && target.pathname.startsWith(apiRoot.pathname)
-      && !target.pathname.startsWith(`${apiRoot.pathname}auth/`);
+      && !NO_API_KEY_AUTH_PATHS.some(prefix => relativePath === prefix || relativePath.startsWith(`${prefix}/`));
   } catch {
     return false;
   }

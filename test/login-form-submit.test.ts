@@ -9,6 +9,7 @@ type TestElement = ReactElement<{
   onSubmit?: (event: { preventDefault: () => void }) => Promise<void>;
   onClick?: unknown;
   type?: string;
+  id?: string;
   noValidate?: boolean;
   value?: string;
 }>;
@@ -36,10 +37,16 @@ function evaluate<Value>(expression: string, scope: Record<string, unknown>): Va
 
 function formHarness(
   username: string,
-  response = Response.json({ username: 'person@example.com', apiKey: 'test-key' }),
-  apiKey = '',
+  response = Response.json({
+    username: 'person@example.com',
+    apiKey: 'test-key',
+    isAdmin: false,
+    passwordChangeRequired: false,
+  }),
+  password = 'fixture-password',
 ) {
   let currentUsername = username;
+  let currentPassword = password;
   let error = '';
   let prevented = false;
   const requests: Array<{ url: string; options: RequestInit }> = [];
@@ -47,12 +54,13 @@ function formHarness(
   const scope = {
     React,
     username,
-    apiKey,
+    password,
     error,
     locale: 'zh',
     colors: {},
     t: (key: string) => key,
     setUsername: (value: string) => { currentUsername = value; },
+    setPassword: (value: string) => { currentPassword = value; },
     setError: (value: string) => { error = value; },
     apiFetch: async (url: string, options: RequestInit) => {
       requests.push({ url, options });
@@ -70,6 +78,7 @@ function formHarness(
     logins,
     error: () => error,
     inputValue: () => currentUsername,
+    passwordValue: () => currentPassword,
     prevented: () => prevented,
     submit: async () => {
       assert.equal(typeof form.props.onSubmit, 'function', 'Submitting the form must invoke the login handler');
@@ -83,41 +92,78 @@ function descendants(element: TestElement): TestElement[] {
   return [element, ...children.flatMap(descendants)];
 }
 
-test('邮箱表单提交阻止页面刷新，去除首尾空白并完成登录', async () => {
+test('登录表单提交用户名和密码，去除首尾空白并完成登录', async () => {
   const harness = formHarness('  person@example.com  ');
   await harness.submit();
   assert.equal(harness.prevented(), true);
   assert.equal(harness.requests.length, 1);
   assert.equal(harness.requests[0].url, '/api/auth/apikey');
   assert.equal(harness.requests[0].options.method, 'POST');
-  assert.deepEqual(JSON.parse(String(harness.requests[0].options.body)), { username: 'person@example.com' });
-  assert.deepEqual(harness.logins, [['person@example.com', 'test-key']]);
+  assert.deepEqual(
+    JSON.parse(String(harness.requests[0].options.body)),
+    { username: 'person@example.com', password: 'fixture-password' },
+  );
+  assert.deepEqual(harness.logins, [[
+    'person@example.com',
+    'test-key',
+    undefined,
+    {
+      isAdmin: false,
+      passwordChangeRequired: false,
+      passwordInitialized: undefined,
+      passwordSetupToken: undefined,
+    },
+  ]]);
+});
+
+test('需要改密的登录把改密凭据交给会话，而不是正式 API Key', async () => {
+  const harness = formHarness('person@example.com', Response.json({
+    username: 'person@example.com',
+    isAdmin: false,
+    passwordChangeRequired: true,
+    passwordInitialized: true,
+    passwordSetupToken: 'setup-token',
+  }));
+  await harness.submit();
+  assert.deepEqual(harness.logins, [[
+    'person@example.com',
+    undefined,
+    undefined,
+    {
+      isAdmin: false,
+      passwordChangeRequired: true,
+      passwordInitialized: true,
+      passwordSetupToken: 'setup-token',
+    },
+  ]]);
 });
 
 test('默认 admin 账号可以通过同一登录表单提交', async () => {
-  const harness = formHarness('admin', Response.json({ username: 'admin', apiKey: 'admin-test-key' }));
-  const input = descendants(harness.form).find(element => element.type === 'input');
-  assert.equal(input?.props.type, 'text');
+  const harness = formHarness('admin', Response.json({
+    username: 'admin',
+    apiKey: 'admin-test-key',
+    isAdmin: true,
+    passwordChangeRequired: true,
+  }));
+  const inputs = descendants(harness.form).filter(element => element.type === 'input');
+  assert.equal(inputs[0]?.props.type, 'text');
+  assert.equal(inputs[1]?.props.type, 'password');
   await harness.submit();
-  assert.deepEqual(JSON.parse(String(harness.requests[0].options.body)), { username: 'admin' });
-  assert.deepEqual(harness.logins, [['admin', 'admin-test-key']]);
-});
-
-test('已有账号登录时提交 API Key，但首次注册允许留空', async () => {
-  const registered = formHarness('new@example.com');
-  await registered.submit();
-  assert.equal(new Headers(registered.requests[0].options.headers).has('x-witty-api-key'), false);
-
-  const restored = formHarness(
-    'person@example.com',
-    Response.json({ username: 'person@example.com', apiKey: 'existing-key' }),
-    ' existing-key ',
+  assert.deepEqual(
+    JSON.parse(String(harness.requests[0].options.body)),
+    { username: 'admin', password: 'fixture-password' },
   );
-  await restored.submit();
-  assert.equal(
-    new Headers(restored.requests[0].options.headers).get('x-witty-api-key'),
-    'existing-key',
-  );
+  assert.deepEqual(harness.logins, [[
+    'admin',
+    'admin-test-key',
+    undefined,
+    {
+      isAdmin: true,
+      passwordChangeRequired: true,
+      passwordInitialized: undefined,
+      passwordSetupToken: undefined,
+    },
+  ]]);
 });
 
 test('登录按钮作为表单提交入口，保留应用已有校验路径', () => {
@@ -129,7 +175,7 @@ test('登录按钮作为表单提交入口，保留应用已有校验路径', ()
   assert.equal(form.props.noValidate, true);
 });
 
-test('空邮箱提交显示现有提示且不发送登录请求', async () => {
+test('空用户名提交显示现有提示且不发送登录请求', async () => {
   const harness = formHarness('   ');
   await harness.submit();
   assert.equal(harness.prevented(), true);
@@ -138,11 +184,33 @@ test('空邮箱提交显示现有提示且不发送登录请求', async () => {
   assert.deepEqual(harness.logins, []);
 });
 
-test('登录被拒绝时显示接口错误并保留邮箱输入', async () => {
+test('空密码提交照常发送请求，由服务端统一判定凭据是否有效', async () => {
+  const harness = formHarness('person@example.com', undefined, '');
+  await harness.submit();
+  assert.equal(harness.prevented(), true);
+  assert.equal(harness.error(), '');
+  assert.equal(harness.requests.length, 1);
+  assert.deepEqual(
+    JSON.parse(String(harness.requests[0].options.body)),
+    { username: 'person@example.com', password: '' },
+  );
+});
+
+test('登录被拒绝时显示接口错误并保留用户名输入', async () => {
   const harness = formHarness('person@domain', Response.json({ error: 'Username must be a valid email address' }, { status: 400 }));
   await harness.submit();
   assert.equal(harness.prevented(), true);
   assert.equal(harness.error(), 'Username must be a valid email address');
   assert.deepEqual(harness.logins, []);
   assert.equal(harness.inputValue(), 'person@domain');
+});
+
+test('凭据错误与限流使用固定文案', async () => {
+  const rejected = formHarness('person@example.com', Response.json({ error: 'Invalid username or password' }, { status: 401 }));
+  await rejected.submit();
+  assert.equal(rejected.error(), 'login.invalidCredentials');
+
+  const limited = formHarness('person@example.com', Response.json({ code: 'too_many_attempts' }, { status: 429 }));
+  await limited.submit();
+  assert.equal(limited.error(), 'login.tooManyAttempts');
 });

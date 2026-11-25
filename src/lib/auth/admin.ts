@@ -29,6 +29,11 @@ export function isAdminUser(username: string | null | undefined): boolean {
     return isPlatformAdmin(username);
 }
 
+export async function resolveAdminUser(request: Request) {
+    const { username } = await resolveUser(request);
+    return { username, isAdmin: isAdminUser(username) };
+}
+
 export async function resolveTraceReadScope(request: Request) {
     const { username } = await resolveUser(request);
     const canViewAllTraces = !!username && isAdminUser(username);

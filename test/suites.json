@@ -186,6 +186,7 @@
     "test/trace-list-sql-contract.test.ts",
     "test/trace-list-storage-performance.test.ts",
     "test/trace-live-refresh.test.ts",
+    "test/trace-output-order.test.ts",
     "test/trace-parent-agent.test.ts",
     "test/trace-render-budget.test.ts",
     "test/trace-session-lazy-load.test.ts",
@@ -554,6 +555,7 @@
     "test/trigger-startup-integration.test.ts"
   ],
   "platform": [
+    "test/account-management.test.ts",
     "test/agent-insight-home-integration.test.ts",
     "test/agent-insight-home-types.test.ts",
     "test/agent-insight-home.test.ts",
@@ -585,6 +587,7 @@
     "test/license-packaging.test.ts",
     "test/log-summary.test.ts",
     "test/login-form-submit.test.ts",
+    "test/login-rate-limit.test.ts",
     "test/model-connection-diagnostics.test.ts",
     "test/model-connection-headers.test.ts",
     "test/model-connection-timeout.test.ts",
