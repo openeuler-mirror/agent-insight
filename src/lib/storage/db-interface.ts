@@ -18,6 +18,7 @@ import { loadAgentInsightEnv } from '@/lib/env';
 loadAgentInsightEnv();
 
 import { Pool, QueryResult } from 'pg';
+import { Prisma } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
 
@@ -33,8 +34,15 @@ export interface DatabaseAdapter {
     findUserByApiKey(apiKey: string): Promise<any>;
     findUserByUsername(username: string): Promise<any>;
     findUserByExternalAccount(externalAccount: string): Promise<any>;
+    findUsers(): Promise<any[]>;
     updateUserExternalAccount(username: string, externalAccount: string): Promise<any>;
+    updateUserPassword(username: string, data: {
+        passwordHash: string | null;
+        passwordUpdatedAt: Date | null;
+        mustChangePassword: boolean;
+    }): Promise<any>;
     createUser(data: any): Promise<any>;
+    disableUser(username: string, data: { apiKey: string; disabledAt: Date }): Promise<any>;
 
     // Skill operations
     findSkill(name: string, user: string | null): Promise<any>;
@@ -127,15 +135,26 @@ class PrismaAdapter implements DatabaseAdapter {
     }
 
     async findUserByApiKey(apiKey: string) {
-        return this.client.user.findUnique({ where: { apiKey } });
+        return this.client.user.findFirst({ where: { apiKey, disabledAt: null } });
     }
     
     async findUserByUsername(username: string) {
-        return this.client.user.findUnique({ where: { username } });
+        const exact = await this.client.user.findUnique({ where: { username } });
+        if (exact) return exact;
+        // 历史数据可能保留大小写；归一化后的登录名再按不区分大小写回退查找。
+        const rows = await this.client.$queryRaw<Array<{ username: string }>>(
+            Prisma.sql`SELECT username FROM "User" WHERE LOWER(username) = LOWER(${username}) LIMIT 1`,
+        );
+        const matched = rows[0]?.username;
+        return matched ? this.client.user.findUnique({ where: { username: matched } }) : null;
     }
 
     async findUserByExternalAccount(externalAccount: string) {
         return this.client.user.findUnique({ where: { externalAccount } });
+    }
+
+    async findUsers() {
+        return this.client.user.findMany({ orderBy: { username: 'asc' } });
     }
 
     async updateUserExternalAccount(username: string, externalAccount: string) {
@@ -145,8 +164,27 @@ class PrismaAdapter implements DatabaseAdapter {
         });
     }
 
+    async updateUserPassword(username: string, data: {
+        passwordHash: string | null;
+        passwordUpdatedAt: Date | null;
+        mustChangePassword: boolean;
+    }) {
+        return this.client.user.update({
+            where: { username },
+            data,
+        });
+    }
+
     async createUser(data: any) {
         return this.client.user.create({ data });
+    }
+
+    async disableUser(username: string, data: { apiKey: string; disabledAt: Date }) {
+        const result = await this.client.user.updateMany({
+            where: { username, disabledAt: null },
+            data,
+        });
+        return result.count > 0 ? this.client.user.findUnique({ where: { username } }) : null;
     }
 
     async findSkill(name: string, user: string | null) {
@@ -463,13 +501,22 @@ class OpenGaussAdapter implements DatabaseAdapter {
     }
 
     async findUserByApiKey(apiKey: string) {
-        const res = await this.query('SELECT * FROM "User" WHERE "apiKey" = $1', [apiKey]);
+        const res = await this.query(
+            'SELECT * FROM "User" WHERE "apiKey" = $1 AND "disabledAt" IS NULL',
+            [apiKey],
+        );
         return res.rows[0] || null;
     }
     
     async findUserByUsername(username: string) {
         const res = await this.query('SELECT * FROM "User" WHERE username = $1', [username]);
-        return res.rows[0] || null;
+        if (res.rows[0]) return res.rows[0];
+        // 历史数据可能保留大小写；归一化后的登录名再按不区分大小写回退查找。
+        const fallback = await this.query(
+            'SELECT * FROM "User" WHERE LOWER(username) = LOWER($1) LIMIT 1',
+            [username],
+        );
+        return fallback.rows[0] || null;
     }
 
     async findUserByExternalAccount(externalAccount: string) {
@@ -477,10 +524,27 @@ class OpenGaussAdapter implements DatabaseAdapter {
         return res.rows[0] || null;
     }
 
+    async findUsers() {
+        const res = await this.query('SELECT * FROM "User" ORDER BY username ASC');
+        return res.rows;
+    }
+
     async updateUserExternalAccount(username: string, externalAccount: string) {
         const res = await this.query(
             'UPDATE "User" SET "externalAccount" = $2 WHERE username = $1 RETURNING *',
             [username, externalAccount],
+        );
+        return res.rows[0] || null;
+    }
+
+    async updateUserPassword(username: string, data: {
+        passwordHash: string | null;
+        passwordUpdatedAt: Date | null;
+        mustChangePassword: boolean;
+    }) {
+        const res = await this.query(
+            'UPDATE "User" SET "passwordHash" = $2, "passwordUpdatedAt" = $3, "mustChangePassword" = $4 WHERE username = $1 RETURNING *',
+            [username, data.passwordHash, data.passwordUpdatedAt, data.mustChangePassword],
         );
         return res.rows[0] || null;
     }
@@ -495,6 +559,14 @@ class OpenGaussAdapter implements DatabaseAdapter {
         const sql = `INSERT INTO "User" (${columns}, id) VALUES (${placeholders}, $${keys.length + 1}) RETURNING *`;
         const res = await this.query(sql, [...values, id]);
         return res.rows[0];
+    }
+
+    async disableUser(username: string, data: { apiKey: string; disabledAt: Date }) {
+        const res = await this.query(
+            'UPDATE "User" SET "apiKey" = $2, "disabledAt" = $3 WHERE username = $1 AND "disabledAt" IS NULL RETURNING *',
+            [username, data.apiKey, data.disabledAt],
+        );
+        return res.rows[0] || null;
     }
 
     async findSkill(name: string, user: string | null) {

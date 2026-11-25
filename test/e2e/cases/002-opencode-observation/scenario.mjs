@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 import { command, poll, runtimeEnv, writePrivate } from '../../shared/runtime.mjs';
+import { ensureAccount } from '../../shared/accounts.mjs';
 import { assertTraceEvidence } from './trace-evidence.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -26,7 +27,7 @@ export async function scenario002(ctx) {
   try {
     await stage('fixture', '正式账号、固定日志及 OpenCode 2.1.4 真实采集插件独立就绪；不依赖 RAS', async () => {
       assert.equal(hash(data), '6d50cefa82380651f910df35fda0995a237a3c788b7b2e3d2d37e51fb9debca9');
-      account = await api('/api/auth/apikey', { method: 'POST', body: JSON.stringify({ username }) });
+      account = await ensureAccount(ctx, username);
       assert.equal(account.username, username);secrets.push(account.apiKey);writePrivate(path.join(root, 'private/account.json'), account);
       const clientRoot = path.join(root, 'ordinary');const bin = path.join(clientRoot, 'bin');fs.mkdirSync(bin, { recursive: true });
       const executable = path.join(project, 'exclude/core-e2e/runtime/v2/node_modules/.bin/opencode');
@@ -80,7 +81,7 @@ export async function scenario002(ctx) {
     browser = await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL || 'chrome', headless: true });context = await browser.newContext({ locale: 'zh-CN' });
     await context.tracing.start({ screenshots: false, snapshots: true, sources: false });page = await context.newPage();page.setDefaultTimeout(30000);page.setDefaultNavigationTimeout(90000);
     await stage('trace-ui', '同一账号通过 Trace 列表检索、详情展开和刷新看到本轮输入、工具及正确结果', async () => {
-      await page.goto(baseUrl + '/login');await page.getByLabel(/邮箱地址|Email Address/i).fill(username);await page.locator('#api-key').fill(account.apiKey);
+      await page.goto(baseUrl + '/login');await page.locator('#username').fill(username);await page.locator('#password').fill(account.password);
       const logged = page.waitForResponse(r => r.url().endsWith('/api/auth/apikey') && r.request().method() === 'POST');await page.locator('button[type=submit]').click();assert.equal((await logged).status(), 200);
       await page.waitForURL(url => url.pathname !== '/login');await page.getByText(username, { exact: true }).waitFor();
       const search = page.getByRole('textbox', { name: '搜索或过滤 trace', exact: true });await search.fill(marker);

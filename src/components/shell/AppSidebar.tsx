@@ -18,7 +18,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useTheme } from '@/lib/client/theme-context';
@@ -73,7 +73,8 @@ const NAV_ICONS: Record<SidebarIconKey, ReactNode> = {
 
 export function AppSidebar() {
     const pathname = usePathname() || '/';
-    const { user, displayName, logout } = useAuth();
+    const router = useRouter();
+    const { user, displayName, logout, isAdmin, loginMode } = useAuth();
     const userLabel = displayName || user;
     const { isDark, toggleTheme } = useTheme();
     const { t, locale, setLocale } = useLocale();
@@ -81,7 +82,11 @@ export function AppSidebar() {
     const [showUserMenu, setShowUserMenu] = useState(false);
     const usageAccess = useUsageAccess();
     const showUsage = usageAccess.enabled && usageAccess.isAdmin;
-    const navigation = useMemo(() => getSidebarNavigation(showUsage), [showUsage]);
+    const showAccounts = isAdmin && loginMode === 'standalone';
+    const navigation = useMemo(
+        () => getSidebarNavigation(showUsage, showAccounts),
+        [showAccounts, showUsage],
+    );
     const [expandedTrees, setExpandedTrees] = useState<Set<string>>(
         new Set(['observe', 'evaluation', 'continuous-optimization', 'config']),
     );
@@ -224,6 +229,19 @@ export function AppSidebar() {
                                     overflow: 'hidden', zIndex: 50,
                                 }}
                             >
+                                {loginMode === 'standalone' && (
+                                    <button
+                                        onClick={() => { setShowUserMenu(false); router.push('/config/password'); }}
+                                        style={{
+                                            width: '100%', padding: '7px 11px',
+                                            background: 'transparent', border: 'none',
+                                            textAlign: 'left', color: 'var(--foreground)',
+                                            fontSize: 11, cursor: 'pointer',
+                                        }}
+                                    >
+                                        {t('nav.changePassword')}
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => { setShowUserMenu(false); logout(); }}
                                     style={{

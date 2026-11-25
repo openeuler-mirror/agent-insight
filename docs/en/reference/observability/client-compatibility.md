@@ -1,6 +1,8 @@
 ---
 title: "Client versions and framework compatibility"
 description: "Shared collector upgrades, framework installation differences, and verified environments."
+keywords: ["Agent Insight", "client compatibility", "Trace collection", "collector upgrades"]
+changefreq: monthly
 ---
 
 ## Shared collector updates

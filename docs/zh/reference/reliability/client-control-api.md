@@ -1,6 +1,8 @@
 ---
 title: "可靠性客户端与配置控制接口"
 description: "安装令牌、设备身份、能力上报、配置快照和控制通道的 HTTP 契约。"
+keywords: ["Agent Insight", "可靠性客户端", "HTTP 接口", "设备鉴权", "配置控制"]
+changefreq: monthly
 ---
 
 本页说明 `/api/reliability/` 下现有 HTTP 方法及 `/api/agent-ras/config`、`/api/agent-ras/catalog`。基线为 `eabde5b0`。配置保存、通知、写入和 RAS 加载是不同阶段；接口成功不能直接解释为配置已生效。安装操作见[本机安装过程](../../how-to/reliability/agent-ras/local-install-process.md)，平台身份解析见 [HTTP 接口与用户身份](../platform/http-api.md)。

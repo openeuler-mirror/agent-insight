@@ -73,6 +73,8 @@ RAS 的内部判定 Agent（ras-judge）归属系统。归属筛选选择用户�
 - **仅子 Agent**：适合排查派生任务、分工任务和协作路径
 - **主 Agent + 子 Agent**：适合完整回看整条协作链路
 
+从 Agent 概览卡片点击“链路跟踪”时，页面会自动选中该 Agent，并按卡片类型设置范围：主 Agent 对应“仅主 Agent”，子 Agent 对应“仅子 Agent”。
+
 Agent 下拉同时列出已观测的主 Agent 和子 Agent。选择子 Agent（例如 Pi 的 `planner`
 或 `worker`）后，配合“仅子 Agent”范围查看该 profile 的独立执行；根 Pi CLI 没有可用
 profile 时显示为 `Pi`。框架名称与 Agent 名称分别表达运行时和实际执行主体，不能互相替代。
