@@ -198,14 +198,11 @@
     "autoprefixer": "^10.5.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
-    "parse5": "7.3.0",
     "postcss": "^8.5.12",
-    "remark-parse": "11.0.0",
     "tailwind-scrollbar": "^4.0.2",
     "tailwindcss": "^4.2.4",
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.20.5",
-    "typescript": "5.9.3",
-    "unified": "11.0.5"
+    "typescript": "5.9.3"
   }
 }
