@@ -54,6 +54,7 @@ if /I "%~1"=="--rebuild" (
   goto :parse_args
 )
 if /I "%~1"=="--port" (
+  if "%~2"=="" goto :bad_port
   set "PLATFORM_PORT=%~2"
   shift
   shift
@@ -70,14 +71,25 @@ echo   Usage: %SCRIPT_NAME% [--prod] [--rebuild] [--port PORT]
 echo.
 echo     --prod      production mode: npm run build + npm start
 echo     --rebuild   with --prod, rebuild even if a build already exists
-echo     --port N    platform port, default 3000
+echo     --port N    platform port, default 3000, must be 1-65535
 echo.
 exit /b 1
 
 :args_ready
 if not defined PLATFORM_PORT set "PLATFORM_PORT=3000"
-for /f "delims=0123456789" %%i in ("%PLATFORM_PORT%") do set "PLATFORM_PORT="
+REM Reject non-digits, then normalize leading zeros before the numeric compare:
+REM CMD would otherwise read values like 03000 as octal (and 08 as invalid).
+for /f "delims=0123456789" %%i in ("%PLATFORM_PORT%") do goto :bad_port
+:port_strip_zeros
 if not defined PLATFORM_PORT goto :bad_port
+if not "%PLATFORM_PORT:~0,1%"=="0" goto :port_range
+set "PLATFORM_PORT=%PLATFORM_PORT:~1%"
+goto :port_strip_zeros
+:port_range
+REM More than 5 digits cannot fit 1-65535 and would overflow the IF comparison.
+if not "%PLATFORM_PORT:~5%"=="" goto :bad_port
+if %PLATFORM_PORT% LSS 1 goto :bad_port
+if %PLATFORM_PORT% GTR 65535 goto :bad_port
 
 REM An explicit DATABASE_URL / AGENT_INSIGHT_HOME from the caller must survive
 REM the .env and default handling below. Capture them before anything overwrites.

@@ -292,6 +292,42 @@ test('Windows start keeps caller-provided DATABASE_URL and AGENT_INSIGHT_HOME', 
   assert.match(script, /\r?\nif defined DATABASE_URL goto :db_ready/)
 })
 
+test('Windows start rejects a missing or out-of-range --port value', t => {
+  const script = fs.readFileSync('scripts/start-windows.bat', 'utf8').replace(/\r\n/g, '\n')
+  const end = script.indexOf('echo ========================================')
+  assert.ok(end > 0, 'cannot locate the port validation block')
+  // Run only argument parsing plus port validation; stop before preflight/startup.
+  const harness = `${script.slice(0, end)}
+echo RESULT=%PLATFORM_PORT%
+exit /b 0
+:bad_port
+echo RESULT=REJECTED
+exit /b 0
+`
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'start-windows-port-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'parse-port.bat')
+  fs.writeFileSync(file, harness, 'utf8')
+  const parse = (args: string[]) => {
+    const result = spawnSync('cmd.exe', ['/d', '/c', file, ...args], { encoding: 'utf8' })
+    return `${result.stdout ?? ''}${result.stderr ?? ''}`
+  }
+  if (process.platform !== 'win32') {
+    assert.match(script, /if "%~2"=="" goto :bad_port/)
+    assert.match(script, /if %PLATFORM_PORT% GTR 65535 goto :bad_port/)
+    t.skip('cmd.exe is only available on Windows')
+    return
+  }
+  assert.match(parse(['--port']), /RESULT=REJECTED/, 'missing value must be rejected')
+  assert.match(parse(['--port', '--prod']), /RESULT=REJECTED/, 'an option must not become the value')
+  for (const port of ['0', '-1', '65536', '99999', '00000', 'abc', '99999999999999999999']) {
+    assert.match(parse(['--port', port]), /RESULT=REJECTED/, `port ${port} must be rejected`)
+  }
+  assert.match(parse([]), /RESULT=3000/, 'no --port falls back to 3000')
+  assert.match(parse(['--port', '65535']), /RESULT=65535/)
+  assert.match(parse(['--port', '03000']), /RESULT=3000/, 'leading zeros are normalized')
+})
+
 test('start.sh integration: first worker generation, reuse, source change, forced and failed rebuilds', { timeout: 90000 }, async t => {
   const f = fixture(t)
   const net = await import('node:net')
