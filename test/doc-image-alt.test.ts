@@ -69,6 +69,36 @@ test('decorative exceptions require exact file/source, a reason and an actually 
   }
 });
 
+test('rejects bare numeric labels while preserving descriptions containing numbers', () => {
+  for (const alt of ['123', '0', '001', ' 123 ', '１２３']) {
+    assert.equal(altProblem(alt), 'placeholder-alt', alt);
+  }
+  for (const alt of ['3 个计算节点连接存储节点', '第 2 步：配置模型供应商', '2026 年各月份调用量对比']) {
+    assert.equal(altProblem(alt), null, alt);
+  }
+});
+
+test('documentation audit flags numeric Markdown and HTML alt without flagging descriptive numbers', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-alt-numeric-'));
+  try {
+    fs.mkdirSync(path.join(root, 'docs/zh'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'docs/en'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'docs/image-alt-decorative.json'), '[]');
+    fs.writeFileSync(path.join(root, 'docs/zh/test.md'), [
+      '![123](diagram.png)',
+      '<img src="setup.png" alt="１２３">',
+      '![3 个计算节点连接存储节点](nodes.png)',
+    ].join('\n\n'));
+    const report = auditDocumentation(root);
+    assert.equal(report.images.length, 3);
+    assert.deepEqual(report.errors.map(error => [error.src, error.problem]), [
+      ['diagram.png', 'placeholder-alt'], ['setup.png', 'placeholder-alt'],
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('all Chinese and English documentation images retain meaningful alt text', () => {
   const report = auditDocumentation(path.resolve(import.meta.dirname, '..'));
   assert.ok(report.images.length > 0);

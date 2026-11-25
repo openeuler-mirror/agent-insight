@@ -42,7 +42,8 @@ export function altProblem(alt) {
   if (alt === undefined) return 'missing-alt';
   const text = alt.trim();
   if (!text) return 'empty-alt';
-  if (/^(?:img|image|picture|photo|screenshot|图片|图像|截图|图)\s*\d*$/iu.test(text)
+  if (/^\p{Decimal_Number}+$/u.test(text)
+    || /^(?:img|image|picture|photo|screenshot|图片|图像|截图|图)\s*\d*$/iu.test(text)
     || /^(?:图|figure|fig\.?)\s*\d+(?:[.\-]\d+)*$/iu.test(text)
     || /^zh[-_]cn[-_]image[_-]/iu.test(text)
     || /\.(?:png|jpe?g|gif|svg|webp|bmp|avif)$/iu.test(text)) return 'placeholder-alt';
