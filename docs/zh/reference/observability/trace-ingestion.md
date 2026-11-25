@@ -15,6 +15,8 @@ changefreq: "monthly"
 | --- | --- |
 | JSON | `Content-Type: application/json`，使用 OTLP `resourceSpans` 结构 |
 | Protobuf | `Content-Type: application/x-protobuf`，使用 OTLP Trace 编码；其他类型由解码器决定是否支持，非法类型返回 `415` |
+| 内容编码 | 两个 Trace 入口均支持 `Content-Encoding: gzip` 和 `identity`，省略时按 `identity` 处理；编码值忽略大小写及首尾空格。gzip 同时适用于 JSON 和 Protobuf |
+| 解压上限 | gzip 解压后输出最多 64 MiB（67,108,864 字节）；超限时在解码和写入 spool 前拒绝请求 |
 | 平台 Key | `x-witty-api-key`；显式传入但未匹配到用户时返回 `401`，不回退到资源里的用户字段 |
 | Langfuse 兼容来源 | 没有已验证平台 Key 时，以 Basic 的 `publicKey:secretKey`，或 `x-langfuse-public-key` / `x-langfuse-secret-key` 验证；分别对应用户名和该用户 API Key |
 | LlamaIndex | 必须通过平台 Key 验证，不能用 `resource.user.id` 选择任意归属 |
@@ -37,10 +39,11 @@ changefreq: "monthly"
 | 状态 | 语义 |
 | --- | --- |
 | `200` | 已受理；仍需后续消费、聚合和投影 |
-| `400` | JSON/Protobuf 无法解码或请求无效 |
+| `400` | 非法 gzip 压缩流、JSON/Protobuf 无法解码或请求无效 |
 | `401` | 显式 Key 无效，或需要验证的来源缺少有效凭证 |
+| `413` | gzip 解压后输出超过 64 MiB，请求被拒绝 |
 | `413` 且 `status: partial` | Goal Plus 会话身份数量达到 spool 限制；部分事件可能已受理，查看 `received` 和 `rejected.spool` |
-| `415` | 不支持的内容类型 |
+| `415` | 不支持的内容类型或未知的 `Content-Encoding` |
 | `500` | 服务处理失败；保留未确认数据供按采集器策略重试 |
 
 接收 ACK、spool 落盘、消费者保存 Execution/Session、界面可见是不同阶段。排查时逐段确认；重发也应沿用采集器已有的去重身份，不要为同一事件随意生成新 ID。
