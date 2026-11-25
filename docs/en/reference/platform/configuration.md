@@ -59,3 +59,8 @@ This page does not enumerate every collector, performance, or diagnostic paramet
 [中文权威版本](../../../zh/reference/platform/configuration.md)
 
 Execution Profiles use `execution.profiles.<key>.backend/options` with explicit bindings. Supported backends validate their own settings; local uses native workspaces and client-default networking, while xGovernor validates its Docker requirements. Legacy flat Profiles retain xGovernor semantics. New explicit configurations do not inject an extra xGovernor Profile. Duplicate Benchmark/platform bindings and unknown fields are rejected. See the [Chinese guide](../../../zh/how-to/evaluation/benchmarks/deploy-services.md#执行-profile-的后端配置).
+
+
+## Database configuration
+
+The user-facing source is project config/storage.local.json. See the [field and installation guide](../../how-to/platform/storage-core.md#configure-external-databases-and-install). runtime.home selects application state; database connections are never inferred from legacy .env settings.

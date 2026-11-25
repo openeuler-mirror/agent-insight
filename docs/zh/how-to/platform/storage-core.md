@@ -17,10 +17,83 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 
 仪表盘和质量分析读取注册信息时使用同一已验证的 Core 事务上下文，报告的 Trace、轨迹评分和诊断数据只来自 Core 分析快照；缺少快照明确失败，不读取旧表。请求回调直接返回延迟查询时，身份范围持续到查询完成。Agent 删除成功后沿用原用量事件，拒绝或失败不计数。
 
-本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 500 条滚动追加及“加载中…”提示保持。
+本轮验证 SQLite + ClickHouse 与 PostgreSQL + ClickHouse；openGauss 保留实现，暂不实测。原页面布局、Trace 服务端分页、Span 每批最多 500 条滚动追加及“加载中…”提示保持。
 
 
 下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
+
+## 配置数据库并一键安装
+
+数据库由用户预先部署并维护。项目只管理 Storage Core 与 Web，不下载、不安装、不启停 PostgreSQL/openGauss/ClickHouse。SQLite 没有独立服务，首次安装可创建指定的新文件。运行架构始终为一种事务库＋ClickHouse，禁止回退旧单库。
+
+准备 Node.js 22+、npm、Python（SQLite 使用 3.11+；固定 PostgreSQL 驱动使用 3.11–3.13）。先由数据库管理员创建 PostgreSQL 数据库、ClickHouse 独立数据库及账号，然后在项目根目录选择样例：
+
+```bash
+cp config/storage.postgresql.example.json config/storage.local.json
+# SQLite 用户改为复制 config/storage.sqlite.example.json
+chmod 600 config/storage.local.json
+# 编辑 storage.local.json，替换全部 YOUR_* 占位符
+bash scripts/install.sh --check
+bash scripts/install.sh
+```
+
+样例为合法 JSON，不支持注释。实际配置不会提交到 Git 或打进 npm、Docker、Next.js standalone。缺项、未知字段、占位符和非私有文件会在连接前拒绝。`--check` 只读，不建库、不建表、不创建运行目录；已有 Python 环境须包含相应驱动。首次安装自动准备固定 Python 依赖，校验连接与权限，初始化应用表，再启动 Core、构建并启动生产 Web。`--storage-only` 可只初始化存储；`--config /absolute/path/storage.local.json` 用于独立实例。`deploy_server.sh --apply` 是安装入口的兼容别名。
+
+| 字段 | 填写方法 |
+|---|---|
+| `control.backend` | 必填：`sqlite`、`postgresql` 或 `opengauss` |
+| `control.database` | SQLite 必填；文件绝对路径或 `~/` 路径，相对路径以项目根目录解析；不得填写历史单库文件。制品位于文件旁的 `.artifacts` 目录 |
+| `control.dsn` | PG/openGauss 必填；`postgresql://用户名:密码@主机:端口/数据库`。密码中的 `@:/#` 等须 URL 编码；示例 `p@ss` 写为 `p%40ss` |
+| `control.schema` | PG/openGauss 必填，独立应用 schema，如 `agent_insight`；不能使用 public 或系统 schema |
+| `control.artifacts` | PG/openGauss 必填，Core 账号可写的持久制品目录 |
+| `clickhouse.endpoint` | 必填，HTTP(S) origin；通常 HTTP 8123、HTTPS 8443；不能填原生 TCP 9000，也不能在 URL 中放密码 |
+| `clickhouse.database` | 必填，管理员预建的独立数据库，不能使用 system/default |
+| `clickhouse.user/password` | 均须显式填写；只有数据库确实采用空密码时才填写空字符串，不能省略 password |
+| `clickhouse.timeout` | 可选，默认 15 秒，范围 1–60 |
+| `runtime.home` | 可选，默认 `~/.agent-insight`；仅存运行配置、内部密钥、日志和进程记录，不是用户维护的数据库配置源 |
+| `runtime.corePort/webPort` | 可选，默认 4319/3000，不可相同；Web 可用 `--port` 或 `AGENT_INSIGHT_PORT` 临时覆盖 |
+
+本机原生 Core 连接映射到本机的容器数据库时用 `127.0.0.1:映射端口`；远程服务填服务器域名。容器中的 localhost 指容器自身，必须填容器可达的服务名或主机地址。
+
+PG 样例默认 TLS `sslmode=verify-full`，将 `sslrootcert` 换成 CA 绝对路径。仅在隔离本机测试明确改为 `sslmode=disable`。ClickHouse HTTPS 使用系统信任链，私有 CA 可通过 Python 的 `SSL_CERT_FILE` 指定；不关闭证书验证。PG `connect_timeout` 默认 10 秒，允许 1–60。诊断不会输出密码或完整 DSN。
+
+初始化账号需要 PG 数据库 CONNECT、创建应用 schema 的 CREATE 权限（或预建 schema 的 USAGE/CREATE），以及应用表读写权限；ClickHouse 需要目标库 CREATE TABLE、SELECT、INSERT，运行时至少 SELECT/INSERT。初始化完成后可收回 DDL 权限，变更账号后重启应用。当前版本门槛为 PostgreSQL 16、ClickHouse 26.8，安装仍会验证实际表结构；高版本并不等于所有功能已验收。openGauss 保留适配，本轮不做真机验收。
+
+## 没有数据库服务时：独立 Docker 启动
+
+准备 Node.js、Docker 和 Compose，先启动 Docker daemon。在项目根目录顺序执行：
+
+```bash
+bash scripts/start_postgresql.sh
+bash scripts/start_clickhouse.sh
+bash scripts/install.sh
+```
+
+两个数据库脚本独立于应用安装：默认 PostgreSQL 16 映射 `127.0.0.1:15432`，ClickHouse 26.8 映射 `127.0.0.1:18123`。Docker 根据目标架构选择镜像。第一次执行任一脚本时，若项目配置不存在，则生成包含随机密码的 `config/storage.local.json`（0600）；不打印密码，不覆盖已有配置。默认应用运行目录为 `~/.agent-insight-postgresql`，Core/Web 端口为 4319/3000。数据库使用独立命名卷，重复执行复用数据。配置缺失但数据卷仍存在时，必须恢复原配置，不能重新生成密码。
+
+已有配置只允许显式本机回环连接；PostgreSQL 使用 `sslmode=disable`，数据库端口仅绑定回环。已有远程数据库不应运行这两个脚本，直接填写配置并安装应用。配置变更不会自动修改数据卷里的账号或密码；需要先由管理员完成迁移。
+
+停止应用仍用 `bash scripts/stop.sh`。数据库需要独立停止：
+
+```bash
+bash scripts/start_postgresql.sh --stop
+bash scripts/start_clickhouse.sh --stop
+```
+
+停止保留数据卷。三个入口均支持 `--config /absolute/path/storage.local.json`，自定义时须始终使用同一文件。不要使用 `docker compose down -v` 清理业务数据。这里的应用仍原生运行，只有数据库在容器内；下方旧全容器流程是 SQLite＋ClickHouse 联调入口，不是 PostgreSQL 的一键部署入口。
+
+## 本机一键启动
+
+```bash
+bash scripts/start.sh                # Core + 生产 Web
+bash scripts/develop_start.sh        # Core + 开发 Web
+bash scripts/status.sh
+bash scripts/stop.sh                 # 仅 Core/Web，数据库保持运行
+```
+
+二者共用项目配置，不同时运行两套 Web。重复安装复用已初始化结构和内部密钥；初始化意图记录支持失败后继续，但不会自动重置任何数据库。配置变化时先停止应用再启动。已有管理模式的 ClickHouse 程序、数据、配置和运行进程均保留，后续须由用户独立管理。
+
+旧业务库、结构版本落后、未知表、不兼容字段、两侧数据状态不匹配均拦截。不要删除旧库来绕过拦截。先备份并按[升级与回滚](upgrade-and-rollback.md)迁移；安装器不承担历史数据转换。事务表与分析表沿用 Core 的版本化迁移 SQL（当前 020/004），不执行 Prisma db push。
 
 ## Docker 隔离联调
 

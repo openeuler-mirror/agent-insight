@@ -17,7 +17,7 @@ Control mutations return committed values, including `updatedAt`, so conditional
 
 Dashboard and quality-analysis registration reads share the verified Core control scope. Report Traces, trajectory scores and diagnoses come exclusively from Core analytics snapshots; a missing snapshot fails explicitly. Request callbacks retain their identity scope until returned lazy queries finish. Successful Agent deletion retains the existing usage event; rejected or failed deletion is not counted.
 
-This implementation run validates SQLite + ClickHouse only. PostgreSQL/openGauss remain supported but are not exercised against real servers in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 500 remain unchanged.
+This implementation run validates startup with SQLite + ClickHouse and PostgreSQL + ClickHouse. openGauss remains supported but is not exercised against a real server in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 500 remain unchanged.
 
 
 The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 020 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
@@ -221,3 +221,23 @@ Resolve owner, file and source/target conflicts first. Retry apply using the sam
 Core detail loads 500 Span structures initially and appends another 500 when scrolling to the loaded end. The original tree and detail panel remain. While a request is pending, only “Loading…” is shown; the indicator disappears afterwards, without loaded/total counts. Node metrics describe loaded spans. Signed cursors bind permissions, Trace and revision. A changed revision requires refresh (409). Payload reads select Span ID directly. Small legacy-format Traces retain their original conversion.
 
 Validation covered 21,001 spans in 43 pages without duplicates or omissions, plus Chrome scrolling to 1,500 spans in the original tree. Global search, full analysis and very large complex legacy sources still require further validation.
+
+## Configure external databases and install
+
+Users provision and operate their databases before installing the application. Installation/start/stop manages Core and Web only. SQLite is a file, not a server. Storage always pairs one transactional backend with required ClickHouse.
+
+Copy `config/storage.postgresql.example.json` or `config/storage.sqlite.example.json` to `config/storage.local.json`, set mode 0600, and replace every `YOUR_*` placeholder. Run `bash scripts/install.sh --check` for read-only validation, then `bash scripts/install.sh` to initialize new application tables and start production Core/Web. Use `--storage-only` for initialization without starting applications, and `--config FILE` for an isolated instance. `deploy_server.sh --apply` is a compatibility alias.
+
+Required SQLite field: `control.database`. Required PostgreSQL/openGauss fields: `control.dsn`, `control.schema` (isolated, not public/system), `control.artifacts`. Both require `control.backend` and ClickHouse `endpoint`, `database`, `user`, `password`. An empty password must be explicit. ClickHouse timeout defaults to 15 seconds (1–60); PG connect_timeout defaults to 10 (1–60). Optional runtime home/corePort/webPort default to `~/.agent-insight`/4319/3000. Relative filesystem paths resolve against the project root; `~/` expands to the current user's home. SQLite artifacts are adjacent to its database.
+
+Create the PG and ClickHouse databases and accounts first. Initialization needs schema/table CREATE privileges and application data read/write privileges; normal runtime does not need CREATE. The PG example uses verify-full TLS with an explicit CA path; percent-encode special characters in credentials. Use sslmode=disable only for deliberately isolated local tests. HTTPS ClickHouse uses system trust or SSL_CERT_FILE. Container localhost refers to the container, not its host. Use the externally mapped port when Core runs natively. Minimum gates: PostgreSQL 16 and ClickHouse 26.8, followed by actual schema checks. openGauss remains supported but not real-service tested in this change.
+
+Python 3.11+ is required; the pinned relational driver needs 3.11–3.13. Set AGENT_INSIGHT_STORAGE_PYTHON to an existing compatible environment when needed. The installer never changes system Python. Missing or unknown fields and placeholders fail before connections. --check does not create runtime directories or databases and requires installed Python dependencies. Private config is excluded from Git, npm, Docker and standalone bundles. Credentials are not printed.
+
+Use start.sh for production, develop_start.sh for development, status.sh for status, stop.sh for Core/Web shutdown. Database services stay running. Repeat installation preserves records and secrets. Partial first-time initialization resumes from an identity-bound intent; legacy/unknown/outdated stores require explicit backed-up migration. Existing formerly managed ClickHouse data and processes are preserved and must be managed separately. See the [complete Chinese field guide](../../../zh/how-to/platform/storage-core.md#配置数据库并一键安装).
+
+## Optional independent database containers
+
+With Docker running and Compose installed, execute `bash scripts/start_postgresql.sh`, then `bash scripts/start_clickhouse.sh`, then `bash scripts/install.sh`. Database scripts create a private project storage.local.json with random passwords only if absent; existing config is never overwritten. Defaults: PostgreSQL 16 at loopback 15432, ClickHouse 26.8 at loopback 18123, application home ~/.agent-insight-postgresql, Core/Web 4319/3000. Named volumes persist across restarts. Lost configuration with existing volumes blocks password regeneration. Existing remote databases should skip these scripts.
+
+Use each database script with --stop to stop only its service while retaining volumes. stop.sh stops Core/Web only. All commands accept --config FILE. The application runs natively in this workflow; the older full-container Compose fixture still uses SQLite/ClickHouse.

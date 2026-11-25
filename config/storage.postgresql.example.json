@@ -1,0 +1,20 @@
+{
+  "control": {
+    "backend": "postgresql",
+    "dsn": "postgresql://YOUR_PG_USER:YOUR_PG_PASSWORD@YOUR_PG_HOST:5432/YOUR_PG_DATABASE?connect_timeout=10&sslmode=verify-full&sslrootcert=YOUR_PG_CA_FILE",
+    "schema": "agent_insight",
+    "artifacts": "~/.agent-insight/storage/artifacts"
+  },
+  "clickhouse": {
+    "endpoint": "https://YOUR_CLICKHOUSE_HOST:8443",
+    "database": "YOUR_CLICKHOUSE_DATABASE",
+    "user": "YOUR_CLICKHOUSE_USER",
+    "password": "YOUR_CLICKHOUSE_PASSWORD",
+    "timeout": 15
+  },
+  "runtime": {
+    "home": "~/.agent-insight",
+    "corePort": 4319,
+    "webPort": 3000
+  }
+}

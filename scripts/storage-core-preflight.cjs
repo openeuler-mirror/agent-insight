@@ -34,10 +34,18 @@ async function preflight(env = process.env, fetcher = fetch) {
   return health;
 }
 
+function diagnostic(error) {
+  if (error?.code === 'ENOENT') return 'controller file is missing';
+  if (error?.code === 'EACCES') return 'controller file is not readable';
+  if (error?.cause?.code === 'ECONNREFUSED') return 'Storage Core connection refused; check that the service is running';
+  if (error?.name === 'TimeoutError') return 'Storage Core health check timed out';
+  return error?.message || 'unknown readiness failure';
+}
+
 if (require.main === module) {
   loadEnvironment();
-  preflight().then(() => console.log('Storage Core ready: transactional database + ClickHouse')).catch(() => {
-    console.error('Storage Core startup check failed. Check Core configuration, controller file permissions, transaction schema 020 and ClickHouse schema 004. Legacy database fallback is disabled.');
+  preflight().then(() => console.log('Storage Core ready: transactional database + ClickHouse')).catch(error => {
+    console.error(`Storage Core startup check failed: ${diagnostic(error)}. Legacy database fallback is disabled.`);
     process.exitCode = 1;
   });
 }

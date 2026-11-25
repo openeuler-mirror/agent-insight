@@ -45,6 +45,8 @@ const nextConfig: NextConfig = {
   outputFileTracingExcludes: {
     '*': [
       'config/**/*.local.yaml',
+      '**/config/storage.local.json',
+      'config/storage.local.json',
       '.git/**',
       'tmp/**',
       '*.tar',

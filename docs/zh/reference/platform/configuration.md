@@ -68,3 +68,8 @@ SWE-bench 和 ZSoft 的自动导入可分别通过对应 `dataset.autoImport` �
 本页未穷举所有采集器、性能与诊断参数；应使用对应功能指南以及当前安装版本的配置模板，不要把未列出解释为已废弃。
 
 [English](../../../en/reference/platform/configuration.md)
+
+
+## 数据库存储配置
+
+数据库连接的唯一用户配置为项目内 `config/storage.local.json`。样例、逐字段说明、TLS、权限和一键安装见 [Storage Core 配置指南](../../how-to/platform/storage-core.md#配置数据库并一键安装)。`runtime.home` 决定运行目录；数据库连接不从旧 `.env` 推断。

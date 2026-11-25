@@ -1,0 +1,18 @@
+{
+  "control": {
+    "backend": "sqlite",
+    "database": "~/.agent-insight/storage/core/core.db"
+  },
+  "clickhouse": {
+    "endpoint": "http://YOUR_CLICKHOUSE_HOST:8123",
+    "database": "YOUR_CLICKHOUSE_DATABASE",
+    "user": "YOUR_CLICKHOUSE_USER",
+    "password": "YOUR_CLICKHOUSE_PASSWORD",
+    "timeout": 15
+  },
+  "runtime": {
+    "home": "~/.agent-insight",
+    "corePort": 4319,
+    "webPort": 3000
+  }
+}

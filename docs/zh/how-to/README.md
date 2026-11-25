@@ -34,3 +34,6 @@ Benchmark 执行 Profile 支持显式 `backend/options`：按后端配置和探�
 管理员全局查看、Trace 列表“用户”列、按用户筛选及全量仪表盘的使用说明，见[Trace 查看范围](./observability/view-traces.md#列表页总览)。
 
 [启用隔离的 Storage Core Trace 链路](./platform/storage-core.md)：独立初始化、私有配置、密码登录及分页Trace。
+
+
+数据库请先独立部署，然后按[项目配置样例与安装指南](platform/storage-core.md)填写项目内配置并一键安装 Core/Web。支持 SQLite＋ClickHouse 和 PostgreSQL＋ClickHouse。

@@ -19,6 +19,10 @@
 
 # Navigate to the project root directory
 cd "$(dirname "$0")/.." || exit 1
+
+if [ "${AGENT_INSIGHT_RUNTIME_CHILD:-}" != "1" ] && [ "${1:-}" != "--help" ] && [ "${1:-}" != "-h" ]; then
+  exec node scripts/project-storage.cjs production "$@"
+fi
 clock_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
     local now="${EPOCHREALTIME/./}"
@@ -29,6 +33,7 @@ clock_ms() {
 }
 START_MILLISECONDS=$(clock_ms)
 
+RUNTIME_START_ARGS=("$@")
 START_PORT=""
 FORCE_REBUILD=""
 
@@ -36,6 +41,8 @@ start_usage() {
   cat <<'EOF'
 Usage: [AGENT_INSIGHT_PORT=3000] bash scripts/start.sh [--port PORT] [--force-rebuild]
 
+Reads config/storage.local.json and starts Core + Web against user-managed databases.
+Run scripts/install.sh for first-time initialization.
 Reuses a verified unchanged build; otherwise rebuilds with cache preserved.
 --force-rebuild always rebuilds, keeping the incremental cache.
 SWE-bench Verified is prepared automatically with its official loader unless
@@ -92,6 +99,9 @@ AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
 AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 
 load_agent_insight_env() {
+  local runtime_core_url="${AGENT_INSIGHT_STORAGE_CORE_URL:-}"
+  local runtime_controller="${AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE:-}"
+
   local name
   local overrides=()
   # 保留启动环境的显式空值，使其也能覆盖 .env。
@@ -111,6 +121,8 @@ load_agent_insight_env() {
   AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
   export AGENT_INSIGHT_HOME
   export AGENT_INSIGHT_STORAGE_DIR
+  export AGENT_INSIGHT_STORAGE_CORE_URL="$runtime_core_url"
+  export AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE="$runtime_controller"
   if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
     echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
     exit 1
@@ -208,6 +220,10 @@ if [ "${#PLATFORM_PORT}" -gt 5 ] || [ "$PLATFORM_PORT" -lt 1 ] || [ "$PLATFORM_P
 fi
 echo "Checking port $PLATFORM_PORT..."
 
+if [ "${AGENT_INSIGHT_RUNTIME_CHILD:-}" != "1" ]; then
+  exec node scripts/local-runtime.cjs start production "${RUNTIME_START_ARGS[@]}"
+fi
+
 echo "Storage: Core transactional backend + ClickHouse"
 
 STAGE_MILLISECONDS=$START_MILLISECONDS
@@ -249,51 +265,6 @@ stage_begin "Storage Core readiness"
 node scripts/storage-core-preflight.cjs || exit 1
 stage_done
 stage_begin "stop old service and release port"
-
-# 1. Try finding PID specifically
-PIDS=$(find_pid_on_port $PLATFORM_PORT)
-
-if [ -n "$PIDS" ]; then
-  echo "Found process(es) occupying port $PLATFORM_PORT: $PIDS"
-  echo "Killing PIDS..."
-  kill -9 $PIDS
-else
-  echo "No PID found via standard tools (lsof/netstat/ss)."
-fi
-
-# 1.5 清理孤儿 opencode 子进程
-# Next.js 通过 opencode-manager.ts spawn 一组 `opencode serve` 子进程作为内部
-# AI runtime（playground/skill-gen 等用）。SIGKILL Next.js 时这些子进程不会跟着死，
-# 多次 restart 后会 leak 一堆，占内存、占端口、阻碍新启动。
-# 通过 node_modules 路径匹配，只清掉本项目 spawn 的那些；不影响用户机器上其它 opencode 实例。
-PROJECT_OPENCODE_PATH="$(pwd)/node_modules/opencode-ai/bin"
-if command -v pkill >/dev/null 2>&1; then
-  ORPHAN_COUNT=$(pgrep -f "${PROJECT_OPENCODE_PATH}/.opencode" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$ORPHAN_COUNT" -gt 0 ]; then
-    echo "Killing $ORPHAN_COUNT orphan opencode child(ren) from $PROJECT_OPENCODE_PATH..."
-    pkill -f "${PROJECT_OPENCODE_PATH}/.opencode" 2>/dev/null || true
-    sleep 1
-  fi
-fi
-
-# 2. Force kill using fuser if available (very reliable)
-if command -v fuser >/dev/null 2>&1; then
-  echo "Attempting to force kill with fuser..."
-  fuser -k -n tcp $PLATFORM_PORT >/dev/null 2>&1
-fi
-
-# 3. Double check
-echo "Waiting for port to release..."
-sleep 2
-
-PIDS_REMAINING=$(find_pid_on_port $PLATFORM_PORT)
-if [ -n "$PIDS_REMAINING" ]; then
-  echo "CRITICAL ERROR: Port $PLATFORM_PORT is STILL in use by PID: $PIDS_REMAINING"
-  echo "Please manually kill this process: kill -9 $PIDS_REMAINING"
-  exit 1
-fi
-
-echo "Port $PLATFORM_PORT is confirmed free."
 
 # 旧 standalone 可能已释放监听端口，却因后台 consumer 定时器继续存活并占住 spool 锁。
 # 等端口释放后再核对进程；Linux 僵尸进程需清除其遗留的全部 consumer 锁。
@@ -379,27 +350,8 @@ fi
 # HOSTNAME=0.0.0.0：standalone server 默认可能绑到非 loopback，WSL/代理下 curl 127.0.0.1 会 502。
 # 必须在 standalone 目录下启动：server.js 相对解析 .next/static、public、node_modules。
 export AGENT_INSIGHT_PACKAGE_ROOT="$(pwd)"
-LOG_FILE="$(pwd)/server.log"
-: > "$LOG_FILE"
-# 脱离当前 shell 会话，避免 start.sh 退出后把 server 一起带走（仅 nohup 在部分环境下不够）。
-# PID 用命令替换捕获，不写仓库根目录的 *.pid（避免 untracked 脏文件）。
-if command -v setsid >/dev/null 2>&1; then
-  NEW_PID=$(
-    cd "$STANDALONE_DIR" || exit 1
-    setsid env HOSTNAME=0.0.0.0 PORT="$PLATFORM_PORT" NODE_OPTIONS="--max-old-space-size=6144" \
-      node ./server.js 9>&- >> "$LOG_FILE" 2>&1 < /dev/null &
-    echo $!
-  )
-else
-  NEW_PID=$(
-    cd "$STANDALONE_DIR" || exit 1
-    nohup env HOSTNAME=0.0.0.0 PORT="$PLATFORM_PORT" NODE_OPTIONS="--max-old-space-size=6144" \
-      node ./server.js 9>&- >> "$LOG_FILE" 2>&1 < /dev/null &
-    echo $!
-  )
-fi
-# 清掉历史版本留下的旁路文件（若存在）
-rm -f "${LOG_FILE}.pid"
+LOG_FILE="$AGENT_INSIGHT_HOME/logs/web.log"
+NEW_PID=$(node scripts/local-runtime.cjs launch-web production "$PLATFORM_PORT" "$STANDALONE_DIR") || exit 1
 
 echo "Waiting for port $PLATFORM_PORT to accept connections..."
 HEALTH_URL="http://127.0.0.1:$PLATFORM_PORT$BASE_PATH"
@@ -416,7 +368,7 @@ done
 
 if [ "$READY" -ne 1 ]; then
   echo "CRITICAL ERROR: Server process spawned (PID ${NEW_PID:-unknown}) but $HEALTH_URL 无响应。"
-  echo "Check server.log for details."
+  echo "Check $LOG_FILE for details."
   tail -n 40 "$LOG_FILE" 2>/dev/null || true
   exit 1
 fi
@@ -425,7 +377,7 @@ stage_done
 echo "Server started successfully."
 echo "PID: ${NEW_PID:-$(find_pid_on_port $PLATFORM_PORT | tr '\n' ' ')}"
 echo "Standalone: $STANDALONE_DIR/server.js"
-echo "Log file: server.log"
+echo "Log file: $LOG_FILE"
 echo "URL: http://localhost:$PLATFORM_PORT$BASE_PATH"
 stage_begin "Goal Plus watcher"
 ensure_goal_plus_watcher
