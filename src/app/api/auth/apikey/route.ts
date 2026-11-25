@@ -24,7 +24,7 @@ import {
 } from '@/lib/auth/local-user';
 import { isAdminUser } from '@/lib/auth/admin';
 import { verifyPassword } from '@/lib/auth/password';
-import { createPasswordSetupToken } from '@/lib/auth/password-setup-token';
+import { createPasswordSetupToken, passwordVersionOf } from '@/lib/auth/password-setup-token';
 import {
   checkLoginRateLimit,
   clearLoginFailures,
@@ -53,7 +53,7 @@ function pendingPasswordResponse(user: any) {
       isAdmin: isAdminUser(user.username),
       passwordChangeRequired: true,
       passwordInitialized: Boolean(user.passwordHash),
-      passwordSetupToken: createPasswordSetupToken(user.username),
+      passwordSetupToken: createPasswordSetupToken(user.username, passwordVersionOf(user)),
     },
     { headers: NO_STORE },
   );

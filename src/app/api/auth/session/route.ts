@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { isAdminUser } from '@/lib/auth/admin';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
-import { verifyPasswordSetupToken } from '@/lib/auth/password-setup-token';
+import { passwordVersionOf, verifyPasswordSetupToken } from '@/lib/auth/password-setup-token';
 
 // standalone 刷新页面时的登录态恢复：只回显身份和改密要求，不下发 API Key。
 export async function GET(request: Request) {
@@ -32,11 +32,13 @@ export async function GET(request: Request) {
     // 改密凭据优先于浏览器里可能残留的旧 API Key，避免旧会话覆盖当前强制改密身份。
     let user = null;
     if (setupToken) {
-        const tokenUser = verifyPasswordSetupToken(setupToken);
-        if (tokenUser) {
-            const tokenAccount = await db.findUserByUsername(tokenUser);
-            // 改密凭据只在仍待改密时有效，改密完成后不能继续当会话凭据使用。
+        const setup = verifyPasswordSetupToken(setupToken);
+        if (setup) {
+            const tokenAccount = await db.findUserByUsername(setup.username);
+            // 改密凭据只在仍待改密时有效，且必须匹配签发时的密码版本；
+            // 管理员重置或改密完成后，旧凭据不能继续当会话凭据使用。
             if (tokenAccount
+                && passwordVersionOf(tokenAccount) === setup.passwordVersion
                 && (tokenAccount.mustChangePassword || !tokenAccount.passwordHash)
                 && !tokenAccount.disabledAt) {
                 user = tokenAccount;

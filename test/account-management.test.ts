@@ -441,6 +441,63 @@ test('重置密码直接设置新密码，旧密码立即失效，登录只发�
   assert.equal((await finalLogin.json()).apiKey, resetKey);
 });
 
+test('管理员重置密码后，重置前签发的改密凭据立即失效', async () => {
+  const staleUser = `reset-stale-${suffix}`;
+  const staleKey = `wi_reset_stale_${suffix}`;
+  const oldPassword = 'StaleResetOld123';
+  const resetPassword = 'StaleResetNew456';
+  const attackerPassword = 'AttackerChosen789';
+  await prisma.user.create({
+    data: {
+      username: staleUser,
+      apiKey: staleKey,
+      passwordHash: await hashPassword(oldPassword),
+      passwordUpdatedAt: new Date(Date.now() - 60_000),
+      mustChangePassword: true,
+    },
+  });
+
+  // 重置前用它自己的临时密码登录，拿到一个尚未过期的改密凭据。
+  const loginResponse = await login(staleUser, oldPassword);
+  assert.equal(loginResponse.status, 200);
+  const { passwordSetupToken } = await loginResponse.json();
+  assert.equal(typeof passwordSetupToken, 'string');
+  const usable = await routes.session(
+    requestWithSetupToken('http://localhost/api/auth/session', passwordSetupToken),
+  );
+  assert.equal(usable.status, 200);
+
+  const resetResponse = await routes.reset(
+    requestWithKey(`http://localhost/api/admin/accounts/${encodeURIComponent(staleUser)}/reset-password`, adminKey, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: resetPassword }),
+    }),
+    { params: Promise.resolve({ username: staleUser }) },
+  );
+  assert.equal(resetResponse.status, 200);
+
+  // 旧凭据已绑定重置前的密码版本，必须被拒绝，不能覆盖管理员重置的新密码。
+  const staleChange = await changePasswordWithSetupToken(passwordSetupToken, attackerPassword);
+  assert.equal(staleChange.status, 401);
+  const staleSession = await routes.session(
+    requestWithSetupToken('http://localhost/api/auth/session', passwordSetupToken),
+  );
+  assert.equal(staleSession.status, 401);
+
+  const row = await prisma.user.findUnique({ where: { username: staleUser } });
+  assert.equal(await verifyPassword(resetPassword, row?.passwordHash), true);
+  assert.equal(await verifyPassword(attackerPassword, row?.passwordHash), false);
+
+  // 重置后重新登录签发的新凭据仍然可用。
+  const relogin = await login(staleUser, resetPassword);
+  assert.equal(relogin.status, 200);
+  const freshToken = (await relogin.json()).passwordSetupToken;
+  assert.equal(typeof freshToken, 'string');
+  const freshChange = await changePasswordWithSetupToken(freshToken, 'FreshChosen123');
+  assert.equal(freshChange.status, 200);
+});
+
 test('停用账号仅管理员可用，且不能停用当前登录账号', async () => {
   const target = `deleted-${suffix}`;
   const oldKey = `wi_deleted_${suffix}`;

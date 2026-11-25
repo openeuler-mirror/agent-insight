@@ -20,7 +20,7 @@ import { resolveUser } from '@/lib/auth/auth';
 import { isAdminUser } from '@/lib/auth/admin';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
 import { hashPassword, validatePasswordPolicy, verifyPassword } from '@/lib/auth/password';
-import { verifyPasswordSetupToken } from '@/lib/auth/password-setup-token';
+import { passwordVersionOf, verifyPasswordSetupToken } from '@/lib/auth/password-setup-token';
 
 export async function POST(request: Request) {
     if (resolveLoginMode() !== 'standalone') {
@@ -37,9 +37,9 @@ export async function POST(request: Request) {
 
     // 登录返回的改密凭据只允许调用本接口；它不能拿去访问业务或管理接口。
     const setupToken = request.headers.get('x-witty-password-token')?.trim() || '';
-    const setupUsername = setupToken ? verifyPasswordSetupToken(setupToken) : null;
-    const { username } = setupUsername
-        ? { username: setupUsername }
+    const setup = setupToken ? verifyPasswordSetupToken(setupToken) : null;
+    const { username } = setup
+        ? { username: setup.username }
         : await resolveUser(request);
 
     if (!username) {
@@ -51,8 +51,13 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
+    // 凭据绑定签发时的密码版本；管理员重置或用户改密后，重置前签发的旧凭据立即作废。
+    if (setup && passwordVersionOf(user) !== setup.passwordVersion) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
     if (user.passwordHash) {
-        if (setupUsername) {
+        if (setup) {
             // 改密 token 来自刚完成的密码登录，不再要求重复输入临时密码。
             if (!user.mustChangePassword) {
                 return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
@@ -80,7 +85,7 @@ export async function POST(request: Request) {
 
     // 只有改密凭据路径需要把正式 API Key 交给浏览器；既有 Key 路径本来就有 Key。
     return NextResponse.json(
-        setupUsername
+        setup
             ? { ok: true, apiKey: user.apiKey, isAdmin: isAdminUser(user.username) }
             : { ok: true },
         { headers: { 'Cache-Control': 'no-store' } },
