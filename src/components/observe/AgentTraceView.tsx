@@ -3501,22 +3501,6 @@ function AgentDetail({
                     )}
                 </div>
 
-                {/* Duration bar */}
-                {totalDurationMs && getAgentActiveDurationMs(node) != null && (
-                    <div className="mb-2">
-                        <div className="h-1 bg-background-secondary rounded-sm overflow-hidden">
-                            <div
-                                className={cn('h-full rounded-sm transition-[width]', status === 'slow' ? 'bg-warning' : 'bg-primary')}
-                                style={{ width: `${Math.min(100, ((getAgentActiveDurationMs(node) ?? 0) / totalDurationMs) * 100)}%` }}
-                            />
-                        </div>
-                        <div className="flex justify-between text-xs text-foreground-muted mt-0.5">
-                            <span className={cn('font-semibold', status === 'slow' ? 'text-warning' : 'text-foreground')}>{formatDuration(getAgentActiveDurationMs(node))}</span>
-                            <span>{Math.round(((getAgentActiveDurationMs(node) ?? 0) / totalDurationMs) * 100)}% of total</span>
-                        </div>
-                    </div>
-                )}
-
                 {/* Tabs */}
                 <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginTop: '0.25rem' }}>
                     {tabs.map(tab => (
