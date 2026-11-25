@@ -6,6 +6,8 @@
 
 ## 本地验证
 
+AtomGit Actions 的 `actions-job.mjs` 在项目锁文件与镜像一致时复用预装依赖；项目锁文件变化时，在 Job 隔离目录中执行 `npm ci --ignore-scripts --include=dev`，严格安装当前提交的锁定版本，使用独立 HOME/cache 且不继承仓库凭证。安装失败即停止，随后才生成当前 Prisma Client 和编译 Trae 扩展。此路径需要访问 npm registry；可通过重建固定镜像恢复离线快路径。E2E 锁文件变化仍须重建镜像，不能复用旧 Playwright 依赖。下述本地 Docker worker 仍要求镜像锁文件一致。
+
 ```bash
 node --test test/e2e/control/*.test.mjs
 node test/e2e/run.mjs --all --mode mock --ut

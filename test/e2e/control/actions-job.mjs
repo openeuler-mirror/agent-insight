@@ -27,7 +27,8 @@ export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt'
   const env={E2E_CI_ROOT:root,E2E_CI_SOURCE:project,E2E_CI_TESTED_SHA:testedSha,E2E_CI_RUN_ID:runId,E2E_ISOLATED_CONTAINER:'1',E2E_ATOMGIT_JOB:'1'};
   if(phase!=='collect') {
     const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    for(const [source,image] of [['package-lock.json','dependencies/package-lock.json'],['test/e2e/package-lock.json','e2e/package-lock.json']]) {
+    const installCurrentDependencies=hash(path.join(project,'package-lock.json'))!==hash(path.join(imageRoot,'dependencies/package-lock.json'));
+    for(const [source,image] of [['test/e2e/package-lock.json','e2e/package-lock.json']]) {
       assert.equal(hash(path.join(project,source)),hash(path.join(imageRoot,image)),`${source} differs from the fixed image; rebuild the image`);
     }
     fs.cpSync(path.join(imageRoot,'dependencies/node_modules'),path.join(project,'node_modules'),{recursive:true,verbatimSymlinks:true});
@@ -38,6 +39,13 @@ export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt'
     fs.cpSync(path.join(imageRoot,'fi-npm-cache'),cache,{recursive:true,verbatimSymlinks:true});
     Object.assign(env,{PLAYWRIGHT_BROWSERS_PATH:path.join(imageRoot,'browsers'),E2E_BROWSER_CHANNEL:'chromium',E2E_PYTHON:'/usr/bin/python3',AGENT_INSIGHT_RAS_PYTHON:path.join(imageRoot,'e2e-python/bin/python'),E2E_NPM_OFFLINE:'1',E2E_PREPARED_PLUGIN_DIR:path.join(imageRoot,'ras-plugin'),PIP_NO_INDEX:'1',PIP_FIND_LINKS:path.join(imageRoot,'wheels'),npm_config_cache:cache,npm_config_registry:'https://registry.npmjs.org',E2E_NPM_REGISTRY:'https://registry.npmjs.org',npm_config_offline:'true'});
     const home=path.join(root,'prisma-home');fs.mkdirSync(home,{mode:0o700});
+    if(installCurrentDependencies) {
+      console.log('Project dependency lock changed; installing the checked-out lock in isolation');
+      const installed=await run('npm',['ci','--ignore-scripts','--include=dev','--no-audit','--no-fund'],{
+        cwd:project,env:{PATH:process.env.PATH,HOME:home,npm_config_registry:'https://registry.npmjs.org',npm_config_cache:path.join(root,'dependency-cache')},timeout:600000,
+      });
+      assert.equal(installed.code,0,'Installing the checked-out dependency lock failed');
+    }
     const started=performance.now();
     const generated=await run(process.execPath,['node_modules/prisma/build/index.js','generate','--schema','prisma/schema.prisma'],{cwd:project,env:{PATH:process.env.PATH,...env,HOME:home,DATABASE_URL:`file:${path.join(home,'generate-only.db')}`,PRISMA_GENERATE_SKIP_AUTOINSTALL:'true',CHECKPOINT_DISABLE:'1'},timeout:120000});
     console.log(`Actions Prisma Client generation: ${Math.round(performance.now()-started)}ms`);
