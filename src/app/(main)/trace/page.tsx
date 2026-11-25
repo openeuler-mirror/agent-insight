@@ -614,7 +614,7 @@ function TracePageContent() {
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
-    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString, workflowTaskId: parseAsString });
+    const [{ taskId: taskIdParam, executionId: executionIdParam }, setTraceTarget] = useQueryStates({ taskId: parseAsString, executionId: parseAsString, step: parseAsString, workflowTaskId: parseAsString });
     const [search, setSearch] = useQueryState('q', traceFilterParsers.q);
     const [showFilters, setShowFilters] = useState(false);
     const [clausesRaw, setClausesRaw] = useQueryState('f', traceFilterParsers.f);
@@ -766,7 +766,7 @@ function TracePageContent() {
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
-        void setTraceTarget({ taskId: id, executionId: null, workflowTaskId: null }, { history: id ? 'push' : 'replace' });
+        void setTraceTarget({ taskId: id, executionId: null, step: null, workflowTaskId: null }, { history: id ? 'push' : 'replace' });
         if (id) reportTraceDetailView(id);
     }, [setTraceTarget, reportTraceDetailView]);
 
@@ -1601,6 +1601,7 @@ function TraceDetailView({
             params.set('workflowTaskId', taskId);
         }
         params.set('taskId', newTaskId);
+        params.delete('step');
         params.delete('executionId');
         router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
     }, [router, searchParams, taskId, execution.framework, session]);
@@ -1962,6 +1963,7 @@ function TraceDetailView({
                         traceRelations={session?.taskId === taskId ? session.traceRelations : undefined}
                         rootSessionId={taskId}
                         traceIdentity={taskId}
+                        initialStep={searchParams?.get('step') || undefined}
                         rootExecutionId={execution.upload_id || execution.task_id}
                         rasMarkers={rasMarkers}
                     />

@@ -105,7 +105,12 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
         if (context.platform === 'jiuwenswarm' && context.model && !runtime.models?.includes(context.model)) {
           issues.push(issue('MODEL_UNAVAILABLE', '所选 JiuwenSwarm 模型已不可用，请刷新模型列表。'))
         }
-        recordPlatform(context, { ...enterpriseCatalog, runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}) } })
+        recordPlatform(context, { version: runtime.version, ...enterpriseCatalog, runExperimentCase: {
+          version: 2, returnsTraceId: runtime.canResolveTraceId, ready: runtime.ready === true && runtime.canResolveTraceId === true,
+          ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}),
+          ...(context.platform === 'opencode' && runtime.major === 2 && runtime.canResolveTraceId === true
+            ? { multiTurn: true, sessionContinuation: true, conversationVersion: 1 } : {}),
+        } })
         capabilities.components[`agent-runtime/${context.platform}/v1`] = { ready: true }
       }
     }

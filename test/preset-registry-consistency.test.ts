@@ -94,11 +94,14 @@ import {
   isSimilarityPresetId,
 } from '../src/lib/engine/experiment/similarity-preset-evaluators';
 
+import { CONVERSATION_RULES_EVALUATOR_ID } from '../src/lib/engine/experiment/conversation-rules';
+
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
  * 新增一族预置评估器时，在 evaluateOnce 里接了分发，就同步在这里登记一行。
  */
 const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids: readonly string[] }> = [
+  { name: 'conversation-rules.ts', claims: id => id === CONVERSATION_RULES_EVALUATOR_ID, ids: [CONVERSATION_RULES_EVALUATOR_ID] },
   {
     name: 'trigger-evaluator.ts',
     claims: isSkillTriggerAnalyzerId,

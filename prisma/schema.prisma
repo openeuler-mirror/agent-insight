@@ -2300,3 +2300,44 @@ model TraceDatasetOperationReceipt {
   @@unique([ownerKey, kind, operationKey])
   @@index([expiresAt])
 }
+
+model EvaluationAssetHead {
+  id               String   @id @default(cuid())
+  user             String
+  kind             String
+  businessId       String
+  publishedVersion Int      @default(0)
+  revision         Int      @default(0)
+  archived         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  versions EvaluationAssetVersion[]
+  draft    EvaluationAssetDraft?
+
+  @@unique([user, kind, businessId])
+  @@index([user, kind, archived])
+}
+
+model EvaluationAssetVersion {
+  id          String   @id @default(cuid())
+  assetId     String
+  asset       EvaluationAssetHead @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  version     Int
+  contentJson String
+  contentHash String
+  note        String   @default("")
+  source      String   @default("manual")
+  createdAt   DateTime @default(now())
+
+  @@unique([assetId, version])
+}
+
+model EvaluationAssetDraft {
+  assetId     String   @id
+  asset       EvaluationAssetHead @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  baseVersion Int
+  revision    Int      @default(1)
+  contentJson String
+  updatedAt   DateTime @updatedAt
+}

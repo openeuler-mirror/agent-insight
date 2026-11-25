@@ -22,6 +22,7 @@
 // 不新建 --cmp-* 局部色板（AGENTS.md §6）。抽屉用自定义 aside（仿 TraceDrawer，G5 不覆写 Sheet）。
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useAuth } from '@/lib/auth/auth-context';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import type { ComparisonDetailData, PairingEntry, GroupSummary } from '@/lib/engine/experiment/comparison-runner';
 
@@ -165,7 +166,8 @@ function Bar({ value, color }: { value: number | null; color: string }) {
 }
 
 function EvaluatorBreakdown({ detail }: { detail: ComparisonDetailData }) {
-  const lookup = useEvaluatorLookup(detail.id ? undefined : undefined); // 不需要 user（仅用 evaluator id 显示）
+  const {user}=useAuth();
+  const lookup = useEvaluatorLookup(user,detail.configSnapshot);
   // 合并 A/B 两组的 breakdown by evaluatorId
   const aBreakdown = detail.groups[0]?.breakdown ?? [];
   const bBreakdown = detail.groups[1]?.breakdown ?? [];

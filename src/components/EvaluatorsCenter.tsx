@@ -410,8 +410,8 @@ export default function EvaluatorsCenter({ benchmarkEvaluatorCards }: {
           {customCreate === null && (
             <p style={{ margin: '6px 0 0', color: 'var(--foreground-secondary)', fontSize: 12.5, maxWidth: 820 }}>
               {activeTab === 'custom'
-                ? '管理自建 LLM 评估器，配置会保存到服务端。点击卡片查看详情，详情内可进入编辑。'
-                : '预置评估器模板库：按类型与场景筛选，点击可查看详情与执行入口。'}
+                ? '管理自建 LLM 评估器。点击卡片可查看各版本配置、对比变更，或进入编辑。'
+                : '预置评估器模板库：按类型与场景筛选，点击可查看详情、已记录版本及配置变更。'}
             </p>
           )}
         </div>

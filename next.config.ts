@@ -35,6 +35,8 @@ if (process.env.NODE_ENV !== 'production' || process.argv.some(arg => arg === 'b
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',
   output: 'standalone',
+  // Worktrees must not inherit a home-directory lockfile as the tracing root.
+  outputFileTracingRoot: process.cwd(),
   typescript: {
     tsconfigPath: 'tsconfig.next.json',
   },

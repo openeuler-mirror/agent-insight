@@ -19,12 +19,18 @@ import { prisma } from '@/lib/storage/prisma';
 import { buildExecutionOwnershipWhere } from '@/lib/agent-ownership';
 import { getTraceLifecycle } from '@/lib/observe/trace-lifecycle';
 import { addEvalExperimentCase, evaluateEvalExperimentCase } from './run-experiment';
+import { appendVersionedCases, frozenAppendDataset } from '@/lib/evaluation-assets/append-experiment-cases';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 
 interface WatchExperiment {
   id: string;
   user: string;
   agentName: string;
   watchEnabledAt: Date;
+  configSnapshotJson: string | null;
+  evaluatorIdsJson: string;
+  deletedAt: Date | null;
+  status: string;
 }
 
 interface WatchTrace {
@@ -62,6 +68,11 @@ export function createExperimentWatcher(options: {
     userOwnershipWhere: Prisma.ExecutionWhereInput,
   ) {
     const cursor = cursors.get(experiment.id) ?? '';
+    let snapshot: Record<string, unknown> = {};
+    try { snapshot = JSON.parse(experiment.configSnapshotJson || '{}'); } catch { /* Legacy snapshots can be absent. */ }
+    const dataset = frozenAppendDataset(snapshot);
+    let evaluatorIds: string[] = [];
+    try { const ids = JSON.parse(experiment.evaluatorIdsJson); if (Array.isArray(ids)) evaluatorIds = ids.map(String).filter(Boolean); } catch { /* The append helper rejects missing evaluators. */ }
     // 每轮分页后回到起点，不能用时间水位线，否则会漏掉晚到或稍后才完成的 Trace。
     const traces: WatchTrace[] = await prisma.$queryRaw(Prisma.sql`
       SELECT e."id", e."taskId", e."framework", e."failures", s."endTime"
@@ -104,9 +115,21 @@ export function createExperimentWatcher(options: {
       });
       if (!enabled) return;
 
-      const caseId = await addEvalExperimentCase(experiment.id, {
-        executionId: trace.id, taskId: trace.taskId, input: '', actualOutput: '',
-      }, { onlyIfNew: true });
+      let caseId: string | null;
+      if (dataset) {
+        try {
+          const outcome = await appendVersionedCases(experiment.user, experiment, [{ executionId: trace.id, taskId: trace.taskId }], dataset, true, evaluatorIds, experiment.watchEnabledAt);
+          caseId = outcome.newCaseIds[0] || null;
+        } catch (error) {
+          if (!(error instanceof EvaluationAssetError) || ![404, 422].includes(error.status)) throw error;
+          cursors.set(experiment.id, trace.id);
+          continue;
+        }
+      } else {
+        caseId = await addEvalExperimentCase(experiment.id, {
+          executionId: trace.id, taskId: trace.taskId, input: '', actualOutput: '',
+        }, { onlyIfNew: true });
+      }
       cursors.set(experiment.id, trace.id);
       if (!caseId) continue;
 
@@ -128,7 +151,7 @@ export function createExperimentWatcher(options: {
     try {
       const experiments: WatchExperiment[] = await prisma.experiment.findMany({
         where: { watchMode: true, watchEnabledAt: { not: null }, agentName: { not: '' } },
-        select: { id: true, user: true, agentName: true, watchEnabledAt: true },
+        select: { id: true, user: true, agentName: true, watchEnabledAt: true, configSnapshotJson: true, evaluatorIdsJson: true, deletedAt: true, status: true },
         orderBy: { id: 'asc' },
       });
       const userOwnershipWhere = await buildExecutionOwnershipWhere('user');

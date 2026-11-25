@@ -42,6 +42,7 @@ import { executeResultRow } from './run-experiment';
 import { createSimpleAsyncLimiter } from '../evaluation/eval-run-guards';
 import { getEvaluatorMeta, type EvaluatorCategory } from '@/lib/evaluators/registry';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { frozenEvaluatorCards } from '@/lib/evaluators/frozen-metadata';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 
@@ -116,6 +117,7 @@ export interface GroupSummary {
 }
 
 export interface ComparisonDetailData {
+  configSnapshot?:Record<string,unknown>|null;
   id: string;
   name: string;
   type: string;
@@ -209,7 +211,7 @@ export async function computePairs(
   const candidatesByKey = new Map<string, TraceCandidate[]>();
   for (const g of experiment.groups) {
     groupByKey.set(g.key, { group: g, dimension });
-    const traces = await dimension.queryCandidateTraces(experiment.agentName, g.variableValue);
+    const traces = await dimension.queryCandidateTraces(experiment.agentName, g.variableValue, experiment.user);
     if (traces.length === 0) {
       throw new Error(`${g.key} 组无任何匹配 trace`);
     }
@@ -364,7 +366,7 @@ export async function autoPairGroups(experimentId: string): Promise<RawPair[]> {
 // ─── getComparisonDetail ────────────────────────────────────────────────────
 
 /** 构建 categoryOf：preset 卡片 + 用户自建卡片 → getEvaluatorMeta(card).category。 */
-async function buildCategoryOf(user: string): Promise<CategoryOf> {
+async function buildCategoryOf(user: string,snapshot?:unknown): Promise<CategoryOf> {
   const byId = new Map<string, EvaluatorCard>();
   for (const card of presetEvaluators) byId.set(card.id, card);
   try {
@@ -374,6 +376,7 @@ async function buildCategoryOf(user: string): Promise<CategoryOf> {
       if (card && card.id) byId.set(card.id, card);
     }
   } catch { /* 拉不到自建卡片不阻塞——类目回退 'res' */ }
+  for(const card of frozenEvaluatorCards(snapshot))byId.set(card.id,card);
   return (evaluatorId: string): EvaluatorCategory => {
     const card = byId.get(evaluatorId);
     return card ? getEvaluatorMeta(card).category : 'res';
@@ -416,7 +419,8 @@ export async function getComparisonDetail(
     if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
   } catch { /* 忽略脏数据 */ }
 
-  const categoryOf = await buildCategoryOf(experiment.user);
+  let snapshot:Record<string,unknown>={};try{snapshot=JSON.parse(experiment.configSnapshotJson||'{}');}catch{}
+  const categoryOf = await buildCategoryOf(experiment.user,snapshot);
 
   // 全量结果（轻量选列）
   const allResults: ResultRowLike[] = await prisma.experimentEvalResult.findMany({

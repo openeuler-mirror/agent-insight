@@ -136,11 +136,22 @@ HTTP 调用先查[接口与用户身份](./http-api.md)、[Trace 接入](../obse
 - **Experiment score and baseline trend**: `GET /api/experiments` 的每个列表项返回 `overallScore: number | null`，`GET /api/experiments/:id` 的 `overall` 使用同一口径；两者仅在实验状态为 `done` 时发布，运行中返回 `null`，不暴露部分均分。单 Case 的 `overall` 仅在该 Case 的全部冻结 evaluator id 都进入 `done|failed` 终态后发布；结果类和轨迹类分数也分别等待本类全部已选 evaluator id 进入终态，未选择的评估器不构成等待条件且对应类目分返回 `null`。RAS 与其他评估器一致，最终聚合均按评估成功且有分的 evaluator 生效总分（`humanScore ?? score`）求算术平均，失败或无分行不进分母，也不展开 `pointsJson` 重新加权。已完成的普通单组或 Benchmark 实验详情还可返回 `baselineTrend { metricKey, metricLabel, metricKind, baselineDescription, points[] } | null`，最多保留当前及之前最近 50 次同基线实验。普通实验以冻结数据集、Case 集/契约、Trace 来源及 evaluator id 集生成指纹；Benchmark 以 Adapter、数据集内容哈希、Case 集及 `benchmark-evaluation/v1` 契约生成指纹，二值主指标使用全部 Case 作为固定分母。监听、A/B、未完成或缺少冻结基线的实验返回 `null`。
 - **Experiment start transaction**: `POST /api/experiments` 创建的 `draft` 只用于 create → run 两次请求间的内部衔接，`GET /api/experiments` 不返回该状态。创建页调用 run 失败后通过 `DELETE /api/experiments/:id?user=...` 补偿回滚；DELETE 只删除同用户且仍为 `draft` 的实验，状态已推进时返回 `409`，调用方转入详情以避免响应丢失造成误删。Skill 工作台 draft 的冻结快照若引用了尚未启动且反向指向该实验的 `GrayscaleTask`，补偿事务会同时删除该临时任务，避免孤立 A/B 任务残留。
 
+### SQLite 评测资产版本与逐轮 Case
+
+`GET /api/evaluation-assets?kind=agent|dataset|evaluator&businessId=...&versionId=...` 返回所属用户的版本列表、选中版本和适用的草稿；省略 `versionId` 读取当前已发布版本。资产身份为用户、类型和业务标识；Agent 的业务标识是规范化平台与名称的 JSON 二元组，版本属于人工变更声明。接口使用真实登录 Key，不能用 `user` 参数代替身份。首版 SQLite 完整支持；OpenGauss 新版本接口明确返回不支持。
+
+`POST /api/evaluation-assets` 的 `action` 支持 `agent-publish`、`evaluator-publish`、`draft-create`、`case-save`、`case-revert`、`draft-discard`、`dataset-publish`。草稿变更和发布须携带当前 `revision`；冲突返回 `409`，不会覆盖另一编辑结果。`case-save` 的 `case:null` 在草稿中删除该题，发布时才投影到当前数据集；历史版本只读。Agent 发布需要 `platform/agentName/note/requestId`；相同 `requestId` 和相同内容重复提交不会产生新版本。
+
+普通实验创建可提交 `assetVersions:{agent?:versionId,dataset?:versionId,evaluators?:{[evaluatorId]:versionId}}`；服务端读取所属版本，冻结为 `configSnapshot.assetVersions` 中的 ID、版本号、内容哈希及定义，不接受调用方伪造定义。Case 通过 `datasetId/datasetCaseId` 绑定，逐轮配置保存到 `caseValues.turns`。已有 Trace 的答案覆盖须显式提供 `referenceOverride:{value,source:'manual'|'dataset-import',sourceDatasetId?,sourceCaseId?}`，同时保存基线版本和原答案；不能借覆盖替换逐轮规则或 Tool/Skill 目录。
+
+固定评测集版本的 `POST /api/experiments/:id/cases` 接受原 `cases[]` 加可选 `datasetCaseId/referenceOverride`。服务端校验真实账号、已完成主 Trace 的归属、Agent/平台和真实首输入；只接受冻结版本的有效题目，忽略客户端伪造的输入、实际输出和上下文。省略 Case ID 时仅允许唯一精确输入匹配（规范化空白）；歧义或版本外题目返回 `422`，整批不写入。成功响应为 `{added,reused,caseIds,newCaseIds,evaluating}`；重复 Trace 不覆盖已有答案或评分、不重新评估。新增项沿用原评估引擎，不重新下发 Agent。
+
 ### 实验自动监听与 Case 追加
 
 - **Entry**: Node 启动时注册 `experiment-watch.ts:startExperimentWatcher`，约每 5 秒从数据库筛选当前用户、所选主 Agent、`Session.startTime > watchEnabledAt` 且链路状态为 `success` 的 Trace。无显式开始时间时 `Session.startTime` 使用首次入库默认值。
-- **Reuse**: 自动监听只传 Trace 标识给 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，复用手动追加的上下文加载、评测及正常重试，不重新执行原始 Trace。上传接口不再直接触发监听。
-- **Idempotency**: `addEvalExperimentCase(experimentId, input)` 仍返回新建或复用的 Case ID，并保留参考数据回填；可选第三参数 `{ onlyIfNew: true }` 仅在新建时返回 ID，已有或并发唯一约束冲突时返回 null。新建带 taskId 的 Case 使用由 experimentId/taskId 派生的稳定主键，无需数据库迁移。自动扫描不会重评已有 Case 或重置人工评分。
+- **Reuse**: 未冻结评测集版本的自动监听只传 Trace 标识给 `addEvalExperimentCase` / `evaluateEvalExperimentCase`，复用手动追加的上下文加载、评测及正常重试，不重新执行原始 Trace。上传接口不再直接触发监听。
+- **Idempotency**: 无评测集版本的 `addEvalExperimentCase(experimentId, input)` 仍返回新建或复用的 Case ID，并保留参考数据回填；可选第三参数 `{ onlyIfNew: true }` 仅在新建时返回 ID，已有或并发唯一约束冲突时返回 null。新建带 taskId 的 Case 使用由 experimentId/taskId 派生的稳定主键，无需数据库迁移。自动扫描不会重评已有 Case 或重置人工评分。
+- **Frozen dataset**: 固定版本的监听走共享版本校验与事务追加，只接收同平台 Agent、首输入唯一匹配的 Case，保存冻结答案及逐轮定义；不匹配或歧义跳过。专用 Skill/backing 入口禁止把已冻结评测集实验当容器复用或直接回填，避免绕开这个合同。
 
 ### Trace 全局读取范围
 

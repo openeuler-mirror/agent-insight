@@ -38,6 +38,8 @@ import { randomUUID } from 'node:crypto';
 import { startBenchmarkExperiment } from '@/lib/benchmark/scheduler';
 import { defaultEvaluatorRuntimeConfigProvider } from '@/lib/benchmark/evaluator-runtime-config';
 import { DEFAULT_EXPERIMENT_AGENT_TIMEOUT_SECONDS } from '@/lib/engine/experiment/constants';
+import { requireExperimentVersionActor } from '@/lib/evaluation-assets/experiment-versions';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -135,7 +137,7 @@ export async function POST(
         results: {
           select: { id: true, status: true },
         },
-        experiment: { select: { scope: true } },
+        experiment: { select: { scope: true, configSnapshotJson: true } },
         benchmarkRuns: {
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: 1,
@@ -150,6 +152,7 @@ export async function POST(
       },
     });
     if (!row) return NextResponse.json({ error: 'case not found' }, { status: 404 });
+    if (parseObject(row.experiment.configSnapshotJson).assetVersions) await requireExperimentVersionActor(req, username);
     if (row.results.some((result: { status: string }) => (
       result.status === 'pending' || result.status === 'running'
     ))) {
@@ -370,6 +373,7 @@ export async function POST(
 
     return NextResponse.json({ error: '该 Case 没有可重试的失败项' }, { status: 409 });
   } catch (error) {
+    if (error instanceof EvaluationAssetError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error instanceof TraceGenerationError) {
       return NextResponse.json(
         { error: error.message, code: error.code },

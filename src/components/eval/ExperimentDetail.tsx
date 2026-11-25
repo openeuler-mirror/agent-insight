@@ -39,6 +39,7 @@ import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTre
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
+import { ExperimentAssetVersions } from '@/components/eval/ExperimentAssetVersions';
 import { RuntimeParameterSnapshot } from '@/components/eval/RuntimeParameterSnapshot';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
@@ -75,10 +76,10 @@ interface ExperimentDetail {
   executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; network?: string; resources?: { cpu: number; memoryMiB: number } } | null } | null;
+    executionTarget?: { workerId?: string | null; platform?: string | null; model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; network?: string; resources?: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
-  configSnapshot?: { grayscaleTaskId?: string; agentLabel?: string };
+  configSnapshot?: { grayscaleTaskId?: string; agentLabel?: string; [key: string]: unknown };
   watchMode?: boolean;
   watchEnabledAt?: string | null;
   evaluatorIds: string[];
@@ -233,8 +234,8 @@ export function ExperimentDetail({
 }) {
   const { user } = useAuth();
   const router = useRouter();
-  const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
+  const lookup = useEvaluatorLookup(user,detail?.configSnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshFailed, setRefreshFailed] = useState(false);
@@ -501,6 +502,7 @@ export function ExperimentDetail({
             {error && (
               <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
             )}
+            <ExperimentAssetVersions snapshot={detail.configSnapshot}/>
             <ComparisonDetail detail={detail as unknown as import('@/lib/engine/experiment/comparison-runner').ComparisonDetailData} />
           </>
         ) : (
@@ -556,6 +558,7 @@ export function ExperimentDetail({
               {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
+              {detail.reusableConfig?.executionTarget?.platform&&<span><span style={{color:'var(--foreground-muted)'}}>执行平台：</span>{detail.reusableConfig.executionTarget.platform} · {detail.reusableConfig.executionTarget.workerId||'原Trace'}</span>}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
               {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · {detail.reusableConfig.executionTarget.executionProfile.network === 'deny' ? '工具断网' : detail.reusableConfig.executionTarget.executionProfile.network === 'allow' ? '允许联网' : '客户端默认网络'}{detail.reusableConfig.executionTarget.executionProfile.resources && <> · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</>}</span>}
               {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
@@ -591,6 +594,7 @@ export function ExperimentDetail({
               )}
               </div>
               <RuntimeParameterSnapshot definition={detail.executionParameterDefinition} options={detail.executionAgentOptions} />
+              <ExperimentAssetVersions snapshot={detail.configSnapshot} />
             </div>
 
             {detail.traceProgress && detail.traceProgress.failed > 0 && (
@@ -975,6 +979,7 @@ export function ExperimentDetail({
                 user={user}
                 needsReference={needsReference}
                 needsDatasetInput={needsDatasetInput}
+                configSnapshot={detail.configSnapshot}
               />
             )}
           </>
