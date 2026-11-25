@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import ts from 'typescript';
 
-function formatSpanClock(): (ts?: number, dayRef?: number) => { clock: string; ms: string } | null {
+function formatSpanClock(): (ts?: number) => string | null {
     const file = new URL('../src/components/observe/AgentTraceView.tsx', import.meta.url);
     const source = fs.readFileSync(file, 'utf8');
     const ast = ts.createSourceFile('AgentTraceView.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -35,32 +35,19 @@ function formatSpanClock(): (ts?: number, dayRef?: number) => { clock: string; m
 const local = (month: number, day: number, hour: number, minute: number, second: number, ms: number) =>
     new Date(2026, month - 1, day, hour, minute, second, ms).getTime();
 
-test('span row clock renders local HH:MM:SS.mmm', () => {
+test('span row clock renders MM-DD HH:mm:ss uniformly', () => {
     const clock = formatSpanClock();
-    assert.deepEqual(clock(local(11, 24, 9, 5, 7, 42), local(11, 24, 9, 0, 0, 0)), {
-        clock: '09:05:07',
-        ms: '042',
-    });
+    assert.equal(clock(local(11, 24, 9, 5, 7, 42)), '11-24 09:05:07');
 });
 
-test('span row clock keeps the time only when the row shares the trace start day', () => {
+test('span row clock keeps the same format across midnight', () => {
     const clock = formatSpanClock();
-    assert.deepEqual(clock(local(11, 24, 23, 59, 59, 999), local(11, 24, 0, 0, 0, 0)), {
-        clock: '23:59:59',
-        ms: '999',
-    });
-});
-
-test('span row clock prefixes MM-DD when the row crosses a day', () => {
-    const clock = formatSpanClock();
-    assert.deepEqual(clock(local(11, 25, 0, 0, 1, 5), local(11, 24, 23, 30, 0, 0)), {
-        clock: '11-25 00:00:01',
-        ms: '005',
-    });
+    assert.equal(clock(local(11, 24, 23, 59, 59, 999)), '11-24 23:59:59');
+    assert.equal(clock(local(11, 25, 0, 0, 1, 5)), '11-25 00:00:01');
 });
 
 test('span row clock returns null when the start time is missing or invalid', () => {
     const clock = formatSpanClock();
-    assert.equal(clock(undefined, local(11, 24, 0, 0, 0, 0)), null);
-    assert.equal(clock(Number.NaN, local(11, 24, 0, 0, 0, 0)), null);
+    assert.equal(clock(undefined), null);
+    assert.equal(clock(Number.NaN), null);
 });

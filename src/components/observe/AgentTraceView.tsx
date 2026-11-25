@@ -109,31 +109,25 @@ const STATUS_DOT: Record<NodeStatus, string> = {
     error: 'bg-error',
 };
 
-// 左侧执行记录的时间列：窄容器先收毫秒，再整列隐藏，避免挤压名称区。
-const SPAN_CLOCK_CELL = 'hidden @min-[600px]/span-tree:inline-block w-[6.75rem] @min-[720px]/span-tree:w-[8.5rem] whitespace-nowrap text-right text-xs tabular-nums font-mono text-foreground-muted shrink-0';
+// 左侧执行记录的时间列：窄容器整列隐藏，避免挤压名称区；格式统一为 MM-DD HH:mm:ss（秒级）。
+const SPAN_CLOCK_CELL = 'hidden @min-[600px]/span-tree:inline-block w-[7rem] whitespace-nowrap text-right text-xs tabular-nums font-mono text-foreground-muted shrink-0';
 
-/** 执行记录行内时间点：`HH:MM:SS.mmm`；与参考时刻不在同一天时补 `MM-DD`。 */
-function formatSpanClock(ts: number | undefined, dayRef?: number): { clock: string; ms: string } | null {
+/** 执行记录行内时间点：统一 `MM-DD HH:mm:ss`，跨天不需要额外补日期。 */
+function formatSpanClock(ts: number | undefined): string | null {
     if (ts == null) return null;
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return null;
     const pad = (n: number) => String(n).padStart(2, '0');
-    const ref = dayRef == null ? null : new Date(dayRef);
-    const crossDay = ref != null && !Number.isNaN(ref.getTime()) && d.toDateString() !== ref.toDateString();
-    const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    return {
-        clock: crossDay ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${clock}` : clock,
-        ms: String(d.getMilliseconds()).padStart(3, '0'),
-    };
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 /** 只有 LLM 和 TOOL 行显示开始时间；其他行留同宽空列保持对齐。 */
-function SpanClockCell({ event, dayRef, title }: { event: AgentEvent; dayRef?: number; title?: string }) {
+function SpanClockCell({ event, title }: { event: AgentEvent; title?: string }) {
     if (event.kind !== 'llm' && event.kind !== 'tool') return <span className={SPAN_CLOCK_CELL} aria-hidden />;
-    const clock = formatSpanClock(event.startedAt, dayRef);
+    const clock = formatSpanClock(event.startedAt);
     return (
         <span className={cn(SPAN_CLOCK_CELL, 'truncate')} title={title}>
-            {clock ? <>{clock.clock}<span className="hidden @min-[720px]/span-tree:inline">.{clock.ms}</span></> : '-'}
+            {clock ?? '-'}
         </span>
     );
 }
@@ -2024,7 +2018,7 @@ function UnifiedEventRow({
             <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
                 {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
             </span>
-            <SpanClockCell event={event} dayRef={totalStart} title={clockTitle} />
+            <SpanClockCell event={event} title={clockTitle} />
             <span className={cn(
                 'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
                 isSlow ? 'text-warning' : 'text-foreground-muted',
