@@ -112,6 +112,11 @@ const STATUS_DOT: Record<NodeStatus, string> = {
 // 左侧执行记录的时间列：窄容器整列隐藏，避免挤压名称区；格式统一为 MM-DD HH:mm:ss（秒级）。
 const SPAN_CLOCK_CELL = 'hidden @min-[600px]/span-tree:inline-block w-[7rem] whitespace-nowrap text-right text-xs tabular-nums font-mono text-foreground-muted shrink-0';
 
+// 表头与各层级行共用同一套右侧单元格宽度与外边距，保证表头和数字严格对齐。
+const SPAN_TOKEN_CELL = 'w-16 ml-1 text-right text-xs tabular-nums font-mono text-foreground-muted shrink-0';
+const SPAN_DURATION_CELL = 'w-24 whitespace-nowrap text-right text-xs tabular-nums font-mono shrink-0';
+const SPAN_STATUS_CELL = 'w-2 ml-1 shrink-0';
+
 /** 执行记录行内时间点：统一 `MM-DD HH:mm:ss`，跨天不需要额外补日期。 */
 function formatSpanClock(ts: number | undefined): string | null {
     if (ts == null) return null;
@@ -1363,13 +1368,13 @@ export default function AgentTraceView({
                     )}
 
                     {/* Column headers */}
-                    <div className="flex shrink-0 items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
+                    <div className="flex shrink-0 items-center pl-2.5 pr-2 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
-                        <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
-                        <span className="w-16 text-right shrink-0">{tt('traceTree.spanTokens')}</span>
+                        <span className="flex-1 mx-2 text-left">{tt('traceTree.spanShare')}</span>
+                        <span className={SPAN_TOKEN_CELL}>{tt('traceTree.spanTokens')}</span>
                         <span className={SPAN_CLOCK_CELL}>{tt('traceTree.spanStart')}</span>
-                        <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
-                        <span className="w-2" />
+                        <span className={SPAN_DURATION_CELL}>{tt('traceTree.spanDuration')}</span>
+                        <span className={SPAN_STATUS_CELL} />
                     </div>
 
                     <TraceSpanViewport
@@ -1823,17 +1828,17 @@ function UnifiedSpanTree({
                     </span>
                 )}
                 {/* Metrics */}
-                <span className="w-16 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0" title={displayTokensNotProvided ? tt('traceTree.tokensNotProvidedHint') : undefined}>
+                <span className={SPAN_TOKEN_CELL} title={displayTokensNotProvided ? tt('traceTree.tokensNotProvidedHint') : undefined}>
                     {displayTokensNotProvided ? tt('traceTree.tokensNotProvided') : formatTokens(displayStats.totalTokens)}
                 </span>
                 <span className={SPAN_CLOCK_CELL} aria-hidden />
                 <span className={cn(
-                    'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
+                    SPAN_DURATION_CELL,
                     status === 'slow' ? 'text-warning' : 'text-foreground-muted',
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
                 </span>
-                <span className="w-2 ml-1 flex items-center justify-center">
+                <span className={cn(SPAN_STATUS_CELL, 'flex items-center justify-center')}>
                     {status !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[status])} />}
                 </span>
             </div>
@@ -2015,17 +2020,17 @@ function UnifiedEventRow({
             />
 
             {/* Metrics */}
-            <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
+            <span className={SPAN_TOKEN_CELL}>
                 {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
             </span>
             <SpanClockCell event={event} title={clockTitle} />
             <span className={cn(
-                'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
+                SPAN_DURATION_CELL,
                 isSlow ? 'text-warning' : 'text-foreground-muted',
             )}>
                 {formatDuration(spanDurationMs)}
             </span>
-            <span className="w-2 ml-1 flex items-center justify-center">
+            <span className={cn(SPAN_STATUS_CELL, 'flex items-center justify-center')}>
                 {hasError ? <span className="size-1.5 rounded-full bg-error" /> : isSlow && <span className="size-1.5 rounded-full bg-warning" />}
             </span>
         </div>
