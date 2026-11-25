@@ -134,7 +134,10 @@ export async function prepareFixtures(ctx) {
     const resources = [];
     for (let i = 2; i <= 5; i++) {
       const username = ctx.testUsername || `test_e2e_${ctx.runId}_00${i}@example.com`;
-      const r = await fetch(ctx.baseUrl + '/api/auth/apikey', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username }) });assert.ok(r.ok);
+      const headers = { 'content-type': 'application/json' };
+      if (ctx.account?.username === username) headers['x-witty-api-key'] = ctx.account.apiKey;
+      const r = await fetch(ctx.baseUrl + '/api/auth/apikey', { method: 'POST', headers, body: JSON.stringify({ username }) });
+      assert.ok(r.ok, `Fixture account authentication failed: HTTP ${r.status}`);
       const account = await r.json();ctx.secrets.push(account.apiKey);
       writePrivate(path.join(ctx.root, 'private', `account-00${i}.json`), account);
       const root = path.join(ctx.root, `fixture-00${i}`);fs.mkdirSync(path.join(root, 'fixtures'), { recursive: true });
