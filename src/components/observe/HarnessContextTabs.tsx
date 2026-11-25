@@ -38,12 +38,13 @@ export function HarnessContextTabs({ entries, selectedKey, onSelect, zh, childre
   const visible = scope === 'session' ? events : relevant;
   if (!entries.length) return <>{children}</>;
   return <>
-    {tab !== 'overview' && <div className="shrink-0 border-b border-border px-4 py-3" aria-label={zh ? '当前请求标识' : 'Selected request identity'}>
-      <p className="text-sm font-medium">{selected ? `${zh ? '模型请求' : 'Model request'} #${selected.request.eventSequence} · ${selected.request.turn}/${selected.request.step}` : agentSelected ? 'DeepSeek Harness' : (zh ? '节点详情' : 'Node details')}</p>
-    </div>}
     <div role="tablist" aria-label={zh ? 'Harness 详情页签' : 'Harness detail tabs'} className="flex shrink-0 flex-wrap gap-1 border-b border-border px-3 py-2">{[['overview', zh ? '概览' : 'Overview'], ['context', zh ? '上下文' : 'Context'], ['delta', zh ? '相邻对比' : 'Adjacent diff'], ['events', zh ? '事件' : 'Events']].map(([id, text]) => <Button key={id} id={`harness-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls="harness-detail-content" size="sm" variant={tab === id ? 'default' : 'ghost'} onClick={() => setTab(id)}>{text}</Button>)}</div>
     <div id="harness-detail-content" role="tabpanel" aria-labelledby={`harness-tab-${tab}`} className={`flex min-h-0 flex-1 flex-col ${tab === 'overview' ? 'overflow-hidden' : 'overflow-y-auto overscroll-contain'}`}>
       {tab === 'overview' ? children : <div className="space-y-3 p-4">
+    <div className="border-b border-border pb-2" aria-label={zh ? '当前请求标识' : 'Selected request identity'}>
+      <p className="text-sm font-medium">{selected ? `${zh ? '模型请求' : 'Model request'} #${selected.request.eventSequence} · ${selected.request.turn}/${selected.request.step}` : agentSelected ? 'DeepSeek Harness' : (zh ? '节点详情' : 'Node details')}</p>
+    </div>
+
         {selected && <div className="flex flex-wrap items-center justify-between gap-2"><Button variant="outline" size="sm" disabled={index <= 0} onClick={() => jump(rows[index - 1])}>{zh ? '← 前次' : '← Previous'}</Button><span className="text-xs">#{selected.request.eventSequence} · {selected.request.turn}/{selected.request.step}</span><Button variant="outline" size="sm" disabled={index >= rows.length - 1} onClick={() => jump(rows[index + 1])}>{zh ? '后次 →' : 'Next →'}</Button></div>}
         {tab === 'context' && <><HarnessContextPanel compact entries={selected ? rows : entries} selectedKey={selectedKey} onSelect={onSelect} zh={zh} />{selected && <DshExistingDetails key={selected.request.sourceSessionId+':'+selected.request.eventSequence} request={selected.request} taskId={taskId} zh={zh} bodies={rows.flatMap(row=>nativeContextBodies(row.request)).filter(body=>body.sourceEventSeq<selected.request.eventSequence)}/>}</>}
         {tab === 'delta' && <HarnessAdjacentDiff entries={entries} current={selected?.request} zh={zh} />}

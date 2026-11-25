@@ -43,3 +43,5 @@ These are existing dsh-context projected nodes and estimated tokens, not complet
 Native summary/checkpoint text is now stored separately after redaction and loaded on disclosure under Trace authorization, quotas and a fixed seven-day maximum TTL. Projection previews remain limited to 80 characters and are labeled separately. Existing historical records require reprocessing through the new admission path to obtain body references. A pruning replacement also overwrites the original tool completion timestamp and inflates its duration; that issue remains unresolved.
 
 Events defaults to the whole session, with an optional before-this-request interval filter. Context source details are collapsed; content loads when expanded. Timed-out reads are cancelled and their peers disposed. At most two uncooperative underlying reads are retained; the next session can recover after one hang, while two persistent hangs stop further admission until completion or plugin recovery.
+
+Detail tabs stay at the top of the panel. Request identity belongs inside the content area, so switching tabs does not insert a header above the tab bar.
