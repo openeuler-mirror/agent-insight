@@ -20,20 +20,22 @@ import {
   type EvaluatorOutput,
 } from '@/lib/evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
+import { JsonFieldNumber, parseJsonWithNumericFields, type JsonNumberEvidence } from './json-field-number';
 import { decodeWorkshopReference, WORKSHOP_RUBRIC_VERSION } from './reference-envelope';
 
 export const TEXT_JSON_FIELDS_PRESET_ID = 'preset-text-json-fields';
 const METRIC = 'json-fields';
 const RUBRIC_VERSION = WORKSHOP_RUBRIC_VERSION;
 
-type ScalarValue = string | number | boolean | null;
+type JsonScalar = string | number | boolean | null;
+type ScalarValue = JsonScalar | JsonFieldNumber;
 type ExpectedFields = Record<string, ScalarValue>;
 
 export interface FieldResult {
   field: string;
   matched: boolean;
   actualPresent: boolean;
-  expected: ScalarValue;
+  expected: JsonScalar | JsonNumberEvidence;
   actual: unknown;
 }
 
@@ -45,6 +47,7 @@ function isScalar(value: unknown): value is ScalarValue {
   if (typeof value === 'string') return true;
   if (typeof value === 'boolean') return true;
   if (typeof value === 'number') return Number.isFinite(value);
+  if (value instanceof JsonFieldNumber) return Number.isFinite(value.value);
   return false;
 }
 
@@ -71,7 +74,7 @@ export function validateExpectedRules(rules: Record<string, unknown>): ExpectedF
 function parseActualObject(actualOutput: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(actualOutput);
+    parsed = parseJsonWithNumericFields(actualOutput);
   } catch {
     return null;
   }
@@ -115,8 +118,16 @@ export function evaluateJsonFields(expected: ExpectedFields, actualOutput: strin
     const expectedValue = expected[field];
     const actualPresent = Object.prototype.hasOwnProperty.call(actual, field);
     const actualValue = actualPresent ? actual[field] : null;
-    const matched = actualPresent && expectedValue === actualValue;
-    return { field, matched, actualPresent, expected: expectedValue, actual: actualValue };
+    const matched = actualPresent && (actualValue instanceof JsonFieldNumber
+      ? actualValue.equals(expectedValue)
+      : expectedValue === actualValue);
+    return {
+      field,
+      matched,
+      actualPresent,
+      expected: expectedValue instanceof JsonFieldNumber ? expectedValue.toEvidence() : expectedValue,
+      actual: actualValue instanceof JsonFieldNumber ? actualValue.toEvidence() : actualValue,
+    };
   });
 
   const totalFields = fieldResults.length;

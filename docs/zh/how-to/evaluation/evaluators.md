@@ -177,6 +177,8 @@ Benchmark 评估器在 **预置评估器** 页展示，即使对应数据集尚�
 
 四项文本 Code 评估器都要求 case 提供参考答案，并按 0～100 分展示结果，不产生模型调用。ROUGE 先进行 NFKC 与小写归一化；任一侧含汉字时，两边统一按有效 Unicode 字符计算 ROUGE-char，纯英文继续按单词计算。中文结果因此不依赖操作系统词典，仍只计算确定性字符重叠，不做语义相似度推断。实体 F1 的 Agent 输出和参考答案必须是 JSON 字符串数组，例如 `["北京", "上海"]`；Agent 输出格式错误时记 0 分，参考答案格式错误时该项不计分。结构化信息抽取准确率评估器的参考答案需按统一封装格式填写：`AI-EVAL-REF-V1:` 前缀 + 标准 Base64 编码的 UTF-8 JSON，JSON 固定为 `{"rubricVersion":"result-workshop-v1","metric":"json-fields","rules":{"expected":{"city":"广州","qty":2,"paid":true,"note":null}}}`（标准值只允许字符串、有限数字、布尔或 null）。例如上例编码后为 `AI-EVAL-REF-V1:eyJydWJyaWNWZXJzaW9uIjoicmVzdWx0LXdvcmtzaG9wLXYxIiwibWV0cmljIjoianNvbi1maWVsZHMiLCJydWxlcyI6eyJleHBlY3RlZCI6eyJjaXR5Ijoi5bm/5beeIiwicXR5IjoyLCJwYWlkIjp0cnVlLCJub3RlIjpudWxsfX19`；未加前缀的纯 JSON（如 `{"expected":{...}}`）会被判为非法参考而不计分。Agent 输出必须能解析为 JSON 对象，否则记 0 分；标准值含嵌套对象或数组、字段为空或超过 32 个字段时视为非法参考不计分。
 
+结构化信息抽取准确率评估器按原始 JSON 数值比较，大整数和高精度小数不会因舍入而被判为相等。等价写法（如 `1`、`1.0` 和 `1e0`）仍匹配，数字与字符串仍按不同类型处理。判分证据用 `numberLiteral` 保留无法安全展示为普通数字的原始写法。
+
 新建实验第 ④ 步中，“完全精确匹配”和“实体 F1 匹配”卡片带有 **配置** 按钮：
 
 - 完全精确匹配可开启忽略大小写、忽略 Unicode 标点、空白归一化、NFKC 全半角归一化，并可选择多候选任一命中或按命中比例计分。

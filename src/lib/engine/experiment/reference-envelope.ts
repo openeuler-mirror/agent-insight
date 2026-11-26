@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { parseJsonWithNumericFields } from './json-field-number';
+
 export const WORKSHOP_RUBRIC_VERSION = 'result-workshop-v1';
 
 export type WorkshopReferenceResult =
@@ -31,7 +33,8 @@ export function decodeWorkshopReference(raw: string | null, metric: string): Wor
   try {
     const bytes = Buffer.from(body, 'base64');
     if (bytes.toString('base64') !== body) return invalid();
-    const payload: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    const json = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const payload = parseJsonWithNumericFields(json, ['rules', 'expected']);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return invalid();
     const envelope = payload as Record<string, unknown>;
     if (Object.keys(envelope).some(key => !['rubricVersion', 'metric', 'rules'].includes(key))) return invalid();

@@ -34,6 +34,11 @@ function encodeReference(expected: Record<string, unknown>): string {
   return encodeEnvelope({ expected });
 }
 
+function encodeNumericReference(value: string): string {
+  const envelope = `{"rubricVersion":"result-workshop-v1","metric":"json-fields","rules":{"expected":{"v":${value}}}}`;
+  return `AI-EVAL-REF-V1:${Buffer.from(envelope, 'utf8').toString('base64')}`;
+}
+
 function context(actualOutput: string, referenceOutput: string | null): FaithfulPresetContext {
   return {
     caseInput: '',
@@ -122,6 +127,53 @@ describe('结构化信息抽取准确率评估器（实际分发入口）', () =
       context('{"v":true}', encodeReference({ v: 1 })),
     );
     assert.equal(boolNumber.score, 0);
+  });
+
+  it('区分相邻的大整数并在证据中保留原始数值', async () => {
+    const reference = encodeNumericReference('9007199254740992');
+    const output = await runTextPreset(
+      'preset-text-json-fields',
+      USER,
+      context('{"v":9007199254740993}', reference),
+    );
+    assert.equal(output.score, 0);
+    assert.equal(output.verdict, 'fail');
+    assert.deepEqual(output.points?.[0].evidence, {
+      json: {
+        field: 'v',
+        matched: false,
+        actualPresent: true,
+        expected: { numberLiteral: '9007199254740992' },
+        actual: { numberLiteral: '9007199254740993' },
+      },
+    });
+  });
+
+  it('同一个大整数的不同写法等价，数字字符串仍不匹配', async () => {
+    const reference = encodeNumericReference('9007199254740993');
+    const equivalent = await runTextPreset(
+      'preset-text-json-fields',
+      USER,
+      context('{"v":9.007199254740993e15}', reference),
+    );
+    const stringValue = await runTextPreset(
+      'preset-text-json-fields',
+      USER,
+      context('{"v":"9007199254740993"}', reference),
+    );
+    assert.equal(equivalent.score, 100);
+    assert.equal(stringValue.score, 0);
+  });
+
+  it('不会把高精度小数或极小非零数比较为舍入后的值', async () => {
+    for (const [expected, actual] of [['0.30000000000000001', '0.3'], ['1e-400', '0']]) {
+      const output = await runTextPreset(
+        'preset-text-json-fields',
+        USER,
+        context(`{"v":${actual}}`, encodeNumericReference(expected)),
+      );
+      assert.equal(output.score, 0, `${expected} vs ${actual}`);
+    }
   });
 
   it('字符串严格比较大小写与空白', async () => {
