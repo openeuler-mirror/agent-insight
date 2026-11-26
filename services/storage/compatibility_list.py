@@ -34,6 +34,52 @@ def _milliseconds(value):
 def _flag(value):return value in ('1','true',True)
 
 
+def record_from_summary(row, aliases, properties, tags, owner, execution=None):
+    from .execution_metadata import record_fields
+    metadata=json.loads(row.get('attributes_json') or '{}')
+    if not isinstance(metadata,dict):raise ValueError('invalid Trace metadata')
+    start=row.get('started_at_ms')
+    timestamp=int(start if start is not None else row.get('created_at_ms',0))
+    end=_number(row.get('ended_at_ms'))
+    latency=max(0,end-float(start)) if end is not None and start is not None else None
+    it=_integer(row.get('input_tokens'));ot=_integer(row.get('output_tokens'))
+    tokens=_integer(int(it)+int(ot)) if it is not None and ot is not None else None
+    status={'done':'completed','failed':'failed','running':'in_progress','unknown':'unknown'}.get(row.get('execution_status'),'unknown')
+    trace_status={'completed':'success','failed':'failed','in_progress':'running'}.get(status,'unknown')
+    record={
+        'task_id':aliases['task_id'],'upload_id':aliases['execution_id'],'user':owner or row['owner_principal_id'],
+        'agentName':row.get('agent_name') or '', 'agent':row.get('agent_name') or '', 'framework':row.get('framework') or '',
+        'timestamp':datetime.datetime.fromtimestamp(timestamp/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z'),
+        'execution_status':status,'executionStatus':status,'trace_status':trace_status,
+        'trace_completed_at':datetime.datetime.fromtimestamp(end/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z') if end is not None else None,
+        'tokens':tokens,'input_tokens':it,'output_tokens':ot,'latency':latency,'cost':_number(row.get('cost_decimal')),
+        'span_count':_integer(row.get('span_count')),'llm_call_count':_integer(row.get('llm_call_count')),
+        'tool_call_count':_integer(row.get('tool_call_count')),'tool_call_error_count':metadata.get('tool_error_count'),
+        'query':properties.get('query') if 'query' in properties.get('override_fields',[]) else metadata.get('query'),'label':properties.get('label') if 'label' in properties.get('override_fields',[]) else metadata.get('label'),
+        'final_result':properties.get('final_result') if 'final_result' in properties.get('override_fields',[]) else metadata.get('final_result'),'user_feedback':properties.get('user_feedback'),
+        'model':metadata.get('model'),'observedIp':metadata.get('observed_ip'),'source_kind':metadata.get('source_kind','otlp'),
+        'agentOwnership':metadata.get('ownership','user'),'invoked_skills':metadata.get('invoked_skills',[]),
+        'agents':metadata.get('agents',[]),'subagent_name':metadata.get('subagent_name'),'subagent_type':metadata.get('subagent_type'),'agent_session_id':metadata.get('agent_session_id'),
+        'skills':metadata.get('skills',[]),'is_subagent':metadata.get('is_subagent',False),
+        'parent_execution_id':metadata.get('parent_execution_id'),'root_execution_id':metadata.get('root_execution_id'),
+        'anomaly_status':properties.get('anomaly_status',metadata.get('anomaly_status','unknown')),
+        'userTags':tags,'_trace_id':row['trace_id'],
+    }
+    if row.get('source_namespace')=='collector.source.v1' and not row.get('agent_name'):
+        record.pop('agentName',None);record.pop('agent',None)
+    metrics=metadata.get('legacy_execution_metrics',{})
+    if not isinstance(metrics,dict):raise ValueError('invalid captured execution metrics')
+    for key in ('cost','latency','tool_call_count','tool_call_error_count'):
+        if key in metrics:record[key]=_number(metrics[key]) if key in ('cost','latency') else metrics[key]
+    record['is_answer_correct']=metrics.get('is_answer_correct')
+    record['has_failures']=metrics.get('has_failures')
+    record['trace_started_at']=metrics.get('session_start') if metrics.get('session_captured') else record['timestamp']
+    if metrics.get('session_captured'):record['trace_completed_at']=metrics.get('session_end')
+    if execution is not None:record.update(record_fields(execution))
+    if 'invokedSkills' not in record:record['invokedSkills']=record.get('invoked_skills')
+    return record
+
+
 class LegacyTraceList:
     def __init__(self,queries,metadata=None,*,analytics=None):
         self.queries=queries;self.control=queries.control;self.iam=queries.iam;self.metadata=metadata;self.analytics=analytics
@@ -87,47 +133,7 @@ class LegacyTraceList:
                     properties=self.metadata.properties(token,workspace,row['trace_id']) if self.metadata else {}
                     aliases=self.metadata.resolve(token,workspace,row['trace_id']) if self.metadata else {'task_id':row['trace_id'],'execution_id':row['trace_id']}
                     tags=self.metadata.get_trace_tags(token,workspace,row['trace_id']) if self.metadata else []
-                    metadata=json.loads(row.get('attributes_json') or '{}')
-                    if not isinstance(metadata,dict):raise ValueError('invalid Trace metadata')
-                    start=row.get('started_at_ms')
-                    timestamp=int(start if start is not None else row.get('created_at_ms',0))
-                    end=_number(row.get('ended_at_ms'))
-                    latency=max(0,end-float(start)) if end is not None and start is not None else None
-                    it=_integer(row.get('input_tokens'));ot=_integer(row.get('output_tokens'))
-                    tokens=_integer(int(it)+int(ot)) if it is not None and ot is not None else None
-                    status={'done':'completed','failed':'failed','running':'in_progress','unknown':'unknown'}.get(row.get('execution_status'),'unknown')
-                    trace_status={'completed':'success','failed':'failed','in_progress':'running'}.get(status,'unknown')
-                    record={
-                        'task_id':aliases['task_id'],'upload_id':aliases['execution_id'],'user':owner[0] if owner else row['owner_principal_id'],
-                        'agentName':row.get('agent_name') or '', 'agent':row.get('agent_name') or '', 'framework':row.get('framework') or '',
-                        'timestamp':datetime.datetime.fromtimestamp(timestamp/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z'),
-                        'execution_status':status,'executionStatus':status,'trace_status':trace_status,
-                        'trace_completed_at':datetime.datetime.fromtimestamp(end/1000,datetime.timezone.utc).isoformat().replace('+00:00','Z') if end is not None else None,
-                        'tokens':tokens,'input_tokens':it,'output_tokens':ot,'latency':latency,'cost':_number(row.get('cost_decimal')),
-                        'span_count':_integer(row.get('span_count')),'llm_call_count':_integer(row.get('llm_call_count')),
-                        'tool_call_count':_integer(row.get('tool_call_count')),'tool_call_error_count':metadata.get('tool_error_count'),
-                        'query':properties.get('query') if 'query' in properties.get('override_fields',[]) else metadata.get('query'),'label':properties.get('label') if 'label' in properties.get('override_fields',[]) else metadata.get('label'),
-                        'final_result':properties.get('final_result') if 'final_result' in properties.get('override_fields',[]) else metadata.get('final_result'),'user_feedback':properties.get('user_feedback'),
-                        'model':metadata.get('model'),'observedIp':metadata.get('observed_ip'),'source_kind':metadata.get('source_kind','otlp'),
-                        'agentOwnership':metadata.get('ownership','user'),'invoked_skills':metadata.get('invoked_skills',[]),
-                        'agents':metadata.get('agents',[]),'subagent_name':metadata.get('subagent_name'),'subagent_type':metadata.get('subagent_type'),'agent_session_id':metadata.get('agent_session_id'),
-                        'skills':metadata.get('skills',[]),'is_subagent':metadata.get('is_subagent',False),
-                        'parent_execution_id':metadata.get('parent_execution_id'),'root_execution_id':metadata.get('root_execution_id'),
-                        'anomaly_status':properties.get('anomaly_status',metadata.get('anomaly_status','unknown')),
-                        'userTags':tags,'_trace_id':row['trace_id'],
-                    }
-                    if row.get('source_namespace')=='collector.source.v1' and not row.get('agent_name'):
-                        record.pop('agentName',None);record.pop('agent',None)
-                    metrics=metadata.get('legacy_execution_metrics',{})
-                    if not isinstance(metrics,dict):raise ValueError('invalid captured execution metrics')
-                    for key in ('cost','latency','tool_call_count','tool_call_error_count'):
-                        if key in metrics:record[key]=_number(metrics[key]) if key in ('cost','latency') else metrics[key]
-                    record['is_answer_correct']=metrics.get('is_answer_correct')
-                    record['has_failures']=metrics.get('has_failures')
-                    record['trace_started_at']=metrics.get('session_start') if metrics.get('session_captured') else record['timestamp']
-                    if metrics.get('session_captured'):record['trace_completed_at']=metrics.get('session_end')
-                    if row['trace_id'] in captured:record.update(record_fields(captured[row['trace_id']]['execution']))
-                    if 'invokedSkills' not in record:record['invokedSkills']=record.get('invoked_skills')
+                    record=record_from_summary(row,aliases,properties,tags,owner[0] if owner else None,captured.get(row['trace_id'],{}).get('execution'))
                     current=_lookup_tx(outcome_store,con,token,workspace,{'trace_ref':row['trace_id']})
                     record=overlay_record(record,current);record['_outcome_selection']=current['selection_hash']
                     projection=current['outcome']['value'].get('record_projection') if current.get('outcome') else None
@@ -228,6 +234,9 @@ class LegacyTraceList:
         return {'records':output,'page':page,'pageSize':size,'hasMore':len(selected)>size,'canViewAllTraces':grant.role in ('owner','admin')}
 
     def read(self,token,workspace,params):
+        from .trace_list_query import optimized_read
+        optimized=optimized_read(self,token,workspace,params)
+        if optimized is not None:return optimized
         paged=self._native_record_page(token,workspace,params)
         if paged is not None:return paged
         facet=params.get('facet');task_selection=execution_selection=tasks_selection=None

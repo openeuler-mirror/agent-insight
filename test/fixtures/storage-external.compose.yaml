@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: insight_test
+      POSTGRES_USER: insight_test
+      POSTGRES_PASSWORD: isolated-test-only
+    ports:
+      - "127.0.0.1:${TEST_PG_PORT:-15439}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U insight_test -d insight_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8
+    environment:
+      CLICKHOUSE_DB: insight_test
+      CLICKHOUSE_USER: insight_test
+      CLICKHOUSE_PASSWORD: isolated-test-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:${TEST_CH_PORT:-18129}:8123"
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    healthcheck:
+      test: [CMD, wget, --spider, -q, "http://127.0.0.1:8123/ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+volumes:
+  pg-data:
+  ch-data:

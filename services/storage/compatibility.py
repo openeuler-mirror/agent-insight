@@ -12,6 +12,8 @@ MAX_STRUCTURE_BYTES = 16 * 1024 * 1024
 MAX_FULL_BYTES = 128 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 MAX_PAYLOAD_CHUNKS = 4096
+SESSION_PAGE_SIZE = 50
+MAX_LEGACY_SESSION_SPANS = 500
 
 
 
@@ -292,21 +294,39 @@ class LegacyTraceReads:
         route=self.queries.route(token,workspace,trace)
         summary=self.queries.summary(token,workspace,trace).get('trace')
         if not summary:raise TraceNotFound('Trace has no indexed facts')
-        if not cursor and not span_id and int(summary.get('span_count') or 0)<=500 and route.get('source_namespace','').startswith(('trace.bundle.','agent.record.','collector.source.v1')):
-            return self.session(token,workspace,trace,view='structure')
+        legacy_structure = (
+            not span_id
+            and int(summary.get('span_count') or 0) <= MAX_LEGACY_SESSION_SPANS
+            and route.get('source_namespace','').startswith(('trace.bundle.','agent.record.','collector.source.v1'))
+        )
         scope=self.queries.iam.scope(token)
-        query=hashlib.sha256(json.dumps([workspace,trace,str(summary['revision']),'session-page-v1']).encode()).hexdigest()
+        cursor_kind = 'legacy-session-page-v1' if legacy_structure else 'session-page-v1'
+        query=hashlib.sha256(json.dumps([workspace,trace,str(summary['revision']),cursor_kind]).encode()).hexdigest()
         after=self.queries._decode(cursor,scope.fingerprint,query) if cursor else (0,'')
-        if span_id:
+        if legacy_structure:
+            result = self.session(token,workspace,trace,view='structure')
+            start = after[0]
+            end = start + SESSION_PAGE_SIZE
+            key = 'langfuseTraceNodes' if result.get('langfuseTraceNodes') else 'interactions'
+            items = result[key]
+            result[key] = items[start:end]
+            if key == 'langfuseTraceNodes':
+                result['interactions'] = []
+            result['paged'] = False
+            result['nextCursor'] = self.queries._encode({
+                'version': 1, 'scope': scope.fingerprint, 'query': query,
+                'created_at_ms': end, 'trace_id': trace,
+            }) if end < len(items) else None
+        elif span_id:
             row=self.authorized.read_span(token,workspace,route['trace_bucket'],trace,span_id)
             if not row:raise TraceNotFound('Span unavailable')
             result={'interaction':self._full(token,workspace,route,row,self._metadata(row,index,summary),{})}
         else:
-            rows=self.authorized.read_spans(token,workspace,route['trace_bucket'],trace,limit=500,time_after=after)
-            interactions=[self._metadata(row,index+i,summary) for i,row in enumerate(rows)]
+            rows=self.authorized.read_spans(token,workspace,route['trace_bucket'],trace,limit=SESSION_PAGE_SIZE+1,time_after=after)
+            interactions=[self._metadata(row,index+i,summary) for i,row in enumerate(rows[:SESSION_PAGE_SIZE])]
             next_cursor=None
-            if len(rows)==500:
-                last=rows[-1]
+            if len(rows)>SESSION_PAGE_SIZE:
+                last=rows[SESSION_PAGE_SIZE-1]
                 next_cursor=self.queries._encode({'version':1,'scope':scope.fingerprint,'query':query,'created_at_ms':int(last.get('started_at_ms') or 0),'trace_id':last['span_id']})
             result={'taskId':trace,'user':self._owner(summary),'startTime':summary.get('started_at_ms'),
                     'interactions':interactions,'interactionCount':summary.get('span_count'),

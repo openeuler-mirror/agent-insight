@@ -144,3 +144,7 @@ agent_fault_injection/*.egg-info/
 
 # Generated standalone Trace dataset Worker
 generated/trace-datasets/
+
+# Private project storage configuration
+config/storage.local.json
+**/config/storage.local.json

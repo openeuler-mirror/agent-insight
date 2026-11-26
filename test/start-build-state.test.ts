@@ -257,12 +257,24 @@ test('start.sh integration: first worker generation, reuse, source change, force
   const port = (probe.address() as import('node:net').AddressInfo).port
   await new Promise<void>(resolve => probe.close(() => resolve()))
   const pids = new Set<number>()
-  t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL') } catch {} } })
-  for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh', 'build-trace-dataset-worker.cjs']) {
+  t.after(() => { for (const pid of pids) { try { process.kill(-pid, 'SIGTERM') } catch {} } })
+  for (const file of ['start.sh', 'start-build-state.cjs', 'verify-standalone.cjs', 'db_push.sh', 'build-trace-dataset-worker.cjs', 'local-runtime.cjs', 'local-runtime-install.cjs', 'clickhouse-server-packages.cjs', 'clickhouse-server-release.json', 'agent-insight-home.cjs']) {
     f.write(`scripts/${file}`, fs.readFileSync(`scripts/${file}`, 'utf8'))
   }
   for (const file of ['migrations/check-diagnosis-schema.cjs', 'prepare-ras-sqlite-schema.js', 'stop-orphan-trace-consumer.cjs', 'benchmark/generate-catalog.cjs', 'trace-datasets/remove-legacy-summary.cjs']) f.write(`scripts/${file}`, '')
-  f.write('scripts/storage-core-preflight.cjs', '')
+  f.write('scripts/storage-core-preflight.cjs', 'exports.loadEnvironment=()=>{}; exports.preflight=async()=>({});')
+  f.write('fixture-server-deployment.cjs', `
+const fs = require('node:fs');
+const { start } = require('./scripts/local-runtime.cjs');
+const calls = process.env.CALLS;
+start(process.env.AGENT_INSIGHT_HOME, process.env, 'production', process.argv.slice(2), {
+  prepareDependencies: async () => fs.appendFileSync(calls, 'prepare-dependencies\\n'),
+  prepare: async env => {
+    fs.appendFileSync(calls, 'prepare-storage\\n');
+    return { ...env, AGENT_INSIGHT_STORAGE_CORE_URL: 'http://127.0.0.1:4319' };
+  },
+}).catch(error => { console.error(error); process.exitCode = 1 });
+`)
   f.write('home/.env', '')
   f.write('public/logo.svg', 'logo')
   f.write('prisma/schema.prisma', 'schema')
@@ -307,17 +319,20 @@ if (process.argv[3] === 'generate') {
     fs.chmodSync(path.join(f.root, 'bin', name), 0o755)
   }
   const calls = path.join(f.root, 'commands.log')
-  const run = (args: string[] = [], fail = false, failWorker = false) => {
-    const env = { ...process.env, ...f.env, PATH: `${path.join(f.root, 'bin')}:${process.env.PATH}`, DATABASE_URL: `file:${f.root}/home/test.db`, CALLS: calls } as NodeJS.ProcessEnv
+  const run = (args: string[] = [], fail = false, failWorker = false, deploy = false) => {
+    const env = { ...process.env, ...f.env, PATH: `${path.join(f.root, 'bin')}:${process.env.PATH}`, DATABASE_URL: `file:${f.root}/home/test.db`, AGENT_INSIGHT_STORAGE_CORE_URL: 'http://127.0.0.1:4319', CALLS: calls } as NodeJS.ProcessEnv
     for (const key of ['PORT', 'DB_HOST', 'AGENT_INSIGHT_DATA_DIR', 'AGENT_INSIGHT_BENCHMARK']) delete env[key]
     if (fail) env.FAIL_BUILD = '1'
     if (failWorker) env.FAIL_WORKER = '1'
-    const result = spawnSync('bash', [path.join(f.root, 'scripts/start.sh'), '--port', String(port), ...args], { env, encoding: 'utf8', timeout: 15000 })
+    if (deploy) delete env.AGENT_INSIGHT_STORAGE_CORE_URL
+    const result = spawnSync(process.execPath,
+      [path.join(f.root, 'fixture-server-deployment.cjs'), '--port', String(port), ...args],
+      { env, encoding: 'utf8', timeout: 15000 })
     for (const match of result.stdout.matchAll(/^PID: (\d+)/gm)) pids.add(Number(match[1]))
     return result
   }
   assert.equal(fs.existsSync(path.join(f.root, 'generated/trace-datasets/worker.cjs')), false)
-  const first = run()
+  const first = run([], false, false, true)
   assert.equal(first.status, 0, first.stdout + first.stderr)
   assert.match(first.stdout, /URL: http:\/\/localhost:\d+\/insight/)
   assert.equal(fs.readFileSync(path.join(f.root, 'generated/trace-datasets/worker.cjs'), 'utf8'), 'worker runtime')
@@ -339,6 +354,7 @@ if (process.argv[3] === 'generate') {
   assert.match(workerFailed.stderr, /worker generation failed/)
   assert.doesNotMatch(workerFailed.stdout, /\[stage\] Next.js build|Server started successfully/)
   const commands = fs.readFileSync(calls, 'utf8').trim().split('\n')
+  assert.deepEqual(commands.slice(0, 2), ['prepare-dependencies', 'prepare-storage'])
   assert.equal(commands.filter(s => s === 'build').length, 5)
   assert.equal(commands.filter(s => s === 'prisma generate').length, 1)
   assert.equal(commands.filter(s => s.includes('db push')).length, 0)

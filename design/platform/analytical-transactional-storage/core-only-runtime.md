@@ -54,3 +54,7 @@
 - Core 与相关业务专项共 151 个测试文件：首轮 149 个通过，注册和 FI 两个文件受临时 Python 环境缺少 PyYAML 影响；在隔离虚拟环境恢复项目已有依赖后，两文件共 15 项全部通过。专项覆盖模型协议、冻结配置、运行时身份隔离、Trigger 保存、Trace 导航与分页契约。
 - 本次完整 `npm run test`：6,111 项，5,516 通过、571 失败、24 跳过。四个 Benchmark 测试子进程超时后被终止并计入失败。全量运行时未补齐全部 Python/扩展等环境前置条件，仍含旧存储夹具和业务断言失败；不能据专项通过声称全部业务已等价验收。定向复测未改写全量统计。
 - 本次按用户选择不启动 Web，未在浏览器中验证。PostgreSQL/openGauss 真实服务验证继续暂缓。
+
+### 外部数据库与应用一键安装
+
+最新需求将数据库部署从应用安装中分离。用户填写项目内 `config/storage.local.json`，使用 SQLite/PG 样例指导字段；安装校验两类数据库并对空环境初始化 Core 表。应用入口只管理 Core/Web。历史库及不兼容结构须显式备份迁移，不能新建空库替代。详见[当前设计](clickhouse-server-deployment-design.md)。本轮覆盖 SQLite＋ClickHouse 和 PostgreSQL＋ClickHouse 的启动，openGauss 暂不实测；用户将验收范围缩小为启动链路，不要求全量测试或浏览器验证。

@@ -20,6 +20,10 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
+if [ "${AGENT_INSIGHT_RUNTIME_CHILD:-}" != "1" ]; then
+  exec node scripts/project-storage.cjs dev "$@"
+fi
+
 PORT="${AGENT_INSIGHT_PORT:-3000}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   echo "Error: AGENT_INSIGHT_PORT must be an integer between 1 and 65535." >&2
@@ -46,6 +50,9 @@ AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
 AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
 
 load_agent_insight_env() {
+  local runtime_core_url="${AGENT_INSIGHT_STORAGE_CORE_URL:-}"
+  local runtime_controller="${AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE:-}"
+
   if [ -f "$AGENT_INSIGHT_ENV_FILE" ]; then
     set -a
     source "$AGENT_INSIGHT_ENV_FILE"
@@ -56,11 +63,14 @@ load_agent_insight_env() {
   AGENT_INSIGHT_STORAGE_DIR="$AGENT_INSIGHT_HOME/data"
   export AGENT_INSIGHT_HOME
   export AGENT_INSIGHT_STORAGE_DIR
+  export AGENT_INSIGHT_PORT="$PORT"
 if [ -n "${AGENT_INSIGHT_DATA_DIR:-}" ]; then
   echo "Error: AGENT_INSIGHT_DATA_DIR is no longer supported; rename it to AGENT_INSIGHT_HOME and unset AGENT_INSIGHT_DATA_DIR (keep the same root path)." >&2
   exit 1
 fi
   [ "$PROCESS_DATABASE_URL_IS_SET" != x ] || export DATABASE_URL="$PROCESS_DATABASE_URL"
+  export AGENT_INSIGHT_STORAGE_CORE_URL="$runtime_core_url"
+  export AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE="$runtime_controller"
 
 
 }
@@ -137,54 +147,13 @@ echo "Checking port $PORT..."
 
 # Load the Web configuration before checking both storage dependencies.
 load_agent_insight_env
+if [ "${AGENT_INSIGHT_RUNTIME_CHILD:-}" != "1" ]; then
+  exec node scripts/local-runtime.cjs start dev "$@"
+fi
+
 node scripts/storage-core-preflight.cjs || exit 1
 
 echo "Storage: Core transactional backend + ClickHouse"
-
-# 1. Try finding PID specifically
-PIDS=$(find_pid_on_port $PORT)
-
-if [ -n "$PIDS" ]; then
-  echo "Found process(es) occupying port $PORT: $PIDS"
-  echo "Killing PIDS..."
-  kill -9 $PIDS
-else
-  echo "No PID found via standard tools (lsof/netstat/ss)."
-fi
-
-# 1.5 清理孤儿 opencode 子进程
-# Next.js 通过 opencode-manager.ts spawn 一组 `opencode serve` 子进程作为内部
-# AI runtime（playground/skill-gen 等用）。SIGKILL Next.js 时这些子进程不会跟着死，
-# 多次 restart 后会 leak 一堆，占内存、占端口、阻碍新启动。
-# 通过 node_modules 路径匹配，只清掉本项目 spawn 的那些；不影响用户机器上其它 opencode 实例。
-PROJECT_OPENCODE_PATH="$(pwd)/node_modules/opencode-ai/bin"
-if command -v pkill >/dev/null 2>&1; then
-  ORPHAN_COUNT=$(pgrep -f "${PROJECT_OPENCODE_PATH}/.opencode" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$ORPHAN_COUNT" -gt 0 ]; then
-    echo "Killing $ORPHAN_COUNT orphan opencode child(ren) from $PROJECT_OPENCODE_PATH..."
-    pkill -f "${PROJECT_OPENCODE_PATH}/.opencode" 2>/dev/null || true
-    sleep 1
-  fi
-fi
-
-# 2. Force kill using fuser if available (very reliable)
-if command -v fuser >/dev/null 2>&1; then
-  echo "Attempting to force kill with fuser..."
-  fuser -k -n tcp $PORT >/dev/null 2>&1
-fi
-
-# 3. Double check
-echo "Waiting for port to release..."
-sleep 2
-
-PIDS_REMAINING=$(find_pid_on_port $PORT)
-if [ -n "$PIDS_REMAINING" ]; then
-  echo "CRITICAL ERROR: Port $PORT is STILL in use by PID: $PIDS_REMAINING"
-  echo "Please manually kill this process: kill -9 $PIDS_REMAINING"
-  exit 1
-fi
-
-echo "Port $PORT is confirmed free."
 
 # 4. Start in DEV mode
 echo "-----------------------------------"
@@ -209,23 +178,25 @@ set -a
 load_agent_insight_env
 set +a
 
-NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev -- --port "$PORT" --hostname "${AGENT_INSIGHT_BIND_HOST:-0.0.0.0}" > server.log 2>&1 &
-NEW_PID=$!
+node scripts/benchmark/generate-catalog.cjs || exit 1
+NEW_PID=$(node scripts/local-runtime.cjs launch-web dev "$PORT") || exit 1
+LOG_FILE="$AGENT_INSIGHT_HOME/logs/web.log"
 
 echo "Server process started."
 echo "PID: $NEW_PID"
-echo "Log file: server.log"
+echo "Log file: $LOG_FILE"
 echo "Waiting for the API to become ready and syncing the admin API key..."
 STARTUP_TIMEOUT_SECONDS="${AGENT_INSIGHT_STARTUP_TIMEOUT_SECONDS:-600}"
 STARTUP_DEADLINE=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
 SERVER_READY=false
 while [ "$SECONDS" -lt "$STARTUP_DEADLINE" ]; do
   if ! kill -0 "$NEW_PID" 2>/dev/null; then
-    echo "⛔ Server process exited before becoming ready. Check server.log."
-    tail -n 40 server.log 2>/dev/null || true
+    echo "⛔ Server process exited before becoming ready. Check $LOG_FILE."
+    tail -n 40 "$LOG_FILE" 2>/dev/null || true
     exit 1
   fi
-  if node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" 2>/dev/null; then
+  if curl --noproxy '*' -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$PORT${NEXT_PUBLIC_URL_PREFIX:-}/login" 2>/dev/null \
+    && node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" 2>/dev/null; then
     SERVER_READY=true
     break
   fi
@@ -234,8 +205,8 @@ done
 
 if [ "$SERVER_READY" != "true" ]; then
   echo "⛔ Server API did not become ready within ${STARTUP_TIMEOUT_SECONDS}s."
-  echo "   Check server.log, then rerun bash scripts/develop_start.sh."
-  tail -n 40 server.log 2>/dev/null || true
+  echo "   Check $LOG_FILE, then rerun bash scripts/develop_start.sh."
+  tail -n 40 "$LOG_FILE" 2>/dev/null || true
   exit 1
 fi
 

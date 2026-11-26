@@ -35,3 +35,6 @@ JiuwenSwarm 升级后，请更新观测扩展并重启 AgentServer，再检查�
 管理员（未配置白名单时为 `admin`）可查看所有用户的 Trace，列表提供“用户”列和按用户筛选，仪表盘按全量 Trace 聚合；普通用户继续按本人数据展示。详见[Trace 查看范围](../how-to/observability/view-traces.md#列表页总览)。
 
 [启用隔离的 Storage Core Trace 链路](../how-to/platform/storage-core.md)：独立初始化、私有配置、密码登录及分页Trace。
+
+
+数据库请先独立部署，然后按[项目配置样例与安装指南](../how-to/platform/storage-core.md)填写项目内配置并一键安装 Core/Web。支持 SQLite＋ClickHouse 和 PostgreSQL＋ClickHouse。

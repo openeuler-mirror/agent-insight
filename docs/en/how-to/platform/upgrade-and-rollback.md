@@ -75,3 +75,7 @@ The following tool only prepares an isolated legacy SQLite copy. It is not part 
 Rehearse on an isolated copy of the deployed database. Quiesce writers and background jobs. Back up external Skill files and report assets alongside the database. Run `python3 scripts/migrations/diagnosis-inputs.py --database /path/to/witty_insight.db` for preflight, then add `--apply --backup /backup/diagnosis-before.db` with a new backup path. The script uses SQLite's backup API, validates integrity and foreign keys, and compares every pre-existing column and row before committing. Save the JSON verification report.
 
 Repeat on the copy with another backup destination and restore the initial backup into a separate directory for verification. After new writes have been accepted, preserve the latest database and assets before recovery; rolling back to an old backup alone discards those writes.
+
+## External database upgrades
+
+Database software is operated independently. Application installation and restart never upgrade database software. Stop application writes, back up both databases and artifacts, and validate explicit Core migrations on isolated copies. Use migrate-sqlite with a new sibling backup, or migrate-relational with a verified backup manifest. The old managed-runtime helper is for historical environments only. Restore both stores and artifacts together for rollback.

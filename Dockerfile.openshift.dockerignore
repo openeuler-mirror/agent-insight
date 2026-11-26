@@ -37,3 +37,7 @@ npm-cache
 *.sqlite
 *.sqlite3
 *.db
+
+# Private database connection configuration
+config/storage.local.json
+**/config/storage.local.json

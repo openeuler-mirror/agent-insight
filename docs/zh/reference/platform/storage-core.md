@@ -17,7 +17,7 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 
 仪表盘和质量分析读取注册信息时使用同一已验证的 Core 事务上下文，报告的 Trace、轨迹评分和诊断数据只来自 Core 分析快照；缺少快照明确失败，不读取旧表。请求回调直接返回延迟查询时，身份范围持续到查询完成。Agent 删除成功后沿用原用量事件，拒绝或失败不计数。
 
-本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 500 条滚动追加及“加载中…”提示保持。
+本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 50 条滚动追加及“加载中…”提示保持。
 
 
 下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
@@ -114,7 +114,7 @@ Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE
 
 `trace_legacy_ids`保存不可变task/execution别名；`trace_annotations`保存版本化标注和显式空值覆盖；`trace_tags`和`trace_tag_links`保存用户标签及多对多关联。均在控制库，受当前IAM与删除屏障约束。001–004不变。新OTLP路由同接收事务登记native ID别名；旧路由需明确回填，不按同名猜测。
 
-兼容入口为旧`/api/observe/data`、`/api/observe/session`、`/api/tags`、execution tags及Trace bundle import/export。列表支持旧记录/统计/筛选合同；含 taskId、executionId 或非空 taskIds 的准确定位先按当前 IAM 解析旧别名/内部 ID 并取交集，只物化所选 Trace，保留来源、当前 Outcome、权限及删除屏障的前后复核。缺失或无权的选择返回空集，仍校验空结果请求的筛选参数；skills/values/tags 全局 facet 保持原范围。普通列表仍枚举授权范围，超过100000条明确拒绝；尚未完成通用索引下推和千级并发容量验证。原详情通过 span-page 每批最多读取 500 条轻量 Span，滚动追加；结构请求不读取正文。完整会话兼容接口仍有独立预算，不用于分页详情的首次装载。点击单Span按固定索引和精确payload revision装载。完整会话/导出128MiB上限；原Langfuse节点协议需完整正文，单独作为兼容例外。
+兼容入口为旧`/api/observe/data`、`/api/observe/session`、`/api/tags`、execution tags及Trace bundle import/export。列表支持旧记录/统计/筛选合同；含 taskId、executionId 或非空 taskIds 的准确定位先按当前 IAM 解析旧别名/内部 ID 并取交集，只物化所选 Trace，保留来源、当前 Outcome、权限及删除屏障的前后复核。缺失或无权的选择返回空集，仍校验空结果请求的筛选参数；skills/values/tags 全局 facet 保持原范围。普通列表仍枚举授权范围，超过100000条明确拒绝；尚未完成通用索引下推和千级并发容量验证。原详情通过 `/api/observe/session?view=structure&paged=1` 每批最多返回 50 条轻量 Span，滚动追加；普通 OTLP 结构请求不读取正文。旧格式兼容路径在还原原结构后按批返回。完整会话兼容接口仍有独立预算，不用于分页详情的首次装载。点击单Span按固定索引和精确payload revision装载。完整会话/导出128MiB上限；原 Langfuse 节点在返回的节点页内保留正文。
 
 Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。Trace回流、普通实验/评测结果/RunPlan及DiagnosisRun消费者已使用下述新存储协议；infra和非OTLP既有写入口仍有未接入范围，不能把页面恢复视为全部功能迁移完成。
 
@@ -519,3 +519,11 @@ collector.source.v1适配原上传协议时，不为未提供、null或空agentN
 原 Trace 列表、Session、证据及 reliability 读取保留完整快照校验。已提交但尚未索引的采集快照以私有 `503/TRACE_INDEXING` 标识；同一身份的来源或分析版本在读取中更新，以 `409/TRACE_READ_CHANGED` 标识。Node 只对这两类 GET 重新执行完整的授权及读取流程，不返回旧快照、部分正文或空结果作为成功。每次读取绑定原服务地址、实际 principal/workspace 及取消信号；来源改绑、删除、权限撤销、稳定事实缺失、损坏和普通服务故障继续按原错误返回。
 
 每个 GET 最多 32 次读取尝试（包括首次），从首次可信过渡错误开始计时，等待及新尝试的启动窗口为 15 秒，后续错误不续期。列表及筛选的 data GET RPC 与证据读取使用相同的 65 秒 I/O 预算，写入及其余接口预算保持；15 秒不是整个请求的硬超时。写入和已经开始的模型调用不重放。Session 解析缓存同时绑定来源身份、source revision 与 annotation revision。私有 session-source 可返回 `identity_hash`，RAS 签名读取 token 可携带同名身份摘要；只在身份证明未变化时允许版本切换重试。旧服务未提供摘要、旧 RAS token 或身份变化仍返回 Conflict，不推断可安全重试。公共 DTO、原界面和关系库 schema 均不因此变化。
+
+## Trace 查询配置
+
+`control.connection_pool` 仅用于 PostgreSQL runtime，CLI/显式 connection factory 不自动启用。可选配置：`enabled=true`、`min_idle=2`、`max_size=16`、`acquire_timeout_seconds=2`、`connect_timeout_seconds=3`、`idle_timeout_seconds=300`、`max_lifetime_seconds=1800`、`health_check_idle_seconds=30`。空闲回收在借用时检查，到龄活动连接在归还后关闭；空闲基线不代表预先建立连接。嵌套借用耗尽时立即失败，普通借用有界等待，已执行事务不自动重放。
+
+Core 顶层 `trace_list_optimization.enabled` 默认 `true`，项目启动配置会转交此项。关闭后保留原兼容列表查询。优化覆盖普通时间排序分页、摘要字段过滤、标签/用户 ID 范围、普通统计及框架/来源/Agent 选项。历史来源、当前页结果覆盖与复杂筛选回退；非空 `legacy_execution_metrics` 的统计也回退，以保留字段覆盖口径。平均延迟分母仍包括延迟为空的匹配记录，工具错误率合并总调用/错误次数后再舍入。
+
+连接池可通过服务内 `connection_pool.snapshot()` 检查 total/active/idle/creating 及累计计数；查询模块通过标准 Python logging 的 INFO 级别记录数据库路径和兼容回退原因，不输出凭证或正文。数据库仍可能扫描所有候选摘要，优化不意味着数据库只读取当前页。

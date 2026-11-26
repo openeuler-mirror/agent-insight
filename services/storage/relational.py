@@ -78,9 +78,16 @@ class _Connection:
         return _Result(cursor)
 
     def close(self):
-        for cursor in self._cursors:
-            cursor.close()
-        self.raw.close()
+        try:
+            for cursor in self._cursors:
+                cursor.close()
+        except BaseException:
+            if callable(getattr(self.raw, 'discard', None)):
+                self.raw.discard()
+            else:
+                raise
+        finally:
+            self.raw.close()
 
 
 class PostgreSQLControlStore(ControlOperations):
@@ -100,16 +107,34 @@ class PostgreSQLControlStore(ControlOperations):
         self.clock = clock or (lambda: time.time_ns() // 1_000_000)
 
     @classmethod
-    def from_dsn(cls, dsn, *, schema, artifact_directory, clock=None):
+    def from_dsn(cls, dsn, *, schema, artifact_directory, clock=None, connection_pool=None):
         if not isinstance(dsn, str) or not dsn.strip():
             raise ValueError('an explicit DSN is required')
+        from .connection_pool import ConnectionPool, pool_options
+        options=pool_options(connection_pool) if connection_pool is not None else None
+        if options and options['enabled'] and cls.backend != 'postgresql':
+            raise ValueError('connection pooling is only supported for PostgreSQL')
         def connect():
             try:
                 import psycopg2
             except ImportError as exc:
                 raise StorageError('install the optional pinned relational driver') from exc
-            return psycopg2.connect(dsn)
-        return cls(connect, schema=schema, artifact_directory=artifact_directory, clock=clock)
+            return psycopg2.connect(dsn, **({'connect_timeout':options['connect_timeout_seconds']} if options and options['enabled'] else {}))
+        pool=ConnectionPool(connect, options) if options and options['enabled'] else None
+        store=cls(pool.acquire if pool else connect, schema=schema, artifact_directory=artifact_directory, clock=clock)
+        store.connection_pool=pool
+        return store
+
+    def close(self):
+        pool=getattr(self,'connection_pool',None)
+        if pool:pool.close()
+
+    @staticmethod
+    def _rollback(connection):
+        if connection is None:return
+        try:connection.raw.rollback()
+        except BaseException:
+            if callable(getattr(connection.raw,'discard',None)):connection.raw.discard()
 
     @contextmanager
     def _connect(self):
@@ -124,16 +149,13 @@ class PostgreSQLControlStore(ControlOperations):
             connection = _Connection(raw)
             yield connection
         except StorageError:
-            if connection is not None:
-                connection.raw.rollback()
+            self._rollback(connection)
             raise
         except MigrationError:
-            if connection is not None:
-                connection.raw.rollback()
+            self._rollback(connection)
             raise StorageError('relational migration violates the known atomic migration contract') from None
         except Exception as exc:
-            if connection is not None:
-                connection.raw.rollback()
+            self._rollback(connection)
             code = getattr(exc, 'pgcode', None) or getattr(exc, 'sqlstate', None)
             if code and (code.startswith('23') or code == 'P0001'):
                 raise Conflict('relational storage constraint violation') from None

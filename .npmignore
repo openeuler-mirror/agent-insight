@@ -86,3 +86,7 @@ agent_ras/logs/
 agent_ras/**/__pycache__/
 agent_ras/**/*.pyc
 agent_ras/.pytest_cache/
+
+# Private project storage configuration
+config/storage.local.json
+**/config/storage.local.json

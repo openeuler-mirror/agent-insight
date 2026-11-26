@@ -41,7 +41,7 @@ function resolvePort(script: string, env: NodeJS.ProcessEnv, args: string[] = []
   assert.ok(offset > 0);
   const variable = script === platformScript ? 'PLATFORM_PORT' : 'EVALUATOR_HOST_PORT';
   const commandArgs = script === evaluatorScript ? ['start', ...args] : args;
-  return spawnSync('bash', ['-c', `${source.slice(0, offset)}\nprintf 'RESOLVED=%s\\n' "$${variable}"`, script, ...commandArgs], { env, encoding: 'utf8' });
+  return spawnSync('bash', ['-c', `${source.slice(0, offset)}\nprintf 'RESOLVED=%s\\n' "$${variable}"`, script, ...commandArgs], { env: { ...env, AGENT_INSIGHT_RUNTIME_CHILD: '1' }, encoding: 'utf8' });
 }
 
 for (const [label, script, variable, defaultPort] of [
@@ -111,7 +111,7 @@ test('evaluator blocks container-port overrides through runtime env', (t) => {
   const source = fs.readFileSync(evaluatorScript, 'utf8');
   assert.match(source, /--publish "\$BIND_ADDRESS:\$EVALUATOR_HOST_PORT:8080"/);
   assert.match(source, /printf 'EVALUATOR_PORT=8080\\n'/);
-  assert.match(fs.readFileSync(platformScript, 'utf8'), /PORT="\$PLATFORM_PORT" NODE_OPTIONS/);
+  assert.match(fs.readFileSync(platformScript, 'utf8'), /launch-web production "\$PLATFORM_PORT"/);
 });
 
 test('stop/purge locates the evaluator by instance even if the configured external port changes', (t) => {

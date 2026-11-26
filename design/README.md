@@ -78,7 +78,9 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| Trace 加载与数据库连接复用 | [需求分析](observability/trace-loading-optimization/phase1-requirements-analysis.md) / [需求设计](observability/trace-loading-optimization/phase2-requirements-design.md) / [开发计划](observability/trace-loading-optimization/phase3-development-plan.md) | 公共连接池、当前页摘要批量查询、统计与筛选选项数据库下推，保留权限和兼容口径 | Fix / Perf | 2026-11-25 | 已实现；相关单测与1,000条真实数据对照、十轮读取、五并发通过；未运行全量测试，未在浏览器验证 | — |
 | 分析与事务存储完整重构 | [总体需求](platform/analytical-transactional-storage/phase1-requirements-analysis.md) / [IAM与三库计划](platform/analytical-transactional-storage/phase5-iam-adapters-plan.md) | ClickHouse 事实分析、IAM、三事务后端、不可变版本及迁移一致性 | Refactor / Architecture | 2026-11-11 | 🟡 Trace/Dataset/实验评测/诊断及主要消费者已接；[剩余入口与96模型迁移计划](platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)分层实施，完整切库待完成 | 待补 |
+| 外部数据库配置与应用安装 | [设计](platform/analytical-transactional-storage/clickhouse-server-deployment-design.md) | 项目内配置样例、独立数据库预检查、Core/Web 一键安装；SQLite/PG＋ClickHouse | Feature / Deployment | 2026-11-25 | SQLite/PG＋ClickHouse 生产启动已验证；按用户要求不跑全量测试 | — |
 | 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
 | Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
 
@@ -188,4 +190,4 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 超大 Trace 增量读取 | [设计](observability/large-trace-loading/phase2-requirements-design.md) / [计划](observability/large-trace-loading/phase3-development-plan.md) | 摘要、Span 分页与正文分块 | Feature | 2026-11-20 | 开发中 | — |
 
-- [唯一存储运行架构](platform/analytical-transactional-storage/core-only-runtime.md)：事务后端三选一 + 必需 ClickHouse，关闭旧业务库运行入口；实施与验收中。
+- [唯一存储运行架构](platform/analytical-transactional-storage/core-only-runtime.md)：事务后端三选一 + 必需 ClickHouse，关闭旧业务库运行入口；含本机一键启动与受控升级设计，实施与验收中。

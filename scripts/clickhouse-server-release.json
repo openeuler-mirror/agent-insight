@@ -1,0 +1,86 @@
+{
+  "version": "26.8.1.2041",
+  "tag": "v26.8.1.2041-lts",
+  "assets": {
+    "clickhouse-client-26.8.1.2041.aarch64.rpm": {
+      "id": 536664742,
+      "size": 314810,
+      "sha256": "9b6380b82a0e7cbf68c14e9236b76b93e71704066633737ccaae044d79912da1"
+    },
+    "clickhouse-client-26.8.1.2041.x86_64.rpm": {
+      "id": 536663625,
+      "size": 314810,
+      "sha256": "9b43a82eebb74f0d0172907d0127b2cf5d2daed3d86a59dcb4a5c451c24718e7"
+    },
+    "clickhouse-client_26.8.1.2041_amd64.deb": {
+      "id": 536661487,
+      "size": 312830,
+      "sha256": "4f1dd88d08a9ad2575ddd03f59727f3d926382add106428dc6f9ad9214941034"
+    },
+    "clickhouse-client_26.8.1.2041_arm64.deb": {
+      "id": 536662577,
+      "size": 312832,
+      "sha256": "8ed776429856599d20f35d6455bb514a28b7f313721484aa935ce2f28d86ad04"
+    },
+    "clickhouse-common-static-26.8.1.2041-amd64.tgz": {
+      "id": 536665983,
+      "size": 235288711,
+      "sha256": "ee9cfe624ab2a4baaeae1d0e57026c9795188ccde2ef18379aaa22e23913a61a"
+    },
+    "clickhouse-common-static-26.8.1.2041-arm64.tgz": {
+      "id": 536667076,
+      "size": 216999177,
+      "sha256": "02cc1736995ab66f0b84e032fc2e6ca2d1acd3fccd16867781ccd3db98ebfe2a"
+    },
+    "clickhouse-common-static-26.8.1.2041.aarch64.rpm": {
+      "id": 536664755,
+      "size": 230245617,
+      "sha256": "19346cbe8e80c7a5f405fc9bbb475bf129f2d8e480cd0d7fe810f838202b9a26"
+    },
+    "clickhouse-common-static-26.8.1.2041.x86_64.rpm": {
+      "id": 536663644,
+      "size": 247653807,
+      "sha256": "0ba0d1070c6af6145077e36c3a550e40175a097496dd8f3d27bea2f02640ed4b"
+    },
+    "clickhouse-common-static_26.8.1.2041_amd64.deb": {
+      "id": 536661493,
+      "size": 247649692,
+      "sha256": "e4f4354e2512faab1701d3f3642c2d679fe41d637aa934fdfe2629b187d418ac"
+    },
+    "clickhouse-common-static_26.8.1.2041_arm64.deb": {
+      "id": 536662591,
+      "size": 230353988,
+      "sha256": "d7648117a5c11005f2c3d63c041a709ae528874e1400e23797d1e808b0beb675"
+    },
+    "clickhouse-server-26.8.1.2041.aarch64.rpm": {
+      "id": 536665931,
+      "size": 347264,
+      "sha256": "a4e62ff951f7382ea2389d6e088e28dbbff3cb1b54d54e9c44f553fd57ff2fb0"
+    },
+    "clickhouse-server-26.8.1.2041.x86_64.rpm": {
+      "id": 536664721,
+      "size": 347264,
+      "sha256": "0c08f674f26ad561faf022172ae215f891321bd4cc8c24b1e72ee6ea1ec1d60f"
+    },
+    "clickhouse-server_26.8.1.2041_amd64.deb": {
+      "id": 536662570,
+      "size": 343662,
+      "sha256": "c8c7ff2167cf7ad5599ad210b89fcf0711d16cd69841657a6354e23b88fe4ca8"
+    },
+    "clickhouse-server_26.8.1.2041_arm64.deb": {
+      "id": 536663613,
+      "size": 343656,
+      "sha256": "49df022c89656fcf6d472ac68c66d9c9c923ffecaacc7b7d42ebf17058002d09"
+    },
+    "clickhouse-macos": {
+      "id": 536668399,
+      "size": 185333769,
+      "sha256": "88fb085041cee65c04f538d18a8f074473b8f52fa92383fdb17a087f1065a09c"
+    },
+    "clickhouse-macos-aarch64": {
+      "id": 536668478,
+      "size": 176352865,
+      "sha256": "4527cec04d9919ec268a4c9502c07ac45fa8f4da23f580c77b66e3ff174c2662"
+    }
+  }
+}

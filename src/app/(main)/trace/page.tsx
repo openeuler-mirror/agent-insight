@@ -47,6 +47,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
+import type { RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { CodexThreadTimeline, type TraceThreadView } from '@/components/observe/CodexThreadTimeline';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
 import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
@@ -1707,13 +1708,19 @@ function TraceDetailView({
         spanPageRequest.current = controller;
         setLoadingMoreSpans(true); setMoreSpansError('');
         try {
-            const query = new URLSearchParams({ taskId, view: 'structure', paged: '1', cursor: current.nextCursor, index: String(current.interactions.length) });
+            const index = current.langfuseTraceNodes?.length || current.interactions.length;
+            const query = new URLSearchParams({ taskId, view: 'structure', paged: '1', cursor: current.nextCursor, index: String(index) });
             const response = await apiFetch('/api/observe/session?' + query, { signal: controller.signal });
             if (!response.ok) throw new Error(await readApiError(response));
             const next = await response.json();
             if (controller.signal.aborted || sessionRef.current !== current) return;
-            const ids = new Set(current.interactions.map((item: any) => item.spanId));
-            const merged = { ...current, nextCursor: next.nextCursor, interactions: [...current.interactions, ...next.interactions.filter((item: any) => !ids.has(item.spanId))] };
+            const merged = { ...current, nextCursor: next.nextCursor };
+            if (current.langfuseTraceNodes?.length) {
+                merged.langfuseTraceNodes = [...current.langfuseTraceNodes, ...next.langfuseTraceNodes];
+            } else {
+                const ids = new Set(current.interactions.map((item: any) => item.spanId));
+                merged.interactions = [...current.interactions, ...next.interactions.filter((item: any) => !ids.has(item.spanId))];
+            }
             sessionRef.current = merged; setSession(merged);
         } catch (error) {
             if (!controller.signal.aborted) setMoreSpansError(error instanceof Error ? error.message : '加载失败');
@@ -1724,7 +1731,9 @@ function TraceDetailView({
 
     const loadInteraction = useCallback(async (index: number) => {
         const selectedSpan = sessionRef.current?.interactions?.[index];
-        const paging = sessionRef.current?.paged ? `&paged=1&spanId=${encodeURIComponent(selectedSpan.spanId)}` : '';
+        const paging = sessionRef.current?.paged === true
+            ? `&paged=1&spanId=${encodeURIComponent(selectedSpan.spanId)}`
+            : sessionRef.current?.paged === false ? '&paged=1' : '';
         const source = selectedSpan?._collaboration;
         const sourceTaskId = source?.taskId ?? taskId;
         const sourceIndex = source?.index ?? index;
@@ -1738,10 +1747,40 @@ function TraceDetailView({
     }, [taskId, user, apiKey]);
 
     const loadFullInteractions = useCallback(async () => {
-        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interactions`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
+        const requestId = sessionRequestRef.current;
+        const compatibility = sessionRef.current?.paged === false ? '&paged=1' : '';
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&user=${encodeURIComponent(user || '')}&view=interactions${compatibility}`, { headers: apiKey ? { 'x-witty-api-key': apiKey } : {} });
         if (!response.ok) throw new Error(await readApiError(response));
         const body = await response.json();
-        return Array.isArray(body?.interactions) ? body.interactions : [];
+        const interactions: (RawInteraction & { spanId?: string })[] = Array.isArray(body?.interactions) ? body.interactions : [];
+        const langfuseTraceNodes = body?.langfuseTraceNodes;
+        const current = sessionRef.current;
+        if (current?.nextCursor && requestId === sessionRequestRef.current) {
+            let completed;
+            if (current.langfuseTraceNodes?.length && Array.isArray(langfuseTraceNodes)) {
+                completed = { ...current, langfuseTraceNodes, nextCursor: null };
+            } else if (!current.langfuseTraceNodes?.length && interactions.length >= current.interactionCount) {
+                const byId = new Map(interactions.map(item => [item.spanId, item]));
+                const sameVersion = current.interactions.every((item: any) =>
+                    item._payloadVersion && byId.get(item.spanId)?._payloadVersion === item._payloadVersion);
+                if (sameVersion) {
+                    const loadedIds = new Set(current.interactions.map((item: any) => item.spanId));
+                    completed = {
+                        ...current,
+                        interactions: [
+                            ...current.interactions.map((item: any) => byId.get(item.spanId)),
+                            ...interactions.filter(item => !loadedIds.has(item.spanId)),
+                        ],
+                        nextCursor: null,
+                    };
+                }
+            }
+            if (completed) {
+                sessionRef.current = completed;
+                setSession(completed);
+            }
+        }
+        return { interactions, langfuseTraceNodes };
     }, [taskId, user, apiKey]);
 
     const { framework } = execution;

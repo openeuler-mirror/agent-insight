@@ -36,3 +36,7 @@
 !config/benchmark/platform.yaml
 !config/benchmark/evaluator.yaml
 !config/benchmark/executor.yaml
+
+# Private project storage configuration
+config/storage.local.json
+**/config/storage.local.json
