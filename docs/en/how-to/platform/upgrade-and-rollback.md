@@ -28,7 +28,7 @@ Replace angle-bracket placeholders before executing. Avoid changing deployment m
 
 ## Next.js security upgrade
 
-The dependency baseline is `next` / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.3 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
+The dependency baseline is `next` 16.4.6 / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.6 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
 
 Docker source mode uses dependencies baked into the image. Rebuild the image after changing source dependencies; updating mounted source and restarting is insufficient. The entrypoint checks for missing direct dependencies and mismatches in exact version declarations, including Next.js, and stops with a rebuild instruction. Audit range dependencies separately against the lockfile and final artifact.
 
