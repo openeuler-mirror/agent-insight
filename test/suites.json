@@ -127,6 +127,7 @@
     "test/opencode-uploader-concurrency.test.ts",
     "test/opencode-uploader-grouping.test.ts",
     "test/opencode-uploader-signature.test.ts",
+    "test/opencode-uploader-streaming.test.ts",
     "test/opencode-v2-adapter.test.ts",
     "test/otel-checkpoint.test.ts",
     "test/otel-consumer-capacity-recovery.test.ts",
