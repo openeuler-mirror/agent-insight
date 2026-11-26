@@ -22,9 +22,10 @@ import path from 'node:path'
 import { createIsolatedDatabase } from './helpers/isolated-database'
 
 const database = createIsolatedDatabase()
+const { stopBenchmarkBackgroundWorkForTest } = require('@/lib/benchmark/scheduler') as typeof import('@/lib/benchmark/scheduler')
 const { prisma } = require('@/lib/storage/prisma') as typeof import('@/lib/storage/prisma')
 const scheduler = require('@/lib/benchmark/evaluation-scheduler') as typeof import('@/lib/benchmark/evaluation-scheduler')
-test.after(async () => { await prisma.$disconnect(); database.dispose() })
+test.after(async () => { await stopBenchmarkBackgroundWorkForTest(); await prisma.$disconnect(); database.dispose() })
 
 test('asset health readiness keeps preparation retryable and installation failure terminal', async () => {
   let postCount = 0

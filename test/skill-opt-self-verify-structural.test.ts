@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -25,7 +26,7 @@ import { verifyStructure } from '@/lib/engine/skill-opt/self-verify-structural';
 // 的语义 bug（年份案就是它，留给行为门 ② 抓），这条边界本身就是设计意图。
 
 function hasPython(): boolean {
-  try { execFileSync('python3', ['--version'], { stdio: 'pipe' }); return true; } catch { return false; }
+  try { execFileSync(pythonExecutable, ['--version'], { stdio: 'pipe' }); return true; } catch { return false; }
 }
 const PY = hasPython();
 

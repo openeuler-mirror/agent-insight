@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from '../helpers/python';
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -34,7 +35,7 @@ test('ZSoft platform and Python hash identical mixed-case paths and Unicode/nume
   for (const filename of ['README.md', 'repo-vul/Kconfig', 'repo-vul/Makefile', 'repo-vul/a.c', 'repo-vul/a-b.c', 'repo-vul/a_b.c']) {
     await fs.writeFile(path.join(taskRoot, 'public', filename), `source ${filename}`)
   }
-  const pythonDigest = () => execFileSync('python3', ['-c', `
+  const pythonDigest = () => execFileSync(pythonExecutable, ['-c', `
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / 'benchmarks/zsoft-l1/evaluator'))

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -24,7 +25,7 @@ import test from 'node:test';
 const runner = path.join(process.cwd(), 'skills', 'agent-debug-diagnosis', 'scripts', 'detector_runner.py');
 
 function run(args: string[]) {
-  return JSON.parse(execFileSync('python3', [runner, ...args], { encoding: 'utf8' })) as Record<string, unknown>;
+  return JSON.parse(execFileSync(pythonExecutable, [runner, ...args], { encoding: 'utf8' })) as Record<string, unknown>;
 }
 
 function runDetector(turns: Array<Record<string, unknown>>) {
@@ -167,10 +168,10 @@ test("final validator requires every detector fact to stay independent or merge 
     fs.writeFileSync(detectorsPath, JSON.stringify({ findings: [detectorFinding] }), "utf8");
     fs.writeFileSync(finalPath, JSON.stringify(final), "utf8");
     const validator = path.join(process.cwd(), "skills", "agent-debug-diagnosis", "scripts", "agentdebug_validate.py");
-    execFileSync("python3", [validator, "--input", finalPath, "--core", corePath, "--detectors", detectorsPath], { encoding: "utf8" });
+    execFileSync(pythonExecutable, [validator, "--input", finalPath, "--core", corePath, "--detectors", detectorsPath], { encoding: "utf8" });
 
     fs.writeFileSync(finalPath, JSON.stringify({ ...final, findings: [coreFinding] }), "utf8");
-    const rejected = spawnSync("python3", [validator, "--input", finalPath, "--core", corePath, "--detectors", detectorsPath], { encoding: "utf8" });
+    const rejected = spawnSync(pythonExecutable, [validator, "--input", finalPath, "--core", corePath, "--detectors", detectorsPath], { encoding: "utf8" });
     assert.equal(rejected.status, 1);
     assert.match(rejected.stdout, /既未独立保留，也未无损合入/);
   } finally {

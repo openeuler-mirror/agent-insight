@@ -217,8 +217,8 @@ test('live management protocol serializes list and dry-run purge through the Con
   assert.equal(store.removed.length, 0)
 })
 
-test('management helper reaches the live pool over its Unix socket', async (t) => {
-  const directory = await fs.mkdtemp('/tmp/benchmark-image-pool-control-')
+test('management helper reaches the live pool over its Unix socket', { skip: process.platform === 'win32' ? 'Unix socket protocol; validated under Linux/WSL' : false }, async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'benchmark-image-pool-control-'))
   const store = new FakeDocker()
   const pool = new BenchmarkImagePool({ dataDir: directory, store, estimator: { estimate: async () => ({ bytes: 100, source: 'test' }) },
     config, log: () => {} })
@@ -524,7 +524,7 @@ test('Desktop classic/containerd checks actual mounts and budgets against the ti
     f.free['/host-mac-space'] = 4000
     assert.equal(await f.store.freeSpace(), containerd ? 1500 : 2000)
     assert.equal(f.store.diskStatus.hostFreeBytes, 4000)
-    assert.deepEqual(f.accessed, containerd ? ['/host-containerd/daemon/io.containerd.content.v1.content'] : [])
+    assert.deepEqual(f.accessed, containerd ? [path.join('/host-containerd', 'daemon', 'io.containerd.content.v1.content')] : [])
   }
 })
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -55,7 +56,7 @@ if (mode?.startsWith('collector-')) {
     'otel_trace.post_otlp_traces = lambda payload: True',
     'otel_trace.flush_session(' + JSON.stringify(target) + ')',
   ].join('\\n')
-  const hook = spawnSync('python3', ['-B', '-c', script], {encoding: 'utf8'})
+  const hook = spawnSync(${JSON.stringify(pythonExecutable)}, ['-B', '-c', script], {encoding: 'utf8'})
   if (hook.status !== 0) { console.error(hook.stderr); process.exit(9) }
   // Record only the temporary path, so cleanup can be checked after execution.
   require('node:fs').writeFileSync(${JSON.stringify(path.join(root, 'activity-dir.txt'))}, process.env.AGENT_INSIGHT_XIAOO_ACTIVITY_DIR || '')
@@ -149,7 +150,7 @@ test('xiaoo parser separates session ownership, model activity and structured er
 })
 
 test('xiaoo experimental trace ID matches actual Collector normalization and Execution task_id', () => {
-  const result = spawnSync('python3', ['-B', '-c', [
+  const result = spawnSync(pythonExecutable, ['-B', '-c', [
     'import sys, json',
     'sys.path.insert(0, "scripts/xiaoo-trace-collector")',
     'from otel_spans import SessionSpanBuffer',

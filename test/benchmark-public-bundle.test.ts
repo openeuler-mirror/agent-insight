@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -155,10 +156,10 @@ assert result is False
       fs.mkdirSync(path.join(root, 'tasks/synthetic'), { recursive: true })
       fs.writeFileSync(path.join(root, 'tasks/synthetic/task.json'), JSON.stringify({ task_id: 'synthetic', max_bytes: 128, submission_kind: kind }))
       const output = path.join(root, 'output')
-      const probe = spawnSync('python3', [path.resolve('services/executor/src/mcts-zsoft-contract.py'), root], { encoding: 'utf8' })
+      const probe = spawnSync(pythonExecutable, [path.resolve('services/executor/src/mcts-zsoft-contract.py'), root], { encoding: 'utf8' })
       assert.equal(probe.status, 0, probe.stderr)
       const contract = JSON.parse(probe.stdout)
-      const result = spawnSync('python3', [path.resolve('services/executor/src/mcts-zsoft-export.py')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', AGENT_INSIGHT_MCTS_REPO_DIR: root, AGENT_INSIGHT_ZSOFT_WORKSPACE: root, AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: kind, AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: contract.sourceDigest, SYNTHETIC_OUTPUT: output } })
+      const result = spawnSync(pythonExecutable, [path.resolve('services/executor/src/mcts-zsoft-export.py')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', AGENT_INSIGHT_MCTS_REPO_DIR: root, AGENT_INSIGHT_ZSOFT_WORKSPACE: root, AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: kind, AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: contract.sourceDigest, SYNTHETIC_OUTPUT: output } })
       assert.equal(result.status, 0, result.stderr)
       assert.deepEqual(fs.readFileSync(path.join(output, 'poc')), Buffer.from([0, 255, 13, 10, 128]))
       const metadata = JSON.parse(fs.readFileSync(path.join(output, 'platform-export.json'), 'utf8'))
@@ -185,11 +186,11 @@ official.evaluate(SimpleNamespace(session=object()), _task, os.environ['SYNTHETI
 `.trim())
       fs.mkdirSync(path.join(root, 'tasks/synthetic'), { recursive: true })
       fs.writeFileSync(path.join(root, 'tasks/synthetic/task.json'), JSON.stringify({ task_id: mutation === 'task-id' ? 'other' : 'synthetic', submission_kind: mutation === 'submission-kind' ? 'c' : 'python', max_bytes: 128 }))
-      const probe = spawnSync('python3', [path.resolve('services/executor/src/mcts-zsoft-contract.py'), root], { encoding: 'utf8' })
+      const probe = spawnSync(pythonExecutable, [path.resolve('services/executor/src/mcts-zsoft-contract.py'), root], { encoding: 'utf8' })
       assert.equal(probe.status, 0, probe.stderr)
       if (mutation === 'source') fs.appendFileSync(path.join(root, 'testcases_union/res/task_plugins/zsoft/plugin.py'), '\nraise RuntimeError("unexpected upstream import")\n')
       const output = path.join(root, 'output')
-      const result = spawnSync('python3', [path.resolve('services/executor/src/mcts-zsoft-export.py')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', AGENT_INSIGHT_MCTS_REPO_DIR: root, AGENT_INSIGHT_ZSOFT_WORKSPACE: root, AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: 'python', AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: JSON.parse(probe.stdout).sourceDigest, SYNTHETIC_OUTPUT: output } })
+      const result = spawnSync(pythonExecutable, [path.resolve('services/executor/src/mcts-zsoft-export.py')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', AGENT_INSIGHT_MCTS_REPO_DIR: root, AGENT_INSIGHT_ZSOFT_WORKSPACE: root, AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: 'python', AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: JSON.parse(probe.stdout).sourceDigest, SYNTHETIC_OUTPUT: output } })
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, mutation === 'source' ? /MCTS source changed/ : /selected task differs/)
       assert.doesNotMatch(result.stderr, /unexpected upstream import/)

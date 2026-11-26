@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -63,7 +64,7 @@ async def main():
 asyncio.run(main())
 print('RESULT=' + json.dumps(state))
 `;
-  const result = spawnSync('python3', ['-c', script], { encoding: 'utf8' });
+  const result = spawnSync(pythonExecutable, ['-c', script], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout.split('\n').find(line => line.startsWith('RESULT='))!.slice(7));
 }

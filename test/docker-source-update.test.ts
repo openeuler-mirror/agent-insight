@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -94,7 +95,7 @@ test('missing ZIP stops before any Docker command', t => {
 
 test('unsafe archive paths are rejected before extraction and recreation', t => {
   const f = fixture(t)
-  const archive = spawnSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w"); z.writestr("../escaped.txt","escape"); z.close()', f.zipFile], { encoding: 'utf8' })
+  const archive = spawnSync(pythonExecutable, ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w"); z.writestr("../escaped.txt","escape"); z.close()', f.zipFile], { encoding: 'utf8' })
   assert.equal(archive.status, 0, archive.stderr)
   const result = f.run()
   assert.notEqual(result.status, 0)

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from '../helpers/python';
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -29,7 +30,7 @@ const require = createRequire(import.meta.url)
 test('ZSoft evidence preserves original bytes, nested results, empty and malformed files, and excludes private inputs', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zsoft-evidence-'))
   t.after(() => fs.rm(directory, { recursive: true, force: true }))
-  execFileSync('python3', ['-c', `
+  execFileSync(pythonExecutable, ['-c', `
 import json, sys, zipfile
 from pathlib import Path
 from unittest.mock import patch

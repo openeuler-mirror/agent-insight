@@ -77,13 +77,20 @@ test('start.sh ignores the removed benchmark environment variable', () => {
 test('startup continues after bootstrap failures with four-line warnings and detailed logs', () => {
   const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-bootstrap-warning-'))
   const managedHome = path.join(testDir, 'managed home')
-  const binDir = path.join(testDir, 'bin')
-  fs.mkdirSync(binDir)
-  fs.writeFileSync(path.join(binDir, 'npx'), `#!${process.execPath}
-console.log(process.env.BOOTSTRAP_TEST_OUTPUT)
-console.error(process.env.BOOTSTRAP_TEST_ERROR)
-process.exit(Number(process.env.BOOTSTRAP_TEST_STATUS))
-`, { mode: 0o755 })
+  const preload = path.join(testDir, 'bootstrap-spawn.cjs')
+  fs.writeFileSync(preload, `const cp = require('node:child_process');
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const original = cp.spawnSync;
+cp.spawnSync = (command, args, options) => {
+  if (!args.includes('scripts/benchmark/ensure-swe-bench-dataset.ts')) return original(command, args, options);
+  assert.equal(command, process.execPath);
+  assert.equal(args[0], require.resolve('tsx/cli', { paths: [process.cwd()] }));
+  fs.writeSync(options.stdio[1], process.env.BOOTSTRAP_TEST_OUTPUT || '');
+  fs.writeSync(options.stdio[2], process.env.BOOTSTRAP_TEST_ERROR || '');
+  return { status: Number(process.env.BOOTSTRAP_TEST_STATUS), signal: null };
+};
+`)
   const source = fs.readFileSync(startScript, 'utf8')
   const bootstrapStart = source.indexOf('if ! node scripts/benchmark/bootstrap-swe-bench-dataset.cjs; then')
   const buildStart = source.indexOf('npm run build -- --webpack', bootstrapStart)
@@ -104,7 +111,7 @@ process.exit(Number(process.env.BOOTSTRAP_TEST_STATUS))
       ...process.env,
       AGENT_INSIGHT_HOME: managedHome,
       AGENT_INSIGHT_CONFIG_DIR: path.join(testDir, 'config'),
-      PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}`,
     }
     for (const failure of cases) {
       const result = spawnSync('bash', [], {
@@ -181,7 +188,7 @@ test('start.sh accepts a one-shot port override before startup side effects', ()
   }
 })
 
-test('start.sh explains an inaccessible custom SQLite target before destructive startup work', () => {
+test('start.sh explains an inaccessible custom SQLite target before destructive startup work', { skip: process.platform === 'win32' ? 'POSIX startup filesystem validation; validated under Linux/WSL' : false }, () => {
   const managedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-insight-start-sqlite-'))
   const missingDir = path.join(managedHome, 'missing', 'nested')
   fs.writeFileSync(path.join(managedHome, '.env'), `DATABASE_URL=file:${missingDir}/test.db\n`, 'utf8')
@@ -215,7 +222,7 @@ test('SWE-bench bootstrap reads project configuration and retains managed cache 
     const { resolveSweBenchProvisionPaths } = await import('../scripts/benchmark/ensure-swe-bench-dataset')
     const paths = resolveSweBenchProvisionPaths()
     assert.equal(paths.datasetPath, path.join(root, 'data/imports/swe-bench-verified/test.parquet'))
-    assert.equal(paths.pythonPath, path.join(root, 'vendor/SWE-bench/.venv/bin/python'))
+    assert.equal(paths.pythonPath, path.join(root, 'vendor', 'SWE-bench', '.venv', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'])))
     assert.equal(paths.datasetSource, 'http://mirror.example.test/test.parquet')
     assert.equal(paths.sourceArchiveSource, 'http://mirror.example.test/source.tar.gz')
     assert.equal(paths.customPythonPath, false)
