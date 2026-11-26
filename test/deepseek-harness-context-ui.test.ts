@@ -69,3 +69,35 @@ test('Context workspace entry stays visible without expanding legacy request ref
  assert.match(html,/请求成员与正文/);assert.match(html,/相邻请求对比/);assert.match(html,/上下文事件定位/);assert.match(html,/无需展开右侧请求标识/);
  assert.equal(renderToStaticMarkup(React.createElement(HarnessRequestInspector,{entries:[],selectedKey:null,onSelect(){},zh:true})), '');
 });
+
+
+test('Request windows default to twenty and reveal distant selections without changing manual width',async()=>{
+ const {clampRequestWindow,revealRequestWindow,shiftRequestWindow}=await import('../src/components/observe/harness-request-window');
+ assert.deepEqual(clampRequestWindow(120),{startIndex:0,endIndex:19});
+ assert.deepEqual(clampRequestWindow(6),{startIndex:0,endIndex:5});
+ assert.deepEqual(clampRequestWindow(0),{startIndex:0,endIndex:-1});
+ assert.deepEqual(revealRequestWindow(120,119),{startIndex:100,endIndex:119});
+ assert.deepEqual(revealRequestWindow(120,60),{startIndex:50,endIndex:69});
+ const manual={startIndex:20,endIndex:29};
+ assert.deepEqual(revealRequestWindow(120,25,manual),manual);
+ assert.deepEqual(revealRequestWindow(120,95,manual),{startIndex:90,endIndex:99});
+ assert.deepEqual(shiftRequestWindow(120,{startIndex:95,endIndex:114},1),{startIndex:100,endIndex:119});
+ assert.deepEqual(shiftRequestWindow(120,{startIndex:5,endIndex:24},-1),{startIndex:0,endIndex:19});
+ assert.deepEqual(clampRequestWindow(10,manual),{startIndex:0,endIndex:9});
+ assert.deepEqual(revealRequestWindow(120,-1,manual),manual);
+});
+
+test('Long context sessions render twenty local requests and initially reveal the selected source and call',()=>{
+ const make=(source:string,count:number)=>Array.from({length:count},(_,index)=>({key:source+':'+index,request:{sourceSessionId:source,eventSequence:10+index*3,turn:1,step:index+1}}));
+ const entries=[...make('a',120),...make('b',30)];
+ const render=(selectedKey:string|null)=>renderToStaticMarkup(React.createElement(HarnessContextPanel,{entries,selectedKey,onSelect(){},zh:true}));
+ const first=render(null);
+ assert.match(first,/第 1–20 \/ 120 次请求/);
+ assert.equal((first.match(/<tbody>[\s\S]*?<\/tbody>/)?.[0].match(/<tr/g)??[]).length,20);
+ assert.match(first,/>#67<\/button>/);assert.doesNotMatch(first,/>#70<\/button>/);
+ assert.match(first,/全量请求概览与范围选择/);
+ const tail=render('a:119');assert.match(tail,/第 101–120 \/ 120 次请求/);assert.match(tail,/>#367<\/button>/);
+ const other=render('b:29');assert.match(other,/第 11–30 \/ 30 次请求/);assert.doesNotMatch(other,/>#367<\/button>/);
+ const short=renderToStaticMarkup(React.createElement(HarnessContextPanel,{entries:make('s',6),selectedKey:null,onSelect(){},zh:true}));
+ assert.match(short,/第 1–6 \/ 6 次请求/);assert.doesNotMatch(short,/全量请求概览与范围选择/);
+});

@@ -1,11 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, Brush, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { dshContextTokens } from '@/lib/ingest/deepseek-harness-otel/context-membership';
+import { clampRequestWindow, DEFAULT_REQUEST_WINDOW_SIZE, revealRequestWindow, shiftRequestWindow, type RequestWindow } from './harness-request-window';
 
 type Reference = NonNullable<RawInteraction['harnessRequests']>[number];
 type Entry = { request: Reference; key: string; usage?: RawInteraction['usage'] };
@@ -100,36 +101,91 @@ export function HarnessBodyDetails({ json, zh, requestLabel, embedded = false, b
 }
 
 export function HarnessContextPanel({ entries, selectedKey, onSelect, zh, compact = false }: { compact?: boolean; entries: Entry[]; selectedKey: string | null; onSelect: (key: string) => void; zh: boolean }) {
-  const [source, setSource] = useState('');
+  const selectedSource = entries.find(entry => entry.key === selectedKey)?.request.sourceSessionId;
+  const [source, setSource] = useState(selectedSource ?? '');
   const sources = [...new Set(entries.map(entry => entry.request.sourceSessionId))];
   const currentSource = sources.includes(source) ? source : sources[0];
-  const rows = entries.filter(entry => entry.request.sourceSessionId === currentSource)
-    .sort((a, b) => a.request.eventSequence - b.request.eventSequence)
-    .map(entry => ({ ...entry, sourceTokens: dshContextTokens(entry.request) }));
-  const categories = [...new Set(rows.flatMap(row => Object.keys(row.sourceTokens ?? {})))];
-  const data = rows.map(row => ({ seq: row.request.eventSequence, requestKey: row.key, ...Object.fromEntries(categories.map(category => [category,
-    row.sourceTokens?.[category] ?? null])) }));
+  useEffect(() => { if (selectedSource) setSource(selectedSource); }, [selectedKey, selectedSource]);
+  const rows = useMemo(() => entries.filter(entry => entry.request.sourceSessionId === currentSource)
+    .sort((a, b) => a.request.eventSequence - b.request.eventSequence), [entries, currentSource]);
   return <details className="rounded-lg border border-border bg-card p-3" open>
     <summary className="cursor-pointer font-medium">{zh ? '逐请求上下文趋势' : 'Context by model request'}</summary>
     {sources.length > 1 && <div className="my-2 flex min-w-0 flex-wrap gap-3 text-sm">
       <label className="min-w-0 max-w-full">{zh ? '源会话 ' : 'Source session '}<select className="max-w-full" aria-label={zh ? '上下文源会话' : 'Context source session'} value={currentSource} onChange={event => setSource(event.target.value)}>{sources.map(id => <option key={id}>{id}</option>)}</select></label>
-
     </div>}
     <p className="text-xs text-foreground-secondary">{zh ? '分类 Token 为近似估算，与服务商实际用量分开显示；缺失保持为空。' : 'Category tokens are estimates, separate from provider usage. Missing data stays unknown.'}</p>
-    <div className={compact ? "h-52" : "h-72"} aria-label={zh ? '逐请求上下文分类堆叠柱状图' : 'Stacked context composition by request'}>
-      <ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 15, right: 15, left: 10, bottom: 5 }}>
+    <HarnessSourceTrend key={currentSource ?? ''} rows={rows} selectedKey={selectedKey} onSelect={onSelect} zh={zh} compact={compact} />
+    <details className="mt-2 text-xs text-foreground-secondary"><summary className="cursor-pointer">{zh ? '数据来源' : 'Data source'}</summary><p>dsh-context {rows.find(row => dshContextTokens(row.request))?.request.dshContext?.version ?? '—'}</p><p>{currentSource}</p></details>
+    {!rows.some(row => dshContextTokens(row.request)) && <p>{zh ? '没有可用投影：插件不可用、版本不兼容或历史不足；不展示成员估算，原有 Trace 仍可使用。' : 'No valid projection: unavailable plugin, incompatible version or insufficient history. Existing Trace remains available.'}</p>}
+  </details>;
+}
+
+function HarnessSourceTrend({ rows: entries, selectedKey, onSelect, zh, compact }: { rows: Entry[]; selectedKey: string | null; onSelect: (key: string) => void; zh: boolean; compact: boolean }) {
+  const rows = useMemo(() => entries.map(entry => ({ ...entry, sourceTokens: dshContextTokens(entry.request) })), [entries]);
+  const selectedIndex = rows.findIndex(row => row.key === selectedKey);
+  const [window, setWindow] = useState<RequestWindow>(() => revealRequestWindow(rows.length, selectedIndex));
+  const previousSelection = useRef({ key: selectedKey, index: selectedIndex });
+  useEffect(() => {
+    const previous = previousSelection.current;
+    previousSelection.current = { key: selectedKey, index: selectedIndex };
+    const selectionChanged = previous.key !== selectedKey || previous.index < 0 && selectedIndex >= 0;
+    setWindow(current => {
+      const next = selectionChanged ? revealRequestWindow(rows.length, selectedIndex, current) : clampRequestWindow(rows.length, current);
+      return next.startIndex === current.startIndex && next.endIndex === current.endIndex ? current : next;
+    });
+  }, [selectedKey, selectedIndex, rows.length]);
+  const range = clampRequestWindow(rows.length, window);
+  const visibleRows = rows.slice(range.startIndex, range.endIndex + 1);
+  const categories = [...new Set(rows.flatMap(row => Object.keys(row.sourceTokens ?? {})))];
+  const data = rows.map(row => ({ seq: row.request.eventSequence, requestKey: row.key, ...Object.fromEntries(categories.map(category => [category,
+    row.sourceTokens?.[category] ?? null])) }));
+  const visibleData = data.slice(range.startIndex, range.endIndex + 1);
+  const overviewMax = rows.reduce((max, row) => Math.max(max, Object.values(row.sourceTokens ?? {}).reduce((sum, value) => sum + value, 0)), 1);
+  const size = visibleRows.length;
+  return <>
+    {rows.length > DEFAULT_REQUEST_WINDOW_SIZE && <div className="mt-3" aria-label={zh ? '全量请求概览与范围选择' : 'All requests and range selection'}>
+      <p className="text-xs text-foreground-secondary">{zh ? `全部 ${rows.length} 次请求；拖动两端调整局部范围。` : `All ${rows.length} requests. Drag the handles to select a range.`}</p>
+      <div className="relative h-24">
+        {/* Keep the overview scale independent of Recharts Brush's local data range. */}
+        <svg className="absolute left-2 top-2 h-16" style={{ width: 'calc(100% - 16px)' }} viewBox={`0 0 ${rows.length} 64`} preserveAspectRatio="none" aria-hidden="true">
+          {rows.map((row, index) => {
+            let offset = 0;
+            return categories.map(category => {
+              const value = row.sourceTokens?.[category] ?? 0;
+              const height = value / overviewMax * 64;
+              offset += height;
+              return value > 0 ? <rect key={row.key + ':' + category} x={index} y={64 - offset} width={0.8} height={height} fill={categoryFills[category] ?? 'var(--foreground-muted)'} /> : null;
+            });
+          })}
+        </svg>
+        <ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
+        <Brush dataKey="seq" y={8} height={64} travellerWidth={8} stroke="var(--primary)" fill="transparent" ariaLabel={zh ? '请求显示范围' : 'Visible request range'}
+          startIndex={range.startIndex} endIndex={range.endIndex} tickFormatter={value => `#${value}`} onChange={next => {
+            if (next.startIndex === undefined || next.endIndex === undefined) return;
+            const bounded = clampRequestWindow(rows.length, { startIndex: next.startIndex, endIndex: next.endIndex });
+            setWindow(current => current.startIndex === bounded.startIndex && current.endIndex === bounded.endIndex ? current : bounded);
+          }} />
+      </BarChart></ResponsiveContainer></div>
+    </div>}
+    <div className="my-2 flex flex-wrap items-center justify-between gap-2">
+      <output className="text-xs text-foreground-secondary" aria-live="polite">{zh ? `第 ${size ? range.startIndex + 1 : 0}–${size ? range.endIndex + 1 : 0} / ${rows.length} 次请求` : `Requests ${size ? range.startIndex + 1 : 0}–${size ? range.endIndex + 1 : 0} of ${rows.length}`}</output>
+      {rows.length > DEFAULT_REQUEST_WINDOW_SIZE && <div className="flex flex-wrap gap-1">
+        <Button size="sm" variant="outline" disabled={range.startIndex === 0} onClick={() => setWindow(shiftRequestWindow(rows.length, range, -1))}>{zh ? `← 前 ${size} 次` : `← Previous ${size}`}</Button>
+        <Button size="sm" variant="outline" onClick={() => setWindow(revealRequestWindow(rows.length, selectedIndex))}>{zh ? '重置为20次' : 'Reset to 20'}</Button>
+        <Button size="sm" variant="outline" disabled={range.endIndex >= rows.length - 1} onClick={() => setWindow(shiftRequestWindow(rows.length, range, 1))}>{zh ? `后 ${size} 次 →` : `Next ${size} →`}</Button>
+      </div>}
+    </div>
+    <div className={compact ? 'h-52' : 'h-72'} aria-label={zh ? '逐请求上下文分类堆叠柱状图' : 'Stacked context composition by request'}>
+      <ResponsiveContainer width="100%" height="100%"><BarChart data={visibleData} margin={{ top: 15, right: 15, left: 10, bottom: 5 }}>
         <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="seq" /><YAxis width={60} /><Tooltip cursor={{ fill: 'var(--background-secondary)' }}
           itemStyle={{ color: 'var(--foreground)' }} labelStyle={{ color: 'var(--foreground)' }} contentStyle={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)', color: 'var(--foreground)' }} /><Legend formatter={value => <span className="text-xs text-foreground-secondary">{value}</span>} />
         {categories.map(category => <Bar key={category} dataKey={category} stackId="context" name={zh ? names[category] ?? category : category}
-          fill={categoryFills[category] ?? 'var(--foreground-muted)'}
-          isAnimationActive={false} cursor="pointer" onClick={point => { if (point?.payload?.requestKey) onSelect(point.payload.requestKey); }}>
-          {rows.map(row => <Cell key={row.key} stroke={selectedKey === row.key ? 'var(--primary)' : undefined} strokeWidth={selectedKey === row.key ? 2 : 0} />)}
+          fill={categoryFills[category] ?? 'var(--foreground-muted)'} isAnimationActive={false} cursor="pointer" onClick={point => { if (point?.payload?.requestKey) onSelect(point.payload.requestKey); }}>
+          {visibleRows.map(row => <Cell key={row.key} stroke={selectedKey === row.key ? 'var(--primary)' : undefined} strokeWidth={selectedKey === row.key ? 2 : 0} />)}
         </Bar>)}
       </BarChart></ResponsiveContainer>
     </div>
-    <p className="text-xs text-foreground-secondary">{zh ? '每根柱对应一次请求，分类组成堆叠展示；点击柱或下表请求定位 LLM。缺失数据不代表零值。' : 'Each stacked bar represents one request. Select a bar or table request to locate its LLM. Missing data does not mean zero.'}</p>
-    <div className="max-h-64 max-w-full overflow-auto"><table className="w-full text-left text-xs"><caption className="text-left">{zh ? '点击请求定位 LLM；分类值为近似估算 Token，实际用量单列。' : 'Select a request to locate its LLM. Category estimates and provider usage are separate.'}</caption><thead><tr><th>{zh ? '请求' : 'Request'}</th>{categories.map(category => <th key={category}>{zh ? names[category] ?? category : category}</th>)}<th>{zh ? '服务商实际 Input / Output / Cache' : 'Provider Input / Output / Cache'}</th></tr></thead><tbody>{rows.map(row => <tr key={row.request.eventSequence} className="border-t border-border"><td><button className="text-primary hover:underline aria-current:font-semibold" aria-current={selectedKey === row.key ? 'true' : undefined} onClick={() => onSelect(row.key)}>#{row.request.eventSequence}</button></td>{categories.map(category => <td key={category}>{row.sourceTokens?.[category] ?? '—'}</td>)}<td>{row.request.providerUsage ? `${row.request.providerUsage.input ?? '—'} / ${row.request.providerUsage.output ?? '—'} / ${row.request.providerUsage.cacheRead ?? '—'}` : '—'}</td></tr>)}</tbody></table></div>
-    <details className="mt-2 text-xs text-foreground-secondary"><summary className="cursor-pointer">{zh?'数据来源':'Data source'}</summary><p>dsh-context {rows.find(row=>row.sourceTokens)?.request.dshContext?.version??'—'}</p><p>{currentSource}</p></details>
-    {!rows.some(row => row.sourceTokens) && <p>{zh ? '没有可用投影：插件不可用、版本不兼容或历史不足；不展示成员估算，原有 Trace 仍可使用。' : 'No valid projection: unavailable plugin, incompatible version or insufficient history. Existing Trace remains available.'}</p>}
-  </details>;
+    <p className="text-xs text-foreground-secondary">{zh ? '每根柱对应一次请求；点击柱或下表请求定位 LLM。新选中的左侧调用会自动进入当前窗口。缺失数据不代表零值。' : 'Each stacked bar represents one request. Select a bar or table request to locate its LLM. Newly selected calls are revealed automatically. Missing data does not mean zero.'}</p>
+    <div className="max-h-64 max-w-full overflow-auto"><table className="w-full text-left text-xs"><caption className="text-left">{zh ? '当前范围内的请求；分类值为近似估算 Token，实际用量单列。' : 'Requests in the visible range. Category estimates and provider usage are separate.'}</caption><thead><tr><th>{zh ? '请求' : 'Request'}</th>{categories.map(category => <th key={category}>{zh ? names[category] ?? category : category}</th>)}<th>{zh ? '服务商实际 Input / Output / Cache' : 'Provider Input / Output / Cache'}</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.key} className="border-t border-border"><td><button className="text-primary hover:underline aria-current:font-semibold" aria-current={selectedKey === row.key ? 'true' : undefined} onClick={() => onSelect(row.key)}>#{row.request.eventSequence}</button></td>{categories.map(category => <td key={category}>{row.sourceTokens?.[category] ?? '—'}</td>)}<td>{row.request.providerUsage ? `${row.request.providerUsage.input ?? '—'} / ${row.request.providerUsage.output ?? '—'} / ${row.request.providerUsage.cacheRead ?? '—'}` : '—'}</td></tr>)}</tbody></table></div>
+  </>;
 }
