@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Bar, BarChart, Brush, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { dshContextTokens } from '@/lib/ingest/deepseek-harness-otel/context-membership';
 import { clampRequestWindow, DEFAULT_REQUEST_WINDOW_SIZE, revealRequestWindow, shiftRequestWindow, type RequestWindow } from './harness-request-window';
@@ -140,42 +140,17 @@ function HarnessSourceTrend({ rows: entries, selectedKey, onSelect, zh, compact 
   const data = rows.map(row => ({ seq: row.request.eventSequence, requestKey: row.key, ...Object.fromEntries(categories.map(category => [category,
     row.sourceTokens?.[category] ?? null])) }));
   const visibleData = data.slice(range.startIndex, range.endIndex + 1);
-  const overviewMax = rows.reduce((max, row) => Math.max(max, Object.values(row.sourceTokens ?? {}).reduce((sum, value) => sum + value, 0)), 1);
   const size = visibleRows.length;
   return <>
-    {rows.length > DEFAULT_REQUEST_WINDOW_SIZE && <div className="mt-3" aria-label={zh ? '全量请求概览与范围选择' : 'All requests and range selection'}>
-      <p className="text-xs text-foreground-secondary">{zh ? `全部 ${rows.length} 次请求；拖动两端调整局部范围。` : `All ${rows.length} requests. Drag the handles to select a range.`}</p>
-      <div className="relative h-24">
-        {/* Keep the overview scale independent of Recharts Brush's local data range. */}
-        <svg className="absolute left-2 top-2 h-16" style={{ width: 'calc(100% - 16px)' }} viewBox={`0 0 ${rows.length} 64`} preserveAspectRatio="none" aria-hidden="true">
-          {rows.map((row, index) => {
-            let offset = 0;
-            return categories.map(category => {
-              const value = row.sourceTokens?.[category] ?? 0;
-              const height = value / overviewMax * 64;
-              offset += height;
-              return value > 0 ? <rect key={row.key + ':' + category} x={index} y={64 - offset} width={0.8} height={height} fill={categoryFills[category] ?? 'var(--foreground-muted)'} /> : null;
-            });
-          })}
-        </svg>
-        <ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
-        <Brush dataKey="seq" y={8} height={64} travellerWidth={8} stroke="var(--primary)" fill="transparent" ariaLabel={zh ? '请求显示范围' : 'Visible request range'}
-          startIndex={range.startIndex} endIndex={range.endIndex} tickFormatter={value => `#${value}`} onChange={next => {
-            if (next.startIndex === undefined || next.endIndex === undefined) return;
-            const bounded = clampRequestWindow(rows.length, { startIndex: next.startIndex, endIndex: next.endIndex });
-            setWindow(current => current.startIndex === bounded.startIndex && current.endIndex === bounded.endIndex ? current : bounded);
-          }} />
-      </BarChart></ResponsiveContainer></div>
-    </div>}
     <div className="my-2 flex flex-wrap items-center justify-between gap-2">
       <output className="text-xs text-foreground-secondary" aria-live="polite">{zh ? `第 ${size ? range.startIndex + 1 : 0}–${size ? range.endIndex + 1 : 0} / ${rows.length} 次请求` : `Requests ${size ? range.startIndex + 1 : 0}–${size ? range.endIndex + 1 : 0} of ${rows.length}`}</output>
       {rows.length > DEFAULT_REQUEST_WINDOW_SIZE && <div className="flex flex-wrap gap-1">
         <Button size="sm" variant="outline" disabled={range.startIndex === 0} onClick={() => setWindow(shiftRequestWindow(rows.length, range, -1))}>{zh ? `← 前 ${size} 次` : `← Previous ${size}`}</Button>
-        <Button size="sm" variant="outline" onClick={() => setWindow(revealRequestWindow(rows.length, selectedIndex))}>{zh ? '重置为20次' : 'Reset to 20'}</Button>
+        <Button size="sm" variant="outline" onClick={() => setWindow(revealRequestWindow(rows.length, selectedIndex))}>{zh ? '重置为10次' : 'Reset to 10'}</Button>
         <Button size="sm" variant="outline" disabled={range.endIndex >= rows.length - 1} onClick={() => setWindow(shiftRequestWindow(rows.length, range, 1))}>{zh ? `后 ${size} 次 →` : `Next ${size} →`}</Button>
       </div>}
     </div>
-    <div className={compact ? 'h-52' : 'h-72'} aria-label={zh ? '逐请求上下文分类堆叠柱状图' : 'Stacked context composition by request'}>
+    <div className={compact ? 'h-48' : 'h-64'} aria-label={zh ? '逐请求上下文分类堆叠柱状图' : 'Stacked context composition by request'}>
       <ResponsiveContainer width="100%" height="100%"><BarChart data={visibleData} margin={{ top: 15, right: 15, left: 10, bottom: 5 }}>
         <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="seq" /><YAxis width={60} /><Tooltip cursor={{ fill: 'var(--background-secondary)' }}
           itemStyle={{ color: 'var(--foreground)' }} labelStyle={{ color: 'var(--foreground)' }} contentStyle={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)', color: 'var(--foreground)' }} /><Legend formatter={value => <span className="text-xs text-foreground-secondary">{value}</span>} />
@@ -186,6 +161,6 @@ function HarnessSourceTrend({ rows: entries, selectedKey, onSelect, zh, compact 
       </BarChart></ResponsiveContainer>
     </div>
     <p className="text-xs text-foreground-secondary">{zh ? '每根柱对应一次请求；点击柱或下表请求定位 LLM。新选中的左侧调用会自动进入当前窗口。缺失数据不代表零值。' : 'Each stacked bar represents one request. Select a bar or table request to locate its LLM. Newly selected calls are revealed automatically. Missing data does not mean zero.'}</p>
-    <div className="max-h-64 max-w-full overflow-auto"><table className="w-full text-left text-xs"><caption className="text-left">{zh ? '当前范围内的请求；分类值为近似估算 Token，实际用量单列。' : 'Requests in the visible range. Category estimates and provider usage are separate.'}</caption><thead><tr><th>{zh ? '请求' : 'Request'}</th>{categories.map(category => <th key={category}>{zh ? names[category] ?? category : category}</th>)}<th>{zh ? '服务商实际 Input / Output / Cache' : 'Provider Input / Output / Cache'}</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.key} className="border-t border-border"><td><button className="text-primary hover:underline aria-current:font-semibold" aria-current={selectedKey === row.key ? 'true' : undefined} onClick={() => onSelect(row.key)}>#{row.request.eventSequence}</button></td>{categories.map(category => <td key={category}>{row.sourceTokens?.[category] ?? '—'}</td>)}<td>{row.request.providerUsage ? `${row.request.providerUsage.input ?? '—'} / ${row.request.providerUsage.output ?? '—'} / ${row.request.providerUsage.cacheRead ?? '—'}` : '—'}</td></tr>)}</tbody></table></div>
+    <details className="mt-2 text-xs"><summary className="cursor-pointer text-foreground-secondary">{zh ? '查看当前窗口数据' : 'View window data'}</summary><div className="max-h-64 max-w-full overflow-auto"><table className="w-full text-left text-xs"><caption className="text-left">{zh ? '当前范围内的请求；分类值为近似估算 Token，实际用量单列。' : 'Requests in the visible range. Category estimates and provider usage are separate.'}</caption><thead><tr><th>{zh ? '请求' : 'Request'}</th>{categories.map(category => <th key={category}>{zh ? names[category] ?? category : category}</th>)}<th>{zh ? '服务商实际 Input / Output / Cache' : 'Provider Input / Output / Cache'}</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.key} className="border-t border-border"><td><button className="text-primary hover:underline aria-current:font-semibold" aria-current={selectedKey === row.key ? 'true' : undefined} onClick={() => onSelect(row.key)}>#{row.request.eventSequence}</button></td>{categories.map(category => <td key={category}>{row.sourceTokens?.[category] ?? '—'}</td>)}<td>{row.request.providerUsage ? `${row.request.providerUsage.input ?? '—'} / ${row.request.providerUsage.output ?? '—'} / ${row.request.providerUsage.cacheRead ?? '—'}` : '—'}</td></tr>)}</tbody></table></div></details>
   </>;
 }

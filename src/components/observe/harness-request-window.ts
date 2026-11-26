@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-export const DEFAULT_REQUEST_WINDOW_SIZE = 20;
+export const DEFAULT_REQUEST_WINDOW_SIZE = 10;
 
 export type RequestWindow = { startIndex: number; endIndex: number };
 
