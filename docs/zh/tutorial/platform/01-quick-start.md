@@ -75,7 +75,26 @@ changefreq: monthly
    </p>
 
 2. 根据部署模式完成登录，进入默认 Workspace。
-   - 默认 `LOGIN_MODE=standalone`：在登录页输入账号和管理员提供的一次性激活凭据，点击 **Sign In** 完成登录。账号由管理员在「配置 → 账号管理」中创建、批量导入或停用；首次登录后必须立即修改密码。存量未设置密码的账号可凭浏览器或 Agent 已持有的 API Key 完成设密，也可由管理员重置后使用新的激活凭据。登录失败时按页面提示检查输入后重试。
+   - 默认 `LOGIN_MODE=standalone` 使用账号和密码登录。**首次登录与改密**按以下步骤操作。
+
+     1. **取得初始密码。** 全新部署的初始账号为 `admin`。如果服务启动时设置了有效的 `AGENT_INSIGHT_ADMIN_PASSWORD`，就使用该密码。否则，服务会在启动时生成临时密码，写入服务运行机器的 `$AGENT_INSIGHT_HOME/.admin_activation_password`。源码部署或按 Docker 指南绑定默认宿主机目录时，在部署机器上运行下面的命令读取密码。
+
+        ```sh
+        cat ~/.agent-insight/.admin_activation_password
+        ```
+
+        如果使用 Docker 命名卷，在容器中读取。将 `agent-insight` 替换为实际容器名。
+
+        ```sh
+        docker exec agent-insight sh -c 'cat "${AGENT_INSIGHT_HOME:-/data/agent-insight}/.admin_activation_password"'
+        ```
+
+        普通用户使用管理员在 **配置 → 账号管理** 中创建的账号和提供的一次性激活凭据。
+
+     2. **登录。** 打开部署地址的 `/login`，在 **密码** 框填写初始密码或激活凭据，输入对应用户名，点击 **Sign In**。
+     3. **设置新密码。** 页面跳转到 **设置密码** 后，输入并确认新密码，点击 **保存** 进入 Workspace。之后用账号和新密码登录。
+
+     存量未设密账号可凭浏览器已保存的有效登录凭据完成设密。没有可用登录凭据时，联系管理员重置密码。建号、批量导入及停用详见[访问控制](../../how-to/platform/settings/access-control.md#本地账号与密码)。
    - `LOGIN_MODE=idaas_oauth`：点击“统一身份登录”，在 IDaaS 完成认证；平台使用 IDaaS 返回的唯一 UUID 作为本地账号和数据归属；人员接口返回账号别名时，侧边栏优先显示该别名，否则显示 UUID；用户可从侧边栏退出当前网页账号，再次登录仍进入统一身份授权。
    - 历史 `ORGANIZATION_MODE=true`：继续使用原组织网关和 Cookie 登录，不等同于 IDaaS OAuth 登录。
 
