@@ -18,6 +18,7 @@ import http from "node:http"
 import https from "node:https"
 import { randomUUID, createHash } from "node:crypto"
 import fs from "node:fs"
+import readline from "node:readline"
 import path from "node:path"
 import os from "node:os"
 import { URL, fileURLToPath } from "node:url"
@@ -500,17 +501,21 @@ function newestSpoolMtime(spoolDir) {
   return newest
 }
 
-function readJsonl(file) {
-  const records = []
-  try {
-    const text = fs.readFileSync(file, "utf8")
-    const lines = text.split("\n")
+function forEachJsonlRecord(file, onRecord) {
+  return new Promise((resolve, reject) => {
     let pluginPid = null
     let pluginCwd = null
-    for (const line of lines) {
-      if (!line || !line.trim()) continue
+    let count = 0
+    const stream = fs.createReadStream(file, { encoding: "utf8" })
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+    rl.on("line", (line) => {
+      if (!line || !line.trim()) return
       const obj = safeJsonParse(line)
-      if (!obj) continue
+      // A line can be valid JSON without being a record: a stray scalar
+      // (`true`, `123`, `"text"`) or an array. Attaching `__sourceFile` to a
+      // primitive throws a TypeError, which would abort the whole upload run —
+      // skip such lines instead of letting one bad line kill the batch.
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return
       if (obj.kind === "plugin.start") {
         const pid = Number(obj?.payload?.pid)
         if (Number.isFinite(pid) && pid > 0) pluginPid = pid
@@ -519,10 +524,56 @@ function readJsonl(file) {
       obj.__sourceFile = file
       if (pluginPid) obj.__pluginPid = pluginPid
       if (pluginCwd) obj.__pluginCwd = pluginCwd
-      records.push(obj)
+      count += 1
+      onRecord(obj)
+    })
+    // `error` and `close` both fire for a failed read: on ENOENT Node emits
+    // "error" first and then "close", but that ordering is not contractual.
+    // Without a settled guard, a `close` that wins the race turns "read failed"
+    // into "read 0 records" — the file is silently treated as empty.
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
     }
-  } catch {}
-  return records
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve(count)
+    }
+    rl.on("error", fail)
+    stream.on("error", fail)
+    rl.on("close", done)
+  })
+}
+
+/**
+ * Feed a batch of spool files into one state builder.
+ *
+ * A file can vanish between the directory listing and the read — the window
+ * spans every file read before it, so on a GB-scale spool it is minutes wide,
+ * not a millisecond race. One unreadable file must not abort the batch: it is
+ * reported in `unreadableFiles` (so the caller can exclude it from the scan
+ * checkpoint and re-select it next round) while the remaining files are still
+ * ingested.
+ */
+async function ingestJsonlBatch(files, builder) {
+  const unreadableFiles = new Set()
+  let totalRecords = 0
+  for (const file of files) {
+    try {
+      const count = await forEachJsonlRecord(file, builder.ingest)
+      totalRecords += count
+      appendUploaderLog(`main.read file=${file} records=${count}`)
+    } catch (error) {
+      unreadableFiles.add(path.resolve(file))
+      appendUploaderLog(
+        `main.readError file=${file} code=${error?.code || "unknown"} error=${error?.message || error} retry=next-scan`,
+      )
+    }
+  }
+  return { totalRecords, unreadableFiles }
 }
 
 function isPidAlive(pid) {
@@ -664,7 +715,7 @@ function saveCheckpoint(file, obj) {
   } catch {}
 }
 
-function buildState(records) {
+function createStateBuilder() {
   const sessions = new Map()
   const sessionParent = new Map()
   const sessionAgent = new Map()
@@ -719,13 +770,13 @@ function buildState(records) {
     if (ms > prev) sessionIdleAt.set(sid, ms)
   }
 
-  for (const r of records) {
+  function ingest(r) {
     const kind = r?.kind
     const recordSid = typeof r?.sessionID === "string" ? r.sessionID : ""
     if (recordSid) sessionRecordCounts.set(recordSid, (sessionRecordCounts.get(recordSid) || 0) + 1)
     if (kind === "llm.request" || kind === "llm.attempt") {
       const payload = r.payload || {}
-      if (!recordSid || !payload.messageID || !payload.request_id) continue
+      if (!recordSid || !payload.messageID || !payload.request_id) return
       const key = JSON.stringify([recordSid, payload.messageID])
       const current = inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
       current.requestIds.add(payload.request_id)
@@ -745,7 +796,7 @@ function buildState(records) {
         })
       }
       inferenceByMessage.set(key, current)
-      continue
+      return
     }
     if (kind === "plugin.shutdown") {
       const sid = r.sessionID
@@ -754,46 +805,46 @@ function buildState(records) {
         recordSessionPid(sid, r)
         cliCompletedSessions.add(sid)
       }
-      continue
+      return
     }
 
     if (kind === "system.prompt") {
       const sid = r.sessionID
-      if (!sid) continue
+      if (!sid) return
       recordSessionPid(sid, r)
       if (!sysPrompts.has(sid)) sysPrompts.set(sid, [])
       const arr = sysPrompts.get(sid)
       const sha = r?.payload?.sha256 || ""
-      if (sha && arr.some((x) => x.sha256 === sha)) continue
+      if (sha && arr.some((x) => x.sha256 === sha)) return
       arr.push({ ...r.payload, providerID: r.providerID, modelID: r.modelID })
-      continue
+      return
     }
 
     if (kind === "chat.message") {
       const sid = r.sessionID
-      if (!sid) continue
+      if (!sid) return
       recordSessionPid(sid, r)
       const mid = r?.payload?.messageID
       if (mid) userTextByMsg.set(mid, r?.payload?.text || "")
       ensureSession(sid)
-      continue
+      return
     }
 
     if (kind === "text.complete") {
       const sid = r.sessionID
-      if (!sid) continue
+      if (!sid) return
       recordSessionPid(sid, r)
       const mid = r?.payload?.messageID
       const pid = r?.payload?.partID
       if (mid && pid) partText.set(`${mid}:${pid}`, r?.payload?.text || "")
       ensureSession(sid)
-      continue
+      return
     }
 
-    if (kind !== "event") continue
+    if (kind !== "event") return
     const t = r?.payload?.type
     const ev = r?.payload?.event
-    if (!t || !ev) continue
+    if (!t || !ev) return
 
     if (t === "session.error") {
       const sid = ev.properties?.sessionID || recordSid
@@ -802,7 +853,7 @@ function buildState(records) {
       const responseHeaders = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]))
       const id = responseHeaders.get('x-request-id') ?? responseHeaders.get('x-agent-insight-call-id')
       if (sid && /^[a-f0-9-]{36}$/.test(id || '')) inferenceErrors.set(JSON.stringify([sid, id]), error.data.message || 'Model request failed')
-      continue
+      return
     }
 
     const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
@@ -813,7 +864,7 @@ function buildState(records) {
         recordSessionPid(sid, r)
         recordSessionIdle(sid, r)
       }
-      continue
+      return
     }
 
     if (t === "session.created" || t === "session.updated") {
@@ -827,18 +878,18 @@ function buildState(records) {
         }
         if (agent) sessionAgent.set(sid, agent)
       }
-      continue
+      return
     }
 
     if (t === "message.updated") {
       const info = ev?.properties?.info
       const sid = info?.sessionID || ev?.properties?.sessionID || r.sessionID
       const mid = info?.id
-      if (!sid || !mid) continue
+      if (!sid || !mid) return
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
       msgInfo.set(mid, info)
-      continue
+      return
     }
 
     if (t === "message.part.updated") {
@@ -849,7 +900,7 @@ function buildState(records) {
       const mid = ev?.properties?.messageID || p?.messageID
       const sid = ev?.properties?.sessionID || p?.sessionID || r.sessionID
       const pid = p?.id || ev?.properties?.partID
-      if (!sid || !mid || !pid) continue
+      if (!sid || !mid || !pid) return
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
       if (!msgParts.has(mid)) msgParts.set(mid, [])
@@ -870,7 +921,7 @@ function buildState(records) {
           sessionAgent.set(childSid, subagentType.trim())
         }
       }
-      continue
+      return
     }
 
     if (t === "message.part.delta") {
@@ -882,9 +933,9 @@ function buildState(records) {
       const pid = typeof props.partID === "string" && props.partID ? props.partID : ""
       const field = typeof props.field === "string" && props.field ? props.field : "text"
       const delta = typeof props.delta === "string" ? props.delta : ""
-      if (!sid || !mid || !delta) continue
+      if (!sid || !mid || !delta) return
       const eventId = typeof ev?.id === "string" ? ev.id : ""
-      if (eventId && seenDeltaEventIds.has(eventId)) continue
+      if (eventId && seenDeltaEventIds.has(eventId)) return
       if (eventId) seenDeltaEventIds.add(eventId)
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
@@ -920,11 +971,21 @@ function buildState(records) {
           text: "",
         })
       }
-      continue
+      return
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+  function finish() {
+    return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+  }
+
+  return { ingest, finish }
+}
+
+function buildState(records) {
+  const builder = createStateBuilder()
+  for (const record of records) builder.ingest(record)
+  return builder.finish()
 }
 
 function extractInvokedSkillsForOrigin(interactions) {
@@ -1661,18 +1722,14 @@ async function main() {
       `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
     )
 
-    // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
-    // "Maximum call stack size exceeded"——args 数量受调用栈限制。
-    // playground 一次会话经常落 30K+ 条事件到 jsonl，必须逐条 push。
-    const allRecords = []
-    for (const f of files) {
-      const records = readJsonl(f)
-      appendUploaderLog(`main.read file=${f} records=${records.length}`)
-      for (const r of records) allRecords.push(r)
-    }
-    appendUploaderLog(`main.records total=${allRecords.length}`)
+    // 逐行读、逐条喂状态机：spool 积压到 GB 级时，把全部记录读成数组会直接
+    // 堆溢出（#277），而这里只需要聚合后的状态，不需要保留原始记录。
+    // 单个文件读不到（列目录后被清理）不拖停整批，见 ingestJsonlBatch。
+    const builder = createStateBuilder()
+    const { totalRecords, unreadableFiles } = await ingestJsonlBatch(files, builder)
+    appendUploaderLog(`main.records total=${totalRecords}`)
 
-    const state = buildState(allRecords)
+    const state = builder.finish()
     applyInferenceGatewayRecords(state, getPreferredInsightDir(), apiKey)
 
     const roots = []
@@ -1822,9 +1879,16 @@ async function main() {
     }
 
     if (!uploadFailed && newestMtime > 0) {
-      for (const [file, mtime] of scannedMtimes) fileScanMtimes[path.resolve(file)] = mtime
+      // scannedMtimes 是在读取之前就填好的。读失败的文件必须排除，否则本轮会把
+      // 它写成"已扫描"，下一轮 selectJsonlFilesForUpload 直接跳过——ENOENT 无所
+      // 谓（文件已经没了），但权限错误 / 瞬时 EIO 这类可恢复失败会变成永久丢数据。
+      for (const [file, mtime] of scannedMtimes) {
+        if (unreadableFiles.has(path.resolve(file))) continue
+        fileScanMtimes[path.resolve(file)] = mtime
+      }
       ckpt.__fileScanMtimes = fileScanMtimes
-      if (!scopedFile) ckpt.__lastScanMtime = newestMtime
+      // 有文件没读成时不推进全局水位线，否则失败文件会被 lastScanMtime 永久滤掉。
+      if (!scopedFile && !unreadableFiles.size) ckpt.__lastScanMtime = newestMtime
       if (gatewayRevision) ckpt.__inferenceGatewayRevision = gatewayRevision
       saveCheckpoint(checkpointFile, ckpt)
       appendUploaderLog("main.checkpointUpdated lastScanMtime=" + newestMtime)
@@ -1839,6 +1903,9 @@ export {
   buildMessagesForSession,
   buildSignature,
   buildState,
+  createStateBuilder,
+  forEachJsonlRecord,
+  ingestJsonlBatch,
   ensureClientIdentity,
   clientIdentityForHost,
   isValidClientId,
