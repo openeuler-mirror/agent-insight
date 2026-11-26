@@ -94,7 +94,8 @@
     "deepagent:ex1": "node --import tsx src/example/deepagent/01-basic-agent.ts",
     "deepagent:ex2": "node --import tsx src/example/deepagent/02-skills-agent.ts",
     "deepagent:ex3": "node --import tsx src/example/deepagent/03-subagent-agent.ts",
-    "deepagent:ex4": "node --import tsx src/example/deepagent/04-memory-hitl-agent.ts"
+    "deepagent:ex4": "node --import tsx src/example/deepagent/04-memory-hitl-agent.ts",
+    "docs:check-images": "node scripts/check-doc-image-alt.mjs"
   },
   "dependencies": {
     "@ai-sdk/langchain": "^2.0.176",

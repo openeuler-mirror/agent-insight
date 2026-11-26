@@ -592,6 +592,7 @@
     "test/copy-text.test.ts",
     "test/dashboard-refresh-ref-sync.test.ts",
     "test/db-archive-script.test.ts",
+    "test/doc-image-alt.test.ts",
     "test/docker-entrypoint-logs.test.ts",
     "test/docker-entrypoint-runtime.test.ts",
     "test/docker-source-dependencies.test.ts",
