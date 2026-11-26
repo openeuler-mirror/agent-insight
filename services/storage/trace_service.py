@@ -301,6 +301,8 @@ class TraceRuntime:
     def close(self):
         self.stop.set()
         if self.worker:self.worker.join(timeout=35)
+        close=getattr(self.control,'close',None)
+        if callable(close):close()
 
 
 class RateLimited(StorageError):
@@ -746,7 +748,10 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 if index is not None:
                     if not re.fullmatch(r'[0-9]{1,8}',index):raise ValueError('invalid interaction index')
                     index=int(index)
-                result=reads.session_page(token,workspace,route['trace_id'],params.get('cursor'),params.get('spanId'),index or 0) if params.get('paged')=='1' else reads.session(token,workspace,route['trace_id'],view=view,index=index)
+                if params.get('paged')=='1' and (view not in ('interaction','interactions') or params.get('spanId')):
+                    result=reads.session_page(token,workspace,route['trace_id'],params.get('cursor'),params.get('spanId'),index or 0)
+                else:
+                    result=reads.session(token,workspace,route['trace_id'],view=view,index=index)
                 annotations=metadata.properties(token,workspace,route['trace_id'])
                 for key in ('label','query'):
                     if key in annotations.get('override_fields',[]):result[key]=annotations.get(key)
@@ -925,17 +930,27 @@ def runtime_from_config(path):
     elif backend in ('postgresql','opengauss'):
         from .relational import PostgreSQLControlStore,OpenGaussControlStore
         cls=PostgreSQLControlStore if backend=='postgresql' else OpenGaussControlStore
-        control=cls.from_dsn(config['control']['dsn'],schema=config['control']['schema'],artifact_directory=config['control']['artifacts'])
+        pool=config['control'].get('connection_pool',{} if backend=='postgresql' else None)
+        control=cls.from_dsn(config['control']['dsn'],schema=config['control']['schema'],artifact_directory=config['control']['artifacts'],connection_pool=pool)
     else:raise ValueError('unknown transactional backend')
-    pending_limit=config.get('max_pending_ingest_batches',256)
-    if type(pending_limit) is not int or not 1<=pending_limit<=10000:raise ValueError('max_pending_ingest_batches must be between 1 and 10000')
-    control.max_pending_ingest_batches=pending_limit
-    plan=control.migration_plan()
-    if plan['current_version']!=len(load_migrations(backend)) or plan['pending']:raise ValueError('explicit schema upgrade is required before service startup')
-    facts=ClickHouseStore(**config['clickhouse'])
-    facts.check_schema()
-    runtime=TraceRuntime(control,facts,cursor_secret=bytes.fromhex(config['cursor_secret_hex']),default_workspace=config.get('default_workspace'),controller_key_file=config.get('controller_key_file'))
-    return runtime,config
+    try:
+        pending_limit=config.get('max_pending_ingest_batches',256)
+        if type(pending_limit) is not int or not 1<=pending_limit<=10000:raise ValueError('max_pending_ingest_batches must be between 1 and 10000')
+        control.max_pending_ingest_batches=pending_limit
+        plan=control.migration_plan()
+        if plan['current_version']!=len(load_migrations(backend)) or plan['pending']:raise ValueError('explicit schema upgrade is required before service startup')
+        facts=ClickHouseStore(**config['clickhouse'])
+        facts.check_schema()
+        runtime=TraceRuntime(control,facts,cursor_secret=bytes.fromhex(config['cursor_secret_hex']),default_workspace=config.get('default_workspace'),controller_key_file=config.get('controller_key_file'))
+        optimization=config.get('trace_list_optimization',{})
+        if not isinstance(optimization,dict) or set(optimization)-{'enabled'} or type(optimization.get('enabled',True)) is not bool:
+            raise ValueError('invalid trace_list_optimization options')
+        runtime.queries.optimize_lists=optimization.get('enabled',True)
+        return runtime,config
+    except BaseException:
+        close=getattr(control,'close',None)
+        if callable(close):close()
+        raise
 
 
 def main(argv=None):

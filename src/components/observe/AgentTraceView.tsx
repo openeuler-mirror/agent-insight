@@ -627,7 +627,7 @@ export interface AgentTraceViewProps {
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
     /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
-    loadAllInteractions?: () => Promise<RawInteraction[]>;
+    loadAllInteractions?: () => Promise<{ interactions: RawInteraction[]; langfuseTraceNodes?: LangfuseTraceNode[] }>;
     /**
      * 点击 sub-agent 节点旁的跳转按钮触发。
      * sessionId 即 sub-agent 的 sessionID，等同于 Execution.taskId。
@@ -721,9 +721,8 @@ export default function AgentTraceView({
     }, [interactions, langfuseProjection, loadInteraction]);
 
     const ensureAllInteractionsLoaded = React.useCallback(async () => {
-        if (langfuseProjection) return langfuseProjection.interactions;
-        if (!loadAllInteractions) return interactions;
-        if (!interactions.some(item => (item as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred)) {
+        if (langfuseProjection && !loadMoreSpans) return langfuseProjection.interactions;
+        if (!loadAllInteractions || (!langfuseProjection && !interactions.some(item => (item as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred))) {
             return interactions;
         }
         if (!fullLoadPromiseRef.current) {
@@ -731,7 +730,11 @@ export default function AgentTraceView({
             const requestedSource = sourceInteractionsRef.current;
             setFullInteractionLoadError(null);
             const promise: Promise<RawInteraction[]> = loadAllInteractions()
-                .then(loaded => {
+                .then(({ interactions: loaded, langfuseTraceNodes: loadedNodes }) => {
+                    if (langfuseProjection && loadedNodes?.length && previousTraceIdentityRef.current === requestedTraceId
+                        && sourceInteractionsRef.current === requestedSource) {
+                        return buildLangfuseAgentTrace(loadedNodes, rootSessionId)?.interactions ?? loaded;
+                    }
                     if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
                         && loaded.length === requestedSource.length
                         && loaded.every((item, index) => item._payloadVersion && item._payloadVersion === requestedSource[index]._payloadVersion)) {
@@ -754,7 +757,7 @@ export default function AgentTraceView({
             fullLoadPromiseRef.current = promise;
         }
         return fullLoadPromiseRef.current;
-    }, [interactions, langfuseProjection, loadAllInteractions]);
+    }, [interactions, langfuseProjection, loadMoreSpans, loadAllInteractions, rootSessionId]);
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
     const tree = useMemo(() => {
@@ -1377,7 +1380,7 @@ export default function AgentTraceView({
                             isLast={true}
                             prefixBits={[]}
                         />
-                        {loadMoreSpans && <ScrollContinuation network onMore={() => { spanViewportRef.current?.pauseFollowing(); loadMoreSpans(); }} busy={loadingMoreSpans} error={moreSpansError} count={sourceInteractions.length} />}
+                        {loadMoreSpans && <ScrollContinuation network onMore={() => { spanViewportRef.current?.pauseFollowing(); loadMoreSpans(); }} busy={loadingMoreSpans} error={moreSpansError} count={langfuseTraceNodes?.length || sourceInteractions.length} />}
                     </TraceSpanViewport>
                 </div>
 

@@ -97,3 +97,19 @@ test('application deployment entry rejects old provisioning options', t => {
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /不支持/)
 })
+
+test('pool and Trace query options survive configuration derivation', t => {
+  const { file, config, save } = fixture(t, 'postgresql')
+  Object.assign(config.control, { connection_pool: { enabled: true, max_size: 8 } })
+  Object.assign(config, { trace_list_optimization: { enabled: false } })
+  save()
+  const loaded = storage.readConfig(file)
+  assert.deepEqual(loaded.control.connection_pool, { enabled: true, max_size: 8 })
+  assert.deepEqual(loaded.trace_list_optimization, { enabled: false })
+})
+
+test('pool configuration does not silently enable unsupported backends', t => {
+  const { file, config, save } = fixture(t)
+  Object.assign(config.control, { connection_pool: { enabled: true } }); save()
+  assert.throws(() => storage.readConfig(file), /PostgreSQL/)
+})

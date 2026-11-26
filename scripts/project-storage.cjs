@@ -20,9 +20,17 @@ function string(value, label, empty = false) {
 function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
   if (!fs.existsSync(file)) fail('缺少 config/storage.local.json；请复制 storage.sqlite.example.json 或 storage.postgresql.example.json，填写后 chmod 600');
   const config = runtime.readPrivate(file);
-  keys(config, ['control', 'clickhouse', 'runtime'], '配置');
+  keys(config, ['control', 'clickhouse', 'runtime', 'trace_list_optimization'], '配置');
   const c = config.control;
-  keys(c, ['backend', 'database', 'dsn', 'schema', 'artifacts'], 'control');
+  keys(c, ['backend', 'database', 'dsn', 'schema', 'artifacts', 'connection_pool'], 'control');
+  if (config.trace_list_optimization !== undefined) {
+    keys(config.trace_list_optimization, ['enabled'], 'trace_list_optimization');
+    if (typeof config.trace_list_optimization.enabled !== 'boolean') fail('trace_list_optimization.enabled 必须为布尔值');
+  }
+  if (c.connection_pool !== undefined) {
+    keys(c.connection_pool, ['enabled', 'min_idle', 'max_size', 'acquire_timeout_seconds', 'connect_timeout_seconds', 'idle_timeout_seconds', 'max_lifetime_seconds', 'health_check_idle_seconds'], 'control.connection_pool');
+    if (c.backend !== 'postgresql') fail('connection_pool 仅适用于 PostgreSQL');
+  }
   if (!['sqlite', 'postgresql', 'opengauss'].includes(c.backend)) fail('control.backend 必须是 sqlite、postgresql 或 opengauss');
   if (c.backend === 'sqlite') {
     if (c.dsn || c.schema || c.artifacts) fail('SQLite 仅接受 database；制品目录为 database.artifacts');
@@ -97,6 +105,7 @@ function configurationFile(config, home) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o077) fail('controller 必须为 0600 普通文件');
   }
   const cfg = { control: config.control, clickhouse: config.clickhouse,
+    ...(config.trace_list_optimization === undefined ? {} : { trace_list_optimization: config.trace_list_optimization }),
     port: config.runtime.corePort, controller_key_file: controller,
     cursor_secret_hex: previous?.cursor_secret_hex || crypto.randomBytes(32).toString('hex'),
     default_workspace: 'default', worker_enabled: true };

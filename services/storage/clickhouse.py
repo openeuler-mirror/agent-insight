@@ -256,6 +256,14 @@ class ClickHouseStore:
         raw=self._request(query,parameters={'workspace':workspace,'count':count,'offset':offset})
         return [json.loads(line)['trace_id'] for line in raw.splitlines() if line]
 
+    def query_trace_list(self,workspace,routes,plan):
+        from .trace_list_sql import query_trace_list
+        return query_trace_list(self,workspace,routes,plan)
+
+    def read_root_executions(self,workspace,routes):
+        from .trace_list_sql import read_root_executions
+        return read_root_executions(self,workspace,routes)
+
     def read_spans(self, workspace_id, bucket, trace_id, *, status=None, parent_span_id=None, after_span_id='', limit=200, search=None, time_after=None):
         if type(limit) is not int or not 1<=limit<=1000: raise ValueError('page size must be 1..1000')
         parameters=self._scope(workspace_id,bucket,trace_id)

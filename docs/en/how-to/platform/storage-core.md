@@ -17,7 +17,7 @@ Control mutations return committed values, including `updatedAt`, so conditional
 
 Dashboard and quality-analysis registration reads share the verified Core control scope. Report Traces, trajectory scores and diagnoses come exclusively from Core analytics snapshots; a missing snapshot fails explicitly. Request callbacks retain their identity scope until returned lazy queries finish. Successful Agent deletion retains the existing usage event; rejected or failed deletion is not counted.
 
-This implementation run validates startup with SQLite + ClickHouse and PostgreSQL + ClickHouse. openGauss remains supported but is not exercised against a real server in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 500 remain unchanged.
+This implementation run validates startup with SQLite + ClickHouse and PostgreSQL + ClickHouse. openGauss remains supported but is not exercised against a real server in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 50 are supported.
 
 
 The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 020 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
@@ -59,7 +59,7 @@ The script authenticates through Web and writes OTLP directly to Storage Core, w
 
 Background error clustering skips repeated full LLM input history, avoiding quadratic copying for large traces. Outputs and error classification are retained; detail callers keep the default history behavior.
 
-Reuse the same arguments and state file to resume; a new state file creates a new Trace. The state contains IDs, timestamps and progress, never credentials. Completion verifies span count and ownership and prints the original Trace page URL. Batch timing includes HTTP, transactions, indexing and polling, not just ClickHouse query latency. This prepares database test data and does not measure the Web collector compatibility layer. Test data remains available for inspection. The local 21,001-Span fixture has been verified across 43 pages of at most 500 Spans with no duplicate IDs; original-layout scrolling was also checked. Endpoint success alone does not establish full product acceptance.
+Reuse the same arguments and state file to resume; a new state file creates a new Trace. The state contains IDs, timestamps and progress, never credentials. Completion verifies span count and ownership and prints the original Trace page URL. Batch timing includes HTTP, transactions, indexing and polling, not just ClickHouse query latency. This prepares database test data and does not measure the Web collector compatibility layer. Test data remains available for inspection. The local 21,001-Span fixture was verified with the earlier batch size across 43 pages of at most 500 Spans with no duplicate IDs; original-layout scrolling was also checked. Endpoint success alone does not establish full product acceptance.
 
 ## Initialize and provision explicit targets
 
@@ -131,7 +131,7 @@ The Web entry accepts OTLP JSON/protobuf and gzip; decoded JSON is limited to4Mi
 
 Successful OTLP responses remain an empty JSON object or protobuf body. `X-Storage-Batch-Id` and `X-Storage-State` identify the durable receipt. Accepted means the private packet was fsynced and the control transaction committed. Poll `/v1/batches/<id>?workspace_id=default`; write-only collectors can inspect their own receipts. Only indexed means all sinks completed.
 
-The original `/trace` retains existing DTOs, filters, tags and detail controls. Trace records are requested by page. Opening a detail requests at most 500 lightweight Spans; scrolling near the end appends the next batch. The loading indicator shows only “Loading…”. It does not read ordinary OTLP payloads during structure loading. Selecting a Span loads its fixed interaction index and exact payload revision, using at most4 chunks per section page.
+The original `/trace` retains existing DTOs, filters, tags and detail controls. Trace records are requested by page. Opening a detail requests at most 50 lightweight Spans; scrolling near the end appends the next batch. The loading indicator shows only “Loading…”. It does not read ordinary OTLP payloads during structure loading. Selecting a Span loads its fixed interaction index and exact payload revision, using at most4 chunks per section page.
 
 Trace bundles retain v1 format and execution trees. Imports accept at most50MiB/500 executions, validate the entire tree first, remap colliding IDs and nested references, and return success only after all batches are indexed. Reuse an Idempotency-Key only to resume the same import. Export/full-session responses are capped at128MiB. Existing Langfuse views consume full nodes directly, so that compatibility path restores full bodies and is excluded from ordinary OTLP lazy-loading claims.
 
@@ -184,7 +184,7 @@ Pricing GET obtains observed models from the caller's IAM-authorized Trace scope
 
 For analytics consumers, explicitly migrate the isolated control store to 015 and initialize CH002. Existing pages and success payloads remain unchanged. Verify real IAM isolation, native Agent platform filtering, selected zero scores, current unresolved issues/reports and genuine RAS events. Write-only API keys may submit RAS events; reading statistics requires read permission. Initial indexing has a dedicated retry marker. Never treat503 as an empty dataset or claim 1000-collector capacity from endpoint tests.
 
-Version one is limited to preserving existing features, UI, workflows, statistics and data. Large Traces now load in batches of at most 500 Spans; watermarked snapshots and thousand-collector capacity remain unverified.
+Version one is limited to preserving existing features, UI, workflows, statistics and data. Large Traces now load in batches of at most 50 Spans; watermarked snapshots and thousand-collector capacity remain unverified.
 
 
 Validate Skill and Agent dynamic reads through the original `/skills` and `/agents` pages: list statistics, version trends and full execution output, including empty results, zero values and historical executions without Sessions. Keep existing static configuration and registrations; dynamic statistics use authorized core storage. A legacy login mapped to a different canonical IAM username must still discover only its own Agents. Skill runs/logs, Agent deletion and asset/configuration writes are outside this slice, these historical slice results do not constitute full acceptance; the current runtime refuses legacy control database access.
@@ -218,9 +218,9 @@ Resolve owner, file and source/target conflicts first. Retry apply using the sam
 
 `/trace` retains its original table, statistics, filters and pagination controls. The default timestamp-sorted list uses ClickHouse LIMIT/OFFSET and enriches only the selected page; complex filters still use the existing compatibility query. Statistics load separately.
 
-Core detail loads 500 Span structures initially and appends another 500 when scrolling to the loaded end. The original tree and detail panel remain. While a request is pending, only “Loading…” is shown; the indicator disappears afterwards, without loaded/total counts. Node metrics describe loaded spans. Signed cursors bind permissions, Trace and revision. A changed revision requires refresh (409). Payload reads select Span ID directly. Small legacy-format Traces retain their original conversion.
+Core detail returns up to 50 Span structures on opening and appends up to 50 per batch when scrolling to the loaded end. When the tree is too short to scroll, choose **Show more calls**. The original tree and detail panel remain. While a request is pending, only “Loading…” is shown; the indicator disappears afterwards, without loaded/total counts. Node metrics describe loaded spans. Signed cursors bind permissions, Trace and revision. A changed revision requires refresh (409). Payload reads select Span ID directly. Small legacy-format Traces retain their original server-side conversion and are returned in batches.
 
-Validation covered 21,001 spans in 43 pages without duplicates or omissions, plus Chrome scrolling to 1,500 spans in the original tree. Global search, full analysis and very large complex legacy sources still require further validation.
+Earlier validation at 500 spans per batch covered 21,001 spans in 43 pages without duplicates or omissions, plus Chrome scrolling to 1,500 spans in the original tree. Global search, full analysis and very large complex legacy sources still require further validation.
 
 ## Configure external databases and install
 
@@ -241,3 +241,11 @@ Use start.sh for production, develop_start.sh for development, status.sh for sta
 With Docker running and Compose installed, execute `bash scripts/start_postgresql.sh`, then `bash scripts/start_clickhouse.sh`, then `bash scripts/install.sh`. Database scripts create a private project storage.local.json with random passwords only if absent; existing config is never overwritten. Defaults: PostgreSQL 16 at loopback 15432, ClickHouse 26.8 at loopback 18123, application home ~/.agent-insight-postgresql, Core/Web 4319/3000. Named volumes persist across restarts. Lost configuration with existing volumes blocks password regeneration. Existing remote databases should skip these scripts.
 
 Use each database script with --stop to stop only its service while retaining volumes. stop.sh stops Core/Web only. All commands accept --config FILE. The application runs natively in this workflow; the older full-container Compose fixture still uses SQLite/ClickHouse.
+
+## Trace list connection and query reuse
+
+PostgreSQL Storage Core uses a process-wide connection pool by default. Requests borrow a connection and return it after each transaction. Browser logout does not close shared connections or revoke API keys used by other clients. Reads retain `REPEATABLE READ READ ONLY`; broken connections are discarded and replaced on demand. SQLite, openGauss, and ClickHouse HTTP transport retain their existing connection behavior.
+
+Ordinary Trace lists enrich only the current database page in batches. Ordinary statistics and framework/source/Agent options use database aggregation. Outcome overrides, historical sources, advanced filters, and fields without equivalent SQL semantics explicitly fall back to compatibility reads, which may still scan records. Root Span attributes are read when execution metadata is needed; child Spans are not loaded in full. Detail pages continue to return at most 50 structural Spans per batch.
+
+Set `control.connection_pool.enabled=false` or `trace_list_optimization.enabled=false` in the existing Core configuration and restart to disable either optimization independently. No data reload is needed. The default pool limit is 16 connections per runtime, with an idle retention baseline of 2; account for all instances when budgeting database connections.
