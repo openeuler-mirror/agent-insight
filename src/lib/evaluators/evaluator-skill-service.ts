@@ -17,6 +17,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '@/lib/storage/prisma';
+import { prismaRaw } from '@/lib/storage/prisma';
+import { getAssetVersion } from '@/lib/evaluation-assets/store';
+import type { AssetQueries } from '@/lib/evaluation-assets/types';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { resolveVersionStorageRoot } from '@/lib/engine/skill-opt/version-snapshot';
 import type { EvaluatorCard } from './custom-evaluator-model';
@@ -117,15 +120,19 @@ export function savedSkillBindings(skills: EvaluatorSkillSelection[] = []): Eval
 }
 
 export interface CustomSnapshots { schemaVersion: 1; cards: Record<string, EvaluatorCard> }
-export async function freezeCustomEvaluators(user: string, ids: string[]): Promise<CustomSnapshots> {
+export type EvaluatorVersionRefs = Record<string, string>;
+export async function freezeCustomEvaluators(user: string, ids: string[], refs: EvaluatorVersionRefs = {}): Promise<CustomSnapshots> {
+  if (Object.keys(refs).some(id => !ids.includes(id))) throw new EvaluatorSkillError('评估器版本引用与所选评估器不一致');
   const customIds = ids.filter(id => id.startsWith('custom-'));
   const cards: Record<string, EvaluatorCard> = Object.create(null);
   if (customIds.length) {
     const current = await readUserCustomEvaluators(user) as EvaluatorCard[];
     const store = new EvaluatorSkillStore();
     for (const id of customIds) {
-      const card = current.find(c => c.id === id);
+      const version = refs[id] ? await getAssetVersion(prismaRaw as unknown as AssetQueries, { user, versionId: refs[id], kind: 'evaluator', businessId: id }) : null;
+      const card = version ? version.content as unknown as EvaluatorCard : current.find(c => c.id === id);
       if (!card) throw new EvaluatorSkillError(`评估器 ${id} 不存在`);
+      if (card.id !== id) throw new EvaluatorSkillError('评估器冻结版本不匹配');
       for (const skill of savedSkillBindings(card.llmConfig?.skills)) await store.load(user, skill.snapshotHash);
       cards[id] = JSON.parse(JSON.stringify(card));
     }
@@ -133,8 +140,8 @@ export async function freezeCustomEvaluators(user: string, ids: string[]): Promi
   return { schemaVersion: 1, cards };
 }
 
-export async function withFrozenCustomEvaluators(user: string, ids: string[], snapshot: Record<string, unknown> = {}) {
-  return { ...snapshot, customEvaluatorSnapshots: await freezeCustomEvaluators(user, ids) };
+export async function withFrozenCustomEvaluators(user: string, ids: string[], snapshot: Record<string, unknown> = {}, refs: EvaluatorVersionRefs = {}) {
+  return { ...snapshot, customEvaluatorSnapshots: await freezeCustomEvaluators(user, ids, refs) };
 }
 
 export async function resolveFrozenCustomEvaluator(user: string, id: string, snapshot: Record<string, unknown>): Promise<EvaluatorCard | null> {

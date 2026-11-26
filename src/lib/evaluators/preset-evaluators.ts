@@ -41,6 +41,23 @@ export const DEFAULT_SELECTED_PRESET_IDS: readonly string[] = [
 
 export const presetEvaluators: EvaluatorCard[] = [
   {
+    id: 'preset-conversation-rules',
+    name: '逐轮业务规则',
+    description: '按每轮输入核对回复的精确／包含文本匹配、必须／禁止调用的工具与参数，以及实际 Skill 加载证据。不调用模型，缺少证据时不计分；历史规则按原定义执行。',
+    evaluatorType: 'Code',
+    source: 'preset',
+    category: 'traj',
+    targetTypes: ['轨迹'],
+    objectives: ['业务规则'],
+    scenarios: ['多轮对话', '业务验收'],
+    runMode: '确定性规则',
+    scoreRange: '0-100',
+    popularity: 80,
+    mappedMetrics: ['逐轮规则满足率'],
+    status: 'ready',
+    runtimeNote: 'conversation-rules.ts · Case 逐轮配置与原始 Trace 证据',
+  },
+  {
     id: SKILL_TRIGGER_ANALYZER_EVALUATOR_ID,
     name: 'skill-trigger-analyzer',
     description: '逐条比较数据集应触发标注与当前 Skill 的真实路由结果，每条 Case 只输出一个「触发准确率」评分点。',

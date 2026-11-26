@@ -22,6 +22,8 @@ import { retryResultRow } from '@/lib/engine/experiment/run-experiment';
 import { retryBenchmarkEvaluation } from '@/lib/benchmark/evaluation-preparation-service';
 import { benchmarkErrorResponse } from '@/lib/benchmark/api-error';
 import { prisma } from '@/lib/storage/prisma';
+import { requireExperimentVersionActor } from '@/lib/evaluation-assets/experiment-versions';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,8 +41,11 @@ export async function POST(
 
     const result = await prisma.experimentEvalResult.findFirst({
       where: { id: resultId, experimentId: id, case: { experiment: { user: username } } },
-      select: { evaluatorId: true },
+      select: { evaluatorId: true, case: { select: { experiment: { select: { configSnapshotJson: true } } } } },
     });
+    let versioned = false;
+    try { versioned = Boolean(JSON.parse(result?.case.experiment.configSnapshotJson || '{}')?.assetVersions); } catch { /* Legacy snapshots may be incomplete. */ }
+    if (versioned) await requireExperimentVersionActor(req, username);
     if (result?.evaluatorId.startsWith('benchmark:')) {
       const retry = await retryBenchmarkEvaluation({ experimentId: id, resultId, user: username });
       recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.retry' });
@@ -55,6 +60,7 @@ export async function POST(
 
     return NextResponse.json({ status });
   } catch (error) {
+    if (error instanceof EvaluationAssetError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     if (error && typeof error === 'object' && 'code' in error) {
       return benchmarkErrorResponse(error, 'benchmark/evaluations/retry');
     }

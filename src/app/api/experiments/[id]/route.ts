@@ -42,7 +42,7 @@ import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseStoredEvaluatorRunConfigs } from '@/lib/evaluators/evaluator-run-config';
 import { parseStoredEvaluatorExecutionConfig } from '@/lib/evaluators/evaluator-execution-config';
 import { getComparisonDetail } from '@/lib/engine/experiment/comparison-runner';
-import { withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
+import { readExperimentDatasetCaseBinding, withoutExperimentDatasetCaseBinding } from '@/lib/engine/experiment/dataset-case-binding';
 import { getExperimentBaselineTrend } from '@/lib/engine/experiment/baseline-trend';
 import { getBenchmarkAdapter } from '@/lib/benchmark/adapter-registry';
 import { deriveBenchmarkTraceStatus } from '@/lib/benchmark/detail-status';
@@ -115,7 +115,7 @@ export async function GET(
 
     const experimentMeta = await prisma.experiment.findFirst({
       where: { id, deletedAt: null, user: username },
-      select: { id: true, type: true },
+      select: { id: true, type: true, configSnapshotJson: true, evaluatorConfigsJson: true },
     });
     if (!experimentMeta) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
@@ -128,7 +128,8 @@ export async function GET(
         casePageSize,
         caseId: wantCaseId || undefined,
       });
-      return NextResponse.json(detail);
+      const snapshot=parseJsonValue(experimentMeta.configSnapshotJson) as Record<string,unknown>|null;
+      return NextResponse.json({...detail,configSnapshot:snapshot,evaluatorConfigs:parseStoredEvaluatorRunConfigs(experimentMeta.evaluatorConfigsJson,detail.evaluatorIds),reusableConfig:{agentName:detail.agentName,traceSource:'existing',assetVersions:snapshot?.assetVersions||null,sourceSnapshot:snapshot}});
     }
 
     // 单组实验：走原聚合路径（响应 shape 不变）
@@ -735,6 +736,7 @@ export async function GET(
       baselineTrend,
       reusableConfig: {
         schemaVersion: 1,
+        assetVersions: configSnapshot?.assetVersions || null,
         sourceExperimentId: experiment.id,
         datasetId: typeof configSnapshot?.agentEvalDatasetId === 'string'
           ? configSnapshot.agentEvalDatasetId
@@ -806,10 +808,12 @@ export async function GET(
           hasTask: Boolean(currentTraceId),
         });
         let caseValues: Record<string, unknown> | null = null;
+        let datasetBinding: ReturnType<typeof readExperimentDatasetCaseBinding> = null;
         if (c.caseValuesJson) {
           try {
             const parsed = JSON.parse(c.caseValuesJson) as unknown;
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              datasetBinding = readExperimentDatasetCaseBinding(parsed as Record<string, unknown>);
               caseValues = withoutExperimentDatasetCaseBinding(parsed as Record<string, unknown>);
             }
           } catch {
@@ -825,6 +829,8 @@ export async function GET(
           taskId: effectiveTaskId,
           input: c.input || ex?.query || '',
           datasetInput: c.datasetInput,
+          datasetId: datasetBinding?.datasetId || null,
+          datasetCaseId: datasetBinding?.caseId || null,
           actualOutput: c.actualOutput || ex?.finalResult || '',
           actualModel: ex?.model || (typeof caseValues?.routing_model === 'string' ? caseValues.routing_model : null),
           actualHost: ex?.hostIp || null,

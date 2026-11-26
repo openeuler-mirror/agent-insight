@@ -6,6 +6,20 @@ changefreq: monthly
 ---
 
 <a id="评估与实验"></a>
+
+## 资产版本、实验冻结与多轮执行
+
+SQLite 使用 `EvaluationAssetHead`、`EvaluationAssetVersion` 和 `EvaluationAssetDraft` 管理 Agent、评估器及评测集。Head 指向当前发布版本，Version 内容不可变；数据集 Draft 与已发布投影分离，按 Case 保存并用 revision 比较避免并发覆盖。版本发布与原数据投影在同一事务中完成，旧 API 立即更新时自动记录变化前后版本。派生缓存、运行进度与时间戳不参与业务版本判定。
+
+Agent 对外身份为平台与规范化名称，版本不以 IP、worker 或模型为身份。用户登记版本只说明外部变更；执行参数和实际 Trace 证据另行保存。实验 `configSnapshotJson.assetVersions` 保存服务器解析的版本引用和定义，Case 的 `caseValuesJson.turns` 保留逐轮定义；原自建评估器 `customEvaluatorSnapshots` 仍是运行冻结入口。重试与按原条件复测读取冻结定义。
+
+新增 `/api/evaluation-assets` 以实际登录 Key 解析用户，拒绝把请求中的 `user` 当作版本权限；包含资产引用的实验创建、运行与克隆也校验真实身份。历史定义用于追溯，不能替代执行端凭据或 Benchmark 私有评测内容。
+
+多轮执行复用原 RUN_EXPERIMENT_CASE、Trace Attempt 与取消机制。任务协议只传 `{version:1,turns:[{id,input}]}`，不下发预期答案。OpenCode v2 在一个 Case 内续接同一会话；服务端核验完成回执及最终 Trace 的全部轮次后绑定。逐轮规则通过原实验评估器分发，原始 interactions 回放按工具调用 ID 关联证据，未知事实不推断为通过。新逐轮定义以 `expectation.outputMatch` 显式启用 `exact` 或 `contains` 文本匹配，直接比较本轮 `expectedOutput` 与最终助手回复；空预期不检查输出，不调用模型。工具与 Skill 检查基于通用 Trace 的调用、参数、加载及完成证据，不要求 Agent 在回答中提供业务字段。历史定义未携带该标记时保留原评分口径，只有用户明确转换、发布新版本才启用简化规则。
+
+版本分析保留原 Trace 标签分析，新增实验资产记录和趋势：每一类趋势只改变一项，其他版本、执行参数与 Case 条件相同才归到同一组；固定条件在图旁展示。数据集版本变化表示验收条件变化，不能直接解释为 Agent 能力改善。
+
+
 评估与实验用于把真实运行中的问题转化为可重复、可比较的质量验证。你可以直接圈选已有 Trace，也可以让平台按数据集 Case 生成新 Trace，再使用一个或多个评估器产出实验级和 Case 级结论。
 
 > **Note**

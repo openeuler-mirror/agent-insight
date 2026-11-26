@@ -44,6 +44,9 @@ import { runCustomEvaluatorWithSkills, CustomEvaluatorExecutionError } from '@/l
  */
 
 import { createHash } from 'node:crypto';
+import { normalizeConversationTurns, type ConversationTurn } from '@/lib/evaluation-conversation';
+import { replayConversation } from './conversation-evidence';
+import { CONVERSATION_RULES_EVALUATOR_ID, evaluateConversationRules } from './conversation-rules';
 import { prisma } from '@/lib/storage/prisma';
 import type { Prisma } from '@prisma/client';
 import {
@@ -118,6 +121,7 @@ import { isRigorPresetId, runRigorPreset } from './rigor-preset-evaluators';
 import { deriveSettledExperimentStatus } from './detail-agg';
 import { loadExperimentRootCauseResolutionContext } from './dataset-root-cause-context';
 import { withExperimentDatasetCaseBinding } from './dataset-case-binding';
+import { EvaluationAssetError } from '@/lib/evaluation-assets/types';
 import { isSimilarityPresetId, runSimilarityPreset } from './similarity-preset-evaluators';
 import { activeCaseOperations, assertExperimentActive, markExperimentCleanupUnconfirmed, withExperimentCancellation } from './cancellation-context';
 import { parseStoredEvaluatorExecutionConfig, type EvaluatorExecutionSnapshot } from '@/lib/evaluators/evaluator-execution-config';
@@ -147,6 +151,7 @@ async function resolveEvaluatorCard(user: string, evaluatorId: string): Promise<
 // ── case 运行时上下文（Execution + 可选 interactions 工具序列）─────────────
 
 interface CaseRuntime {
+  conversation?: ConversationTurn[];
   judgeCtx: JudgeCaseContext;
   /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文；
    *  安全与创意评估器也共用此类型（见 §4.3 实现签名）。 */
@@ -337,6 +342,7 @@ async function loadCaseRuntime(caseRow: {
   return {
     judgeCtx,
     faithfulCtx,
+    ...(caseValues?.turns !== undefined ? { conversation: normalizeConversationTurns({ input: caseInput, expectedOutput: caseRow.referenceOutput ?? undefined, turns: caseValues.turns }) } : {}),
     ...(typeof shouldTrigger === 'boolean'
       ? { trigger: { shouldTrigger, skillTriggered: targetSkillInvoked, ...(triggerReason ? { reason: triggerReason } : {}) } }
       : {}),
@@ -370,6 +376,10 @@ async function evaluateOnce(
   configs: EvaluatorRunConfigMap,
   frozenSnapshot: Record<string, unknown> = {},
 ): Promise<EvaluatorOutput> {
+  if (evaluatorId === CONVERSATION_RULES_EVALUATOR_ID) {
+    if (!runtime.conversation) return { summary: '不适用：Case未配置逐轮业务规则' };
+    return evaluateConversationRules(runtime.conversation, replayConversation(runtime.faithfulCtx.interactions ?? []));
+  }
   if (isSkillTriggerAnalyzerId(evaluatorId)) {
     if (!runtime.trigger) throw new Error('触发分析 Case 缺少 should_trigger 标注');
     return evaluateSkillTriggerAnalysis(runtime.trigger);
@@ -916,9 +926,17 @@ export async function ensureEvalExperiment(params: {
   if (params.existingId) {
     const found = await prisma.experiment.findFirst({
       where: { id: params.existingId, user: params.user },
-      select: { id: true },
+      select: { id: true, configSnapshotJson: true },
     });
-    if (found) { await assertExperimentActive(found.id); return found.id; }
+    if (found) {
+      let snapshot: unknown;
+      try { snapshot = JSON.parse(found.configSnapshotJson || '{}'); } catch { snapshot = null; }
+      if (snapshot && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'assetVersions')) {
+        throw new EvaluationAssetError('该实验已冻结资产版本，不能作为 Skill 或批量评测容器复用。请到原实验详情追加该版本已有 Case；新题请先发布评测集新版本并创建新实验。', 409, 'ASSET_BACKING_FORBIDDEN');
+      }
+      await assertExperimentActive(found.id);
+      return found.id;
+    }
   }
   const exp = await prisma.experiment.create({
     data: {
@@ -964,6 +982,13 @@ export async function addEvalExperimentCase(
   options?: { onlyIfNew: true },
 ): Promise<string | null> {
   await assertExperimentActive(experimentId);
+  const container = await prisma.experiment.findUnique({ where: { id: experimentId }, select: { configSnapshotJson: true } });
+  let snapshot: Record<string, unknown> = {};
+  try { snapshot = JSON.parse(container?.configSnapshotJson || '{}'); } catch { /* Legacy snapshots can be absent. */ }
+  const refs = snapshot?.assetVersions as Record<string, unknown> | undefined;
+  if (refs && refs.dataset !== undefined && refs.dataset !== null) {
+    throw new EvaluationAssetError('固定数据集版本的实验只能在实验详情中追加该版本的 Case，不能作为专用评测容器', 409, 'ASSET_BACKING_FORBIDDEN');
+  }
   const createOrReuse = async (): Promise<string | null> => {
     if (c.datasetBinding) await assertExperimentActive(experimentId, `dataset:${c.datasetBinding.caseId}`);
     if (c.taskId) {

@@ -29,7 +29,7 @@ jobs:
     name: 生产编译
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 35
     outputs:
       tested_sha: ${{ steps.phase.outputs.tested_sha }}
@@ -99,7 +99,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 45
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -168,7 +168,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -230,7 +230,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -292,7 +292,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -354,7 +354,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -416,7 +416,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -478,7 +478,7 @@ jobs:
     if: ${{ always() }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 15
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}

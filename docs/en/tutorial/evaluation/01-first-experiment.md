@@ -58,6 +58,20 @@ If a machine judgment is clearly wrong, save a human correction with a reason. C
 
 When Benchmark evaluation fails, inspect the Case's failure stage and error before asking the administrator to investigate service or image issues.
 
+## Try versioned multi-turn evaluation (SQLite)
+
+If you have a JSONL file for a full multi-turn dataset, choose **Create dataset → Import from JSONL (从 JSONL 导入)** to create and publish `v1` in one step. Then select that version in step 2. See the [JSONL example, Chinese](../../../zh/how-to/evaluation/datasets.md#从-jsonl-创建整套多轮评测集).
+
+1. Edit each Case in an evaluation dataset. Configure turn inputs, expected text with exact/contains matching, required/forbidden tools and argument checks, and an expected Skill when needed. Save each Case draft, then publish a dataset version.
+2. In the existing experiment wizard, select the dataset and its version. For **Generate Trace**, choose an online OpenCode v2 target, model and Agent version; the client must report multi-turn session-continuation capability.
+3. Select Cases, inspect their read-only turn rules in step 3, and select evaluator versions in step 4, including **Per-turn business rules (逐轮业务规则)**. Evaluator card details also expose saved configurations and version comparisons.
+4. All turn inputs for one Case execute sequentially in one conversation. The Agent receives inputs only, without expected answers or scoring rules. A retry starts a new conversation. Unsupported targets are blocked instead of silently executing only the first input.
+5. Each multi-turn Case stays on one row. Open its trajectory evaluation for per-turn scores, evidence, suggestions and Trace anchors. Missing evidence remains unscored; the deterministic rules do not invoke a judging model.
+6. **Add Case** on a completed experiment accepts only Cases from its frozen dataset version. Publish a new dataset version and create another experiment for new questions. An explicit reference-answer override is recorded for this experiment and does not change frozen turn rules.
+7. Reuse the configuration to rerun the same versions, or inspect asset version records and trends under **Version analysis → Experiment assets (实验资产)**. Agent versions are user declarations, not external deployment or code verification.
+
+OpenGauss retains the original workflow. Specialized Skill generation/A/B and FI generation remain single-turn; existing complete multi-turn Traces can still be evaluated.
+
 ## Next steps
 
 - [Experiment HTTP API](../../reference/evaluation/experiments-api.md) and [Benchmark protocol](../../reference/evaluation/benchmark-protocol.md).

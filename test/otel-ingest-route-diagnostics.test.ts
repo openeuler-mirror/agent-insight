@@ -130,6 +130,51 @@ test('decode failures that previously returned silently now report 400/415 with 
   assert.equal(failures[0].contentEncoding, 'gzip');
 });
 
+test('OTLP traces accept gzip JSON and reject an invalid gzip stream', async t => {
+  setup(t);
+  t.mock.method(db, 'findUserByApiKey', async () => ({ username: 'fixture' }));
+  const headers = { 'content-encoding': '  GZip  ', 'x-witty-api-key': 'never-log-key' };
+  const accepted = await POST(request(headers, new Uint8Array(gzipSync(JSON.stringify(body)))));
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).persisted, 1);
+
+  const invalid = await POST(request(headers));
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: 'Invalid OTLP traces gzip payload' });
+});
+
+for (const [route, post] of [['ingest', POST], ['public', PUBLIC_POST]] as const) {
+  for (const failure of ['unsupported-encoding', 'decompression-limit'] as const) {
+    test(`${route} OTLP traces reject ${failure} without writing spool`, async t => {
+      const f = setup(t);
+      const lookup = t.mock.method(db, 'findUserByApiKey', async () => ({ username: 'fixture' }));
+      const oversized = failure === 'decompression-limit';
+      const payload = oversized
+        ? new Uint8Array(gzipSync(Buffer.alloc(64 * 1024 * 1024 + 1, 0x20)))
+        : JSON.stringify(body);
+      const req = new Request(`http://localhost/api/${route === 'public' ? 'public' : 'ingest'}/otel/v1/traces`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-encoding': oversized ? 'gzip' : 'br',
+          'x-witty-api-key': 'fixture-secret',
+        },
+        body: payload,
+      });
+      const response = await post(req);
+      assert.equal(lookup.mock.callCount(), 1);
+      assert.equal(response.status, oversized ? 413 : 415);
+      assert.deepEqual(await response.json(), {
+        error: oversized
+          ? 'Decompressed OTLP traces payload exceeds 64 MiB'
+          : 'Unsupported OTLP traces content encoding. Use gzip or identity.',
+      });
+      assert.equal(fs.existsSync(path.join(f.temp, 'spool')), false);
+      assert.equal(f.lines.find(x => x.event === 'failed')?.stage, 'decode');
+    });
+  }
+}
+
 test('authentication rejection and filesystem failure preserve response behavior while locating the failed stage', async t => {
   const f = setup(t);
   const lookup = t.mock.method(db, 'findUserByApiKey', async () => null);

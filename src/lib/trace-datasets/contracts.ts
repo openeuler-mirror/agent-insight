@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { normalizeConversationTurns } from '@/lib/evaluation-conversation';
+
 export type GenerationConfig = { name: string; description: string; platform: string; agentKey: string; from: string; to: string; limit: number; requestId: string };
 export type GenerationStatus = 'generating' | 'failed' | 'published';
 export const STAGES = ['queued', 'read', 'dedup', 'stratify', 'sample', 'convert', 'save', 'complete', 'failed'] as const;
@@ -64,12 +66,18 @@ export function normalizeTraceCases(raw: unknown) {
   if (!Array.isArray(raw)) throw new GenerationError('INVALID_CONFIG', '数据项必须为数组', 422);
   const ids = new Set<string>();
   return raw.map(item => {
-    const values = item?.values || { input: item?.input, reference_output: item?.expectedOutput };
+    let turns;
+    if (item?.turns !== undefined) {
+      try { turns = normalizeConversationTurns({ input: String(item.input || ''), expectedOutput: String(item.expectedOutput || ''), turns: item.turns }); }
+      catch { throw new GenerationError('INVALID_CONFIG', '逐轮配置无效', 422); }
+    }
+    const supplied = item?.values || { input: item?.input, reference_output: item?.expectedOutput };
+    const values = turns ? { ...supplied, input: turns[0].input, reference_output: turns[turns.length - 1].expectedOutput } : supplied;
     if (Object.keys(values).some(k => !['input', 'reference_output'].includes(k)) || typeof values.input !== 'string' || !values.input.trim() || typeof values.reference_output !== 'string' || !values.reference_output.trim()) throw new GenerationError('INVALID_CONFIG', 'input 与 reference_output 必须为非空文本，且只允许这两列', 422);
     const input = values.input.replace(/\r\n?/g, '\n').normalize('NFC');
     const output = values.reference_output.replace(/\r\n?/g, '\n').normalize('NFC');
     if (typeof item.id !== 'string' || !item.id || ids.has(item.id)) throw new GenerationError('INVALID_CONFIG', '数据项标识缺失或重复', 422);
     ids.add(item.id);
-    return { id: item.id, input, expectedOutput: output, evaluationFocus: '', tags: [] as string[], trajectory: '', values: { input, reference_output: output } };
+    return { id: item.id, input, expectedOutput: output, evaluationFocus: '', tags: [] as string[], trajectory: '', values: { input, reference_output: output }, ...(turns ? { turns } : {}) };
   });
 }

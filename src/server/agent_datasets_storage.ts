@@ -30,6 +30,9 @@ import {
 } from '@/lib/dataset-case-root-causes';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { SYSTEM_BENCHMARK_DATASET_OWNER } from '@/lib/benchmark/dataset-ownership';
+import { normalizeConversationTurns, type ConversationTurn } from '@/lib/evaluation-conversation';
+import { ensureAssetVersion, withEvaluationAssetTransaction } from '@/lib/evaluation-assets/store';
+import { EvaluationAssetError, type AssetTransaction } from '@/lib/evaluation-assets/types';
 
 const DATA_DIR = resolveAgentInsightDataPath();
 const LEGACY_FILE = path.join(DATA_DIR, 'agent_datasets.json');
@@ -80,6 +83,7 @@ export interface DatasetCase {
   evaluationFocus: string;
   tags: string[];
   trajectory: string;
+  turns?: ConversationTurn[];
   values?: Record<string, unknown>;
   traceSource?: {
     taskId: string;
@@ -361,17 +365,21 @@ export function normalizeCase(item: unknown): DatasetCase {
       : traceValue !== undefined
       ? (typeof traceValue === 'string' ? traceValue.trim() : JSON.stringify(traceValue))
       : '';
+  const turns = obj.turns === undefined ? undefined : normalizeConversationTurns({ input, expectedOutput, turns: obj.turns });
+  const projectedInput = turns ? turns[0].input : input;
+  const projectedOutput = turns ? turns[turns.length - 1].expectedOutput : expectedOutput;
   return {
     id: obj.id && String(obj.id).trim() ? String(obj.id).trim() : randomUUID(),
-    input,
-    expectedOutput,
+    input: projectedInput,
+    expectedOutput: projectedOutput,
     evaluationFocus: String(obj.evaluationFocus || '').trim(),
     tags: normalizeTags(obj.tags),
     trajectory,
+    ...(turns ? { turns } : {}),
     values: {
       ...values,
-      ...(hasInput || hasInputValue ? { input } : {}),
-      ...(expectedOutput || Object.hasOwn(values, 'reference_output') ? { reference_output: expectedOutput } : {}),
+      ...(turns || hasInput || hasInputValue ? { input: projectedInput } : {}),
+      ...(turns || expectedOutput || Object.hasOwn(values, 'reference_output') ? { reference_output: projectedOutput } : {}),
       ...(trajectory && !Object.hasOwn(values, 'trace') ? { trajectory } : {}),
     },
     source,
@@ -805,13 +813,38 @@ export async function findAgentDataset(user: string, id: string): Promise<AgentD
   return readLegacyFileSync().find(d => d.id === id && canReadAgentDataset(user, d)) ?? null;
 }
 
+export function datasetVersionContent(value: object): Record<string, unknown> {
+  const row = value as Record<string, unknown>;
+  const parsed = (key: string, fallback: unknown) => {
+    try { return JSON.parse(String(row[key] || JSON.stringify(fallback))); }
+    catch { throw new EvaluationAssetError('数据集内容损坏', 409); }
+  };
+  const datasetKind = normalizeDatasetKind(row.datasetKind);
+  const cases = row.generationSource === 'trace' ? normalizeTraceCases(parsed('casesJson', [])) : normalizeCases(parsed('casesJson', []));
+  return {
+    id: row.id, user: row.user, name: row.name, description: row.description || '', targetAgent: row.targetAgent || '', targetSkill: row.targetSkill || '',
+    datasetKind, fields: normalizeFields(parsed('fieldsJson', []), datasetKind), cases, tags: normalizeTags(parsed('tagsJson', [])),
+    generationSource: row.generationSource, generationStatus: row.generationStatus,
+  };
+}
+
+export async function recordPublishedDatasetVersion(tx: AssetTransaction, value: object, source = 'legacy') {
+  if (process.env.DB_HOST) return null;
+  const row = value as Record<string, unknown>;
+  if (row.generationSource === 'trace' && row.generationStatus !== 'published') return null;
+  const identity = { user: String(row.user), kind: 'dataset' as const, businessId: String(row.id) };
+  await tx.evaluationAssetHead.updateMany({ where: { ...identity, archived: true }, data: { archived: false } });
+  return ensureAssetVersion(tx, { ...identity, content: datasetVersionContent(row), source });
+}
+
 export async function createAgentDatasetRecord(record: AgentDatasetRecord): Promise<void> {
+  const cases = record.cases.map(item => item.turns === undefined ? item : normalizeCase(item));
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
-    const projection = buildAgentDatasetProjection(record.cases);
-    await prisma.agentEvalDataset.create({
-      data: {
+    const projection = buildAgentDatasetProjection(cases);
+    await withEvaluationAssetTransaction(async tx => {
+      const row = await tx.agentEvalDataset.create({ data: {
         id: record.id,
         user: record.user,
         name: record.name,
@@ -820,50 +853,55 @@ export async function createAgentDatasetRecord(record: AgentDatasetRecord): Prom
         targetSkill: record.targetSkill ?? '',
         tagsJson: JSON.stringify(record.tags),
         fieldsJson: JSON.stringify(record.fields),
-        casesJson: JSON.stringify(record.cases),
+        casesJson: JSON.stringify(cases),
         ...projection,
         projectionReady: true,
         datasetKind: record.datasetKind,
         createdAt: new Date(record.createdAt),
         updatedAt: new Date(record.updatedAt),
-      },
-    });
+      } });
+      await recordPublishedDatasetVersion(tx, row);
+    }, prisma);
     return;
   }
   warnFileBackendOnce();
   const datasets = readLegacyFileSync();
-  datasets.push(record);
+  datasets.push({ ...record, cases });
   writeLegacyFileSync(datasets);
 }
 
 export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Promise<boolean> {
+  const cases = updated.cases.map(item => item.turns === undefined ? item : normalizeCase(item));
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
-    const projection = buildAgentDatasetProjection(updated.cases, updated.generationSource === 'trace');
-    const res = await prisma.agentEvalDataset.updateMany({
-      where: { id: updated.id, user: updated.user, ...(updated.generationSource === 'trace' ? { generationStatus: 'published', OR: [{ generationJob: { is: null } }, { generationJob: { is: { status: 'succeeded' } } }] } : {}) },
-      data: {
+    const projection = buildAgentDatasetProjection(cases, updated.generationSource === 'trace');
+    return withEvaluationAssetTransaction(async tx => {
+      const current = await tx.agentEvalDataset.findFirst({ where: { id: updated.id, user: updated.user, ...(updated.generationSource === 'trace' ? { generationStatus: 'published', OR: [{ generationJob: { is: null } }, { generationJob: { is: { status: 'succeeded' } } }] } : {}) } });
+      if (!current) return false;
+      await recordPublishedDatasetVersion(tx, current);
+      const row = await tx.agentEvalDataset.update({ where: { id: current.id }, data: {
         name: updated.name,
         description: updated.description,
         targetAgent: updated.targetAgent,
         targetSkill: updated.targetSkill ?? '',
         tagsJson: JSON.stringify(updated.tags),
         fieldsJson: JSON.stringify(updated.fields),
-        casesJson: JSON.stringify(updated.cases),
+        casesJson: JSON.stringify(cases),
         ...projection,
         projectionReady: true,
         datasetKind: updated.datasetKind,
         updatedAt: new Date(updated.updatedAt),
-      },
-    });
-    return res.count > 0;
+      } });
+      await recordPublishedDatasetVersion(tx, row);
+      return true;
+    }, prisma);
   }
   warnFileBackendOnce();
   const datasets = readLegacyFileSync();
   const index = datasets.findIndex(item => item.id === updated.id && item.user === updated.user);
   if (index === -1) return false;
-  datasets[index] = updated;
+  datasets[index] = { ...updated, cases };
   writeLegacyFileSync(datasets);
   return true;
 }

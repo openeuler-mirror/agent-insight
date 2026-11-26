@@ -26,7 +26,7 @@ import { createIsolatedDatabase } from './helpers/isolated-database';
 const cli = process.env.OPENCODE_TRACE_TEST_CLI;
 const major = Number(process.env.OPENCODE_TRACE_TEST_MAJOR || 2);
 
-test('native OpenCode generates, uploads and binds the exact Trace to its experiment Case', { skip: !cli, timeout: 120_000 }, async (t) => {
+test('native OpenCode generates, uploads and binds the exact Trace to its experiment Case', { skip: !cli, timeout: 180_000 }, async (t) => {
   const database = createIsolatedDatabase();
   const { prisma } = require('../src/lib/storage/prisma');
   const { POST } = require('../src/app/api/ingest/upload/route');
@@ -41,6 +41,7 @@ test('native OpenCode generates, uploads and binds the exact Trace to its experi
   const { createInstallToken, registerClient } = require('../src/lib/reliability/client-registry');
   const uploads: string[] = [];
   const errors: string[] = [];
+  const modelRequests: any[] = [];
   let mode = 'success';
   const server = createServer(async (req, res) => {
     try {
@@ -55,6 +56,7 @@ test('native OpenCode generates, uploads and binds the exact Trace to its experi
         res.writeHead(response.status, { 'content-type': 'application/json' }); res.end(text); return;
       }
       if (mode === 'hang') return;
+      try { modelRequests.push(JSON.parse(body)); } catch {}
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const choice of [{ delta: { role: 'assistant', content: 'TRACE_FIXTURE_OK' }, finish_reason: null }, { delta: {}, finish_reason: 'stop' }]) {
         res.write(`data: ${JSON.stringify({ id: 'fixture-answer', object: 'chat.completion.chunk', model: 'mock', choices: [{ index: 0, ...choice }] })}\n\n`);
@@ -100,12 +102,12 @@ test('native OpenCode generates, uploads and binds the exact Trace to its experi
         child.once('close', code => code === 0 ? resolve() : reject(new Error(`OpenCode v1 fixture initialization failed: ${code}`)));
       });
     }
-    const run = async (cancel = false, skill = false) => {
+    const run = async (cancel = false, skill = false, conversation?: unknown) => {
       const code = `const c=require(${JSON.stringify(runner)});const a=new AbortController();let timer;
 const services=require(${JSON.stringify(servicesFile)}).createServices({cfg:{},client:c});
 services.checkAgent({platform:'opencode',agent:'build',model:'mock/mock'}).then(issues=>{
 require('node:assert/strict').deepEqual(issues,[]);
-c.runExperimentCase({clientId:${JSON.stringify(clientId)},workspaceBase:process.cwd()},{platform:'opencode',agent:'build',model:'mock/mock',input:'Reply TRACE_FIXTURE_OK.',timeoutSeconds:60,signal:a.signal,${skill ? `skillExecution:{version:1,skill:{name:'fixture',version:1,files:{'SKILL.md':'---\\nname: fixture\\ndescription: fixture\\n---\\nReply TRACE_FIXTURE_OK.'}}}` : ''}},()=>{${cancel ? "timer=setTimeout(()=>a.abort(),500)" : ''}}).then(r=>console.log(JSON.stringify({ok:true,...r})),e=>console.log(JSON.stringify({ok:false,code:e.code,...e.runFacts}))).finally(()=>clearTimeout(timer));
+c.runExperimentCase({clientId:${JSON.stringify(clientId)},workspaceBase:process.cwd()},{platform:'opencode',agent:'build',model:'mock/mock',input:${JSON.stringify(conversation ? (conversation as any).turns[0].input : 'Reply TRACE_FIXTURE_OK.')},timeoutSeconds:60,signal:a.signal,${conversation ? `conversation:${JSON.stringify(conversation)},` : ''}${skill ? `skillExecution:{version:1,skill:{name:'fixture',version:1,files:{'SKILL.md':'---\\nname: fixture\\ndescription: fixture\\n---\\nReply TRACE_FIXTURE_OK.'}}}` : ''}},()=>{${cancel ? "timer=setTimeout(()=>a.abort(),500)" : ''}}).then(r=>console.log(JSON.stringify({ok:true,...r})),e=>console.log(JSON.stringify({ok:false,code:e.code,...e.runFacts}))).finally(()=>clearTimeout(timer));
 });`;
       return await new Promise<any>((resolve, reject) => {
         const child = spawn(process.execPath, ['-e', code], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -156,6 +158,28 @@ c.runExperimentCase({clientId:${JSON.stringify(clientId)},workspaceBase:process.
       assert.ok(uploads.includes(isolated.traceId), 'isolated Skill execution uploads its Trace through the installed collector');
       assert.match(isolatedTrace?.finalResult || '', /TRACE_FIXTURE_OK/);
       assert.equal(isolatedTrace.clientId, clientId);
+      modelRequests.length = 0;
+      const conversation = { version: 1, turns: [
+        { id: 'first', input: 'Remember the evaluation marker alpha-931.' },
+        { id: 'second', input: 'Recall the preceding marker.' },
+        { id: 'third', input: 'Confirm the earlier marker once more.' },
+      ] };
+      const dialogue = await run(false, false, conversation);
+      assert.equal(dialogue.ok, true, JSON.stringify(dialogue));
+      assert.notEqual(dialogue.traceId, result.traceId);
+      assert.deepEqual(dialogue.conversation, { version: 1, sessionId: dialogue.traceId, completedTurnIds: ['first', 'second', 'third'] });
+      assert(modelRequests.some(request => {
+        const messages = request.messages || [];
+        return conversation.turns.every(turn => messages.some((message: any) => message.role === 'user' && JSON.stringify(message.content).includes(turn.input)))
+          && messages.some((message: any) => message.role === 'assistant' && JSON.stringify(message.content).includes('TRACE_FIXTURE_OK'));
+      }), 'third native model call includes both previous user turns and assistant outputs');
+      let dialogueTrace;
+      for (let i=0;i<60;i++) {
+        dialogueTrace=await findExecutionByTraceId({user,traceId:dialogue.traceId,conversation});
+        if (dialogueTrace) break;
+        await new Promise(resolve=>setTimeout(resolve,250));
+      }
+      assert(dialogueTrace, 'all dialogue turns arrived through the installed native collector');
     }
     mode = 'hang';
     const cancelled = await run(true);

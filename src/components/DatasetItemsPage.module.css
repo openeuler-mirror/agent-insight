@@ -222,6 +222,24 @@
   width: 100px;
 }
 
+.itemsTableDraft th:last-child {
+  width: 200px;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.rowActions > button {
+  flex-shrink: 0;
+}
+
+.rowActions .linkBtnDanger {
+  margin-left: 0;
+}
+
 .dataTable thead tr {
   background: var(--table-header-bg);
   border-bottom: 1px solid var(--table-border);

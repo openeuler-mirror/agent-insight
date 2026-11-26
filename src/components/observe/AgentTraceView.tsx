@@ -17,6 +17,7 @@
 'use client';
 
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
+import { resolveTraceStepSelection } from '@/lib/engine/experiment/conversation-anchors';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
 import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
@@ -641,6 +642,7 @@ export interface AgentTraceViewProps {
     rootExecutionId?: string;
     /** 跨增量刷新保持树交互状态的稳定 Trace 标识。 */
     traceIdentity?: string;
+    initialStep?: string;
     /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
     rasMarkers?: RasTraceMarker[];
 }
@@ -658,6 +660,7 @@ export default function AgentTraceView({
     rootSessionId,
     rootExecutionId,
     traceIdentity,
+    initialStep,
     rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
@@ -769,6 +772,8 @@ export default function AgentTraceView({
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
 
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
+    const appliedInitialStep = React.useRef('');
+    const initialStepTarget = React.useRef('');
     const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
     const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('overview');
     const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>('all');
@@ -1141,6 +1146,36 @@ export default function AgentTraceView({
                 : [],
         ))
         : [];
+
+    useEffect(() => {
+        if (!initialStep) { appliedInitialStep.current = ''; initialStepTarget.current = ''; return; }
+        if (!tree) return;
+        const request = `${stableTraceIdentity ?? rootSessionId ?? ''}:${initialStep}`;
+        if (appliedInitialStep.current === request) return;
+        if (sourceInteractions.length !== interactions.length || sourceInteractions.some((source, index) => {
+            const loaded = interactions[index];
+            return source !== loaded && !((source as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred && source._payloadVersion && source._payloadVersion === loaded?._payloadVersion && sameCollaborationSource(source, loaded));
+        })) return;
+        const target = resolveTraceStepSelection(displayInteractions, initialStep, tree, rootSessionId);
+        if (!target) return;
+        appliedInitialStep.current = request;
+        initialStepTarget.current = target.selectedKey;
+        setSelectedKey(target.selectedKey);
+        setExpandedKeys(current => new Set([...current, ...target.expandedKeys]));
+        setTreeKindFilter([]); setEventTypeFilter('all'); setSearchQuery('');
+        setMinDurationMs(0); setMinTokenK(0);
+        if (slowOnly) void setSlowOnlyParam(null);
+    }, [initialStep, tree, sourceInteractions, interactions, displayInteractions, stableTraceIdentity, rootSessionId, slowOnly, setSlowOnlyParam]);
+
+    useEffect(() => {
+        if (!initialStep || !selectedKey || selectedKey !== initialStepTarget.current) return;
+        const timer = setTimeout(() => {
+            Array.from(document.querySelectorAll('[data-span-key]'))
+                .find(element => element.getAttribute('data-span-key') === selectedKey)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 80);
+        return () => clearTimeout(timer);
+    }, [initialStep, selectedKey, tree]);
 
     const findEventAnomalies = useCallback(
         (event: AgentEvent) => findEventAnomaliesForMarkers(event, rasMarkers),

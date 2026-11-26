@@ -13,7 +13,7 @@ These routes do not uniformly use `resolveUser`:
 
 | Entry point | Current identity behavior |
 | --- | --- |
-| Ordinary listing, creation, updates, details, deletion, Trace drafts, and backflow | Read a nonempty `user` from the query or JSON body. Ordinary branches do not verify it as a credential. Storage filters by that username and visibility of public system Benchmark datasets; a successful lookup does not prove caller authentication |
+| Ordinary listing, creation, updates, details, deletion, Trace drafts, and backflow | Use `resolveUser` to verify that the Key matches the requested `user`. JSONL creation uses the authenticated account directly, so the file does not supply a `user` field |
 | Trace generation, generation options/progress, cancellation, and deletion progress | `traceIdentity` verifies only the `x-witty-api-key` header. Query `apiKey` and explicit `user` cannot replace it; missing or invalid credentials return `401` |
 | Ordinary routes accessing Trace-generated datasets | Additionally require the valid Key account, `user`, and dataset owner to match. Mismatches return `404`, deletion in progress returns `409`, and writes require publication. Lists include these datasets only when the Key account matches query `user` |
 
@@ -49,6 +49,12 @@ Existing built-in reliability and Benchmark datasets return `403` in ordinary `P
 ```
 
 This is an ordinary `POST` body. It neither executes an Agent nor creates an experiment. Creation has no general idempotency key; if the response is lost, inspect the list before creating again.
+
+### Import a complete JSONL dataset
+
+Send the raw UTF-8 file to `POST /api/agent-datasets` with `Content-Type: application/x-ndjson` and authenticate using `x-witty-api-key`. The first nonblank record has `type: "dataset"`, required `schemaVersion: 1` and `name`, and optional `description` and `tags`. Each subsequent `type: "case"` record has 2 to 20 `turns` and an optional Case `id`. Turn rules use the same contract as manually created Cases. See the [file example, Chinese](../../../zh/how-to/evaluation/datasets.md#从-jsonl-创建整套多轮评测集).
+
+The success response matches ordinary creation. On SQLite, the dataset, all Cases, and published `v1` are created in one transaction. An invalid file returns `422 { error, line, field }` and leaves no partial dataset. Line numbers and turn positions in error paths start at 1.
 
 ## Build a draft and backflow an existing Trace
 

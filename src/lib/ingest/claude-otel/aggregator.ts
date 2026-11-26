@@ -1169,7 +1169,9 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     model,
     tokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
     cost,
-    latency: latencyMs / 1000,
+    // duration_ms 本身就是毫秒,Execution.latency 全链路也统一为毫秒(见 lib/latency-format.ts),
+    // 这里不能再做秒→毫秒的反向换算,否则写入值比真实值小 1000 倍。
+    latency: latencyMs,
     timestamp,
     final_result: finalResult || '[No final text output]',
     interactions: normalizeClaudeCodeInteractionsForStorage(interactions),

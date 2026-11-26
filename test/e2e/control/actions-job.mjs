@@ -17,11 +17,11 @@ function git(cwd,args) {
   assert.equal(result.status,0,result.stderr||'Git source preparation failed');return result.stdout.trim();
 }
 
-export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt',envFile=process.env.ATOMGIT_ENV,phase,runId,expectedSha,dependencyMode=process.env.E2E_DEPENDENCY_MODE||'image',jobRoot,run=command}) {
+export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt',envFile=process.env.ATOMGIT_ENV,phase,runId,expectedSha,dependencyMode=process.env.E2E_DEPENDENCY_MODE||'project-lockfile',jobRoot,run=command}) {
   assert.ok(['build','ut','case','collect'].includes(phase),'Unknown Actions job phase');
   assert.match(runId||'',/^[a-z0-9-]{1,80}$/,'Invalid Actions run ID');
   assert.ok(path.isAbsolute(envFile||''),'Actions environment file is required');
-  assert.ok(['image','lockfile'].includes(dependencyMode),'Unknown Actions dependency mode');
+  assert.ok(['image','lockfile','project-lockfile'].includes(dependencyMode),'Unknown Actions dependency mode');
   const testedSha=git(checkout,['rev-parse','HEAD']);
   if(expectedSha)assert.equal(testedSha,expectedSha,'Job checked out a different source commit');
   const root=jobRoot||fs.mkdtempSync(path.join(checkout,'.atomgit-e2e.')),project=path.join(root,'source');
@@ -30,11 +30,13 @@ export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt'
   if(phase!=='collect') {
     const hash=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     const locks=[['package-lock.json','dependencies',''],['test/e2e/package-lock.json','e2e','test/e2e']].map(([source,image,prefix])=>({source,image,prefix,digest:hash(path.join(project,source)),matches:hash(path.join(project,source))===hash(path.join(imageRoot,image,'package-lock.json'))}));
-    if(dependencyMode==='image')for(const lock of locks)assert.ok(lock.matches,`${lock.source} differs from the fixed image; rebuild the image`);
+    for(const lock of locks)if(dependencyMode==='image'||dependencyMode==='project-lockfile'&&lock.prefix)assert.ok(lock.matches,`${lock.source} differs from the fixed image; rebuild the image`);
     for(const lock of locks) {
       const directory=path.join(project,lock.prefix);
       if(lock.matches)fs.cpSync(path.join(imageRoot,lock.image,'node_modules'),path.join(directory,'node_modules'),{recursive:true,verbatimSymlinks:true});
-      else {
+      else if(dependencyMode==='project-lockfile'){
+        fs.cpSync(path.join(imageRoot,lock.image,'node_modules'),path.join(directory,'node_modules'),{recursive:true,verbatimSymlinks:true});
+      } else {
         const home=path.join(root,'dependency-home');fs.mkdirSync(home,{mode:0o700,recursive:true});
         const install=()=>run('npm',['ci','--legacy-peer-deps','--ignore-scripts','--no-audit','--no-fund','--prefer-offline','--maxsockets=8','--fetch-retries=1','--fetch-timeout=120000'],{cwd:directory,env:{PATH:process.env.PATH,HOME:home,npm_config_cache:path.join(root,'dependency-cache'),npm_config_registry:'https://registry.npmjs.org',npm_config_offline:'false',npm_config_userconfig:path.join(home,'empty.npmrc')},log:path.join(root,'dependency-install.log'),maxLogBytes:2*1024*1024,timeout:600000});
         let installed=await install();
@@ -52,6 +54,14 @@ export async function prepareActionsJob({checkout=process.cwd(),imageRoot='/opt'
     fs.cpSync(path.join(imageRoot,'fi-npm-cache'),cache,{recursive:true,verbatimSymlinks:true});
     Object.assign(env,{PLAYWRIGHT_BROWSERS_PATH:path.join(imageRoot,'browsers'),E2E_BROWSER_CHANNEL:'chromium',E2E_PYTHON:'/usr/bin/python3',AGENT_INSIGHT_RAS_PYTHON:path.join(imageRoot,'e2e-python/bin/python'),E2E_NPM_OFFLINE:'1',E2E_PREPARED_PLUGIN_DIR:path.join(imageRoot,'ras-plugin'),PIP_NO_INDEX:'1',PIP_FIND_LINKS:path.join(imageRoot,'wheels'),npm_config_cache:cache,npm_config_registry:'https://registry.npmjs.org',E2E_NPM_REGISTRY:'https://registry.npmjs.org',npm_config_offline:'true'});
     const home=path.join(root,'prisma-home');fs.mkdirSync(home,{mode:0o700});
+    if(dependencyMode==='project-lockfile'&&!locks[0].matches) {
+      console.log('Project dependency lock changed; installing the checked-out lock in isolation');
+      const installed=await run('npm',['ci','--ignore-scripts','--include=dev','--no-audit','--no-fund'],{
+        cwd:project,env:{PATH:process.env.PATH,HOME:home,npm_config_registry:'https://registry.npmjs.org',npm_config_cache:path.join(root,'dependency-cache')},timeout:600000,
+      });
+      assert.equal(installed.code,0,'Installing the checked-out dependency lock failed');
+      assert.equal(hash(path.join(project,locks[0].source)),locks[0].digest,'Dependency preparation changed the lockfile');
+    }
     const started=performance.now();
     const generated=await run(process.execPath,['node_modules/prisma/build/index.js','generate','--schema','prisma/schema.prisma'],{cwd:project,env:{PATH:process.env.PATH,...env,HOME:home,DATABASE_URL:`file:${path.join(home,'generate-only.db')}`,PRISMA_GENERATE_SKIP_AUTOINSTALL:'true',CHECKPOINT_DISABLE:'1'},timeout:120000});
     console.log(`Actions Prisma Client generation: ${Math.round(performance.now()-started)}ms`);

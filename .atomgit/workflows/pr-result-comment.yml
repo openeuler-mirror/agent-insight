@@ -40,7 +40,7 @@ jobs:
     if: ${{ atomgit.ref == 'refs/heads/master' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 5
     steps:
       - name: Checkout trusted master

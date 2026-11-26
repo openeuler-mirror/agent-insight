@@ -78,6 +78,8 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 多版本资产与多轮对话评测迁入主线 | [需求与设计](evaluation/versioned-assets-multiturn-integration/) | 复用主线的 Agent、评估器、数据集和实验流程，增加不可变版本及真实多轮执行/评测 | Feature / Integration | 2026-10-29 | 已实现并完成专项与真实流程验证 | — |
+
 | 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
 | Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
 
@@ -167,6 +169,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 | ClickHouse 存储支持 | [需求分析](platform/clickhouse-storage/phase1-requirements-analysis.md) · [需求设计](platform/clickhouse-storage/phase2-requirements-design.md) · [开发计划](platform/clickhouse-storage/phase3-development-plan.md) | 以分层存储支持 ClickHouse：Trace 数据面（Execution/ExecutionSkill/Session）进列存，元数据与控制面留在 SQLite/OpenGauss；后端显式开关、能力降级与迁移运维方案 | Feature / Storage | 2026-11-09 | ⬜ 未实现（设计待对齐） | [#374](https://atomgit.com/openeuler/agent-insight/issues/374) |
 | Agent 运行时切换 | [agent-runtime-switching](platform/agent-runtime-switching/) | 检测服务部署环境中的内置 Agent 运行时，展示版本、来源、兼容性、能力与不可用原因，并保存个人默认值；执行层与 Pi 适配器分期接入 | Feature | 2026-11-09 | 🟡 阶段一已实现（探测/诊断/偏好保存/页面/单测）；统一执行服务、OpenCode 适配器抽取与内置 Pi 待实现 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
 | 平台内置 Agent 运行时选择 | [agent-runtime-selection](platform/agent-runtime-selection/) | 检测服务可访问的 Pi/OpenCode，展示版本、来源、兼容性、能力与不可用原因；保存个人默认值并在执行入口强制校验，不静默换引擎 | Feature | 2026-11-09 | 🟡 检测、能力评估、个人默认值、页面与执行入口约束已实现并覆盖专项测试；Pi 执行适配器、内置 Pi 交付与浏览器/真实模型验收见开发计划 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
+| 本地账号密码登录 | [standalone-login-hardening](platform/standalone-login-hardening/) | 关闭 standalone 自助注册，改为管理员建档与密码登录；管理员可新建、批量导入、重置密码与删除账号，新账号初始密码与账号名一致（admin 为 admin），首次登录强制改密，之后可自助修改 | Feature | 2026-11-20 | 🟡 代码与专项测试完成，未做浏览器验收；全量测试存在 Windows fsync 权限等既有失败 | 待补 |
 
 ## 字段口径
 

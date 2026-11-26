@@ -52,6 +52,12 @@ import {
 export const WORKBENCH_EXPERIMENT_PRESETS = ['trigger', 'use-case', 'skill-ab'] as const;
 export type WorkbenchExperimentPreset = (typeof WORKBENCH_EXPERIMENT_PRESETS)[number];
 
+export function assertSkillSingleTurnCases(cases: Iterable<{turns?: unknown}>) {
+  if (Array.from(cases).some(item => Array.isArray(item.turns) && item.turns.length > 1)) {
+    throw new TraceGenerationError('SKILL_MULTI_TURN_UNSUPPORTED', 'Skill 专用生成与 A/B 暂不支持多轮 Case，请使用普通实验执行多轮对话，或通过已有 Trace 评测。', 400);
+  }
+}
+
 function parseJson<T>(value: string | null, fallback: T): T {
   try { return JSON.parse(value || '') as T; } catch { return fallback; }
 }
@@ -224,6 +230,7 @@ export async function createWorkbenchExperiment(input: {
   if (selectedCases.length === 0 || (input.caseIds?.length && selectedCases.length !== input.caseIds.length)) {
     return { kind: 'invalid_cases' as const };
   }
+  assertSkillSingleTurnCases(selectedCases);
   const evaluatorIds = input.preset === 'trigger'
     ? [SKILL_TRIGGER_ANALYZER_EVALUATOR_ID]
     : Array.from(new Set((input.evaluatorIds || []).map((id) => id.trim()).filter(Boolean)));

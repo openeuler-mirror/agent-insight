@@ -35,6 +35,10 @@ TABLE_DEFINITIONS = {
             ("username", "TEXT UNIQUE NOT NULL"),
             ("externalAccount", "TEXT UNIQUE"),
             ("apiKey", "TEXT UNIQUE NOT NULL"),
+            ("passwordHash", "TEXT"),
+            ("passwordUpdatedAt", "TIMESTAMP"),
+            ("mustChangePassword", "BOOLEAN DEFAULT FALSE"),
+            ("disabledAt", "TIMESTAMP"),
             ("createdAt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
         ],
         "unique_constraints": []

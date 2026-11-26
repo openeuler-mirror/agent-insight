@@ -129,12 +129,39 @@ test('Actions job starts from the exact clean commit and prepares only fixed ima
   assert.ok(!env.includes('private-fixture'));
 });
 
-test('Actions job refuses either image lock drift before running commands or publishing its environment', async t => {
-  for (const lock of ['dependencies/package-lock.json','e2e/package-lock.json']) await t.test(lock,async t => {
+test('Actions job refuses E2E image lock drift before running commands or publishing its environment', async t => {
+  for (const lock of ['e2e/package-lock.json']) await t.test(lock,async t => {
     const f=fixture(t);fs.writeFileSync(path.join(f.imageRoot,lock),'different');
     await assert.rejects(prepareActionsJob({ ...f, phase:'build', runId:'atomgit-fixture', run:async()=>assert.fail('lock drift must abort preparation') }),/fixed image/);
     assert.equal(fs.existsSync(f.envFile),false);
   });
+});
+
+test('project lock drift installs the current lock without inherited secrets before generation', async t => {
+  const f=fixture(t),calls=[],execute=preparedCommand(calls);
+  fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'older image lock');
+  let installed=false;
+  await prepareActionsJob({...f,phase:'build',runId:'atomgit-new-lock',dependencyMode:'project-lockfile',run:async(bin,args,options)=>{
+    if(args[0]==='ci') {
+      assert.deepEqual(args,['ci','--ignore-scripts','--include=dev','--no-audit','--no-fund']);
+      assert.equal(fs.readFileSync(path.join(options.cwd,'package-lock.json'),'utf8'),'package-lock.json');
+      assert.deepEqual(Object.keys(options.env).sort(),['HOME','PATH','npm_config_cache','npm_config_registry']);
+      assert.ok(options.env.HOME.startsWith(f.checkout+path.sep));
+      assert.equal(fs.existsSync(f.envFile),false);
+      installed=true;return {code:0};
+    }
+    assert.equal(installed,true);
+    return execute(bin,args,options);
+  }});
+});
+
+test('a failed current-lock install aborts without generating clients or publishing environment', async t => {
+  const f=fixture(t);
+  fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'older image lock');
+  await assert.rejects(prepareActionsJob({...f,phase:'build',runId:'atomgit-install-fail',dependencyMode:'project-lockfile',run:async(bin,args)=>{
+    assert.equal(bin,'npm');assert.equal(args[0],'ci');return {code:1};
+  }}),/Installing the checked-out dependency lock failed/);
+  assert.equal(fs.existsSync(f.envFile),false);
 });
 
 test('matching dependency locks allow an older image schema', async t => {
