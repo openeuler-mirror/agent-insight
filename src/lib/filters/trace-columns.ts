@@ -39,9 +39,11 @@ export const TRACE_FILTER_COLUMNS: readonly FilterColumn[] = [
   { column: 'subagentType', type: 'stringOptions', label: '子 Agent 类型', description: 'kuafu / general …', syncMode: 'exactOption', nullable: true },
 
   // —— 数值(可区间)——
-  // ⚠️ latency 单位=**秒**:DB 原始列即秒(claude=durationMs/1000、jiuwen=ns/1e9)。
-  //    过滤值与原始列同单位,直接比较;展示侧统一用 latency-format 做 ms/s/m/h 换算。
-  { column: 'latency', type: 'number', label: '耗时', description: '执行时长(秒)', unit: 's', nullable: true },
+  // ⚠️ latency 口径=**毫秒**:与 Execution.latency 的全链路契约(lib/latency-format.ts)一致,
+  //    过滤值与原始列同单位直接比较;展示侧统一用 latency-format 做 ms/s/m/h 换算。
+  //    历史遗留:actrail/llamaindex/qwencode/qoder/codeagent-otel/deepseek-harness 仍写秒,
+  //    claude-otel 在改为毫秒之前入库的旧数据也是秒;这些行按毫秒过滤会偏小 1000 倍,待迁移。
+  { column: 'latency', type: 'number', label: '耗时', description: '执行时长(毫秒)', unit: 'ms', nullable: true },
   { column: 'tokens', type: 'number', label: 'Tokens', description: '总 token 数', nullable: true },
   { column: 'inputTokens', type: 'number', label: '输入 Tokens', description: '输入 token 数', nullable: true },
   { column: 'outputTokens', type: 'number', label: '输出 Tokens', description: '输出 token 数', nullable: true },
