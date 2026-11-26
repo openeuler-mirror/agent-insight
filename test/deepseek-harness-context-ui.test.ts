@@ -6,7 +6,7 @@ import {HarnessContextPanel,HarnessBodyDetails} from '../src/components/observe/
 
 test('Old Harness traces remain renderable with explicit missing context and no estimated zeros',()=>{
  const html=renderToStaticMarkup(React.createElement(HarnessContextPanel,{entries:[{request:{sourceSessionId:'old',eventSequence:1,turn:1,step:1},key:'e:one'}],selectedKey:null,onSelect(){},zh:true}));
- assert.match(html,/没有可用投影/);assert.match(html,/原有 Trace 仍可使用/);assert.match(html,/缺失保持为空/);
+ assert.match(html,/没有可用投影/);assert.match(html,/原有 Trace 仍可使用/);assert.match(html,/缺失不代表零/);
 });
 test('Body disclosures identify categories sources truncation and omitted content',()=>{
  const html=renderToStaticMarkup(React.createElement(HarnessBodyDetails,{zh:true,json:JSON.stringify([{itemId:'m1',category:'skill-injection',sourceKind:'tool',sourceCallId:'call1',bodyStatus:'truncated',text:'visible',originalBytes:9000,redactedBytes:9000,storedBytes:8192},{itemId:'m2',category:'user',bodyStatus:'quota-omitted'}])}));

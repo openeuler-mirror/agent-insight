@@ -3303,7 +3303,10 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
-                    <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
+                    event.interaction.harnessRequests?.length ? <details className="rounded-md border border-border p-3">
+                        <summary className="cursor-pointer text-sm font-medium">{locale === 'zh' ? '查看输入与输出' : 'View input and output'}</summary>
+                        <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
+                    </details> : <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
                 )}
 
                 {/* ── User message ── */}

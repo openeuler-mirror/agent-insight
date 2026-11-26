@@ -113,10 +113,10 @@ export function HarnessContextPanel({ entries, selectedKey, onSelect, zh, compac
     {sources.length > 1 && <div className="my-2 flex min-w-0 flex-wrap gap-3 text-sm">
       <label className="min-w-0 max-w-full">{zh ? '源会话 ' : 'Source session '}<select className="max-w-full" aria-label={zh ? '上下文源会话' : 'Context source session'} value={currentSource} onChange={event => setSource(event.target.value)}>{sources.map(id => <option key={id}>{id}</option>)}</select></label>
     </div>}
-    <p className="text-xs text-foreground-secondary">{zh ? '分类 Token 为近似估算，与服务商实际用量分开显示；缺失保持为空。' : 'Category tokens are estimates, separate from provider usage. Missing data stays unknown.'}</p>
+    <p className="text-xs text-foreground-secondary">{zh ? 'Token 为近似估算；缺失不代表零。' : 'Estimated tokens; missing data is not zero.'}</p>
     <HarnessSourceTrend key={currentSource ?? ''} rows={rows} selectedKey={selectedKey} onSelect={onSelect} zh={zh} compact={compact} />
     <details className="mt-2 text-xs text-foreground-secondary"><summary className="cursor-pointer">{zh ? '数据来源' : 'Data source'}</summary><p>dsh-context {rows.find(row => dshContextTokens(row.request))?.request.dshContext?.version ?? '—'}</p><p>{currentSource}</p></details>
-    {!rows.some(row => dshContextTokens(row.request)) && <p>{zh ? '没有可用投影：插件不可用、版本不兼容或历史不足；不展示成员估算，原有 Trace 仍可使用。' : 'No valid projection: unavailable plugin, incompatible version or insufficient history. Existing Trace remains available.'}</p>}
+    {!rows.some(row => dshContextTokens(row.request)) && <p>{zh ? '没有可用投影，原有 Trace 仍可使用。' : 'No valid projection. Existing Trace remains available.'}</p>}
   </details>;
 }
 
@@ -160,7 +160,6 @@ function HarnessSourceTrend({ rows: entries, selectedKey, onSelect, zh, compact 
         </Bar>)}
       </BarChart></ResponsiveContainer>
     </div>
-    <p className="text-xs text-foreground-secondary">{zh ? '每根柱对应一次请求；点击柱或下表请求定位 LLM。新选中的左侧调用会自动进入当前窗口。缺失数据不代表零值。' : 'Each stacked bar represents one request. Select a bar or table request to locate its LLM. Newly selected calls are revealed automatically. Missing data does not mean zero.'}</p>
     <details className="mt-2 text-xs"><summary className="cursor-pointer text-foreground-secondary">{zh ? '查看当前窗口数据' : 'View window data'}</summary><div className="max-h-64 max-w-full overflow-auto"><table className="w-full text-left text-xs"><caption className="text-left">{zh ? '当前范围内的请求；分类值为近似估算 Token，实际用量单列。' : 'Requests in the visible range. Category estimates and provider usage are separate.'}</caption><thead><tr><th>{zh ? '请求' : 'Request'}</th>{categories.map(category => <th key={category}>{zh ? names[category] ?? category : category}</th>)}<th>{zh ? '服务商实际 Input / Output / Cache' : 'Provider Input / Output / Cache'}</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.key} className="border-t border-border"><td><button className="text-primary hover:underline aria-current:font-semibold" aria-current={selectedKey === row.key ? 'true' : undefined} onClick={() => onSelect(row.key)}>#{row.request.eventSequence}</button></td>{categories.map(category => <td key={category}>{row.sourceTokens?.[category] ?? '—'}</td>)}<td>{row.request.providerUsage ? `${row.request.providerUsage.input ?? '—'} / ${row.request.providerUsage.output ?? '—'} / ${row.request.providerUsage.cacheRead ?? '—'}` : '—'}</td></tr>)}</tbody></table></div></details>
   </>;
 }
