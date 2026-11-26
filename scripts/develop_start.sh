@@ -292,7 +292,7 @@ if [[ "${DATABASE_URL:-}" == file:* ]]; then
   fi
 fi
 # 走 db_push.sh 而不是直接 npx：它只对脚本内精确列出的无损变更放行，
-# 其余潜在破坏性变更仍照旧拦下。详见 scripts/db_push.sh 顶部说明。
+# 其余潜在破坏性变更仍照旧拦下。详见 scripts/db-push.cjs 顶部说明。
 if ! sh scripts/db_push.sh; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
