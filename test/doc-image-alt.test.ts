@@ -35,9 +35,7 @@ test('HTML attributes support single quotes, unquoted values, case and missing a
 });
 
 test('Markdown rendering preserves descriptive alt and escapes attribute characters', () => {
-  const html = renderToStaticMarkup(createElement(Markdown, {
-    children: '![节点 "A" & 存储](./topo.png)',
-  }));
+  const html = renderToStaticMarkup(createElement(Markdown, {}, '![节点 "A" & 存储](./topo.png)'));
   assert.match(html, /alt="节点 &quot;A&quot; &amp; 存储"/);
   assert.equal(collectImages(html)[0].alt, '节点 "A" & 存储');
 });

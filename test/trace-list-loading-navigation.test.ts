@@ -308,8 +308,7 @@ async function navigationHarness(run: (scope: Record<string, unknown>) => void, 
         renderToString(React.createElement(NuqsTestingAdapter, {
             searchParams: initialQuery,
             onUrlUpdate: event => updates.push(event),
-            children: React.createElement(Harness),
-        }));
+        }, React.createElement(Harness)));
         let pending: Promise<URLSearchParams> | undefined;
         run({
             setSelectedExecution: () => {}, reportTraceDetailView: () => {}, setImportResult: () => {},

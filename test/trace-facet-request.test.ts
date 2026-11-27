@@ -67,9 +67,9 @@ const BAR_COLUMNS = variable(bar, 'BAR_COLUMNS', { TRACE_FILTER_COLUMNS });
 const FACETED = variable(bar, 'FACETED', {});
 
 async function facetLoader(): Promise<FacetLoader> {
-    const module = await import(helperUrl.href) as { loadTraceFacetValues: FacetLoader };
-    assert.equal(typeof module.loadTraceFacetValues, 'function');
-    return module.loadTraceFacetValues;
+    const loaded = await import(helperUrl.href) as { loadTraceFacetValues: FacetLoader };
+    assert.equal(typeof loaded.loadTraceFacetValues, 'function');
+    return loaded.loadTraceFacetValues;
 }
 
 function transport(context: TestContext) {
