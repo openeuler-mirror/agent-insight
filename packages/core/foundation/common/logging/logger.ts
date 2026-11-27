@@ -1,5 +1,11 @@
+import type { LogValue } from './redaction';
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
 export interface LogFields {
   readonly requestId: string;
+  readonly module?: string;
+  readonly instanceId?: string;
   readonly errorId?: string;
   readonly code?: string;
   readonly jobId?: string;
@@ -7,5 +13,5 @@ export interface LogFields {
 }
 
 export interface Logger {
-  log(level: 'debug' | 'info' | 'warn' | 'error', message: string, fields: LogFields): void;
+  log(level: LogLevel, message: string, fields: LogFields, details?: Readonly<Record<string, LogValue>>): void;
 }

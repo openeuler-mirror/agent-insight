@@ -12,3 +12,7 @@ The [Chinese guide](../../../zh/how-to/platform/refactor-module-boundaries.md) s
 | Verification | Put unit tests under test/UT and end-to-end scenarios directly under test/ST. Update the contract, affected callers and documentation together. |
 
 Use the [observation service](../../../../packages/core/observation/trace-service.ts) and [device protocol](../../../../packages/core/foundation/device-protocol/index.ts) as reference contracts.
+
+Use PascalCase role names for interfaces, camelCase verbs for methods and kebab-case filenames. Public business services use Service. Replaceable components use a role such as Evaluator, Adapter, Processor, Store or Provider. Name inputs and results after their business meaning. Omit the I prefix and Interface suffix.
+
+Call transactional storage through read or transaction with a registered operation and a verified scope. Document the coordinated keys, creation and replay rules, lock order and stale-writer behavior. A registered write runs on one connection at the storage host. PostgreSQL and openGauss adapters must demonstrate independent commits with two real connections while preserving schema migration exclusion.

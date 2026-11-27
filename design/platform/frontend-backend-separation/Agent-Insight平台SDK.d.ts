@@ -1,6 +1,13 @@
 /** 已落地的模块类型从源码导出。其他模块和 HTTP 客户端类型仍为设计草案。 */
 import type { CallContext } from '../../../packages/core/foundation/common/context/call-context';
-export type { CallContext } from '../../../packages/core/foundation/common/context/call-context';
+export type { CallContext, RequestContext, WorkspaceContext } from '../../../packages/core/foundation/common/context/call-context';
+export type { Storage, StorageProvider, StorageOperation, TransactionalStore, AnalyticalStore, ArtifactStore, CacheStore }
+  from '../../../packages/core/foundation/storage';
+export type { AppError, ErrorReporter } from '../../../packages/core/foundation/common/errors/app-error';
+export type { ErrorCategory, ErrorDefinition } from '../../../packages/core/foundation/common/errors/error-code';
+export type { Logger, LogLevel, LogFields } from '../../../packages/core/foundation/common/logging/logger';
+export type { LogRedactor } from '../../../packages/core/foundation/common/logging/redaction';
+export type { LoggerProvider, LoggingPolicy } from '../../../packages/core/foundation/common/logging/rotation';
 import type { PageRequest } from '../../../packages/core/foundation/common/shared-interfaces/pagination';
 export type { PageRequest } from '../../../packages/core/foundation/common/shared-interfaces/pagination';
 import type { ApiError } from '../../../packages/core/foundation/common/errors/safe-error';

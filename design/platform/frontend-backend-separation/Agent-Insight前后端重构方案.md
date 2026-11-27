@@ -220,10 +220,13 @@ agent-insight/
 │           │   ├── registry.ts             # 校验并选择启用的运行时实现
 │           │   └── providers/opencode/     # 首期适配平台已有的 OpenCode 运行逻辑
 │           ├── storage/                    # 仓内的公共存储模块，由数据库重构专项维护
-│           │   ├── index.ts                # 直接导出存储契约和初始化入口 createStorage
+│           │   ├── index.ts                # 导出存储契约和 StorageProvider 的创建约定
 │           │   ├── registry.ts             # 存储模块内部维护：按存储职责和配置名查找创建函数
 │           │   ├── storage-interfaces/     # 按职责定义可替换实现必须满足的读写约定
-│           │   │   ├── transactional.ts       # 事务内读写、唯一约束冲突、提交与回滚
+│           │   │   ├── operations.ts          # 绑定操作类型、授权范围、输入和结果
+│           │   │   ├── transactional.ts       # 业务方统一的只读和原子写入口
+│           │   │   ├── transaction-session.ts # 存储宿主本地的同连接读写和行锁
+│           │   │   ├── maintenance.ts         # 部署侧检查、初始化和迁移
 │           │   │   ├── analytical.ts          # 批量写入、按键分页读取和聚合
 │           │   │   ├── artifacts.ts           # 按引用保存、读取与清理持久内容
 │           │   │   └── cache.ts               # 按键读写、过期和删除
@@ -292,7 +295,7 @@ agent-insight/
 | --- | --- |
 | `*-service.ts` | 写模块的公开类型和方法签名。新增一种评估器时，在 `extensions/evaluation/evaluators/<名称>/` 编写实现并在该类注册表登记。沿用现有评分约定时无需改服务文件。 |
 | `application/` | 实现业务步骤、调用已选的扩展、决定事务范围。只在模块内部使用的协作接口随用例放置。简单规则可以写成同文件的函数。多个流程共用或需要独立测试的规则，在本目录按业务含义命名。例如 `delivery-state-rules.ts` 规定设备命令执行成功后，再收到“已收件”仍保留成功状态。 |
-| `adapters/`（按需） | 封装有独立职责的接入或转换，如验证外部凭据、按授权范围读取证据。数据库驱动与方言由 `foundation/storage/adapters/` 封装。 |
+| `adapters/`（按需） | 封装有独立职责的接入或转换，如验证外部凭据、按授权范围读取证据。与 dev 对接时，存储适配接入 Storage Core，数据库驱动和方言由存储宿主管理。 |
 
 ## 3. 模块接口怎么设计
 
@@ -378,6 +381,8 @@ sequenceDiagram
 | E4 设备命令 | `DeviceCommandService`：登记待发命令、查询收件或处理状态。 | 平台实现命令服务；`DeviceTransport` 约定领取、确认、上报，设备处理函数实现 `MessageHandler.handle()`。 |
 | E5 项目与鉴权 | `AccessService`：识别调用者、检查操作权限、列出项目成员。 | `CredentialVerifier.authenticate()` 由平台的认证适配实现。 |
 | foundation 共享能力 | `AgentRuntime.run()` 供诊断、评测、优化运行平台内置 Agent；其他模块通过对应的存储接口读写业务记录、Trace、文件和缓存。 | 运行时提供方实现 `AgentRuntimeProvider`；存储实现分别遵守对应的读写约定。 |
+
+命名按[模块接口与评审规则](../../../docs/zh/how-to/platform/refactor-module-boundaries.md)检查。接口用大驼峰角色名（如 `TransactionalStore`），方法用小驼峰动作名（如 `importTrace`），文件用连字符分词。
 
 SDK 草案中的四个方法名建议改得更明确：`report()` → `getReport()`、`results()` → `listResults()`、`identity()` → `getIdentity()`、`members()` → `listMembers()`。最终签名以评审后的 SDK 为准。[当前 SDK 契约稿](Agent-Insight平台SDK.d.ts)
 
@@ -655,11 +660,44 @@ sequenceDiagram
 
 ### 5.2 数据库接入、建表与迁移
 
-| 工作 | 代码位置与验证方式 |
+**统一入口。** 业务模块以操作名、授权上下文和输入调用 `storage.transactional.read(...)` 或 `storage.transactional.transaction(...)`。业务模块声明各操作的输入、结果和权限范围，例如“保存指定版本的评测集”。foundation 只定义只读快照、事务、批写、分析查询等通用能力。宿主登记操作名并校验参数和权限。登录前的凭据验证由专用认证入口处理；普通工作区操作必须携带已验证的 workspace。
+
+**事务在哪里执行。** 对接 dev 时，一次已登记的操作可映射到 Storage Core 已有的类型化入口或批提交协议。业务流程决定哪些写入必须一起成功，拥有连接的存储宿主在同一事务内读取、判断、写入、提交或回滚。例如保存评测集时，版本头、release、别名、操作回执和 outbox 一起提交。TS 回调只用于进程内实现，跨进程调用传操作名和数据。宿主维护三种事务库的方言、驱动、迁移与备份校验；目录树中的后端位置是可选实现位置，接入 dev 时直接适配已有存储服务。[dev 事务实现](https://gitcode.com/openeuler/agent-insight/blob/c6ef915e82760472fe5492d8eefd2c4ac65b3d55/services/storage/relational.py#L196)
+
+| dev 中的实际操作族 | 通用契约如何承接 | 业务方或适配器必须保留的语义 |
+| --- | --- | --- |
+| IAM、项目、评测集、资产、报告、诊断、实验状态与版本 | 只读快照 + 写事务；宿主 session 提供参数化 query、execute、executeMany 和受影响行数 | 多表提交、唯一键初建、条件更新、批量全成或全退。按真实范围复核身份；全局账号使用 principal 范围。 |
+| 任务领取、续租、取消、配额、回执、outbox、导入检查点 | 一个注册写操作组织行锁、条件写和回执记录 | 按执行代次拒绝迟到写回。相同幂等键和摘要重放原结果，内容变化返回冲突。 |
+| ClickHouse Span、RAS、基础设施、使用量与分析事实 | analytical.append 批写，query 承接单条、分页、筛选、聚合以及按版本按块读正文，remove 承接范围删除 | 各查询定义游标、顺序和结果，删除区分受理和生效。授权范围、稳定事件 ID、修订、摘要与投影水位由对应操作校验。[dev 分析读写](https://gitcode.com/openeuler/agent-insight/blob/c6ef915e82760472fe5492d8eefd2c4ac65b3d55/services/storage/clickhouse.py) |
+| 原文、制品、可重算缓存 | ArtifactStore 流式保存和读取不可变引用，CacheStore 按授权范围读写和过期 | 原件按摘要校验。关系库提交不能撤回已写文件或 CH 数据，可靠投递沿用 outbox、版本和回执。 |
+| 就绪检查、空库初始化、升级、旧库搬迁 | 部署进程注入 StorageMaintenance；搬迁工具使用各自源快照、受控批次和检查点 | schema 版本、历史迁移校验和、备份凭证、回滚与在线业务隔离由数据库专项维护。 |
+
+本次映射以 dev 提交 `c6ef915e8` 为基线。核对入口包括事务内单条与批量 SQL、条件更新、快照查询和 ClickHouse 读写。按下表找实际调用方，再为其登记具体操作。新基础接口覆盖的是操作种类，每个业务操作的输入、绑定、授权和真实后端验收随该能力迁移。
+
+| dev 源码（`services/storage/`） | 迁移时必须一起覆盖的写者或读取者 |
 | --- | --- |
-| 接入事务库 | 实现 `storage/storage-interfaces/transactional.ts` → 在 registry 登记 → `createStorage(config.storage)` 装配 → 用真实数据库运行 `test/ST/` 中涉及读写的端到端用例。 |
-| 建表与升级 | `schema/<类别>/<数据库>/current.sql` 初始化；已有库按已登记版本执行 `upgrades/`。比较全新安装与升级后的表、约束和索引。 |
-| 跨库搬迁 | `migration_tools/` 导出、转换、回填及校验；迁移和回滚由数据库专项负责。（见数据库专项《Agent-Insight 数据库切换与表结构设计方案》） |
+| `iam.py`、`authorized.py`、`control.py`、`platform_controls.py` | 账号、组、授权和资产身份；草稿、别名；平台记录批量提交与授权版本 |
+| `datasets.py`、`dataset_generation.py`、`evaluator_assets.py`、`experiments.py`、`trigger.py` | 资产版本头、发布/删除/恢复、生成任务、RunPlan、实验和复核结果 |
+| `benchmark_core.py`、`benchmark_cancellation.py`、`diagnosis.py`、`diagnosis_runs.py`、`trace_reports.py` | 下发、领取、取消、额度、诊断轮次和报告发布 |
+| `observations.py`、`collector_*.py`、`agent_traces.py`、`trace_metadata.py`、`trace_outcome.py`、`trace_transfer.py` | OTLP 和采集器并行入队、Span 版本与删除、标签、线程关联、转移与回执 |
+| `clickhouse.py`、`trace_list_sql.py`、`trace_analytics.py`、`semantic_usage.py`、`infra.py` | 受限范围读取、聚合、分块正文、用量、基础设施和跨库投影 |
+| `legacy_import.py`、`migrations.py`、`relational.py` | 离线迁移、版本核验、备份证据、分批恢复和迁移屏障 |
+
+#### 两个请求写入同一数据库时，谁能同时提交？
+
+dev 基线的 PostgreSQL 事务入口使用 `schema_meta` 上同一行的排他锁，openGauss 继承该行为。即使同一用户在同一工作区分别编辑甲、乙两个评测集也会排队。新契约要求 PG/openGauss 的普通写者共享迁移屏障，业务互斥只覆盖会共同改变同一规则的记录。宿主为每个写操作登记保护资源、键字段和方式（唯一键、条件写或行锁），可从 TransactionHandler.guards 反查所有共同写者。守卫描述供审查，约束仍须通过数据库语句和实际连接验证。SQLite 保留单写行为。迁移使用独占屏障并重新核验 schema 和备份；PG/openGauss 的锁模式分别在真实数据库上验证。
+
+- **已有对象和初次创建。** 以工作区和对象键锁定版本头，或按预期版本条件更新并检查影响行数。同一对象的保存、删除、恢复、后台发布采用相同规则。首次创建使用唯一键或稳定父记录，获得保护后复查 owner、版本、回执及摘要。未找到的行无法用行锁保护。
+- **真正共享的约束。** 采集的队列顺序记录和工作区容量、Benchmark 的工作区额度、组内最后一名 owner 等有各自的保护范围。所有写入口按一致顺序获取多把锁，同类记录按键排序。队首有有效租约时保持原顺序。死锁回滚和使用过期版本编辑应返回可区分的错误。受保护写入和撤权须共享可排序的授权依据。
+- **跨库和恢复。** CH 写入、设备下发和模型调用放在事务外。先保存意图和稳定操作编号，再执行外部动作，最后用当前代次登记结果。提交结果未知时先查回执。重放已有 dev 路径中的外部副作用前必须证实其幂等性。
+- **验收门槛。** 各后端用独立连接、受控暂停点、有界超时及最终读回验收。类型检查只证明调用形状。PG 和 openGauss 必须分别记录以下结果，SQLite 单独验证既有语义。[dev 关系库测试](https://gitcode.com/openeuler/agent-insight/blob/c6ef915e82760472fe5492d8eefd2c4ac65b3d55/services/storage/tests/test_relational.py)
+
+| 用例 | 必须观察的结果 |
+| --- | --- |
+| T1 独立写 / T2 同对象旧版本 | A 写甲但未提交时，先观察 B 写乙已提交，再释放 A。同写甲时只有一个新版本，过期方得到版本冲突。 |
+| T3 初建重放 / T4 认领与最后一个名额 | 同键同内容返回原回执，异内容冲突。两个领取者或两个实验竞争最后一个名额，仅一个有效占用。 |
+| T5 采集 | 并发入队遵守队首和容量，重复批次返回原回执；删除和迟到 Span 交错后不复活 Trace，indexed 可与 CH 事实核对。 |
+| T6 生命周期与权限 / T7 迁移与回滚 | 取消或撤权后旧代次和旧权限均不能生效。迁移与业务写双向互斥，多表中途失败后版本、额度、回执全部回滚。 |
 
 ### 5.3 多架构镜像和部署文件放在哪里
 
@@ -695,7 +733,7 @@ sequenceDiagram
 
 ### 6.3 怎样从页面错误找到日志
 
-服务入口捕获异常，响应携带错误码、`error_id` 和 `request_id`。页面展示错误码和本次错误的 `error_id`，运维可以据此找到日志，再用 `request_id` 查看同一次请求的记录。生产默认记录 WARN 及以上级别，日志脱敏、轮转并按保留期限清理。
+服务入口捕获异常，响应携带错误码、`error_id` 和 `request_id`。页面展示错误码和本次错误的 `error_id`，运维可以据此找到日志，再用 `request_id` 查看同一次请求的记录。生产默认记录 WARN 及以上级别。宿主按 LoggingPolicy 选择 stdout 或文件；文件轮转按单文件上限、总量上限及保留天数配置。ErrorReporter 在入口捕获一次，已知错误沿用模块定义的稳定错误码（如 TRACE_INDEXING），未知异常使用安全通用码。响应通过 ApiError 返回，原因和堆栈由 LogRedactor 过滤后记入受控日志。
 
 ### 6.4 各阶段如何验收
 
