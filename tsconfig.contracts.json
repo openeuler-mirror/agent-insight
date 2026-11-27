@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "strict": true,
+    "noEmit": true
+  },
+  "include": [
+    "packages/core/**/*.ts",
+    "design/platform/frontend-backend-separation/*.d.ts",
+    "test/UT/**/*.types.ts"
+  ]
+}

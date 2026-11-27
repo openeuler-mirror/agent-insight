@@ -1,0 +1,146 @@
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/data
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# env files (can opt-in for committing if needed)
+.env.local
+.env
+/config/**/*.local.yaml
+
+# custom model config (copy from custom-models.example.json)
+custom-models.json
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# database
+*.db
+*.db-journal
+
+# python
+__pycache__/
+*.egg-info/
+*.py[cod]
+*$py.class
+
+# local development
+.opencode/
+bun.lock
+
+# git worktrees
+.worktrees/
+3rd-pro/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# debug
+.vscode
+
+# Agent development configuration
+.agentdev/
+_local_legacy/
+
+# OpenCode OTel local capture samples (dev-only)
+scripts/otel_data/opencode/
+
+# workspace 目录不纳入版本控制
+workspace/
+
+# graphify 输出目录
+graphify-out/
+
+# 本地诊断/复现脚本，不纳入版本控制
+exclude/
+
+# Claude
+.claude
+.claude/
+
+# IDE configurations
+.idea
+.vscode
+.cursor
+.trae
+*.iml
+.agents
+.codex
+.qoder/
+
+# Qoder collector plugin builds
+integrations/qoder-desktop/build/
+integrations/qoder-jetbrains/.gradle/
+integrations/qoder-jetbrains/build/
+integrations/qoder-jetbrains/.intellijPlatform/
+
+# AET local artifacts
+.aet/
+
+# ad-hoc local test dumps
+.fi-test.out
+
+# local docs backup
+docs_backup/
+docs/series-articles/
+
+# npm pack output (build artifact, never commit)
+*.tgz
+
+# omo tool local data (sessions/handoffs, never commit)
+.omo/
+# Python build artifacts from pip install (agent_fault_injection)
+agent_fault_injection/build/
+agent_fault_injection/*.egg-info/
+
+# Generated standalone Trace dataset Worker
+generated/trace-datasets/

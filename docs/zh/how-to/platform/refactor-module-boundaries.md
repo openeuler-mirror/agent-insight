@@ -22,8 +22,10 @@
 
 首批接口声明见[观测服务](../../../../packages/core/observation/trace-service.ts)、[设备命令](../../../../packages/core/foundation/device-commands/device-command-service.ts)和[设备协议](../../../../packages/core/foundation/device-protocol/index.ts)。完整示例与扩展注册流程见[重构方案](../../../../design/platform/frontend-backend-separation/Agent-Insight前后端重构方案.md)。
 
-在仓库根目录执行以下命令，可检查观测和设备的 SDK 调用示例。
+新代码的引用应在新骨架内闭合。迁移时可查阅 [legacy/](../../../../legacy/)，并把依赖的契约、实现和测试迁入所属模块。
+
+在仓库根目录使用 TypeScript 5.9.3 检查全部 core 接口、SDK 声明和契约调用示例：
 
 ```sh
-npx --no-install tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM --types node test/UT/core/observation/trace-contract.types.ts
+tsc -p tsconfig.contracts.json
 ```
