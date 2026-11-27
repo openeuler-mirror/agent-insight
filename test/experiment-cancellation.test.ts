@@ -20,6 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth';
 
 test('experiment cancellation persists intent, isolates cases, blocks late work and preserves source records', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'experiment-cancellation-'));
@@ -27,10 +28,27 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   await fs.writeFile(path.join(directory, 'test.db'), '');
   execFileSync(path.resolve('node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], { env: process.env, stdio: 'pipe' });
   const { prismaRaw: prisma } = await import('../src/lib/storage/prisma');
+  await ensureTestApiUsers('owner');
   const { deleteExperimentExecution, reconcileCancellation } = await import('../src/lib/engine/experiment/cancellation-service');
   const { assertExperimentActive, withExperimentCancellation, markExperimentCleanupUnconfirmed } = await import('../src/lib/engine/experiment/cancellation-context');
   t.after(async () => { await prisma.$disconnect(); await fs.rm(directory, { recursive: true, force: true }); });
   const experiment = await prisma.experiment.create({ data: { user: 'owner', name: 'cancel test', status: 'running', cases: { create: [{ id: 'case-a' }, { id: 'case-b' }] } } });
+  let captured!: () => void;
+  let resume!: () => void;
+  let held = false;
+  const snapshotCaptured = new Promise<void>((resolve) => { captured = resolve; });
+  const snapshotGate = new Promise<void>((resolve) => { resume = resolve; });
+  const originalCount = prisma.experimentLocalExecution.count;
+  prisma.experimentLocalExecution.count = (async (args: any) => {
+    const count = await Reflect.apply(originalCount, prisma.experimentLocalExecution, [args]);
+    if (!held && args.where.experimentId === experiment.id && count > 0) {
+      held = true;
+      captured();
+      await snapshotGate;
+    }
+    return count;
+  }) as typeof originalCount;
+  t.after(() => { resume(); prisma.experimentLocalExecution.count = originalCount; });
   await assert.rejects(() => deleteExperimentExecution('other', experiment.id), /不存在/);
   await assert.rejects(() => deleteExperimentExecution('owner', experiment.id, 'foreign'), /不属于/);
   let enter!: () => void;
@@ -38,10 +56,11 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
   let timeout!: ReturnType<typeof setTimeout>;
   // Production polling is unref'ed, so the test must own its bounded wait.
   const deadline = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error('Experiment cancellation did not complete within 5000ms')), 5000);
+    // 上限只为兜住"永远不结束"，不是性能断言；并发跑全量 UT 时 5s 会被调度延迟打满。
+    timeout = setTimeout(() => reject(new Error('Experiment cancellation did not complete within 30000ms')), 30000);
   });
   const running = withExperimentCancellation(experiment.id, 'case-a', (signal) => new Promise((resolve) => {
-    signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+    signal.addEventListener('abort', () => { void snapshotCaptured.then(() => resolve('aborted')); }, { once: true });
     enter();
   }));
   let cancelled: Awaited<ReturnType<typeof deleteExperimentExecution>>;
@@ -49,14 +68,26 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
     await Promise.race([entered, running, deadline]);
     cancelled = await Promise.race([deleteExperimentExecution('owner', experiment.id, 'case-a'), deadline]);
     await assert.rejects(Promise.race([running, deadline]), /已取消/);
+    // Reconciliation can still be sharing a pass that observed the worker before it exited.
+    await Promise.race([(async () => {
+      const pendingPass = reconcileCancellation(cancelled.id);
+      resume();
+      let reconciled = await pendingPass;
+      assert.equal(reconciled.status, 'pending');
+      while (reconciled.status === 'pending') {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        reconciled = await reconcileCancellation(cancelled.id);
+      }
+      assert.equal(reconciled.status, 'completed');
+    })(), deadline]);
   } finally {
+    resume();
     clearTimeout(timeout);
   }
   await assert.rejects(() => assertExperimentActive(experiment.id, 'case-a'), /已取消/);
   await assertExperimentActive(experiment.id, 'case-b');
   assert.equal((await prisma.experiment.findUniqueOrThrow({ where: { id: experiment.id } })).deletedAt, null);
   assert.ok((await prisma.experimentCase.findUniqueOrThrow({ where: { id: 'case-a' } })).deletedAt);
-  assert.equal((await reconcileCancellation(cancelled.id)).status, 'completed');
   assert.equal((await deleteExperimentExecution('owner', experiment.id, 'case-a')).id, cancelled.id);
   await deleteExperimentExecution('owner', experiment.id);
   await assert.rejects(() => assertExperimentActive(experiment.id), /已取消/);
@@ -75,7 +106,7 @@ test('experiment cancellation persists intent, isolates cases, blocks late work 
     cases: { create: [{ id: 'api-case-a' }, { id: 'api-case-b' }] } } });
   const { DELETE: deleteCase } = await import('../src/app/api/experiments/[id]/cases/[caseId]/route');
   const deleteByApi = async (caseId: string) => {
-    const response = await deleteCase(new Request(`http://localhost/api/experiments/${apiExperiment.id}/cases/${caseId}?user=owner`, { method: 'DELETE' }),
+    const response = await deleteCase(testRequest(`http://localhost/api/experiments/${apiExperiment.id}/cases/${caseId}?user=owner`, 'owner', { method: 'DELETE' }),
       { params: Promise.resolve({ id: apiExperiment.id, caseId }) });
     assert.ok(response.ok);
     return response.json();

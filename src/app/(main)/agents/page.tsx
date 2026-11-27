@@ -31,6 +31,7 @@ import {
     Trash2
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { AgentEvaluationVersions } from '@/components/eval/AgentEvaluationVersions';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
@@ -1389,6 +1390,7 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
             {/* Spacer */}
             <div style={{ flex: 1, minHeight: 12 }} />
 
+            <div className="mt-2"><AgentEvaluationVersions platform={agent.platform} name={agent.name}/></div>
             {/* Actions */}
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <Btn
@@ -1397,7 +1399,8 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void })
                     style={{ flex: 1 }}
                     onClick={(e) => {
                         e.stopPropagation();
-                        router.push(`/trace?agent=${encodeURIComponent(agent.name)}`);
+                        const scope = agent.layer === 'subagent' ? 'subagent' : 'root';
+                        router.push(`/trace?agent=${encodeURIComponent(agent.name)}&scope=${scope}`);
                     }}
                 >
                     {t('nav.agentTrace')}

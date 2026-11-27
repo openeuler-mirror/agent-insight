@@ -22,6 +22,10 @@ const FILES = [
   { name: 'package.json', contentType: 'application/json; charset=utf-8' },
   { name: 'index.js', contentType: 'text/javascript; charset=utf-8' },
   { name: 'cordis.patch.yml', contentType: 'application/yaml; charset=utf-8' },
+  { name: 'process-lock.mjs', contentType: 'text/javascript; charset=utf-8' },
+  { name: 'dsh-context-source.mjs', contentType: 'text/javascript; charset=utf-8' },
+  { name: 'dsh-context-details.mjs', contentType: 'text/javascript; charset=utf-8' },
+  { name: 'replay-compat.mjs', contentType: 'text/javascript; charset=utf-8' },
 ] as const;
 
 export type DeepSeekHarnessPluginFile = {

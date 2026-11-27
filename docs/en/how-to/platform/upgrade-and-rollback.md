@@ -28,7 +28,7 @@ Replace angle-bracket placeholders before executing. Avoid changing deployment m
 
 ## Next.js security upgrade
 
-The dependency baseline is `next` / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.3 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
+The dependency baseline is `next` 16.4.6 / `eslint-config-next` 16.4.3. Commit the updated `package-lock.json`, install from it in a clean build directory, and regenerate standalone output, static assets, and the release package. Do not reuse old `.next` output. Verify that the final artifact loads Next.js 16.4.6 and `sharp` 0.35.5 or later, with matching native binaries for the target platform.
 
 Docker source mode uses dependencies baked into the image. Rebuild the image after changing source dependencies; updating mounted source and restarting is insufficient. The entrypoint checks for missing direct dependencies and mismatches in exact version declarations, including Next.js, and stops with a rebuild instruction. Audit range dependencies separately against the lockfile and final artifact.
 
@@ -48,6 +48,12 @@ Before restoring external writes, verify:
 A successful installation, reachable port, or health response alone does not prove data or workflow compatibility.
 
 After upgrading to a release with OpenCode data isolation, restart the platform and run both AgentDebug and Skill optimization once. The platform initializes a private OpenCode database and creates new sessions for new runs. The user's CLI continues to use its existing database.
+
+## Built-in example data cleanup
+
+Older releases injected example Agents, Skills, datasets, and Traces when a user first logged in. Current releases no longer inject them and, on each startup, delete leftover records from existing databases using the fixed identifiers written at injection time (Agent name and description, dataset name, Skill name and description, and the `builtin_msg_` taskId prefix). All conditions are exact matches, so user-created data is unaffected, and repeated startups do not delete anything further. A `builtin demo cleanup` line in the startup log reports records removed by that run.
+
+Cleanup only covers database records. Client-local files such as `~/.agent-insight/example/messages` are not removed and can be deleted manually.
 
 ## Rollback
 

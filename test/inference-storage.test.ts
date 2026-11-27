@@ -39,7 +39,9 @@ test('inference IDs survive authenticated upload, SQLite storage and deferred Tr
         { role: 'user', content: 'fixture', timeInfo: { created: now } },
         { role: 'assistant', trace_kind: 'llm', messageID: 'answer', content: 'root result', inference_session_id: root,
           inference_request_id: 'logical-root', inference_call_ids: ids.slice(0, 2), timeInfo: { created: now, completed: now + 100 },
-          inference_attempts: ids.slice(0, 2).map((id, i) => ({ request_id: 'logical-root', attempt_id: String(i), call_id: id, status_code: i ? 200 : 503, started_at: new Date(now + i).toISOString() })) },
+          inference_upstream_request_ids: [{ call_id: ids[1], request_id: 'service-root', source: 'model-response-header' }],
+          inference_attempts: ids.slice(0, 2).map((id, i) => ({ request_id: 'logical-root', attempt_id: String(i), call_id: id, status_code: i ? 200 : 503, started_at: new Date(now + i).toISOString(),
+            ...(i ? { upstream_request_id: 'service-root' } : {}) })) },
         { role: 'subagent', trace_kind: 'llm', messageID: 'child-answer', content: 'child result', subagent_session_id: 'child', subagent_parent_session_id: root, subagent_name: 'worker', inference_session_id: 'child', inference_call_ids: [ids[2]], timeInfo: { created: now, completed: now + 100 } },
         { role: 'system', content: '', inference_session_id: root, inference_unassigned_calls: [{ call_id: ids[3], state: 'transport_error' }] },
     ];
@@ -48,6 +50,7 @@ test('inference IDs survive authenticated upload, SQLite storage and deferred Tr
     const stored = await prismaRaw.session.findUniqueOrThrow({ where: { taskId: root } });
     const storedRows = JSON.parse(stored.interactions!);
     assert.deepEqual(storedRows.find((row: any) => row.messageID === 'answer').inference_call_ids, ids.slice(0, 2));
+    assert.deepEqual(storedRows.find((row: any) => row.messageID === 'answer').inference_upstream_request_ids, [{ call_id: ids[1], request_id: 'service-root', source: 'model-response-header' }]);
     const detailUrl = `http://localhost/api/observe/session?taskId=${root}&source=raw&view=structure`;
     assert.equal((await GET(new Request(detailUrl))).status, 401);
     await prismaRaw.user.create({ data: { username: 'inference-storage-outsider', apiKey: 'test-inference-outsider' } });
@@ -57,6 +60,8 @@ test('inference IDs survive authenticated upload, SQLite storage and deferred Tr
     const detail = await response.json();
     assert.ok(detail.interactions.some((row: any) => row._payloadDeferred));
     assert.deepEqual(inferenceAnalysisTarget({ scope: 'trace', framework: 'opencode', interactions: detail.interactions }).callIds?.sort(), [...ids].sort());
+    assert.deepEqual(detail.interactions.find((row: any) => row.messageID === 'answer').inference_upstream_request_ids,
+        [{ call_id: ids[1], request_id: 'service-root', source: 'model-response-header' }]);
     const tree = buildAgentCallTree(detail.interactions)!;
     const llms = [tree, ...tree.children].flatMap(node => node.events.filter(event => event.kind === 'llm'));
     assert.equal(llms.length, 2);
@@ -64,5 +69,9 @@ test('inference IDs survive authenticated upload, SQLite storage and deferred Tr
         const target = inferenceAnalysisTarget({ scope: 'llm', framework: 'opencode', interaction: llm.interaction });
         assert.deepEqual(target.callIds, llm.interaction.messageID === 'answer' ? ids.slice(0, 2) : [ids[2]]);
         assert.ok(!target.callIds?.includes(ids[3]));
+        if (llm.interaction.messageID === 'answer') {
+            assert.equal(target.calls?.find(call => call.callId === ids[1])?.upstreamRequestId, 'service-root');
+            assert.equal(target.calls?.find(call => call.callId === ids[0])?.upstreamRequestId, undefined);
+        }
     }
 });

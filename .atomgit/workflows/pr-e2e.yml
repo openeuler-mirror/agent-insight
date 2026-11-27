@@ -18,6 +18,7 @@ concurrency:
     enable: false
 
 env:
+  E2E_DEPENDENCY_MODE: lockfile
   E2E_ACTION_EVENT: ${{ atomgit.event_name }}
   E2E_CASE_MODES: ${{ vars.E2E_CASE_MODES }}
   E2E_MODEL_BASE_URL: ${{ vars.E2E_MODEL_BASE_URL }}
@@ -28,7 +29,7 @@ jobs:
     name: 生产编译
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 35
     outputs:
       tested_sha: ${{ steps.phase.outputs.tested_sha }}
@@ -90,6 +91,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
 
   ut:
     name: UT
@@ -97,7 +99,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 45
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -157,6 +159,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
             ${{ env.E2E_CI_ROOT }}/public/ut-metrics.json
 
   case_001:
@@ -165,7 +168,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -219,6 +222,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
 
   case_002:
     name: 002 OpenCode 执行与 Trace 采集展示
@@ -226,7 +230,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -280,6 +284,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
 
   case_003:
     name: 003 Skill 生成/数据集评测/优化发布
@@ -287,7 +292,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -341,6 +346,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
 
   case_004:
     name: 004 已有 Trace 评测/诊断/Skill 优化
@@ -348,7 +354,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -402,6 +408,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
 
   case_005:
     name: 005 故障注入/检测拦截/恢复验证
@@ -409,7 +416,7 @@ jobs:
     if: ${{ always() && jobs.build.result == 'success' }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 55
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -463,6 +470,7 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log
 
   collect:
     name: 汇总与门禁
@@ -470,7 +478,7 @@ jobs:
     if: ${{ always() }}
     runs-on: [self-hosted, openeuler, x86, cpu=8]
     container:
-      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261111
+      image: swr.cn-north-4.myhuaweicloud.com/agent-insight/agent-insight-e2e:node24-pw1.62.1-amd64-20261120-8685a22a
     timeout-minutes: 15
     env:
       E2E_EXPECTED_SHA: ${{ jobs.build.outputs.tested_sha }}
@@ -571,3 +579,4 @@ jobs:
             ${{ env.E2E_CI_ROOT }}/public/report.json
             ${{ env.E2E_CI_ROOT }}/public/report.html
             ${{ env.E2E_CI_ROOT }}/public/summary.md
+            ${{ env.E2E_CI_ROOT }}/public/preparation.log

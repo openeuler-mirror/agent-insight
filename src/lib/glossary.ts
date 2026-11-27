@@ -91,7 +91,7 @@ const GLOSSARY = {
     body: 'Agent 的来源类型，表示自定义实现，与"模板"或"预置"相对。',
   },
   'trace-link': {
-    name: '链路跟踪',
+    name: '链路追踪',
     tag: 'trace',
     body: '跳转到该 Agent 最近若干次执行的全链路 Trace 视图。',
   },

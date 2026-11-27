@@ -26,8 +26,7 @@
               {
                 "group": "平台公共",
                 "pages": [
-                  "zh/tutorial/platform/01-quick-start",
-                  "zh/tutorial/platform/02-example-walkthrough"
+                  "zh/tutorial/platform/01-quick-start"
                 ]
               },
               {
@@ -175,7 +174,6 @@
                   "zh/reference/platform/configuration",
                   "zh/reference/platform/api-and-contracts",
                   "zh/reference/platform/design-system",
-                  "zh/reference/platform/example-cost",
                   "zh/reference/platform/file-map"
                 ]
               },

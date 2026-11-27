@@ -52,7 +52,15 @@ The platform has three main parts:
 Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
 <p align="center">
-  <img src="docs/images/architecture.png" alt="Agent Insight architecture" />
+  <img src="docs/images/architecture.en.png" alt="Agent Insight architecture" />
+</p>
+
+### Agent Insight in the openJiuwen Architecture
+
+Agent Insight provides observability, evaluation, diagnosis, and optimization in openJiuwen. Its position is highlighted in the lower right of the architecture diagram.
+
+<p align="center">
+  <img src="docs/images/openjiuwen-architecture.png" alt="openJiuwen architecture with Agent Insight highlighted in the lower right" />
 </p>
 
 ## Supported Platforms
@@ -152,7 +160,7 @@ Run a small task in the connected Agent, then open the execution list in Agent I
 3. **Evaluate**: configure a dataset and evaluators, run the task, and inspect execution details and evaluation results.
 4. **Optimize**: select an existing Skill and use the findings to create an improved version. Re-run the same task or dataset to compare behavior.
 
-Start with the [built-in example walkthrough](docs/zh/tutorial/platform/02-example-walkthrough.md) for a concrete workflow. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
+Start with the [quick-start tutorial](docs/zh/tutorial/platform/01-quick-start.md) to connect a real Agent and inspect its first trace. See the [Chinese README](README.zh.md) for the longer illustrated walkthrough.
 
 ## Documentation
 

@@ -1223,10 +1223,16 @@ export function buildQoderOtlpPayload({
     const matching = call.response_id && responseSpans.get(call.response_id)
     const uniqueResponse = responseCounts.get(call.response_id) === 1
     if (matching?.length === 1 && uniqueResponse) {
-      matching[0].attributes.push(...attributes({ "agent_insight.inference.call_ids": [call.call_id] }))
+      matching[0].attributes.push(...attributes({
+        "agent_insight.inference.call_ids": [call.call_id],
+        ...(call.upstream_request_id ? { "agent_insight.inference.upstream_request_ids": [{
+          call_id: call.call_id, request_id: call.upstream_request_id, source: "model-response-header",
+        }] } : {}),
+      }))
     } else {
       unassigned.push({ call_id: call.call_id, status_code: call.status_code, state: call.state,
         started_at: call.started_at, completed_at: call.completed_at,
+        ...(call.upstream_request_id ? { upstream_request_id: call.upstream_request_id } : {}),
         reason: call.response_id ? "ambiguous_or_missing_response" : "missing_response_id" })
     }
   }

@@ -14,7 +14,13 @@ export async function createDatasetThroughUi({page,baseUrl,root,api,username,dat
  const dataset=await api(`/api/agent-datasets/${result.dataset.id}?user=${encodeURIComponent(username)}`),owner=readOwner(dataset.id);
  const proof=assertConstructedDataset(dataset,recipe,datasetName,username,owner);assert.equal(owner,username);
  await page.reload();const row=page.locator(`#case-${proof.case.id}`);await row.waitFor();
- for(const [index,text]of [[1,recipe.input],[2,recipe.reference]]){const cell=row.locator('td').nth(index);await cell.hover();await cell.locator('div').waitFor();assert.equal(await cell.locator('div').innerText(),text);}
+ const table=row.locator('xpath=ancestor::table');
+ for(const [key,text]of [['input',recipe.input],['reference_output',recipe.reference]]){
+  const field=dataset.fields.find(field=>field.key===key);assert.ok(field,`Dataset is missing field ${key}`);
+  const header=table.getByRole('columnheader',{name:field.label,exact:true});
+  const index=await header.evaluate(th=>th.cellIndex);
+  const cell=row.getByRole('cell').nth(index);await cell.hover();await cell.locator('div').waitFor();assert.equal(await cell.locator('div').innerText(),text);
+ }
  await shot('dataset');await page.mouse.move(0,0);
  writePrivate(path.join(root,'private/constructed-dataset.json'),dataset);return {dataset,proof};
 }

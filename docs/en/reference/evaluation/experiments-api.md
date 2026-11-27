@@ -15,7 +15,9 @@ This reference covers common ordinary-experiment calls and asynchronous behavior
 | `GET /api/experiments/:id` | Experiment details, Cases, results, and phase information; fields vary by experiment type, so a list-item type cannot describe every detail response |
 | `GET /api/experiments/cancellations` | Up to 100 current-user `pending` cancellation records as `{ cancellations }`, not the complete cancellation history |
 
-Send the current account Key instead of relying on the overriding `user` selector. An ordinary list with no identity can have a broader scope, so its success is not proof of credential validation. Writes and detail branches apply their own ownership handling.
+List items retain the existing Agent identity in `agentName` and may include an optional display field, `agentLabel`, read from `configSnapshotJson.agentLabel`. The ordinary experiment wizard stores the full JiuwenSwarm display name and platform in `configSnapshot.agentLabel` for list and detail presentation. The detail page reads the existing `configSnapshot.agentLabel` field from the detail response; `agentName` in detail responses and reusable configurations remains the Agent identity. This label is not used for dispatch or Trace matching. Same-configuration experiments retain the snapshot. Missing, blank, or invalid label snapshots omit the list field `agentLabel`; both views fall back to `agentName`. Queries do not require the current client Agent catalog.
+
+Send the current account Key; the server resolves identity from that Key. The `user` parameter only checks the requested account and cannot override the authenticated account. Ordinary lists and details return `401` for missing or mismatched identity. Creation, execution, Case append and retry branches retain their own identity error responses. Legacy requests without asset versions also require authentication.
 
 Execution progress in experiment details is read through a consistent transaction snapshot using only required fields. A transaction is limited to 30 seconds, with a shared 35-second wait budget across at most two attempts. Only `P1008/P2028/P2034` trigger one retry, logged with its code and elapsed time. Persistent failures still return errors; retries do not rerun Agents or evaluators or rewrite experiment records. When a background refresh succeeds, the UI exits the full-page loading state and displays the result.
 
@@ -39,6 +41,14 @@ Execution progress in experiment details is read through a consistent transactio
 `name` must be nonempty after trimming, and `evaluatorIds` must contain at least one item. Non-watch mode needs at least one Case. Watch mode uses `watchMode: true` and a nonempty `agentName`. Cases can reference `executionId` / `taskId`, and support `datasetInput`, reference output, and evaluator context. Reference-answer requirements depend on evaluator metadata. The ordinary branch returns `200` with `{ id }`; the new record is a draft, not a completed evaluation.
 
 The Benchmark dataset branch has its own binding, Case selection, and execution settings and can return `201`. Ordinary experiments cannot select `benchmark:` evaluators. Do not apply the ordinary payload to a Benchmark or frozen Skill-snapshot experiment. See [evaluator output and runtime settings](./evaluator-output.md) and [environment preparation](./execution-environment.md).
+
+## SQLite asset versions and per-turn Cases
+
+Ordinary experiments can send `assetVersions:{agent?:versionId,dataset?:versionId,evaluators?:{[evaluatorId]:versionId}}`. The server checks version ownership using the real account Key and freezes definitions rather than trusting caller-supplied snapshots. Dataset Cases use `datasetId/datasetCaseId`; turn definitions are preserved in `caseValues.turns`. Execution receives only `{version:1,turns:[{id,input}]}`, without expected answers or scoring rules.
+
+Native multi-turn generation requires explicit OpenCode v2 session-continuation capability. Evaluation starts after every configured turn and the final Trace are complete. Unsupported targets fail explicitly instead of executing only the first input. Requests without turn definitions retain the single-turn workflow.
+
+An experiment with a frozen dataset version can append only Cases from that version. Duplicate inputs require explicit Case selection, and a repeated Trace does not overwrite existing references, rules or results. An explicit `referenceOverride` records the experiment-only final reference change and its original version provenance; frozen turn rules stay unchanged. See the [asset version contract, Chinese](../../../zh/reference/platform/api-and-contracts.md#sqlite-评测资产版本与逐轮-case) for version endpoints and draft revision checks.
 
 ## Start and completion
 

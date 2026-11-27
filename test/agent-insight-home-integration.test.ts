@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -49,7 +50,7 @@ test('both installers render valid Bash and share root configuration on both pla
   }
 })
 
-test('generated shell wrappers retain the installation root in a fresh environment', () => {
+test('generated shell wrappers retain the installation root in a fresh environment', { skip: process.platform === 'win32' ? 'POSIX wrapper execution; validated under Linux/WSL' : false }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight wrapper space-'))
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: root }
   delete env.AGENT_INSIGHT_DATA_DIR
@@ -71,7 +72,7 @@ test('standalone Qwen configuration and spool share the custom root', () => {
     console.log(JSON.stringify([agentInsightEnvPath, collectorBaseRoot]));
   `], { env: { ...process.env, AGENT_INSIGHT_HOME: '/tmp/insight-test-custom', AGENT_INSIGHT_DATA_DIR: '' }, encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(JSON.parse(result.stdout), ['/tmp/insight-test-custom/.env', '/tmp/insight-test-custom/otel_data/qwencode'])
+  assert.deepEqual(JSON.parse(result.stdout), [path.join(path.resolve('/tmp/insight-test-custom'), '.env'), path.join(path.resolve('/tmp/insight-test-custom'), 'otel_data', 'qwencode')])
 })
 
 test('shared collector transport uses the custom root without creating files', () => {
@@ -80,11 +81,12 @@ test('shared collector transport uses the custom root without creating files', (
     console.log(transport.collectorStateDir('codex', 'test-key', '/tmp/mock-user'));
   `], { env: { ...process.env, AGENT_INSIGHT_HOME: '/tmp/insight-test-custom', AGENT_INSIGHT_DATA_DIR: '' }, encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /^\/tmp\/insight-test-custom\/otel_data\/codex\/[a-f0-9]{12}\n$/)
+  assert.equal(path.dirname(result.stdout.trim()),path.join(path.resolve('/tmp/insight-test-custom'),'otel_data','codex'))
+  assert.match(path.basename(result.stdout.trim()),/^[a-f0-9]{12}$/)
 })
 
 test('Hermes and LlamaIndex agree on custom, empty and expanded roots', () => {
-  const result = spawnSync('python3', ['-B', '-c', `
+  const result = spawnSync(pythonExecutable, ['-B', '-c', `
 import os, runpy
 from pathlib import Path
 hermes = runpy.run_path('scripts/hermes_agent_insight_plugin.py')
@@ -121,7 +123,7 @@ test('postinstall selects the requested database before any initialization or mi
         return require(name)
       },
     })
-    assert.equal(env.DATABASE_URL, selected === undefined ? 'file:/tmp/managed.db' : selected || 'file:/tmp/custom-root/data/witty_insight.db')
+    assert.equal(env.DATABASE_URL, selected === undefined ? 'file:/tmp/managed.db' : selected || `file:${path.join('/tmp/custom-root','data','witty_insight.db')}`)
     assert.equal(migrated, false)
   }
 })

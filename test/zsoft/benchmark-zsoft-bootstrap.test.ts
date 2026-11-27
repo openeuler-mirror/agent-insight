@@ -25,19 +25,28 @@ function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zsoft-bootstrap-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const configDir = path.join(root, 'config')
-  const bin = path.join(root, 'bin')
   fs.mkdirSync(configDir)
-  fs.mkdirSync(bin)
   const calls = path.join(root, 'calls.jsonl')
-  fs.writeFileSync(path.join(bin, 'npx'), `#!${process.execPath}
+  const preload = path.join(root, 'bootstrap-spawn.cjs')
+  fs.writeFileSync(preload, `const cp = require('node:child_process');
 const fs = require('node:fs');
-fs.appendFileSync(process.env.BOOTSTRAP_CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
-const key = process.argv.includes('zsoft-l1') ? 'zsoft-l1' : 'swe-bench';
-console.log(key + ': ' + (process.env.BOOTSTRAP_OUTPUT || 'imported'));
-if (process.env.BOOTSTRAP_FAIL === key) { console.error('fixture import failed: ' + key); process.exit(1); }
-`, { mode: 0o755 })
+const assert = require('node:assert/strict');
+const original = cp.spawnSync;
+cp.spawnSync = (command, args, options) => {
+  if (!args.includes('scripts/benchmark/ensure-dataset.ts') && !args.includes('scripts/benchmark/ensure-swe-bench-dataset.ts')) return original(command, args, options);
+  assert.equal(command, process.execPath);
+  assert.equal(args[0], require.resolve('tsx/cli', { paths: [process.cwd()] }));
+  fs.appendFileSync(process.env.BOOTSTRAP_CALLS, JSON.stringify(args) + '\\n');
+  const key = args.includes('zsoft-l1') ? 'zsoft-l1' : 'swe-bench';
+  fs.writeSync(options.stdio[1], key + ': ' + (process.env.BOOTSTRAP_OUTPUT || 'imported'));
+  const failed = process.env.BOOTSTRAP_FAIL === key;
+  if (failed) fs.writeSync(options.stdio[2], 'fixture import failed: ' + key);
+  return { status: failed ? 1 : 0, signal: null };
+};
+`)
   const env = { ...process.env, AGENT_INSIGHT_CONFIG_DIR: configDir, AGENT_INSIGHT_HOME: root,
-    DATABASE_URL: `file:${root}/fixture.db`, BOOTSTRAP_CALLS: calls, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+    DATABASE_URL: `file:${root}/fixture.db`, BOOTSTRAP_CALLS: calls,
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}` }
   const configure = (value: unknown) => fs.writeFileSync(path.join(configDir, 'platform.local.yaml'), JSON.stringify(value))
   const run = () => spawnSync(process.execPath, ['scripts/benchmark/bootstrap-zsoft-dataset.cjs'], { env, encoding: 'utf8', timeout: 10_000 })
   return { root, calls, env, configure, run }
@@ -80,8 +89,8 @@ test('default ZSoft auto-import uses the shared CLI, records logs, and retries a
   assert.match(success.stdout, /ZSoft L1 数据集已就绪/)
   assert.doesNotMatch(fs.readFileSync(log, 'utf8'), /fixture import failed/)
   assert.deepEqual(fs.readFileSync(f.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)), [
-    ['tsx', 'scripts/benchmark/ensure-dataset.ts', '--benchmark', 'zsoft-l1'],
-    ['tsx', 'scripts/benchmark/ensure-dataset.ts', '--benchmark', 'zsoft-l1'],
+    [require.resolve('tsx/cli'), 'scripts/benchmark/ensure-dataset.ts', '--benchmark', 'zsoft-l1'],
+    [require.resolve('tsx/cli'), 'scripts/benchmark/ensure-dataset.ts', '--benchmark', 'zsoft-l1'],
   ])
 })
 

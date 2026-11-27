@@ -19,7 +19,7 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -36,6 +36,8 @@ import { Term } from '@/components/text/Term';
 import styles from './code-evaluator-detail.module.css';
 import EvaluatorSkillsEditor from '@/components/eval/EvaluatorSkillsEditor';
 import EvaluatorPointsEditor from '@/components/eval/EvaluatorPointsEditor';
+import { AssetVersionPicker } from '@/components/eval/AssetVersionPicker';
+import { evaluationAssetRequest, type AssetVersionView } from '@/lib/client/evaluation-assets';
 
 const CodeMonacoEditor = dynamic(
   () => import('@monaco-editor/react').then(m => m.Editor),
@@ -82,7 +84,7 @@ export default function CustomEvaluatorDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { t, locale } = useLocale();
-  const { user } = useAuth();
+  const { user, apiKey } = useAuth();
   const rawId = typeof params?.id === 'string' ? params.id : '';
   const id = decodeURIComponent(rawId);
 
@@ -90,6 +92,15 @@ export default function CustomEvaluatorDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [card, setCard] = useState<EvaluatorCard | null>(null);
+  const [assetView,setAssetView]=useState<AssetVersionView|null>(null);
+  const searchParams=useSearchParams();
+  const requestedVersionId=searchParams?.get('version')||'';
+  const [versionId,setVersionId]=useState(requestedVersionId);
+  useEffect(()=>setVersionId(requestedVersionId),[requestedVersionId]);
+  const [versionStatus,setVersionStatus]=useState<'loading'|'ready'|'unsupported'|'error'>('loading');
+  const historical=Boolean(assetView&&assetView.selectedVersion.version!==assetView.head.publishedVersion);
+  const readOnly=historical||Boolean(assetView?.readOnly);
+  const updateCard=(next:EvaluatorCard)=>{if(!readOnly)setCard(next);};
 
   const reload = useCallback(async () => {
     if (!user) return;
@@ -140,7 +151,7 @@ export default function CustomEvaluatorDetailPage() {
   }
 
   const handleSave = async () => {
-    if (!user || !card) return;
+    if (!user || !card || readOnly || versionStatus==='loading' || versionStatus==='error') return;
     setSaving(true);
     setError('');
     try {
@@ -173,6 +184,10 @@ export default function CustomEvaluatorDetailPage() {
           setError('请编写评测代码');
           return;
         }
+      }
+      if(assetView&&apiKey){
+        await evaluationAssetRequest(apiKey,{body:{action:'evaluator-publish',kind:'evaluator',businessId:id,card:normalizeCardForSave(card),baseVersion:assetView.selectedVersion.version,revision:assetView.head.revision,note:'保存评估器配置'}});
+        router.push('/metrics');return;
       }
       const list = await fetchEvaluators(user);
       const idx = list.findIndex(c => c.id === card.id);
@@ -249,17 +264,19 @@ export default function CustomEvaluatorDetailPage() {
           <span className="ai-badge ai-badge-gr">{card.evaluatorType}</span>
         </div>
 
+        <div className="mb-4 grid gap-2"><AssetVersionPicker kind="evaluator" businessId={id} value={versionId||undefined} onStatus={setVersionStatus} onLoad={view=>{setAssetView(view);setCard(view.selectedVersion.content as unknown as EvaluatorCard);}} onChange={version=>setVersionId(version.id)}/>{historical&&<span className="text-xs text-foreground-muted">历史版本只读，请选择最新版编辑</span>}</div>
         {error ? (
           <div className="ai-card" style={{ padding: 12, color: 'var(--error)', marginBottom: 14 }}>
             {error}
           </div>
         ) : null}
 
+        <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0">
         {card.evaluatorType === 'LLM' && (
-          <LlmEditor card={card} onChange={setCard} />
+          <LlmEditor card={card} onChange={updateCard} />
         )}
         {card.evaluatorType === 'Code' && (
-          <CodeEditor card={card} onChange={setCard} />
+          <CodeEditor card={card} onChange={updateCard} readOnly={readOnly} />
         )}
         {card.evaluatorType === 'Custom RPC' && (
           <div className="ai-card" style={{ padding: 16, marginBottom: 14 }}>
@@ -269,9 +286,10 @@ export default function CustomEvaluatorDetailPage() {
           </div>
         )}
 
+        </fieldset>
         <div className={styles.detailFooter}>
-          <button type="button" className="ai-btn-p" disabled={saving || card.evaluatorType === 'Custom RPC'} onClick={() => void handleSave()}>
-            {saving ? '保存中…' : '保存'}
+          <button type="button" className="ai-btn-p" disabled={saving || readOnly || versionStatus==='loading' || versionStatus==='error' || card.evaluatorType === 'Custom RPC'} onClick={() => void handleSave()}>
+            {saving ? '保存中…' : assetView?'保存为新版本':'保存'}
           </button>
           <Link href="/metrics" className="ai-btn-s" style={{ marginLeft: 'auto' }}>
             取消
@@ -402,7 +420,7 @@ function LlmEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eval
   );
 }
 
-function CodeEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: EvaluatorCard) => void }) {
+function CodeEditor({ card, onChange, readOnly=false }: { card: EvaluatorCard; onChange: (c: EvaluatorCard) => void; readOnly?:boolean }) {
   const cfg: CodeEvaluatorConfig = card.codeConfig ?? {
     language: 'python',
     scoreMode: '0-100',
@@ -424,6 +442,7 @@ function CodeEditor({ card, onChange }: { card: EvaluatorCard; onChange: (c: Eva
   const monacoLang = cfg.language === 'python' ? 'python' : 'javascript';
 
   const editorOptions = {
+    readOnly,
     fontSize: 13,
     minimap: { enabled: false },
     automaticLayout: true,

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { command, poll, runtimeEnv, writePrivate } from './runtime.mjs';
+import { ensureAccount } from './accounts.mjs';
 
 const sha = data => createHash('sha256').update(data).digest('hex');
 export async function prepareClients(ctx) {
@@ -128,30 +129,17 @@ export async function prepareClients(ctx) {
 }
 
 export async function prepareFixtures(ctx) {
-  await ctx.stage('fixtures', '后续四例的测试账号与日志文件、003 的内置参考资源就绪，不执行业务场景', async () => {
-    const data = fs.readFileSync(path.join(ctx.project, 'public/example/messages'));
+  await ctx.stage('fixtures', '后续四例的测试账号与日志文件就绪，不执行业务场景', async () => {
+    const data = fs.readFileSync(path.join(ctx.project, 'test/e2e/fixtures/messages'));
     assert.equal(sha(data), '6d50cefa82380651f910df35fda0995a237a3c788b7b2e3d2d37e51fb9debca9');
     const resources = [];
     for (let i = 2; i <= 5; i++) {
       const username = ctx.testUsername || `test_e2e_${ctx.runId}_00${i}@example.com`;
-      const r = await fetch(ctx.baseUrl + '/api/auth/apikey', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username }) });assert.ok(r.ok);
-      const account = await r.json();ctx.secrets.push(account.apiKey);
+      const account = await ensureAccount(ctx, username);
       writePrivate(path.join(ctx.root, 'private', `account-00${i}.json`), account);
       const root = path.join(ctx.root, `fixture-00${i}`);fs.mkdirSync(path.join(root, 'fixtures'), { recursive: true });
       fs.writeFileSync(path.join(root, 'fixtures/messages'), data);
-      let builtin = null;
-      if (i === 3) {
-        const response = await fetch(ctx.baseUrl + `/api/agent-datasets?user=${encodeURIComponent(username)}`, { headers: { 'x-witty-api-key': account.apiKey } });assert.ok(response.ok);
-        const datasets = await response.json();const selected = datasets.find(d => d.name === 'messages 日志分析（内置示例）');assert.ok(selected, 'Builtin dataset missing');
-        const cases = typeof selected.casesJson === 'string' ? JSON.parse(selected.casesJson) : selected.cases;
-        const fixed = cases.find(c => c.id === '951e0e4b-3eed-4d24-b1e6-83b0fb782be4');assert.ok(fixed, 'Builtin case missing');
-        assert.equal(fixed.input, '请分析如下 messages 日志：~/.agent-insight/example/messages。针对 root 账户的 SSH 爆破有多严重？都来自哪些来源 IP？');
-        const dest = path.join(root, 'host/.agent-insight/example/messages');fs.mkdirSync(path.dirname(dest), { recursive: true });fs.writeFileSync(dest, data);
-        const skillsResponse = await fetch(ctx.baseUrl + `/api/skills?user=${encodeURIComponent(username)}`, { headers: { 'x-witty-api-key': account.apiKey } });assert.ok(skillsResponse.ok);
-        const skills = await skillsResponse.json();const skill = skills.find(s => s.name === 'linux-messages-auth-triage-demo');assert.ok(skill?.versions?.some(v => v.version === 0), 'Builtin Skill v0 missing');
-        builtin = { datasetId: selected.id, caseId: fixed.id, caseHash: sha(JSON.stringify(fixed)), skill: skill.name, skillVersion: 0, executionPath: dest };
-      }
-      resources.push({ caseId: `00${i}`, username, sourceHash: sha(data), builtin });
+      resources.push({ caseId: `00${i}`, username, sourceHash: sha(data) });
     }
     return resources;
   });

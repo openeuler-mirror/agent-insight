@@ -41,7 +41,7 @@ changefreq: "monthly"
 - [质量监控](./observability/quality-monitoring.md)
 - [QwenPaw Trace Collector](./observability/qwenpaw-trace-collector.md)
 - [Trae IDE 接入指南](./observability/trae-integration.md)
-- [链路追踪](./observability/view-traces.md)：查看模型与工具的关联、筛选及详情；明确关联的普通工具缩进到对应 LLM 下
+- [链路追踪](./observability/view-traces.md)：查看模型与工具的关联、类型多选及详情；可同时筛选 User 与 LLM、跳到底部并跟随更新，明确关联的普通工具缩进到对应 LLM 下
 - [Token 与任务分析](./observability/token-task-insight.md)：按任务类型与用户拆 Token/成本，识别长时任务与可延后的夜间执行项
 - [WorkBuddy Trace Collector](./observability/workbuddy-trace-collector.md)
 

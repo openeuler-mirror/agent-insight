@@ -129,10 +129,11 @@ test('the repair turn keeps the main turn deadline and cancellation contract', a
     ? { ok: false, structural: { ok: false, failures: ['missing script'] }, failures: ['missing script'] }
     : { ok: true, structural: { ok: true, failures: [] }, failures: [] };
   const controller = new AbortController();
-  let repair: {
+  type RepairRunOptions = {
     chatOptions?: { idleTimeoutMs?: number; streamTimeoutMs?: number; signal?: AbortSignal };
     cancelSignal?: AbortSignal;
-  } | undefined = undefined;
+  };
+  let repair: RepairRunOptions | undefined = undefined;
   agent = async run => {
     if (!run.sessionTitle?.startsWith('skill-opt repair')) {
       return { workspaceDir: directory, sessionId: 'main', output: 'candidate' };
@@ -153,10 +154,11 @@ test('the repair turn keeps the main turn deadline and cancellation contract', a
   } finally {
     process.env.SKILL_OPT_NO_VERIFY = '1';
   }
-  assert.equal(repair?.chatOptions?.idleTimeoutMs, 0);
-  assert.equal(repair?.chatOptions?.streamTimeoutMs, 900000);
-  assert.equal(repair?.chatOptions?.signal, controller.signal);
-  assert.equal(repair?.cancelSignal, controller.signal);
+  const observedRepair = repair as RepairRunOptions | undefined;
+  assert.equal(observedRepair?.chatOptions?.idleTimeoutMs, 0);
+  assert.equal(observedRepair?.chatOptions?.streamTimeoutMs, 900000);
+  assert.equal(observedRepair?.chatOptions?.signal, controller.signal);
+  assert.equal(observedRepair?.cancelSignal, controller.signal);
   assert.ok(events.includes('done'));
 });
 

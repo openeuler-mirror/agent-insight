@@ -64,6 +64,14 @@
   <img src="docs/images/architecture.png" alt="Agent-Insight 架构图" />
 </p>
 
+### Agent Insight 在 openJiuwen 架构中的位置
+
+Agent Insight 是 openJiuwen 架构中负责观测、评测、诊断和优化的组件，对应下图右下方的高亮区域。
+
+<p align="center">
+  <img src="docs/images/openjiuwen-architecture.png" alt="openJiuwen 整体架构，右下方高亮显示 Agent Insight" />
+</p>
+
 ---
 
 ## 🔌 支持平台
@@ -188,7 +196,7 @@ docker run -d \
 适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
 
 ```bash
-git clone https://gitcode.com/openJiuwen/agent-insight.git /srv/agent-insight
+git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
 
 docker run -d \
   --name agent-insight \
@@ -281,8 +289,6 @@ bash scripts/stop.sh
 
 完整体验在 Agent Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
 
-> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + `linux-messages-auth-triage-demo` Skill + 三条示例 Trace；客户端安装后还会生成本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/zh/tutorial/platform/02-example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
-
 > 🧩 **自定义 Benchmark**：如需接入新的 Benchmark 评测，请从 [Benchmark 文档关系与开发指南](docs/zh/explanation/evaluation/benchmarks/README.md) 开始。客户只需用自然语言描述评测目标并提供已有材料，AI 会协助完成需求确认、接入包开发和验证。接入包完成后，按[《Benchmark 整体服务安装指南》](docs/zh/how-to/evaluation/benchmarks/deploy-services.md)部署 Agent Insight、Agent 执行端、Evaluator 和数据集。
 
 ### 注册模型
@@ -361,7 +367,7 @@ bash scripts/stop.sh
 
 | 入口 | 内容 |
 | --- | --- |
-| [入门教程](docs/zh/tutorial/README.md) | 快速开始、完整示例与第一次评测 |
+| [入门教程](docs/zh/tutorial/README.md) | 快速开始与第一次评测 |
 | [操作指南](docs/zh/how-to/README.md) | 安装、配置、使用、开发与扩展操作 |
 | [参考文档](docs/zh/reference/README.md) | API、配置、协议与数据字段 |
 | [概念与原理](docs/zh/explanation/README.md) | 概念、架构、数据流与职责边界 |
@@ -370,7 +376,7 @@ bash scripts/stop.sh
 | [内部需求与设计](design/README.md) | 需求、方案、开发计划和历史资料 |
 
 
-> 新用户推荐从 [内置示例端到端走查](docs/zh/tutorial/platform/02-example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通「智能诊断 → Skill 生成 → 评测 → 优化」完整闭环。
+> 新用户推荐从 [5 分钟上手](docs/zh/tutorial/platform/01-quick-start.md) 开始 —— 先接入真实 Agent 并产生第一条 Trace，再按需进入 Skill 生成、评测与优化。
 
 ## 🤝 参与贡献
 

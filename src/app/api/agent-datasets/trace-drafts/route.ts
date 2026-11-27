@@ -20,6 +20,7 @@ import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { db } from '@/lib/storage/prisma';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
+import { resolveUser } from '@/lib/auth/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,10 @@ export async function POST(request: Request) {
     const executionId = String(body.executionId || '').trim();
     if (!user || (!requestedTaskId && !executionId)) {
       return NextResponse.json({ error: 'user and taskId or executionId are required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
 
     const executions = await db.findExecutions(

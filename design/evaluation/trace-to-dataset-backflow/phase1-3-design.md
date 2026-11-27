@@ -22,7 +22,7 @@ Trace 回流时，系统直接使用原始用户输入作为 `input`、Agent 最
 
 - `input`：直接使用 `Execution.query`；缺失时回退 `Session.query`。
 - `output`：直接使用 `Execution.finalResult`。
-- `trace`：链路跟踪里的 Trace 本体。
+- `trace`：链路追踪里的 Trace 本体。
 
 评测数据集不再只使用写死的 case 属性，而是支持用户新增字段、编辑字段定义，以及为每条 case 新增、补齐、修改或清空字段值。字段定义与字段值是两个独立层次：给数据集增加字段后，用户可以逐条维护该字段在各 case 中的值。`reference_output` 与其他业务字段一样是可选扩展，不属于 Trace 回流的前置条件。
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -78,7 +79,7 @@ test('start.sh refuses to kill a Trace lock owner outside its project', { skip: 
 test('start.sh clears all spool locks left by a Linux zombie process', { skip: process.platform !== 'linux' }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-consumer-zombie-'))
   const insightHome = path.join(root, 'home')
-  const parent = spawn('python3', ['-u', '-c', 'import os,time; pid=os.fork(); os._exit(0) if pid==0 else (print(pid,flush=True),time.sleep(30))'], {
+  const parent = spawn(pythonExecutable, ['-u', '-c', 'import os,time; pid=os.fork(); os._exit(0) if pid==0 else (print(pid,flush=True),time.sleep(30))'], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'ignore'],
   })

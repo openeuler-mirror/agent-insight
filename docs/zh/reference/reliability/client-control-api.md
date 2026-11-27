@@ -1,6 +1,8 @@
 ---
 title: "可靠性客户端与配置控制接口"
 description: "安装令牌、设备身份、能力上报、配置快照和控制通道的 HTTP 契约。"
+keywords: ["Agent Insight", "可靠性客户端", "HTTP 接口", "设备鉴权", "配置控制"]
+changefreq: monthly
 ---
 
 本页说明 `/api/reliability/` 下现有 HTTP 方法及 `/api/agent-ras/config`、`/api/agent-ras/catalog`。基线为 `eabde5b0`。配置保存、通知、写入和 RAS 加载是不同阶段；接口成功不能直接解释为配置已生效。安装操作见[本机安装过程](../../how-to/reliability/agent-ras/local-install-process.md)，平台身份解析见 [HTTP 接口与用户身份](../platform/http-api.md)。
@@ -11,7 +13,7 @@ description: "安装令牌、设备身份、能力上报、配置快照和控制
 
 | 调用方 | 凭证与边界 |
 | --- | --- |
-| 平台用户 | 列表、安装令牌和客户端配置采用 `resolveUser`；非空显式 `user` 可优先于 Key，因此它是兼容身份选择，不是凭证验证。集成应带 `x-witty-api-key`，避免再传覆盖身份的 `user` |
+| 平台用户 | 列表、安装令牌和客户端配置采用 `resolveUser`；身份只从 `x-witty-api-key` 或查询 `apiKey` 解析，显式 `user` 必须与 Key 对应用户一致，否则得到空身份。集成应带有效 Key，不能只传 `user` |
 | 安装器 | 注册体中的一次性 `installToken`。默认 600 秒，`expiresInSeconds` 被限制到 60～3600 秒；已使用返回 `409`，过期返回 `410`，无效返回 `401` |
 | 已注册设备 | `Authorization: Bearer <deviceCredential>`；HTTP 设备接口可额外带 `x-agent-insight-client-id`，与凭证归属不匹配返回 `403`。凭证只在注册响应中返回，数据库保存哈希；实现未设置固定到期时间，撤销或重新注册轮换后旧凭证不可用 |
 | 控制服务内部调用 | `x-agent-insight-internal` 匹配 `AGENT_INSIGHT_INTERNAL_TOKEN`（未配置时为 `local`），用于三个 `control-*` 桥接接口；不是用户 Key 或设备凭证，错误返回 `403 INTERNAL_ONLY` |

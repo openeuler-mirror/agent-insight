@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import { loadRuntimeDefinitions } from '../packages/agent-runtime/loader.cjs'
 const definition = loadRuntimeDefinitions().find(item => item.descriptor.runtimeKey === 'mcts')!.descriptor
 import assert from 'node:assert/strict'
@@ -30,11 +31,13 @@ import { GET as listExperimentAgents } from '../src/app/api/experiments/agents/r
 import { prisma, prismaRaw } from '../src/lib/storage/prisma'
 import { writeSyntheticZsoftPlugin } from './fixtures/mcts-zsoft-fixture'
 import { zsoftL1Adapter } from '../benchmarks/zsoft-l1/adapter'
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
 
 const require = createRequire(import.meta.url)
 const runtime = require('../services/executor/src/mcts-runtime.cjs')
 const { runProcess } = require('../services/executor/src/index.cjs')
 const client = require('../scripts/reliability-client.cjs')
+test.before(async () => { await ensureTestApiUsers('fixture-user') })
 
 function git(cwd: string, ...args: string[]) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -251,7 +254,7 @@ test('pi-mcts checks a real venv without importing slow dependencies and retains
   const f = fixture()
   try {
     const venv = path.join(f.root, "python env's runtime")
-    const create = spawnSync('python3', ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
+    const create = spawnSync(pythonExecutable, ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
     assert.equal(create.status, 0, create.stderr)
     const python = path.join(venv, 'bin', 'python')
     const purelib = spawnSync(python, ['-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'], { encoding: 'utf8' })
@@ -447,7 +450,7 @@ for (const scenario of [
       methods[key] = implementation
       t.after(() => { methods[key] = original })
     }
-    const response = await listExperimentAgents(new Request('http://localhost/api/experiments/agents?user=fixture-user'))
+    const response = await listExperimentAgents(testRequest('http://localhost/api/experiments/agents?user=fixture-user', 'fixture-user'))
     assert.equal(response.status, 200)
     const body = await response.json()
     if (!scenario.ready) {
@@ -520,7 +523,7 @@ test('process group cancellation sends SIGINT and lets child clean up', async ()
 function zsoftFixture(kind = 'python') {
   const f = fixture()
   writeSyntheticZsoftPlugin(f.repoDir)
-  const python = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' })
+  const python = spawnSync(pythonExecutable, ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' })
   assert.equal(python.status, 0, python.stderr)
   const config = { ...f.config, mctsPython: python.stdout.trim() }
   const taskId = 'synthetic-only'
@@ -599,7 +602,7 @@ test('ZSoft-only MCTS is selectable without datasets or the SWE launcher, while 
   const f = zsoftFixture()
   try {
     const venv = path.join(f.root, 'zsoft-only-python')
-    const create = spawnSync('python3', ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
+    const create = spawnSync(pythonExecutable, ['-m', 'venv', '--without-pip', venv], { encoding: 'utf8' })
     assert.equal(create.status, 0, create.stderr)
     const config = { ...f.config, mctsPython: path.join(venv, 'bin', 'python') }
     assert.match(runtime.probeMctsBenchmarkRuntime(config).reason, /datasets/)

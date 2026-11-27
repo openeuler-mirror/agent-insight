@@ -15,6 +15,7 @@
  */
 
 import { safeUUID } from './safe-uuid';
+import type { ConversationTurn } from './evaluation-conversation';
 import type {
   DatasetCaseRootCauseMeta,
   RootCauseItem,
@@ -108,6 +109,7 @@ export interface DatasetCase {
   evaluationFocus: string;
   tags: string[];
   trajectory: string;
+  turns?: ConversationTurn[];
   values?: Record<string, unknown>;
   traceSource?: {
     taskId: string;

@@ -19,7 +19,7 @@
 
 当前编号连续为 001～005：原 005 数据集主路径已合入 003，原 006 故障恢复改为 005。新命令、配置和报告采用新编号，旧报告、Trace 和下文历史运行记录保留当时编号；原 006 的既有通过结果不能冒充改号后重新执行。外部可信配置需将 `cases` / `caseModes` 中的 006 改为 005；旧 005 数据集配置改用 003。历史 `core-five` 参数继续兼容原来的排除故障恢复范围（现为 001～004），完整五例请使用默认配置或 `--all`。
 
-专用资源在相应 `cases/*/fixtures/` 下；复用的产品原始日志 `public/example/messages` 和内置 Skill 直接引用产品文件，避免副本漂移。单次临时运行的数据和证据位于 `exclude/core-e2e/<runId>/`，不提交。指定 `--lane pr|daily --state-dir /absolute/private/state` 时，使用固定的 `test_e2e_pr@example.com` 或 `test_e2e_daily@example.com` 账号，应用数据保存在各自独立目录；报告列出本轮新增 Trace，旧 Trace 保留且不计入本轮通过证据。原始日志与浏览器 trace 在受限 `private/`；不要将整个运行目录直接公开。
+专用资源在相应 `cases/*/fixtures/` 下；多个用例复用的日志 `test/e2e/fixtures/messages` 与 003 的 Skill 基线包 `cases/003-skill-lifecycle/fixtures/skill-bundle.json` 集中放置，避免副本漂移。单次临时运行的数据和证据位于 `exclude/core-e2e/<runId>/`，不提交。指定 `--lane pr|daily --state-dir /absolute/private/state` 时，使用固定的 `test_e2e_pr@example.com` 或 `test_e2e_daily@example.com` 账号，应用数据保存在各自独立目录；报告列出本轮新增 Trace，旧 Trace 保留且不计入本轮通过证据。原始日志与浏览器 trace 在受限 `private/`；不要将整个运行目录直接公开。
 
 编号整理验证：222项测试工具检查通过，`--list`与PR/daily配置均为001～005。未重跑产品页面E2E。本机`npm test`未完整通过：观测汇总4746项、4524通过、197失败、23跳过、2取消，`evaluator-scoring-http.test.ts`触发180秒文件超时，计数仅为观测下限；未逐项归因，不能替代此前119隔离UT结果。日志位于`exclude/core-e2e/renumber-20261106/`。
 
@@ -57,9 +57,21 @@ docker buildx build --platform linux/amd64 \
   --tag agent-insight-e2e-env:local --load .
 ```
 
-构建上下文通过 `control/Dockerfile.dockerignore` 限制为依赖清单及 Prisma schema。依赖锁文件或工具链变化后需重建镜像。Actions 每个非汇总 Job 按当前检出的 schema 生成 Prisma Client，schema 单独变化无需重建 Actions 环境镜像；独立 Docker 控制服务仍按其指南校验镜像中的 schema。上传 SWR 后可以在 Job 的 `container.image` 中引用固定版本或摘要；私有镜像需要另行配置 Runner 的拉取授权。
+构建上下文通过 `control/Dockerfile.dockerignore` 限制为依赖清单及 Prisma schema。依赖锁文件或工具链变化后应重建镜像；PR 工作流允许在镜像锁文件过期时按当前锁文件安装，工具链及浏览器变化仍需更新镜像。Actions 每个非汇总 Job 按当前检出的 schema 生成 Prisma Client，schema 单独变化无需重建 Actions 环境镜像；独立 Docker 控制服务仍按其指南校验镜像中的 schema。上传 SWR 后可以在 Job 的 `container.image` 中引用固定版本或摘要；私有镜像需要另行配置 Runner 的拉取授权。
 
 ## GitCode Actions PR 门禁
+
+生产编译前先运行 `node scripts/test-suites.mjs --check`，核对所有默认 UT 均已在 `test/suites.json` 中唯一登记。缺项、重复或失效路径会提前阻断并保留具体错误，不等待编译及五组 E2E 完成后才发现；完整 UT 中的一致性检查仍然保留。新增 `.test.ts` 时需同步所属模块清单。
+
+镜像池冷拉取、命中和回收计数测试使用受控时钟，避免共享 Runner 的文件写入延迟消耗模拟的 1 秒准入预算；保留独立的测试总时限。真实等待超时语义另由受控推进时钟的回归验证：等待者超时后，未完成拉取的预算仍保留，拉取结束后才释放，不通过放宽生产超时策略使测试通过。
+
+003 的数据集页面验收按实际字段的表头解析列位置，再悬停读取完整输入和预期输出；新增“类别”列或调整字段顺序不会让断言读错列。仍需核对刷新后的页面全文、保存内容及私有归属，不以 API 返回成功替代页面内容验证。
+
+在线清理的拉取保护断言同样使用受控时钟。实验取消回归主动暂停一轮已读到活动执行记录的核对，让执行先退出，再验证旧核对仍为 pending、后续核对最终为 completed；整个等待保留 30 秒上限，避免将异步最终一致性误判为即时完成。
+
+PR 工作流显式设置 `E2E_DEPENDENCY_MODE=lockfile`：依赖锁文件与镜像一致时复用预装依赖；不一致时在隔离目录按当前锁文件运行 `npm ci --legacy-peer-deps --ignore-scripts`，需要能访问锁文件指定的包仓库。安装后核对锁文件未变化，再生成当前 Prisma Client。网络错误最多复用同一缓存重试一次，每次上限 10 分钟；完整性校验等其他错误不重试。安装失败仍阻断，不降级使用过期依赖。直接调用准备工具默认仍为 `image` 严格模式；固定镜像应定期按当前锁文件重建以避免每个 Job 重装。
+
+准备失败也会导出报告目录并保存 `BLOCKED` 原因，供 `always()` 上传步骤使用；安装日志保留最后 64 KiB 的脱敏副本 `preparation.log`。汇总缺少 `inputs/build/context.json` 时保留同次运行、同提交的编译准备错误；制品完全缺失则提示检查上传/下载日志。缺失上下文不补造，也不计为编译或测试通过。
 
 入口为 [pr-e2e.yml](../../.atomgit/workflows/pr-e2e.yml)。目标为 `master` 的 PR 新建、更新和重开自动触发；普通 `pull_request` 只申请仓库和 PR 读取权限，不读取模型密钥，001～005 固定使用 Mock。真实编译、UT、客户端、浏览器和数据库仍执行。未配置 Actions 变量和密钥时，手动运行也默认五例全 Mock；需要 Real 时使用下列仓库配置。该覆盖仅作用于当前 Actions 运行，不修改 `config.json`，不改变既有本地、Webhook 或 daily 入口。
 
@@ -78,7 +90,7 @@ docker buildx build --platform linux/amd64 \
 
 驱动器在 Job 源码目录之外生成本轮配置快照，配置冻结后随编译制品传递，Key 只在 Real 用例 Job 内通过权限为 `0600` 的临时文件传给该用例，正常完成、测试失败或启动异常后移除；不把 Key 放进测试子进程环境变量、报告或制品。门禁独立读取执行前的配置快照，核对配置哈希、五例实际模式及完整 UT；不能把配置为 Real 却实际执行 Mock 的报告算作通过。报告包含模式、模型名称和 Base URL，不包含模型 Key。
 
-流水线在社区 Kubernetes Job 中使用带日期版本标签的 SWR 构建环境镜像，创建独立源码快照，核对项目及 E2E 锁文件与镜像一致，复制预装依赖后，在编译、UT 和每例 Job 内分别按本次检出的 `prisma/schema.prisma` 生成 Prisma Client，再验证 Chromium 无头启动。生成过程使用隔离目录及数据库 URL，只生成代码，不执行迁移或连接业务数据库；源码指纹继续绑定本轮 schema。初始化会检查进程清理工具，当前已发布镜像缺少 `procps` 时自动补装。当前社区资源池拒绝 `image@sha256` 格式，因此使用 `node24-pw1.62.1-amd64-20261111` 标签，已发布标签须保持指向不变。此 Actions 入口要求该环境镜像保持公开并允许匿名拉取，不引用 `SWR_PULL_USERNAME` 或 `SWR_PULL_PASSWORD`；同仓及跨仓 Fork PR 均不需要镜像拉取密钥，保持普通 `pull_request` 触发。环境镜像仅预装工具链、公开依赖、依赖清单及 Prisma 结构文件，不能加入真实凭据或业务数据；PR 应用源码在 Job 中另行检出。总览显示 8 个独立 Job：生产编译 → UT 与 001～005 并行 → 汇总与门禁。编译通过后，UT 和五例 E2E 分别只依赖编译制品即可进入调度，五例不再等待 UT；汇总等待全部阶段结束。生产编译只执行一次，压缩制品包含 `.next`、生成代码和清单；各测试 Job 下载后核对运行 ID、提交 SHA、源码指纹、配置哈希、压缩包哈希和 BUILD_ID，再复用编译结果。UT 与每例 E2E 使用各自独立源码目录、账号状态与数据库，不继承其他测试 Job 的数据库。编译失败时跳过 UT 和用例；UT 失败时五例仍继续，单例失败也不取消其他例。汇总始终尝试运行，缺失制品、异常退出、失败 Job、UT 不完整或必需阶段缺失均不能通过。更多 Job 会增加镜像准备、制品传输和排队开销，实际耗时以本轮运行记录为准。
+流水线在社区 Kubernetes Job 中使用带日期版本标签的 SWR 构建环境镜像，创建独立源码快照，按依赖模式校验锁文件：默认允许项目锁文件变化后隔离安装、E2E 锁文件必须匹配；显式 image 模式要求两者匹配，PR 工作流的 lockfile 模式允许分别安装变更的锁文件。匹配时复制预装依赖，然后在编译、UT 和每例 Job 内分别按本次检出的 `prisma/schema.prisma` 生成 Prisma Client，再验证 Chromium 无头启动。生成过程使用隔离目录及数据库 URL，只生成代码，不执行迁移或连接业务数据库；源码指纹继续绑定本轮 schema。初始化会检查进程清理工具，本版环境镜像已预装 `procps`。当前社区资源池拒绝 `image@sha256` 格式，因此使用 `node24-pw1.62.1-amd64-20261120-8685a22a` 标签（对应 Next.js 16.4.6 的项目依赖锁文件），已发布标签须保持指向不变。此 Actions 入口要求该环境镜像保持公开并允许匿名拉取，不引用 `SWR_PULL_USERNAME` 或 `SWR_PULL_PASSWORD`；同仓及跨仓 Fork PR 均不需要镜像拉取密钥，保持普通 `pull_request` 触发。环境镜像仅预装工具链、公开依赖、依赖清单及 Prisma 结构文件，不能加入真实凭据或业务数据；PR 应用源码在 Job 中另行检出。总览显示 8 个独立 Job：生产编译 → UT 与 001～005 并行 → 汇总与门禁。编译通过后，UT 和五例 E2E 分别只依赖编译制品即可进入调度，五例不再等待 UT；汇总等待全部阶段结束。生产编译只执行一次，压缩制品包含 `.next`、生成代码和清单；各测试 Job 下载后核对运行 ID、提交 SHA、源码指纹、配置哈希、压缩包哈希和 BUILD_ID，再复用编译结果。UT 与每例 E2E 使用各自独立源码目录、账号状态与数据库，不继承其他测试 Job 的数据库。编译失败时跳过 UT 和用例；UT 失败时五例仍继续，单例失败也不取消其他例。汇总始终尝试运行，缺失制品、异常退出、失败 Job、UT 不完整或必需阶段缺失均不能通过。更多 Job 会增加镜像准备、制品传输和排队开销，实际耗时以本轮运行记录为准。
 
 本 workflow 使用正式仓 Runner 标签 `[self-hosted, openeuler, x86, cpu=8]` 和 amd64 环境镜像。测试副本使用其已获授权的 `[self-hosted, default, x86, cpu=4]` 时，需在副本中同步调整 `runs-on`；资源池共享授权不会随 Fork 自动继承。`runs-on` 数组使用固定标签，当前平台未正确展开其中的仓库条件表达式。Job 使用镜像预装的 npm 依赖、Playwright Chromium、Python 依赖和 PowerShell，补装 `procps` 时需要能访问 Debian 软件源。每轮使用新建的工作目录和 SQLite 状态，测试结束后由 Job 回收。每个测试 Job 独立复制预热 npm 缓存，并固定使用缓存对应的 npmjs registry 与离线模式，不能依赖前序 UT 写入的缓存。用例内部使用由完整运行 ID 派生的短编号，避免页面名称长度限制；公开报告仍保留完整 Actions 运行 ID。
 

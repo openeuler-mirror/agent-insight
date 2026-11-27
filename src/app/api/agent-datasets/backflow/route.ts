@@ -37,6 +37,7 @@ import {
   type DatasetField,
 } from '@/server/agent_datasets_storage';
 import { isBuiltinReliabilityDataset } from '@/lib/agent-dataset-builtin';
+import { resolveUser } from '@/lib/auth/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,6 +72,10 @@ export async function POST(request: Request) {
       : [{ values: body.values, traceSource: body.traceSource }];
     if (!user || !mode || candidates.length === 0) {
       return NextResponse.json({ error: 'user, target mode and cases are required' }, { status: 400 });
+    }
+    const { username } = await resolveUser(request, user);
+    if (!username) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
     }
     if (mode === 'existing' && !datasetId) {
       return NextResponse.json({ error: 'datasetId is required' }, { status: 400 });

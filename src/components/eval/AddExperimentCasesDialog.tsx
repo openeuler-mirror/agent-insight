@@ -23,8 +23,10 @@
 // 不重做第 ④ 步评估器门控——追加的 case 走实验既定的评估器，所以这里把"缺预期输出会
 // 让依赖预期输出的评估器不记分"作为前置提示直接摆出来。
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 
 import { apiFetch } from '@/lib/client/api';
+import { frozenAppendCandidates, frozenAppendPayload, readFrozenAppendDataset } from '@/lib/client/versioned-append-cases';
 
 interface TraceItem {
   id: string;
@@ -41,6 +43,7 @@ interface PickedCase {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
+  datasetCaseId?: string;
 }
 
 const PAGE_SIZE = 8;
@@ -87,19 +90,24 @@ export function AddExperimentCasesDialog({
   onAdded,
   experimentId,
   agentName,
+  agentLabel,
   user,
   needsReference,
   needsDatasetInput,
+  configSnapshot,
 }: {
   onClose: () => void;
   onAdded: (msg: string) => void;
   experimentId: string;
   agentName: string;
+  agentLabel?: string;
   user: string;
   /** 实验里是否含依赖预期输出的评估器——决定要不要提示补标注 */
   needsReference: boolean;
   needsDatasetInput: boolean;
+  configSnapshot?: unknown;
 }) {
+  const frozenDataset = useMemo(() => readFrozenAppendDataset(configSnapshot), [configSnapshot]);
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -132,6 +140,9 @@ export function AddExperimentCasesDialog({
   useEffect(() => { load(1); }, [load]);
 
   const toggle = (t: TraceItem) => {
+    const candidates = frozenDataset ? frozenAppendCandidates(frozenDataset, t.query || '') : [];
+    if (frozenDataset && !candidates.length) return;
+    const source = candidates.length === 1 ? candidates[0] : undefined;
     setPicked((prev) => {
       const next = new Map(prev);
       if (next.has(t.id)) next.delete(t.id);
@@ -140,8 +151,19 @@ export function AddExperimentCasesDialog({
         taskId: t.taskId,
         input: t.query || '',
         actualOutput: t.finalResult || '',
-        referenceOutput: null,
+        referenceOutput: source?.expectedOutput ?? null,
+        ...(source ? { datasetCaseId: source.id } : {}),
       });
+      return next;
+    });
+  };
+
+  const selectSource = (executionId: string, datasetCaseId: string) => {
+    const source = frozenDataset?.cases.find((c) => c.id === datasetCaseId);
+    setPicked((prev) => {
+      const next = new Map(prev);
+      const selected = next.get(executionId);
+      if (selected) next.set(executionId, { ...selected, datasetCaseId: source?.id, referenceOutput: source?.expectedOutput ?? null });
       return next;
     });
   };
@@ -157,17 +179,18 @@ export function AddExperimentCasesDialog({
 
   const pickedList = useMemo(() => Array.from(picked.values()), [picked]);
   const unannotated = pickedList.filter((c) => !c.referenceOutput).length;
+  const cannotSubmit = !pickedList.length || submitting || !!frozenDataset?.error || !!(frozenDataset && pickedList.some((c) => !c.datasetCaseId));
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const submit = useCallback(async () => {
-    if (!pickedList.length || submitting) return;
+    if (cannotSubmit) return;
     setSubmitting(true);
     setError('');
     try {
       const res = await apiFetch(`/api/experiments/${encodeURIComponent(experimentId)}/cases`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, cases: pickedList }),
+        body: JSON.stringify({ user, cases: frozenDataset ? pickedList.map((c) => frozenAppendPayload(frozenDataset, c)) : pickedList }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '新增 case 失败'));
@@ -181,7 +204,7 @@ export function AddExperimentCasesDialog({
     } finally {
       setSubmitting(false);
     }
-  }, [pickedList, submitting, experimentId, user, onAdded, onClose]);
+  }, [pickedList, cannotSubmit, frozenDataset, experimentId, user, onAdded, onClose]);
 
   return (
     <div style={OVERLAY} onClick={onClose}>
@@ -193,7 +216,7 @@ export function AddExperimentCasesDialog({
         }}>
           <span style={{ fontSize: 14, fontWeight: 600 }}>新增 Case</span>
           <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-            Agent「{agentName || '—'}」的 trace · 共 {total} 条
+            Agent「{agentLabel || agentName || '—'}」的 trace · 共 {total} 条
           </span>
           <span style={{ flex: 1 }} />
           <button onClick={onClose} style={{
@@ -209,19 +232,28 @@ export function AddExperimentCasesDialog({
           background: 'var(--background-secondary)',
         }}>
           新增的 case 按<b>本实验已配置的评估器</b>评测，提交后立即在后台执行。
-          {needsReference && (
+          {!frozenDataset && needsReference && (
             <>
               {' '}本实验含<b>依赖预期输出</b>的评估器——未标注预期输出的 case，该评估器会判为不记分，
               请在下方勾选后展开补标注。
             </>
           )}
-          {needsDatasetInput && (
+          {!frozenDataset && needsDatasetInput && (
             <>
               {' '}本实验含<b>依赖数据集输入</b>的评估器——通过该弹窗直接追加的 case 没有数据集输入快照，
               该评估器会显示为不适用且不计分。
             </>
           )}
         </div>
+
+        {frozenDataset && (
+          <div style={{ padding: '9px 18px', fontSize: 12, lineHeight: 1.65, borderBottom: '1px solid var(--border)' }}>
+            {frozenDataset.error || <>
+              仅追加 <Link href={`/dataset/${encodeURIComponent(frozenDataset.businessId)}?version=${encodeURIComponent(frozenDataset.versionId)}`}>{frozenDataset.name} · v{frozenDataset.version}</Link> 已有 Case，按首轮输入匹配。
+              预期答案和逐轮规则沿用该版本；修改答案仅影响本次实验。新增题目请先发布评测集新版本，再创建实验。
+            </>}
+          </div>
+        )}
 
         {/* trace 列表 */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -241,6 +273,7 @@ export function AddExperimentCasesDialog({
                 <tr>
                   <th style={{ ...TH, width: 38 }} />
                   <th style={TH}>任务输入</th>
+                  {frozenDataset && <th style={TH}>固定版本 Case</th>}
                   <th style={{ ...TH, width: 240 }}>实际输出</th>
                   <th style={{ ...TH, width: 140 }}>时间</th>
                 </tr>
@@ -249,16 +282,19 @@ export function AddExperimentCasesDialog({
                 {traces.map((t) => {
                   const sel = picked.get(t.id);
                   const open = expanded === t.id;
+                  const candidates = frozenDataset ? frozenAppendCandidates(frozenDataset, t.query || '') : [];
+                  const selectable = !frozenDataset || candidates.length > 0;
                   return (
                     <Fragment key={t.id}>
                       <tr
                         onClick={() => toggle(t)}
-                        style={{ cursor: 'pointer', background: sel ? 'var(--primary-subtle)' : undefined }}
+                        style={{ cursor: selectable ? 'pointer' : 'default', opacity: selectable ? 1 : 0.55, background: sel ? 'var(--primary-subtle)' : undefined }}
                       >
                         <td style={{ ...TD, textAlign: 'center' }}>
-                          <input type="checkbox" checked={!!sel} readOnly style={{ pointerEvents: 'none' }} />
+                          <input type="checkbox" checked={!!sel} disabled={!selectable} readOnly style={{ pointerEvents: 'none' }} />
                         </td>
                         <td style={{ ...TD, color: 'var(--foreground)' }}>{truncate(t.query, 90)}</td>
+                        {frozenDataset && <td style={TD}>{candidates.length === 1 ? truncate(candidates[0].input, 32) : candidates.length > 1 ? `${candidates.length} 个同输入 Case，勾选后指定` : '不属于本实验固定版本'}</td>}
                         <td style={TD}>{truncate(t.finalResult, 60)}</td>
                         <td style={{ ...TD, whiteSpace: 'nowrap', fontSize: 11 }}>
                           {new Date(t.timestamp).toLocaleString('zh-CN', { hour12: false })}
@@ -267,11 +303,18 @@ export function AddExperimentCasesDialog({
                       {sel && (
                         <tr>
                           <td style={{ ...TD, borderBottom: '1px solid var(--border)' }} />
-                          <td colSpan={3} style={{ ...TD, borderBottom: '1px solid var(--border)' }}>
+                          <td colSpan={frozenDataset ? 4 : 3} style={{ ...TD, borderBottom: '1px solid var(--border)' }}>
+                            {frozenDataset && <div style={{ marginBottom: 8 }}>
+                              <label>关联 Case：<select aria-label="固定版本 Case" value={sel.datasetCaseId || ''} onChange={(e) => selectSource(t.id, e.target.value)} style={{ ...BTN, maxWidth: '100%' }}>
+                                <option value="">请选择对应 Case</option>
+                                {candidates.map((c) => <option key={c.id} value={c.id}>{c.input} · {c.id}</option>)}
+                              </select></label>
+                              {!sel.datasetCaseId && <span style={{ marginLeft: 8, color: 'var(--error)' }}>同输入有多个 Case，请明确选择</span>}
+                            </div>}
                             {open ? (
                               <>
                                 <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 5 }}>
-                                  预期输出（可选）
+                                  预期输出{frozenDataset ? '（仅本次实验覆盖）' : '（可选）'}
                                 </div>
                                 <textarea
                                   autoFocus
@@ -340,11 +383,11 @@ export function AddExperimentCasesDialog({
           <button onClick={onClose} style={BTN}>取消</button>
           <button
             onClick={submit}
-            disabled={!pickedList.length || submitting}
+            disabled={cannotSubmit}
             style={{
               ...BTN_PRIMARY,
-              opacity: !pickedList.length || submitting ? 0.5 : 1,
-              cursor: !pickedList.length || submitting ? 'default' : 'pointer',
+              opacity: cannotSubmit ? 0.5 : 1,
+              cursor: cannotSubmit ? 'default' : 'pointer',
             }}
           >
             {submitting ? '提交中…' : `新增并评测 ${pickedList.length || ''}`}

@@ -277,6 +277,8 @@ export default function AgentDatasetCenter() {
   const createMenuRef = useRef<HTMLDivElement | null>(null);
   const listTopRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const jsonlInputRef = useRef<HTMLInputElement | null>(null);
+  const [importingJsonl, setImportingJsonl] = useState(false);
   const [tableActionError, setTableActionError] = useState('');
   const [traceFlow, setTraceFlow] = useState<{ initialId?: string; initialName?: string; initialConfig?: GenerationConfig; replaceId?: string } | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -459,6 +461,28 @@ export default function AgentDatasetCenter() {
     }
   };
 
+  const importJsonlDataset = async (file: File | null) => {
+    if (!file || !user || importingJsonl) return;
+    setTableActionError('');
+    setImportingJsonl(true);
+    try {
+      const response = await apiFetch('/api/agent-datasets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-ndjson' },
+        body: file,
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.success || !result.dataset?.id) {
+        throw new Error(result?.error || 'JSONL 导入失败');
+      }
+      router.push(`/dataset/${encodeURIComponent(result.dataset.id)}`);
+    } catch (error) {
+      setTableActionError(error instanceof Error ? error.message : 'JSONL 导入失败');
+    } finally {
+      setImportingJsonl(false);
+    }
+  };
+
   const selectDatasetKind = (kind: DatasetKind) => {
     setDraft(prev => ({ ...prev, datasetKind: kind }));
     setError('');
@@ -525,6 +549,7 @@ export default function AgentDatasetCenter() {
         values: item.values,
         source: item.source,
         traceSource: item.traceSource,
+        turns: item.turns,
       })),
     };
 
@@ -574,6 +599,7 @@ export default function AgentDatasetCenter() {
 
       {tableActionError ? (
         <div
+          role="alert"
           style={{
             marginBottom: 12,
             padding: 10,
@@ -664,16 +690,18 @@ export default function AgentDatasetCenter() {
               type="button"
               className="ai-dataset-create-split__main"
               onClick={() => setCreateMenuOpen(v => !v)}
+              disabled={importingJsonl}
               aria-expanded={createMenuOpen}
               aria-haspopup="menu"
             >
               <IconPlus size={13} />
-              新建评测集
+              {importingJsonl ? '正在导入评测集…' : '新建评测集'}
             </button>
             <button
               type="button"
               className="ai-dataset-create-split__chev"
               onClick={() => setCreateMenuOpen(v => !v)}
+              disabled={importingJsonl}
               aria-label="展开新建方式"
             >
               <IconChevronDown size={10} />
@@ -713,6 +741,21 @@ export default function AgentDatasetCenter() {
                 </span>
                 导入本地文件
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="ai-dataset-menu-item"
+                onClick={() => {
+                  setTableActionError('');
+                  jsonlInputRef.current?.click();
+                  setCreateMenuOpen(false);
+                }}
+              >
+                <span className="ai-dataset-menu-item__icon">
+                  <IconUpload size={14} />
+                </span>
+                从 JSONL 导入
+              </button>
             </div>
           )}
           <input
@@ -724,6 +767,17 @@ export default function AgentDatasetCenter() {
               const f = e.target.files?.[0] ?? null;
               void handleFileChosen(f);
               // 同一文件二次选择也能触发 change
+              e.target.value = '';
+            }}
+          />
+          <input
+            ref={jsonlInputRef}
+            type="file"
+            accept=".jsonl,application/x-ndjson"
+            aria-label="多轮评测集 JSONL 文件"
+            style={{ display: 'none' }}
+            onChange={e => {
+              void importJsonlDataset(e.target.files?.[0] ?? null);
               e.target.value = '';
             }}
           />

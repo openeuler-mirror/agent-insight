@@ -1,6 +1,8 @@
 ---
 title: "评测数据集 HTTP 接口"
 description: "数据集读写、Trace 回流、历史 Trace 自动生成及取消删除的请求和响应。"
+keywords: ["Agent Insight", "评测数据集", "HTTP 接口", "Trace 生成"]
+changefreq: monthly
 ---
 
 本页覆盖当前 `/api/agent-datasets` 前缀下 9 个路由文件的 13 个 HTTP 方法。数据集以 `id` 寻址，`targetSkill` 使用 Skill 名称；通用身份与接口分类见 [HTTP 接口与用户身份](../platform/http-api.md)。界面流程见[评测数据集](../../how-to/evaluation/datasets.md)，创建实验见[实验 HTTP 接口](./experiments-api.md)。基于 Skill 起草样本、Benchmark 管理命令不属于本前缀。
@@ -11,7 +13,7 @@ description: "数据集读写、Trace 回流、历史 Trace 自动生成及取�
 
 | 入口 | 当前身份行为 |
 | --- | --- |
-| 普通列表、创建、更新、详情、删除、Trace 草稿与回流 | 从查询参数或 JSON 请求体读取非空 `user`，普通分支并不把该值验证为凭证。存储查询按该用户名及系统公开 Benchmark 的可见性过滤，不能据此证明调用者身份已验证 |
+| 普通列表、创建、更新、详情、删除、Trace 草稿与回流 | 使用 `resolveUser` 验证 Key 与请求中的 `user` 一致。JSONL 创建直接使用 Key 对应账号，文件内无需指定 `user` |
 | Trace 自动生成、生成选项、生成进度、取消、删除进度 | `traceIdentity` 只验证请求头 `x-witty-api-key`，不接受查询参数 `apiKey` 或显式 `user` 替代；缺少或无效 Key 返回 `401` |
 | 普通路由访问 Trace 自动生成的数据集 | 额外检查有效 Key 对应账号、`user` 与数据集归属一致；不匹配返回 `404`，删除中返回 `409`；更新还要求已发布。列表仅在 Key 账号等于查询 `user` 时包含此类数据集 |
 
@@ -47,6 +49,12 @@ Case 使用 `id/input/expectedOutput/evaluationFocus/tags/trajectory/values`；�
 ```
 
 这是普通 `POST` 请求体示例，不执行 Agent，也不创建实验。创建没有通用幂等键，响应不明时先查询列表，不要盲目重复创建。
+
+### 整集 JSONL 导入
+
+向 `POST /api/agent-datasets` 发送原始 UTF-8 文件正文，`Content-Type` 为 `application/x-ndjson`，通过 `x-witty-api-key` 认证。首条非空记录是 `type: "dataset"`（`schemaVersion: 1`、`name` 必填，可选 `description`、`tags`），其后每条 `type: "case"` 包含 2～20 轮 `turns`，可选 Case `id`。轮次规则与手工创建相同。参见[文件示例](../../how-to/evaluation/datasets.md#从-jsonl-创建整套多轮评测集)。
+
+成功响应同普通创建。在 SQLite 上，数据集、全部 Case 和已发布 `v1` 在同一个事务中创建。文件无效时返回 `422 { error, line, field }`，行号和错误路径中的轮次序号均从 1 开始，不写入部分数据。
 
 ## 从已有 Trace 构建草稿并回流
 

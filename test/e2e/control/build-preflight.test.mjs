@@ -1,5 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync} from 'node:child_process';
 import {compileProduction} from './build-preflight.mjs';import {loadExecutionConfig} from '../shared/config.mjs';
+test('an unclassified UT stops before database preparation and production compilation',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'preflight-inventory-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));spawnSync('git',['init','-q'],{cwd:root});fs.writeFileSync(path.join(root,'source'),'source');
+ const calls=[];
+ const result=await compileProduction(loadExecutionConfig(),{project:root,runId:'missing-inventory',env:{E2E_ISOLATED_CONTAINER:'1'},run:async(bin,args)=>{
+  calls.push([bin,args]);return {code:1,output:'Unclassified tests: test/new-case.test.ts'};
+ }});
+ assert.equal(calls.length,1);assert.deepEqual(calls[0],['node',['scripts/test-suites.mjs','--check']]);
+ assert.equal(result.status,'FAIL');assert.match(result.reason,/UT inventory preflight failed: Unclassified tests: test\/new-case.test.ts/);
+ assert.equal(fs.existsSync(path.join(root,'exclude/core-e2e/production-build.json')),false);
+});
 test('direct suite compilation uses its explicit project, identity and isolated environment',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'preflight-direct-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));spawnSync('git',['init','-q'],{cwd:root});fs.writeFileSync(path.join(root,'source'),'source');
  const run=async(bin,args,options)=>{

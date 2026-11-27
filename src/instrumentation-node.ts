@@ -32,6 +32,7 @@ import { spawn } from 'child_process';
 import { getAgentInsightHome } from '@/lib/env';
 
 export async function setupNodeRuntime(): Promise<void> {
+  await ensureAdminBootstrapCredentials();
   const { startExperimentCancellationWatchdog } = await import('@/lib/engine/experiment/cancellation-service');
   startExperimentCancellationWatchdog();
   // 注册内置系统 Agent（skill-generator-agent 等）。失败不阻塞启动——惰性注册作为兜底。
@@ -45,17 +46,25 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
-  // 确保内置「messages 日志分析」示例日志存在于平台数据根。内置 case 的 query 指向
-  // ~/.agent-insight/example/messages（执行时展开成绝对路径），换台干净服务器/重装后那个
-  // 路径可能没文件 → agent 一读就 "No such file" 直接结束。这里"不在才补"一份（存在即跳过，
-  // 绝不覆盖）。详见 ensure-example-file.ts。
+  // 旧版本会为新用户注入内置示例数据；该注入已移除，启动时把旧库里残留的示例
+  // Agent / Skill / 数据集 / Trace 按固定标识清掉（精确匹配，重复执行无副作用）。
   try {
-    const { ensureExampleMessagesFile } = await import('@/server/builtin-example/ensure-example-file');
-    if (ensureExampleMessagesFile() === 'copied') {
-      console.warn('[instrumentation] 补齐内置示例日志 → ~/.agent-insight/example/messages');
+    const { cleanupBuiltinDemoData } = await import('@/server/builtin-example/cleanup-demo');
+    const removed = await cleanupBuiltinDemoData();
+    const total = removed.executions + removed.sessions + removed.agents
+      + removed.datasets + removed.skills;
+    if (total > 0) {
+      console.warn(
+        '[instrumentation] 清理内置示例数据:',
+        `executions=${removed.executions}`,
+        `sessions=${removed.sessions}`,
+        `agents=${removed.agents}`,
+        `datasets=${removed.datasets}`,
+        `skills=${removed.skills}`,
+      );
     }
   } catch (err) {
-    console.warn('[instrumentation] ensure example messages failed (non-fatal):', (err as Error)?.message);
+    console.warn('[instrumentation] builtin demo cleanup failed (non-fatal):', (err as Error)?.message);
   }
 
   // 注册进程退出钩子：dev server / 生产 server 关闭时把 spawn 出去的 opencode 子进程
@@ -243,4 +252,86 @@ export async function setupNodeRuntime(): Promise<void> {
       .then(({ startTraceDatasetManager }) => startTraceDatasetManager())
       .catch(() => { console.warn('[trace-datasets] generation unavailable'); });
   }).unref();
+}
+
+/**
+ * 本地登录使用账号密码。这里在服务启动时确保 admin 账号存在，并把 Key 写到数据目录，
+ * 供脚本读取。admin 不再使用可预测的默认口令：优先使用 AGENT_INSIGHT_ADMIN_PASSWORD，
+ * 未配置时生成随机一次性激活凭据并写入 `.admin_activation_password`（0600）。
+ * 首次登录后强制修改密码；其余账号由管理员创建，同样使用随机激活凭据。
+ */
+async function ensureAdminBootstrapCredentials(): Promise<void> {
+  try {
+    const { resolveLoginMode } = await import('@/lib/auth/login-mode');
+    if (resolveLoginMode() === 'idaas_oauth') return;
+
+    const { db } = await import('@/lib/storage/prisma');
+    const { hashPassword, generateActivationPassword, validatePasswordPolicy, verifyPassword } =
+      await import('@/lib/auth/password');
+
+    let admin = await db.findUserByUsername('admin');
+    if (!admin) {
+      const crypto = await import('node:crypto');
+      admin = await db.createUser({
+        username: 'admin',
+        apiKey: 'wi_' + crypto.randomBytes(24).toString('hex'),
+      });
+    }
+
+    const keyPath = path.join(getAgentInsightHome(), '.admin_api_key');
+    try {
+      fs.writeFileSync(keyPath, admin.apiKey, { encoding: 'utf8', mode: 0o600 });
+      try { fs.chmodSync(keyPath, 0o600); } catch { /* 非 POSIX 文件系统忽略 */ }
+    } catch (err) {
+      console.warn('[instrumentation] admin api key file write failed:', (err as Error)?.message);
+    }
+
+    const activationPath = path.join(getAgentInsightHome(), '.admin_activation_password');
+    const activationFileExists = fs.existsSync(activationPath);
+    const usesLegacyDefault = Boolean(admin.passwordHash)
+      && await verifyPassword('admin', admin.passwordHash);
+
+    if (!admin.passwordHash || usesLegacyDefault) {
+      const configured = String(process.env.AGENT_INSIGHT_ADMIN_PASSWORD || '').trim();
+      let initialPassword = configured;
+      if (configured) {
+        const policyError = validatePasswordPolicy(configured, admin.username);
+        if (policyError) {
+          console.warn(`[instrumentation] AGENT_INSIGHT_ADMIN_PASSWORD rejected: ${policyError}; generating an activation password`);
+          initialPassword = '';
+        }
+      }
+      if (!initialPassword) initialPassword = generateActivationPassword();
+
+      await db.updateUserPassword(admin.username, {
+        passwordHash: await hashPassword(initialPassword),
+        passwordUpdatedAt: new Date(),
+        mustChangePassword: true,
+      });
+      try {
+        fs.writeFileSync(activationPath, initialPassword, { encoding: 'utf8', mode: 0o600 });
+        try { fs.chmodSync(activationPath, 0o600); } catch { /* 非 POSIX 文件系统忽略 */ }
+        console.warn(`[instrumentation] admin activation password written to ${activationPath}`);
+      } catch (err) {
+        console.warn('[instrumentation] admin activation password file write failed:', (err as Error)?.message);
+      }
+    } else if (admin.mustChangePassword && !activationFileExists) {
+      // 待改密但激活文件丢失（例如旧版本升级）：轮换一次，保证管理员仍能进入。
+      const initialPassword = generateActivationPassword();
+      await db.updateUserPassword(admin.username, {
+        passwordHash: await hashPassword(initialPassword),
+        passwordUpdatedAt: new Date(),
+        mustChangePassword: true,
+      });
+      try {
+        fs.writeFileSync(activationPath, initialPassword, { encoding: 'utf8', mode: 0o600 });
+        try { fs.chmodSync(activationPath, 0o600); } catch { /* 非 POSIX 文件系统忽略 */ }
+        console.warn(`[instrumentation] admin activation password rotated at ${activationPath}`);
+      } catch (err) {
+        console.warn('[instrumentation] admin activation password file write failed:', (err as Error)?.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[instrumentation] admin bootstrap failed (non-fatal):', (err as Error)?.message);
+  }
 }

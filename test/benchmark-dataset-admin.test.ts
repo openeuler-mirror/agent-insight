@@ -68,6 +68,8 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     );
   `)
   database.close()
+  const currentSchema = spawnSync(process.execPath, [path.resolve('node_modules/prisma/build/index.js'), 'db', 'push', '--skip-generate'], { env: process.env, encoding: 'utf8' })
+  assert.equal(currentSchema.status, 0, currentSchema.stderr)
 
   const [registry, admin, storage, ownership, prismaModule] = await Promise.all([
     import('@/lib/benchmark/adapter-registry'),
@@ -148,6 +150,8 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     where: { id: dataset?.agentEvalDatasetId },
   })
   assert.equal(publicDataset?.casesJson.includes('expected:case-1'), false)
+  const versionHead = await prismaModule.prisma.evaluationAssetHead.findUnique({ where: { user_kind_businessId: { user: ownership.SYSTEM_BENCHMARK_DATASET_OWNER, kind: 'dataset', businessId: dataset!.agentEvalDatasetId } } })
+  assert.equal(versionHead?.publishedVersion, 1)
   assert.deepEqual(JSON.parse(publicDataset?.fieldsJson || '[]'), [
     {
       id: 'input', key: 'input', path: 'input', label: '任务', type: 'text',
@@ -221,15 +225,11 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     profileKey: 'default',
     sourcePath: referencedPath,
   })
-  await prismaModule.prisma.$executeRawUnsafe(
-    `INSERT INTO BenchmarkExperimentBinding
-      (experimentId, datasetId, datasetContentHash, adapterKey, selectionJson, runConfigJson, expectedCaseCount)
-     VALUES (?, ?, ?, ?, '{}', '{}', 1)`,
-    'experiment-1',
-    referenced.id,
-    referenced.contentHash,
-    'fixture-dataset',
-  )
+  await prismaModule.prisma.experiment.create({ data: { id: 'experiment-1', user: 'fixture-binding', name: 'Referenced Benchmark' } })
+  await prismaModule.prisma.benchmarkExperimentBinding.create({ data: {
+    experimentId: 'experiment-1', datasetId: referenced.id, datasetContentHash: referenced.contentHash,
+    adapterKey: 'fixture-dataset', selectionJson: '{}', runConfigJson: '{}', expectedCaseCount: 1,
+  } })
   const archived = await admin.removeSystemBenchmarkDataset(referenced.id)
   assert.equal(archived.action, 'archived')
   const archivedDataset = await prismaModule.prisma.benchmarkDataset.findUnique({ where: { id: referenced.id } })
@@ -306,10 +306,11 @@ test('admin installs one shared dataset, optionally removes the source, and safe
     assert.deepEqual(await ensureBenchmarkDataset('zsoft-l1'), { action: 'already-installed', id: zsoft.id, caseCount: 1 })
     await assert.rejects(ensureBenchmarkDataset('zsoft-l1', { refresh: true }), /官方/)
     configureZsoft(officialDirectory, false)
-    await prismaModule.prisma.$executeRawUnsafe(
-      `INSERT INTO BenchmarkExperimentBinding (experimentId, datasetId, datasetContentHash, adapterKey, selectionJson, runConfigJson, expectedCaseCount)
-       VALUES (?, ?, ?, ?, '{}', '{}', 1)`, 'zsoft-experiment', zsoft.id, zsoft.contentHash, 'zsoft-l1',
-    )
+    await prismaModule.prisma.experiment.create({ data: { id: 'zsoft-experiment', user: 'fixture-binding', name: 'ZSoft referenced' } })
+    await prismaModule.prisma.benchmarkExperimentBinding.create({ data: {
+      experimentId: 'zsoft-experiment', datasetId: zsoft.id, datasetContentHash: zsoft.contentHash,
+      adapterKey: 'zsoft-l1', selectionJson: '{}', runConfigJson: '{}', expectedCaseCount: 1,
+    } })
     fs.writeFileSync(path.join(taskDirectory, 'public/README.md'), 'Updated official instructions')
     await assert.rejects(ensureBenchmarkDataset('zsoft-l1', { refresh: true, name: zsoftRow!.name }), /新的数据集名称/)
     const nextVersion = await ensureBenchmarkDataset('zsoft-l1', { refresh: true, name: 'ZSoft new version' })

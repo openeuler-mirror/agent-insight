@@ -18,6 +18,7 @@ import http from "node:http"
 import https from "node:https"
 import { randomUUID, createHash } from "node:crypto"
 import fs from "node:fs"
+import readline from "node:readline"
 import path from "node:path"
 import os from "node:os"
 import { URL, fileURLToPath } from "node:url"
@@ -500,17 +501,21 @@ function newestSpoolMtime(spoolDir) {
   return newest
 }
 
-function readJsonl(file) {
-  const records = []
-  try {
-    const text = fs.readFileSync(file, "utf8")
-    const lines = text.split("\n")
+function forEachJsonlRecord(file, onRecord) {
+  return new Promise((resolve, reject) => {
     let pluginPid = null
     let pluginCwd = null
-    for (const line of lines) {
-      if (!line || !line.trim()) continue
+    let count = 0
+    const stream = fs.createReadStream(file, { encoding: "utf8" })
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+    rl.on("line", (line) => {
+      if (!line || !line.trim()) return
       const obj = safeJsonParse(line)
-      if (!obj) continue
+      // A line can be valid JSON without being a record: a stray scalar
+      // (`true`, `123`, `"text"`) or an array. Attaching `__sourceFile` to a
+      // primitive throws a TypeError, which would abort the whole upload run —
+      // skip such lines instead of letting one bad line kill the batch.
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return
       if (obj.kind === "plugin.start") {
         const pid = Number(obj?.payload?.pid)
         if (Number.isFinite(pid) && pid > 0) pluginPid = pid
@@ -519,10 +524,56 @@ function readJsonl(file) {
       obj.__sourceFile = file
       if (pluginPid) obj.__pluginPid = pluginPid
       if (pluginCwd) obj.__pluginCwd = pluginCwd
-      records.push(obj)
+      count += 1
+      onRecord(obj)
+    })
+    // `error` and `close` both fire for a failed read: on ENOENT Node emits
+    // "error" first and then "close", but that ordering is not contractual.
+    // Without a settled guard, a `close` that wins the race turns "read failed"
+    // into "read 0 records" — the file is silently treated as empty.
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
     }
-  } catch {}
-  return records
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve(count)
+    }
+    rl.on("error", fail)
+    stream.on("error", fail)
+    rl.on("close", done)
+  })
+}
+
+/**
+ * Feed a batch of spool files into one state builder.
+ *
+ * A file can vanish between the directory listing and the read — the window
+ * spans every file read before it, so on a GB-scale spool it is minutes wide,
+ * not a millisecond race. One unreadable file must not abort the batch: it is
+ * reported in `unreadableFiles` (so the caller can exclude it from the scan
+ * checkpoint and re-select it next round) while the remaining files are still
+ * ingested.
+ */
+async function ingestJsonlBatch(files, builder) {
+  const unreadableFiles = new Set()
+  let totalRecords = 0
+  for (const file of files) {
+    try {
+      const count = await forEachJsonlRecord(file, builder.ingest)
+      totalRecords += count
+      appendUploaderLog(`main.read file=${file} records=${count}`)
+    } catch (error) {
+      unreadableFiles.add(path.resolve(file))
+      appendUploaderLog(
+        `main.readError file=${file} code=${error?.code || "unknown"} error=${error?.message || error} retry=next-scan`,
+      )
+    }
+  }
+  return { totalRecords, unreadableFiles }
 }
 
 function isPidAlive(pid) {
@@ -664,7 +715,7 @@ function saveCheckpoint(file, obj) {
   } catch {}
 }
 
-function buildState(records) {
+function createStateBuilder() {
   const sessions = new Map()
   const sessionParent = new Map()
   const sessionAgent = new Map()
@@ -719,13 +770,13 @@ function buildState(records) {
     if (ms > prev) sessionIdleAt.set(sid, ms)
   }
 
-  for (const r of records) {
+  function ingest(r) {
     const kind = r?.kind
     const recordSid = typeof r?.sessionID === "string" ? r.sessionID : ""
     if (recordSid) sessionRecordCounts.set(recordSid, (sessionRecordCounts.get(recordSid) || 0) + 1)
     if (kind === "llm.request" || kind === "llm.attempt") {
       const payload = r.payload || {}
-      if (!recordSid || !payload.messageID || !payload.request_id) continue
+      if (!recordSid || !payload.messageID || !payload.request_id) return
       const key = JSON.stringify([recordSid, payload.messageID])
       const current = inferenceByMessage.get(key) || { requestIds: new Set(), attempts: new Map() }
       current.requestIds.add(payload.request_id)
@@ -740,10 +791,12 @@ function buildState(records) {
           ...(payload.status_code ? { status_code: payload.status_code } : {}),
           ...(payload.error_type ? { error_type: payload.error_type } : {}),
           ...(payload.call_id ? { call_id: payload.call_id } : {}),
+          ...(payload.upstream_request_id ? { upstream_request_id: payload.upstream_request_id,
+            upstream_request_id_source: payload.upstream_request_id_source || 'model-response-header' } : {}),
         })
       }
       inferenceByMessage.set(key, current)
-      continue
+      return
     }
     if (kind === "plugin.shutdown") {
       const sid = r.sessionID
@@ -752,46 +805,46 @@ function buildState(records) {
         recordSessionPid(sid, r)
         cliCompletedSessions.add(sid)
       }
-      continue
+      return
     }
 
     if (kind === "system.prompt") {
       const sid = r.sessionID
-      if (!sid) continue
+      if (!sid) return
       recordSessionPid(sid, r)
       if (!sysPrompts.has(sid)) sysPrompts.set(sid, [])
       const arr = sysPrompts.get(sid)
       const sha = r?.payload?.sha256 || ""
-      if (sha && arr.some((x) => x.sha256 === sha)) continue
+      if (sha && arr.some((x) => x.sha256 === sha)) return
       arr.push({ ...r.payload, providerID: r.providerID, modelID: r.modelID })
-      continue
+      return
     }
 
     if (kind === "chat.message") {
       const sid = r.sessionID
-      if (!sid) continue
+      if (!sid) return
       recordSessionPid(sid, r)
       const mid = r?.payload?.messageID
       if (mid) userTextByMsg.set(mid, r?.payload?.text || "")
       ensureSession(sid)
-      continue
+      return
     }
 
     if (kind === "text.complete") {
       const sid = r.sessionID
-      if (!sid) continue
+      if (!sid) return
       recordSessionPid(sid, r)
       const mid = r?.payload?.messageID
       const pid = r?.payload?.partID
       if (mid && pid) partText.set(`${mid}:${pid}`, r?.payload?.text || "")
       ensureSession(sid)
-      continue
+      return
     }
 
-    if (kind !== "event") continue
+    if (kind !== "event") return
     const t = r?.payload?.type
     const ev = r?.payload?.event
-    if (!t || !ev) continue
+    if (!t || !ev) return
 
     if (t === "session.error") {
       const sid = ev.properties?.sessionID || recordSid
@@ -800,7 +853,7 @@ function buildState(records) {
       const responseHeaders = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]))
       const id = responseHeaders.get('x-request-id') ?? responseHeaders.get('x-agent-insight-call-id')
       if (sid && /^[a-f0-9-]{36}$/.test(id || '')) inferenceErrors.set(JSON.stringify([sid, id]), error.data.message || 'Model request failed')
-      continue
+      return
     }
 
     const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
@@ -811,7 +864,7 @@ function buildState(records) {
         recordSessionPid(sid, r)
         recordSessionIdle(sid, r)
       }
-      continue
+      return
     }
 
     if (t === "session.created" || t === "session.updated") {
@@ -825,18 +878,18 @@ function buildState(records) {
         }
         if (agent) sessionAgent.set(sid, agent)
       }
-      continue
+      return
     }
 
     if (t === "message.updated") {
       const info = ev?.properties?.info
       const sid = info?.sessionID || ev?.properties?.sessionID || r.sessionID
       const mid = info?.id
-      if (!sid || !mid) continue
+      if (!sid || !mid) return
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
       msgInfo.set(mid, info)
-      continue
+      return
     }
 
     if (t === "message.part.updated") {
@@ -847,7 +900,7 @@ function buildState(records) {
       const mid = ev?.properties?.messageID || p?.messageID
       const sid = ev?.properties?.sessionID || p?.sessionID || r.sessionID
       const pid = p?.id || ev?.properties?.partID
-      if (!sid || !mid || !pid) continue
+      if (!sid || !mid || !pid) return
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
       if (!msgParts.has(mid)) msgParts.set(mid, [])
@@ -868,29 +921,71 @@ function buildState(records) {
           sessionAgent.set(childSid, subagentType.trim())
         }
       }
-      continue
+      return
     }
 
     if (t === "message.part.delta") {
       const props = ev?.properties || {}
       const mid = props.messageID
       const sid = props.sessionID || r.sessionID
-      const pid = props.partID
+      // `partID` is optional on the wire. Keep a per-message bucket when it is
+      // absent so a CLI stream is still reconstructable.
+      const pid = typeof props.partID === "string" && props.partID ? props.partID : ""
       const field = typeof props.field === "string" && props.field ? props.field : "text"
       const delta = typeof props.delta === "string" ? props.delta : ""
-      if (!sid || !mid || !pid || !delta) continue
+      if (!sid || !mid || !delta) return
       const eventId = typeof ev?.id === "string" ? ev.id : ""
-      if (eventId && seenDeltaEventIds.has(eventId)) continue
+      if (eventId && seenDeltaEventIds.has(eventId)) return
       if (eventId) seenDeltaEventIds.add(eventId)
       ensureSession(sid).messageIDs.add(mid)
       recordSessionPid(sid, r)
-      const key = `${mid}:${pid}:${field}`
+      const bucketId = pid || `delta-${field}`
+      const key = `${mid}:${bucketId}:${field}`
       partDeltas.set(key, `${partDeltas.get(key) || ""}${delta}`)
-      continue
+
+      // CLI mode (`opencode run`) can exit before the deferred
+      // `message.updated` / `message.part.updated` sync events are published,
+      // while `message.part.delta` is emitted synchronously. Without these
+      // synthetic shells the streamed answer (and its message) would be
+      // dropped entirely by buildMessagesForSession(). A later real
+      // part.updated/message.updated with the same ids merges/overrides them.
+      if (!msgInfo.has(mid)) {
+        msgInfo.set(mid, {
+          id: mid,
+          sessionID: sid,
+          role: "assistant",
+          time: { created: toMsTimestamp(r?.t) ?? Date.now() },
+        })
+      }
+      if (!msgParts.has(mid)) msgParts.set(mid, [])
+      const parts = msgParts.get(mid)
+      if (!parts.some((part) => part?.id === bucketId)) {
+        parts.push({
+          id: bucketId,
+          messageID: mid,
+          sessionID: sid,
+          // The delta protocol does not carry the part type (reasoning deltas
+          // also use field="text"); default to text and let a real snapshot
+          // correct it.
+          type: "text",
+          text: "",
+        })
+      }
+      return
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+  function finish() {
+    return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, partDeltas, userTextByMsg, sysPrompts, inferenceByMessage, inferenceErrors, cliCompletedSessions, sessionPids, sessionFiles, sessionWorkspaces, sessionIdleAt, sessionRecordCounts }
+  }
+
+  return { ingest, finish }
+}
+
+function buildState(records) {
+  const builder = createStateBuilder()
+  for (const record of records) builder.ingest(record)
+  return builder.finish()
 }
 
 function extractInvokedSkillsForOrigin(interactions) {
@@ -1069,6 +1164,71 @@ function collectTextPartContent(parts, mid, partText, partDeltas) {
   return buf.join("")
 }
 
+// Deltas without `partID` are accumulated in a synthetic `delta-<field>` part.
+// When OpenCode later flushes the real part snapshot, it carries the same text
+// already completed; keeping both would duplicate the answer in the transcript.
+function isSyntheticDeltaPart(part) {
+  return typeof part?.id === "string" && part.id.startsWith("delta-")
+}
+
+// Compare the streamed bucket with real `text` snapshots by content instead of
+// assuming a snapshot always supersedes it: a partially published snapshot (or
+// a reasoning-only snapshot, which cannot carry the answer) must not truncate
+// the streamed answer.
+function preferRealParts(parts, mid, partText, partDeltas) {
+  const list = parts || []
+  const syntheticParts = list.filter(isSyntheticDeltaPart)
+  if (!syntheticParts.length) return list
+  const realTextParts = list.filter((part) => !isSyntheticDeltaPart(part)
+    && (part?.type || "").toLowerCase() === "text")
+  if (!realTextParts.length) return list
+
+  const dropped = new Set()
+  for (const synthetic of syntheticParts) {
+    const streamed = resolvePartField(synthetic, mid, partText, partDeltas)
+    if (!streamed) { dropped.add(synthetic); continue }
+    for (const real of realTextParts) {
+      const snapshot = resolvePartField(real, mid, partText, partDeltas)
+      if (!snapshot) continue
+      // Snapshot already completed (or contains) the stream: the bucket is a
+      // duplicate. Stream longer than the snapshot: the snapshot is stale, so
+      // drop it and keep the complete stream.
+      if (snapshot.includes(streamed)) dropped.add(synthetic)
+      else if (streamed.includes(snapshot)) dropped.add(real)
+    }
+  }
+  return dropped.size ? list.filter((part) => !dropped.has(part)) : list
+}
+
+// 上游是否真的给了 usage。全 0 的 token 对象（TUI 之外的部分版本、以及 CLI
+// 退出时丢失 message.updated 后由占位逻辑补出来的空对象）不能当成"用量为 0"，
+// 否则界面会把"未提供"显示成有效的 0。
+function hasReportedTokenUsage(tokens) {
+  if (!tokens || typeof tokens !== "object") return false
+  const values = [tokens.input, tokens.output, tokens.reasoning, tokens.total, tokens.cache?.read, tokens.cache?.write]
+  return values.some((value) => Number(value) > 0)
+}
+
+// CLI 模式可能丢掉带 tokens 的 message.updated，但 step-finish part 里带着同一份
+// usage。把它作为 message 级 usage 的兜底来源。
+function usageFromStepFinishParts(parts) {
+  let found = false
+  const sum = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "step-finish") continue
+    const t = p?.tokens
+    if (!t || typeof t !== "object") continue
+    found = true
+    sum.input += Number(t.input || 0) || 0
+    sum.output += Number(t.output || 0) || 0
+    sum.reasoning += Number(t.reasoning || 0) || 0
+    sum.cache.read += Number(t.cache?.read || 0) || 0
+    sum.cache.write += Number(t.cache?.write || 0) || 0
+  }
+  if (!found || !hasReportedTokenUsage(sum)) return undefined
+  return sum
+}
+
 function buildMessagesForSession(state, sid) {
   const { msgInfo, msgParts, partText, partDeltas, userTextByMsg } = state
   const messages = []
@@ -1078,6 +1238,7 @@ function buildMessagesForSession(state, sid) {
     const role = info?.role
     const created = info?.time?.created
     const completed = info?.time?.completed
+    const rawParts = preferRealParts(msgParts.get(mid) || [], mid, partText, partDeltas)
 
     let content = ""
     if (role === "user") {
@@ -1085,15 +1246,14 @@ function buildMessagesForSession(state, sid) {
       // part may contain the expanded routing prompt instead of what the user
       // typed. Its message id comes from output.message.id on current OpenCode.
       content = userTextByMsg.get(mid) || ""
-      if (!content) content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
+      if (!content) content = collectTextPartContent(rawParts, mid, partText, partDeltas)
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText, partDeltas)
+      content = collectTextPartContent(rawParts, mid, partText, partDeltas)
     }
 
     const tool_calls = []
-    const parts = msgParts.get(mid) || []
-    for (const p of parts) {
+    for (const p of rawParts) {
       if ((p?.type || "").toLowerCase() !== "tool") continue
       const callID = p?.callID || p?.callId || p?.id
       const tool = p?.tool
@@ -1110,7 +1270,9 @@ function buildMessagesForSession(state, sid) {
       })
     }
 
-    const tokens = info?.tokens
+    const tokens = hasReportedTokenUsage(info?.tokens)
+      ? info.tokens
+      : usageFromStepFinishParts(rawParts)
     const u = tokens
       ? {
           input: tokens.input,
@@ -1126,7 +1288,6 @@ function buildMessagesForSession(state, sid) {
     // and so compaction-trigger user messages (which carry only a "compaction"
     // part with no text) are not silently dropped. messageID/sessionID on each
     // part are redundant with the enclosing message — strip them.
-    const rawParts = msgParts.get(mid) || []
     const partsOut = rawParts.length
       ? rawParts.map((p) => {
           const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
@@ -1178,6 +1339,14 @@ function buildMessagesForSession(state, sid) {
       m.inference_attempts = [...inference.attempts.values()]
       const callIds = [...new Set(m.inference_attempts.map(attempt => attempt.call_id).filter(Boolean))]
       if (callIds.length) m.inference_call_ids = callIds
+      const upstreamIds = [...new Map(m.inference_attempts
+        .filter(attempt => attempt.call_id && attempt.upstream_request_id)
+        .map(attempt => [`${attempt.call_id}\u0000${attempt.upstream_request_id}`, {
+          call_id: attempt.call_id,
+          request_id: attempt.upstream_request_id,
+          source: attempt.upstream_request_id_source || 'model-response-header',
+        }])).values()]
+      if (upstreamIds.length) m.inference_upstream_request_ids = upstreamIds
       if (!m.error_summary && !m.content && !m.toolCalls?.length) {
         const errors = callIds.map(id => state.inferenceErrors?.get(JSON.stringify([sid, id]))).filter(Boolean)
         if (errors.length === 1) { m.status = 'error'; m.error_summary = errors[0] }
@@ -1234,7 +1403,9 @@ function applyInferenceGatewayRecords(state, insightDir, apiKey) {
         current.attempts.set(attemptKey, { ...current.attempts.get(attemptKey), request_id: expected,
           ...(lateMessageId ? { transport_request_id: call.request_id } : {}),
           attempt_id: call.attempt_id, call_id: call.call_id, started_at: call.started_at,
-          status_code: call.status_code, error_type: call.error_type, state: call.state })
+          status_code: call.status_code, error_type: call.error_type, state: call.state,
+          ...(call.upstream_request_id ? { upstream_request_id: call.upstream_request_id,
+            upstream_request_id_source: 'model-response-header' } : {}) })
         state.inferenceByMessage.set(key, current)
       } else {
         const unassigned = state.inferenceUnassigned.get(sid) || []
@@ -1316,6 +1487,9 @@ function deriveFields(interactions) {
   let toolCallCount = 0
   let toolCallErrorCount = 0
   let maxSingleCallTokens = 0
+  // 至少有一条 completion 消息带真实 usage 时才认为上游提供了用量。否则 token
+  // 字段留空（undefined），让服务端/界面区分「未提供」和「确实为 0」。
+  let usageReported = false
 
   for (const m of interactions || []) {
     if (!m) continue
@@ -1330,6 +1504,9 @@ function deriveFields(interactions) {
     llmCallCount++
     const u = m.usage
     if (u) {
+      // 与 server 端 deriveOpencodeExecutionFields / buildAgentCallTree 保持同一判定：
+      // 全 0 的 usage 对象视为「未上报」，不能因此把 tokens 标成有效的 0。
+      if (hasReportedTokenUsage(u)) usageReported = true
       const input = Number(u.input || 0) || 0
       const rawOutput = Number(u.output || 0) || 0
       const cacheRead = Number(u.cache?.read || 0) || 0
@@ -1365,17 +1542,18 @@ function deriveFields(interactions) {
   return {
     model: model || undefined,
     final_result: finalResult || undefined,
-    tokens: Math.round(totalTokens),
+    usageReported,
+    tokens: usageReported ? Math.round(totalTokens) : undefined,
     latency: totalLatencyMs / 1000,
-    input_tokens: Math.round(totalInputTokens),
-    output_tokens: Math.round(totalOutputTokens),
+    input_tokens: usageReported ? Math.round(totalInputTokens) : undefined,
+    output_tokens: usageReported ? Math.round(totalOutputTokens) : undefined,
     tool_call_count: toolCallCount,
     tool_call_error_count: toolCallErrorCount,
     llm_call_count: llmCallCount,
-    cache_read_input_tokens: Math.round(totalCacheReadInputTokens),
-    cache_creation_input_tokens: Math.round(totalCacheCreationInputTokens),
-    max_single_call_tokens: Math.round(maxSingleCallTokens),
-    reasoning_tokens: Math.round(totalReasoningTokens),
+    cache_read_input_tokens: usageReported ? Math.round(totalCacheReadInputTokens) : undefined,
+    cache_creation_input_tokens: usageReported ? Math.round(totalCacheCreationInputTokens) : undefined,
+    max_single_call_tokens: usageReported ? Math.round(maxSingleCallTokens) : undefined,
+    reasoning_tokens: usageReported ? Math.round(totalReasoningTokens) : undefined,
   }
 }
 
@@ -1544,18 +1722,14 @@ async function main() {
       `newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`,
     )
 
-    // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
-    // "Maximum call stack size exceeded"——args 数量受调用栈限制。
-    // playground 一次会话经常落 30K+ 条事件到 jsonl，必须逐条 push。
-    const allRecords = []
-    for (const f of files) {
-      const records = readJsonl(f)
-      appendUploaderLog(`main.read file=${f} records=${records.length}`)
-      for (const r of records) allRecords.push(r)
-    }
-    appendUploaderLog(`main.records total=${allRecords.length}`)
+    // 逐行读、逐条喂状态机：spool 积压到 GB 级时，把全部记录读成数组会直接
+    // 堆溢出（#277），而这里只需要聚合后的状态，不需要保留原始记录。
+    // 单个文件读不到（列目录后被清理）不拖停整批，见 ingestJsonlBatch。
+    const builder = createStateBuilder()
+    const { totalRecords, unreadableFiles } = await ingestJsonlBatch(files, builder)
+    appendUploaderLog(`main.records total=${totalRecords}`)
 
-    const state = buildState(allRecords)
+    const state = builder.finish()
     applyInferenceGatewayRecords(state, getPreferredInsightDir(), apiKey)
 
     const roots = []
@@ -1705,9 +1879,16 @@ async function main() {
     }
 
     if (!uploadFailed && newestMtime > 0) {
-      for (const [file, mtime] of scannedMtimes) fileScanMtimes[path.resolve(file)] = mtime
+      // scannedMtimes 是在读取之前就填好的。读失败的文件必须排除，否则本轮会把
+      // 它写成"已扫描"，下一轮 selectJsonlFilesForUpload 直接跳过——ENOENT 无所
+      // 谓（文件已经没了），但权限错误 / 瞬时 EIO 这类可恢复失败会变成永久丢数据。
+      for (const [file, mtime] of scannedMtimes) {
+        if (unreadableFiles.has(path.resolve(file))) continue
+        fileScanMtimes[path.resolve(file)] = mtime
+      }
       ckpt.__fileScanMtimes = fileScanMtimes
-      if (!scopedFile) ckpt.__lastScanMtime = newestMtime
+      // 有文件没读成时不推进全局水位线，否则失败文件会被 lastScanMtime 永久滤掉。
+      if (!scopedFile && !unreadableFiles.size) ckpt.__lastScanMtime = newestMtime
       if (gatewayRevision) ckpt.__inferenceGatewayRevision = gatewayRevision
       saveCheckpoint(checkpointFile, ckpt)
       appendUploaderLog("main.checkpointUpdated lastScanMtime=" + newestMtime)
@@ -1722,6 +1903,9 @@ export {
   buildMessagesForSession,
   buildSignature,
   buildState,
+  createStateBuilder,
+  forEachJsonlRecord,
+  ingestJsonlBatch,
   ensureClientIdentity,
   clientIdentityForHost,
   isValidClientId,

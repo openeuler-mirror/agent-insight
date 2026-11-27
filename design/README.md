@@ -78,6 +78,8 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 多版本资产与多轮对话评测迁入主线 | [需求与设计](evaluation/versioned-assets-multiturn-integration/) | 复用主线的 Agent、评估器、数据集和实验流程，增加不可变版本及真实多轮执行/评测 | Feature / Integration | 2026-10-29 | 已实现并完成专项与真实流程验证 | — |
+
 | 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |
 | Benchmark 自动接入 Skill | [需求分析](evaluation/benchmark-onboarding-automation/phase1-requirements-analysis.md) · [需求设计](evaluation/benchmark-onboarding-automation/phase2-requirements-design.md) · [开发计划](evaluation/benchmark-onboarding-automation/phase3-development-plan.md) | 以 Agent Insight 项目地址与 Benchmark 来源为入口，单 Skill 完成能力查询、接入开发及有界修复；验收脚本和模板随包分发，以三类试验验证评分一致性与真实链路 | Feature / Evaluation | 2026-10-28 | 🟡 Skill 包、版本化协议快照、核对/验收 CLI、模板及自测已实现；三类 Benchmark 与跨宿主真实验收待执行 | — |
 
@@ -98,6 +100,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 | MCTS 执行 Trace 非侵入式接入 | [mcts-trace-observability](observability/mcts-trace-observability/) | 不修改 MCTS 代码，由独立安装的外部启动器和透明 xGovernor 观测网关采集精确 Runtime Trace 与 checkpoint 血缘；MCTS node/score/final tree 仅按 stdout 权威边界独立展示 | Feature / Observability | 2026-09-23 | 🟡 核心实现、独立安装分发与自动化测试完成；待真实 MCTS golden path 和浏览器验收 | —（待补） |
 | 实验删除与评测服务停止清理 | [experiment-cancellation](evaluation/experiment-cancellation/phase1-requirements.md) | 实验及 Case 定向停止和逻辑删除、立即停服、离线镜像清理，保留共享资源及未确认取消记录 | Feature | 2026-09-23 | 🟡 工作区实现，专项通过，待全量与部署验收 | — |
 | Trace 无上报超时 | [trace-inactivity-timeout](observability/trace-inactivity-timeout/) | 所有 Agent 采集的未结束 Trace 连续十分钟无上报后显示超时，新上报恢复执行中，列表和详情自动刷新 | Bugfix | 2026-09-15 | ✅ 830 已验收，master 专项自动化验证通过 | [#301](https://atomgit.com/openeuler/agent-insight/issues/301) |
+| Claude Code 轮次结束信号 | [claude-code-turn-end-completion](observability/claude-code-turn-end-completion/) | 客户端 `Stop`/`StopFailure`/`SessionEnd` hook 以 `turn_end` 补传项上报轮次结束，服务端按客户端事件时间收敛 `trace_completed_at`/`executionStatus`；多轮会话回到执行中，`SubagentStop` 不完成整轮，十分钟兜底保留 | Bugfix | 2026-11-23 | 🟡 代码与专项自动化测试完成，未做浏览器 golden path 验收 | [#424](https://atomgit.com/openeuler/agent-insight/issues/424) |
 | 跨 Session 协作 Trace | [cross-session-collaboration-trace](observability/cross-session-collaboration-trace/) | 以不可变关系事件和可重算端点解析连接分散 Session，并由服务端将 Goal Plus 语义成员关系投影为逻辑主节点到 worker 的关系，不改原生 Execution 树 | Feature | 2026-09-12 | 🟡 已完成合成数据 HTTP 与浏览器验证；55 项专项通过；全量未全绿，未做真实客户端 E2E | —（待补） |
 | Benchmark 统一接入 | [benchmark](evaluation/benchmark/) | 以 Manifest、五方法 Adapter 和构建期 Catalog 接入 Benchmark；覆盖共享数据集、Agent 执行、独立 Evaluator、官方 Harness、结果归一化、统一实验前端与扩展约束 | Feature / Refactor | 2026-09-03 | 🟡 主链路、前端与自动化测试已完成；待浏览器验收及 x86_64 Linux 正式计分验收 | —（待补） |
 | Goal Plus 观测接入 | [goal-plus-observability](observability/goal-plus-observability/) | 以只读 `.gp` 语义快照和 Codex/Pi 原生 Trace 双通道构建 Goal、Run、Candidate、Iteration 与 Execution 的确定性关联，并独立呈现完整度和保真度 | Feature | 2026-09-02 | 🟡 已补 Pi 主对话、全 worker 与无截断 native 正文，待真实宿主及浏览器验收 | —（待补） |
@@ -106,6 +109,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 | IDaaS OAuth 登录 | [idaas-oauth-login](platform/idaas-oauth-login/) | 新增与历史组织集成完全隔离的 OAuth 2.0 授权码登录，以 IDaaS UUID 映射本地用户，保存人员接口账号别名用于展示和反查，并提供默认关闭的欧盟地区访问限制 | Feature | 2026-08-27 | 🟡 代码与专项测试完成，待浏览器验收 | —（待补） |
 | DeepSeek Harness 观测接入 | [deepseek-harness-observability](observability/deepseek-harness-observability/) | 复用 Harness 官方 Session Telemetry，以 Agent Insight 插件完成认证、脱敏和截断，并通过专用 OTLP Logs spool/adapter 生成 Trace、Tool、Skill 与子 Session 观测数据 | Feature | 2026-08-21 | 🟡 实现中 | —（待补） |
 | QwenPaw Trace 采集器 | [qwenpaw-trace-collector](observability/qwenpaw-trace-collector/) | 通过 QwenPaw hook 插件、Middleware 和可逆运行时补丁采集真实对话、USER、LLM、Tool、Skill、MCP、Cron 与子 Agent 树，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-09-01 | 🟡 实现中 | —（待补） |
+| 模型响应头 X-Request-Id 采集与推理详情关联 | [issue-390-model-response-request-id.md](observability/issue-390-model-response-request-id.md) | 从模型 HTTP 响应头采集服务侧 `X-Request-Id`，按实际调用尝试关联 Trace/LLM 节点，在 Trace 详情展示复制并支持按服务 ID 打开推理详情；与网关本地调用 ID 分层且不互相替代 | Feature | 2026-11-12 | 🟡 代码与自动化测试完成，待真实服务端到端验收 | [#390](https://atomgit.com/openeuler/agent-insight/issues/390) |
 | Pi Agent Trace 采集器 | [issue-158-pi-agent-trace-collector.md](observability/issue-158-pi-agent-trace-collector.md) | 通过 Pi Extension API、结构化 SubAgent 结果和 durable JSONL spool 采集 Agent/SubAgent/Skill/Tool/LLM/MCP Trace，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#158](https://atomgit.com/openeuler/opensource-intern/issues/158) |
 | Codex CLI 与 IDE Trace 采集器 | [issue-159-codex-trace-collectors.md](observability/issue-159-codex-trace-collectors.md) | 通过 Codex lifecycle Hooks 与原生 OTel 双通道采集 CLI/IDE Agent Trace，以本地 relay 合并 Token、Tool、SubAgent 和编辑器事件，并由专用 Adapter 转换为 ExecutionRecord | Feature | 2026-07-27 | ✅ 已实现并验证 | [openeuler/opensource-intern#159](https://atomgit.com/openeuler/opensource-intern/issues/159) |
 | Codex Desktop 与 App Server Trace 接入 | [codex-app-server-desktop-trace-upgrade](observability/codex-app-server-desktop-trace-upgrade/) | 通过 Desktop rollout、App Server JSON-RPC 代理与 lifecycle reducer 补齐桌面会话、steer、中断、compaction 与 TraceThread 时间线；0.166 起兼容 zstd 压缩会话 | Feature | 2026-10-10 | 🟡 PR #446 评审通过，0.166 适配与 master 合并中 | [#247](https://atomgit.com/openeuler/agent-insight/issues/247) |
@@ -162,8 +166,10 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 | Token 与任务分析 | [token-task-insight](observability/token-task-insight/) | 从 root trace 汇总 token/成本，按问答、文本、文档、代码、批处理、多步工具归类，综合耗时/token/调用次数识别长时任务并给出夜间执行建议 | Feature | 2026-11-09 | 🟡 实现中（分类/聚合/API/页面/单测已落地；未做浏览器验证） | [#375](https://atomgit.com/openeuler/agent-insight/issues/375) |
 
 | Runtime 启动参数 YAML 配置 | [runtime-parameters](platform/runtime-parameters/) | 通用嵌套编辑、独立草稿、完整快照与原样下发；默认值仅初始化，执行参数由客户端消费 | Refactor | 2026-10-16 | ✅ 通用草稿与原样下发已实现，105 项专项回归通过；全量测试及类型检查仍有既有基线问题；用户选择暂不进行浏览器验证 | 待补 |
+| ClickHouse 存储支持 | [需求分析](platform/clickhouse-storage/phase1-requirements-analysis.md) · [需求设计](platform/clickhouse-storage/phase2-requirements-design.md) · [开发计划](platform/clickhouse-storage/phase3-development-plan.md) | 以分层存储支持 ClickHouse：Trace 数据面（Execution/ExecutionSkill/Session）进列存，元数据与控制面留在 SQLite/OpenGauss；后端显式开关、能力降级与迁移运维方案 | Feature / Storage | 2026-11-09 | ⬜ 未实现（设计待对齐） | [#374](https://atomgit.com/openeuler/agent-insight/issues/374) |
 | Agent 运行时切换 | [agent-runtime-switching](platform/agent-runtime-switching/) | 检测服务部署环境中的内置 Agent 运行时，展示版本、来源、兼容性、能力与不可用原因，并保存个人默认值；执行层与 Pi 适配器分期接入 | Feature | 2026-11-09 | 🟡 阶段一已实现（探测/诊断/偏好保存/页面/单测）；统一执行服务、OpenCode 适配器抽取与内置 Pi 待实现 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
 | 平台内置 Agent 运行时选择 | [agent-runtime-selection](platform/agent-runtime-selection/) | 检测服务可访问的 Pi/OpenCode，展示版本、来源、兼容性、能力与不可用原因；保存个人默认值并在执行入口强制校验，不静默换引擎 | Feature | 2026-11-09 | 🟡 检测、能力评估、个人默认值、页面与执行入口约束已实现并覆盖专项测试；Pi 执行适配器、内置 Pi 交付与浏览器/真实模型验收见开发计划 | [#352](https://atomgit.com/openeuler/agent-insight/issues/352) |
+| 本地账号密码登录 | [standalone-login-hardening](platform/standalone-login-hardening/) | 关闭 standalone 自助注册，改为管理员建档与密码登录；管理员可新建、批量导入、重置密码与删除账号，新账号初始密码与账号名一致（admin 为 admin），首次登录强制改密，之后可自助修改 | Feature | 2026-11-20 | 🟡 代码与专项测试完成，未做浏览器验收；全量测试存在 Windows fsync 权限等既有失败 | 待补 |
 
 ## 字段口径
 
@@ -182,3 +188,5 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 4. **回到本清单追加一行**,填齐上表各列。
 
 | JiuwenSwarm 企业版 WebSocket 实验 | [设计](evaluation/jiuwen-enterprise-websocket/phase2-design.md) / [计划](evaluation/jiuwen-enterprise-websocket/phase3-plan.md) | 本地登录、授权 Agent 发现与选择，沿用 #588 WS 下发 | Feature | 2026-11-10 | 开发中 | — |
+
+| Issue 381 Harness 上下文已有数据 | [设计与来源](observability/issue-381-existing-source-v1.md)；[评审修复方案](observability/issue-381-review-system-plan.md) / [验收报告](observability/issue-381-pr-acceptance.md) | 复用原有遥测及 dsh-context 投影，不新增请求成员采样 | Feature | 2026-11-24 | 评审修复：摘要按需读取与超时恢复已接入；新任务在线复验待完成 | [#381](https://gitcode.com/openeuler/agent-insight/issues/381) |

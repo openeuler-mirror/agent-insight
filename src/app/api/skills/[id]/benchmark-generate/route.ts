@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { normalizeOptionalSkillVersion } from '@/lib/engine/evaluation/config-target';
 import { generateBenchmarksForSkill } from '@/lib/engine/skill-generation/skill-benchmark-generator';
 import { NextRequest, NextResponse } from 'next/server';
@@ -41,7 +41,7 @@ export async function POST(
       );
     }
 
-    const { allowed, skill } = await canAccessSkill(id, username);
+    const { allowed, skill } = await canManageSkill(id, username);
     if (!skill) {
       return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
     }

@@ -15,7 +15,7 @@
  */
 
 
-import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { activateVerifiedSkillVersion, SkillVersionVerificationError } from '@/lib/skill-workbench/version-verification-service';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -42,7 +42,7 @@ export async function POST(
             return NextResponse.json({ error: '缺少用户信息' }, { status: 401 });
         }
 
-        const { allowed, skill } = await canAccessSkill(id, username);
+        const { allowed, skill } = await canManageSkill(id, username);
         if (!skill) {
             return NextResponse.json({ error: 'Skill not found' }, { status: 404 });
         }

@@ -28,6 +28,8 @@ process.env.AGENT_INSIGHT_HOME = testDir
 fs.closeSync(fs.openSync(path.join(testDir, 'benchmark.db'), 'a'))
 
 const user = `benchmark-test-${Date.now()}-${process.pid}`
+import { ensureTestApiUsers, testRequest } from './helpers/api-auth'
+const authRequest = (url: string, init?: RequestInit) => testRequest(url, user, init)
 const clientId = `benchmark-client-${Date.now()}-${process.pid}`
 const datasetPath = process.env.SWE_BENCH_DATASET_PATH
   || path.join(os.homedir(), '.agent-insight', 'data', 'imports', 'swe-bench-verified', 'test.parquet')
@@ -87,6 +89,7 @@ test.before(async () => {
   resumeDispatches = scheduler.resumeBenchmarkDispatchesAtStartup
   reapStaleRuns = scheduler.reapStaleBenchmarkRuns
   stopBackgroundWork = scheduler.stopBenchmarkBackgroundWorkForTest
+  await ensureTestApiUsers(user)
 })
 
 test.after(async () => {
@@ -204,13 +207,13 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     },
   })
 
-  const missingDatasetResponse = await listExecutionTargets(new Request(
+  const missingDatasetResponse = await listExecutionTargets(authRequest(
     `http://insight.test/api/benchmark/v1/execution-targets?user=${encodeURIComponent(user)}`,
   ))
   assert.equal(missingDatasetResponse.status, 400)
   assert.equal((await missingDatasetResponse.json()).error.code, 'BENCHMARK_DATASET_REQUIRED')
 
-  const targetsResponse = await listExecutionTargets(new Request(
+  const targetsResponse = await listExecutionTargets(authRequest(
     `http://insight.test/api/benchmark/v1/execution-targets?user=${encodeURIComponent(user)}&datasetId=${encodeURIComponent(imported.id)}`,
   ))
   assert.equal(targetsResponse.status, 200)
@@ -231,7 +234,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     ready: true,
   }])
 
-  const unavailableTargetResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
+  const unavailableTargetResponse = await createExperiment(authRequest('http://insight.test/api/experiments', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -252,7 +255,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
     'EXECUTION_TARGET_UNAVAILABLE',
   )
 
-  const createResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
+  const createResponse = await createExperiment(authRequest('http://insight.test/api/experiments', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -303,7 +306,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
 
   process.env.AGENT_INSIGHT_BENCHMARK_EXECUTOR_CALLBACK_BASE_URL = 'http://127.0.0.1:3000'
   const runResponse = await runExperiment(
-    new Request(`http://insight.test/api/experiments/${created.id}/run?user=${encodeURIComponent(user)}`, {
+    authRequest(`http://insight.test/api/experiments/${created.id}/run?user=${encodeURIComponent(user)}`, {
       method: 'POST',
     }),
     { params: Promise.resolve({ id: created.id }) },
@@ -395,7 +398,7 @@ test('benchmark first phase imports, freezes, builds and dispatches one SWE-benc
       }),
     },
   })
-  const missingCapabilityResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
+  const missingCapabilityResponse = await createExperiment(authRequest('http://insight.test/api/experiments', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -433,12 +436,12 @@ test('xGovernor experiment APIs freeze the confirmed environment and keep native
   await prisma.reliabilityClient.create({ data: { clientId: sandboxClient, user, name: 'sandbox fixture', arch: 'x64', status: 'online', serviceHealth: 'healthy', lastSeenAt: new Date(), capabilitiesJson: JSON.stringify(capabilities) } })
   const imported = await importBenchmarkDataset({ user, name: 'sandbox API fixture', adapterKey: 'swe-bench', source: { kind: 'synthetic-test-fixture' }, cases: [JSON.parse(fs.readFileSync(path.resolve('benchmarks/swe-bench/fixtures/smoke-case.json'), 'utf8'))] })
   const { GET: listAgents } = await import('@/app/api/experiments/agents/route')
-  const candidates = await (await listAgents(new Request(`http://insight.test/api/experiments/agents?user=${encodeURIComponent(user)}`))).json()
+  const candidates = await (await listAgents(authRequest(`http://insight.test/api/experiments/agents?user=${encodeURIComponent(user)}`))).json()
   const target = candidates.agents.flatMap((agent: any) => agent.targets).find((item: any) => item.workerId === sandboxClient)
   assert.deepEqual(target.models.map((item: any) => item.id), ['', 'native/model'])
   assert.deepEqual(target.benchmarkEnvironments['swe-bench'].models.map((item: any) => item.id), ['', 'sandbox/model'])
   assert.equal(target.benchmarkEnvironments['swe-bench'].profile.definitionDigest, profile.definitionDigest)
-  const create = (executionProfileDigest: string) => createExperiment(new Request('http://insight.test/api/experiments', {
+  const create = (executionProfileDigest: string) => createExperiment(authRequest('http://insight.test/api/experiments', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user, scope: 'benchmark', name: 'confirmed environment', benchmark: {
       datasetId: imported.id, caseSelection: { mode: 'all' }, executionTarget: { clientId: sandboxClient }, runConfig: { platform: 'pi-agent', agent: 'pi-agent', model: 'sandbox/model', executionProfileDigest },
     } }),
@@ -579,6 +582,7 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
 }, async () => {
   const officialUser = `${user}-official`
   const officialClientId = `${clientId}-official`
+  await ensureTestApiUsers(officialUser)
   const imported = await importOfficialSweBenchVerifiedDataset({
     user: officialUser,
     name: 'official SWE-bench Verified API flow',
@@ -627,7 +631,7 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
     },
   })
 
-  const createResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
+  const createResponse = await createExperiment(testRequest('http://insight.test/api/experiments', officialUser, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -668,7 +672,7 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
   })
 
   const runResponse = await runExperiment(
-    new Request(
+    authRequest(
       `http://insight.test/api/experiments/${created.id}/run?user=${encodeURIComponent(officialUser)}`,
       { method: 'POST' },
     ),
@@ -699,7 +703,7 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
     where: { experimentId: created.id, status: 'pending' },
   }), 499)
 
-  const rejectedCreateResponse = await createExperiment(new Request('http://insight.test/api/experiments', {
+  const rejectedCreateResponse = await createExperiment(authRequest('http://insight.test/api/experiments', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -723,7 +727,7 @@ test('real SWE-bench Verified data crosses create/run APIs and the client comman
     message: 'task rejected',
   }))
   const rejectedRunResponse = await runExperiment(
-    new Request(
+    authRequest(
       `http://insight.test/api/experiments/${rejectedExperiment.id}/run?user=${encodeURIComponent(officialUser)}`,
       { method: 'POST' },
     ),
@@ -759,7 +763,7 @@ test('parallel Case claims use project limits and restore default budgets when o
   const capabilities = { platforms: [{ id: 'codex', agents: ['review'], runExperimentCase: { version: 2, returnsTraceId: true }, actions: ['RUN_EXPERIMENT_CASE', 'RUN_BENCHMARK_CASE'] }],
     components: { 'git-workspace/v1': { ready: true }, 'agent-runtime/codex/v1': { ready: true }, 'git-patch/v1': { ready: true }, 'concurrent-execution/v1': { ready: true } } }
   await prisma.reliabilityClient.create({ data: { clientId, user, name: 'parallel', status: 'online', serviceHealth: 'healthy', capabilitiesJson: JSON.stringify(capabilities), lastSeenAt: new Date() } })
-  const response = await createExperiment(new Request('http://insight.test/api/experiments', { method: 'POST',
+  const response = await createExperiment(authRequest('http://insight.test/api/experiments', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user, scope: 'benchmark', name: 'parallel claims',
       benchmark: { datasetId: dataset.id, executionTarget: { clientId }, caseSelection: { mode: 'all' },
         runConfig: { platform: 'codex', agent: 'review', executionConcurrency: 2 } } }) }))

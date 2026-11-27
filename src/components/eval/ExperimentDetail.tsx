@@ -39,6 +39,7 @@ import { ExperimentBaselineTrend } from '@/components/eval/ExperimentBaselineTre
 import { ExperimentRenameButton } from '@/components/eval/ExperimentRenameButton';
 import { displayedExperimentName } from '@/lib/engine/experiment/experiment-name';
 import type { AgentOptions, RuntimeDefinition } from '@/lib/engine/experiment/runtime-options';
+import { ExperimentAssetVersions } from '@/components/eval/ExperimentAssetVersions';
 import { RuntimeParameterSnapshot } from '@/components/eval/RuntimeParameterSnapshot';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { ComparisonDetail } from '@/components/eval/ComparisonDetail';
@@ -75,10 +76,10 @@ interface ExperimentDetail {
   executionParameterDefinition?: RuntimeDefinition | null;
   reusableConfig?: {
     traceSource?: string | null;
-    executionTarget?: { model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; network?: string; resources?: { cpu: number; memoryMiB: number } } | null } | null;
+    executionTarget?: { workerId?: string | null; platform?: string | null; model?: string | null; timeoutSeconds?: number | null; executionProfile?: { key: string; sourceRevision?: string; network?: string; resources?: { cpu: number; memoryMiB: number } } | null } | null;
   };
   preset?: string | null;
-  configSnapshot?: { grayscaleTaskId?: string };
+  configSnapshot?: { grayscaleTaskId?: string; agentLabel?: string; [key: string]: unknown };
   watchMode?: boolean;
   watchEnabledAt?: string | null;
   evaluatorIds: string[];
@@ -233,8 +234,8 @@ export function ExperimentDetail({
 }) {
   const { user } = useAuth();
   const router = useRouter();
-  const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
+  const lookup = useEvaluatorLookup(user,detail?.configSnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshFailed, setRefreshFailed] = useState(false);
@@ -442,6 +443,8 @@ export function ExperimentDetail({
   const benchmarkCaseColumns = benchmarkPresentation?.caseTable.columns || DEFAULT_BENCHMARK_CASE_COLUMNS;
   const benchmarkMetricPresentation = benchmarkPresentation?.result?.primaryMetric;
   const executionTimeoutSeconds = Number(detail?.reusableConfig?.executionTarget?.timeoutSeconds);
+  const agentLabel = typeof detail?.configSnapshot?.agentLabel === 'string' ? detail.configSnapshot.agentLabel.trim() : '';
+  const displayAgentName = agentLabel || detail?.agentName || '—';
   const focusVisible = Boolean(!loading && focusCaseId && detail?.id === id && detail.casePage === casePage
     && detail.casePageSize === casePageSize && detail.cases.some(item => item.id === focusCaseId));
   useEffect(() => {
@@ -499,6 +502,7 @@ export function ExperimentDetail({
             {error && (
               <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
             )}
+            <ExperimentAssetVersions snapshot={detail.configSnapshot}/>
             <ComparisonDetail detail={detail as unknown as import('@/lib/engine/experiment/comparison-runner').ComparisonDetailData} />
           </>
         ) : (
@@ -520,7 +524,7 @@ export function ExperimentDetail({
                 }} />
                 <span style={{ fontWeight: 600, color: 'var(--tag-green-fg)' }}>监听中</span>
                 <span style={{ color: 'var(--foreground-secondary)' }}>
-                  自动评测 Agent <b style={{ color: 'var(--foreground)' }}>{detail.agentName || '—'}</b> 在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准
+                  自动评测 Agent <b style={{ color: 'var(--foreground)' }}>{displayAgentName}</b> 在监听开启后开始、且状态为已完成的 Trace；未上报开始时间时，以首次入库时间为准
                   {detail.watchEnabledAt && `（自 ${new Date(detail.watchEnabledAt).toLocaleString('zh-CN', { hour12: false })} 起）`}
                 </span>
                 <button
@@ -550,10 +554,11 @@ export function ExperimentDetail({
               }}>
                 {status.label}
               </span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>{detail.reusableConfig?.traceSource === 'import' ? '提交来源：' : '待评测 Agent：'}</span>{detail.agentName || '—'}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>{detail.reusableConfig?.traceSource === 'import' ? '提交来源：' : '待评测 Agent：'}</span>{displayAgentName}</span>
               {detail.reusableConfig?.traceSource === 'generate' && detail.reusableConfig.executionTarget && (
                 <span><span style={{ color: 'var(--foreground-muted)' }}>运行模型：</span>{detail.reusableConfig.executionTarget.model || '平台默认'}</span>
               )}
+              {detail.reusableConfig?.executionTarget?.platform&&<span><span style={{color:'var(--foreground-muted)'}}>执行平台：</span>{detail.reusableConfig.executionTarget.platform} · {detail.reusableConfig.executionTarget.workerId||'原Trace'}</span>}
               {detail.executionConcurrency != null && <span><span style={{ color: 'var(--foreground-muted)' }}>执行并发：</span>{detail.executionConcurrency}</span>}
               {detail.reusableConfig?.executionTarget?.executionProfile && <span><span style={{ color: 'var(--foreground-muted)' }}>执行环境：</span>{detail.reusableConfig.executionTarget.executionProfile.key}{detail.reusableConfig.executionTarget.executionProfile.sourceRevision && ` · ${detail.reusableConfig.executionTarget.executionProfile.sourceRevision.slice(0, 12)}`} · {detail.reusableConfig.executionTarget.executionProfile.network === 'deny' ? '工具断网' : detail.reusableConfig.executionTarget.executionProfile.network === 'allow' ? '允许联网' : '客户端默认网络'}{detail.reusableConfig.executionTarget.executionProfile.resources && <> · {detail.reusableConfig.executionTarget.executionProfile.resources.cpu} CPU / {detail.reusableConfig.executionTarget.executionProfile.resources.memoryMiB} MiB</>}</span>}
               {Number.isSafeInteger(executionTimeoutSeconds) && executionTimeoutSeconds > 0 && (
@@ -589,6 +594,7 @@ export function ExperimentDetail({
               )}
               </div>
               <RuntimeParameterSnapshot definition={detail.executionParameterDefinition} options={detail.executionAgentOptions} />
+              <ExperimentAssetVersions snapshot={detail.configSnapshot} />
             </div>
 
             {detail.traceProgress && detail.traceProgress.failed > 0 && (
@@ -969,9 +975,11 @@ export function ExperimentDetail({
                 onAdded={(msg) => { setNotice(msg); load(true); }}
                 experimentId={id}
                 agentName={detail.agentName}
+                agentLabel={displayAgentName}
                 user={user}
                 needsReference={needsReference}
                 needsDatasetInput={needsDatasetInput}
+                configSnapshot={detail.configSnapshot}
               />
             )}
           </>

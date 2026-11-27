@@ -1,0 +1,76 @@
+/*
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {normalizeConversationTurns} from '@/lib/evaluation-conversation';
+import {evaluateConversationRules} from '@/lib/engine/experiment/conversation-rules';
+test('逐轮路由、审批红线、工具参数按对应轮评分',async()=>{
+ const turns=normalizeConversationTurns({input:'',turns:[{input:'申请',expectation:{expectedSkill:'loan',requiredTools:[{name:'review',arguments:{approved:false}}],forbiddenTools:['pay'],contains:'人工'}}]});
+ const result=await evaluateConversationRules(turns,[{input:'申请',output:'已转人工',messageIndex:0,skill:'loan',tools:[{name:'review',arguments:{approved:true}}]}]);
+ assert.equal(result.verdict,'fail');assert.equal(result.points?.length,1);assert.equal(result.score,80);
+ assert.match(JSON.stringify(result.evidence),/工具参数/);
+});
+test('缺证据不计零分，已确认空工具列表才能判断未调用',async()=>{
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{requiredTools:[{name:'lookup'}]}}]});
+ const missing=await evaluateConversationRules(turns,[{input:'q',output:'x',messageIndex:0}]);assert.equal(missing.score,undefined);assert.equal(missing.verdict,'warn');
+ const empty=await evaluateConversationRules(turns,[{input:'q',output:'x',messageIndex:0,tools:[]}]);assert.equal(empty.score,0);assert.equal(empty.verdict,'fail');
+ const noRound=await evaluateConversationRules(turns,[]);assert.equal(noRound.score,undefined);
+});
+test('输出字段约束和顺序明确检查；错误关联的轮次不伪装通过',async()=>{
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{fields:[{path:'amount',type:'number',min:10,max:20}],toolOrder:['check','review']}}]});
+ const evidence={input:'q',output:'{"amount":15}',messageIndex:0,tools:[{name:'check',arguments:{}},{name:'review',arguments:{}}]};
+ assert.equal((await evaluateConversationRules(turns,[evidence])).score,100);
+ assert.equal((await evaluateConversationRules(turns,[{...evidence,input:'another task'}])).score,undefined);
+});
+
+test('没有最终回复或存在额外未回复用户轮次时不能判通过',async()=>{
+ const {replayConversation}=await import('@/lib/engine/experiment/conversation-evidence');
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{contains:'answer'}}]});
+ const extra=await evaluateConversationRules(turns,replayConversation([{role:'user',content:'q'},{role:'assistant',content:'answer'},{role:'user',content:'unfinished'}]));
+ assert.equal(extra.score,undefined);assert.notEqual(extra.verdict,'pass');
+ const toolOnly=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{requiredTools:[{name:'lookup'}]}}]});
+ const partial=await evaluateConversationRules(toolOnly,replayConversation([{role:'user',content:'q'},{role:'assistant',content:'',tool_calls:[{id:'one',function:{name:'lookup',arguments:'{}'}}]}]));
+ assert.equal(partial.score,undefined);assert.notEqual(partial.verdict,'pass');
+});
+
+test('包含和正则同时配置时独立判断，矛盾规则不会互相覆盖或优先放行', async () => {
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{contains:'approved',pattern:'^rejected$'}}]});
+ for(const output of ['approved','rejected']){
+  const result=await evaluateConversationRules(turns,[{input:'q',output,messageIndex:0,complete:true}]);
+  assert.equal(result.verdict,'fail');assert.equal(result.score,50);
+  assert.equal(((result.evidence as any)?.json).checks.length,2);
+ }
+ const compatible=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{contains:'ORDER-',pattern:'^ORDER-[0-9]{6}$'}}]});
+ assert.equal((await evaluateConversationRules(compatible,[{input:'q',output:'ORDER-123456',messageIndex:0,complete:true}])).score,100);
+});
+
+test('简化规则逐轮匹配预期输出，不依赖JSON、业务状态或模型',async()=>{
+ for(const mode of ['exact','contains'] as const){
+  const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'已收到',expectation:{outputMatch:mode}}]});
+  const check=(output:string)=>evaluateConversationRules(turns,[{input:'q',output,messageIndex:0,complete:true}]);
+  assert.equal((await check('已收到')).score,100);
+  assert.equal((await check('申请已收到。')).verdict,mode==='contains'?'pass':'fail');
+  assert.equal((await check('已收妥')).verdict,'fail');
+  const empty=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'',expectation:{outputMatch:mode}}]});
+  assert.equal((await evaluateConversationRules(empty,[{input:'q',output:'anything',messageIndex:0}])).score,undefined);
+ }
+ const legacy=normalizeConversationTurns({input:'q',turns:[{input:'q',expectedOutput:'从不自动参与旧规则'}]});
+ assert.equal((await evaluateConversationRules(legacy,[{input:'q',output:'other',messageIndex:0}])).score,undefined);
+});
+
+test('简化Skill检查只采信真实加载证据，私有metadata不能代替且各轮独立',async()=>{
+ const {replayConversation}=await import('@/lib/engine/experiment/conversation-evidence');
+ const turns=normalizeConversationTurns({input:'q',turns:[{input:'q',expectation:{outputMatch:'contains',expectedSkill:'loan'}}]});
+ const check=(messages:unknown[])=>evaluateConversationRules(turns,replayConversation(messages));
+ const input={role:'user',content:'q'};
+ assert.equal((await check([input,{role:'assistant',content:'loan已使用',metadata:{evaluation:{skill:'loan'}},tool_calls:[]}])).verdict,'fail');
+ assert.equal((await check([input,{role:'assistant',content:'loan已使用',metadata:{evaluation:{skill:'loan'}}}])).verdict,'warn');
+ assert.equal((await check([input,{role:'assistant',content:'done',tool_calls:[{function:{name:'load_skill',arguments:{skill_name:'loan'}},state:'completed'}]}])).verdict,'warn');
+ // A call-only message is not a final reply; the final assistant response closes the round.
+ const loaded=await check([input,{role:'assistant',content:'',tool_calls:[{function:{name:'load_skill',arguments:{skill_name:'loan'}},state:'completed'}]},{role:'assistant',content:'done',tool_calls:[]}]);
+ assert.equal(loaded.verdict,'pass');assert.doesNotMatch(loaded.summary||'',/业务红线/);
+});

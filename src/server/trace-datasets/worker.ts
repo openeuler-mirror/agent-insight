@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { transaction } from './transaction';
+import { retryTransient, transaction } from './transaction';
+import { recordPublishedDatasetVersion } from '../agent_datasets_storage';
 import { parentPort, workerData } from 'node:worker_threads';
 import { PrismaClient } from '@prisma/client';
 import fs from 'node:fs/promises';
@@ -28,18 +29,32 @@ const db = new PrismaClient({ datasources: { db: { url: workerData.databaseUrl }
 const port = parentPort!;
 let busy = false;
 let cancelled = false;
+let shuttingDown = false;
+let stopped = false;
 let acknowledge: ((message: { jobId: string; epoch: number; sequence?: number }) => void) | undefined;
 let sequence = 0;
+let current: { jobId: string; epoch: number } | undefined;
+// The manager waits for this instead of terminating a thread that still owns native database handles.
+async function shutdown() {
+  if (stopped) return;
+  stopped = true;
+  await db.$disconnect().catch(() => {});
+  try { port.postMessage({ type: 'closed', incarnationId: workerData.incarnationId }); } catch { /* parent already gone */ }
+  port.close();
+}
 port.on('message', async (message: { type?: string; jobId: string; epoch: number; incarnationId: string; dir: string; sequence?: number }) => {
   if (message.type === 'summary_ack') { acknowledge?.(message); return; }
-  if (message.type === 'cancel') { cancelled = true; return; }
-  if (busy) return;
+  if (message.type === 'shutdown') { shuttingDown = true; cancelled = true; if (!busy) await shutdown(); return; }
+  if (message.type === 'cancel') { if (current && message.jobId === current.jobId && message.epoch === current.epoch) cancelled = true; return; }
+  if (busy || shuttingDown) return;
   busy = true; cancelled = false;
   const { jobId, epoch, incarnationId, dir } = message;
+  current = { jobId, epoch };
   const send = (type: string) => port.postMessage({ type, jobId, epoch, incarnationId });
   const valid = { id: jobId, leaseEpoch: epoch, status: 'running', cancelRequested: false };
-  const check = async () => { if (cancelled || !await db.traceDatasetGenerationJob.findFirst({ where: valid, select: { id: true } })) throw new Error('CANCELLED'); };
-  const stage = async (value: string, index: number) => { const result = await db.traceDatasetGenerationJob.updateMany({ where: valid, data: { stage: value, stageIndex: index } }); if (!result.count) throw new Error('CANCELLED'); send('progress'); };
+  let stageName = 'queued';
+  const check = async () => { const ok = await retryTransient(() => db.traceDatasetGenerationJob.findFirst({ where: valid, select: { id: true } })); if (cancelled || !ok) throw new Error('CANCELLED'); };
+  const stage = async (value: string, index: number) => { stageName = value; const result = await retryTransient(() => db.traceDatasetGenerationJob.updateMany({ where: valid, data: { stage: value, stageIndex: index } })); if (!result.count) throw new Error('CANCELLED'); send('progress'); };
   const compute = async <T>(steps: Generator<void, T>): Promise<T> => {
     let lastCheck = Date.now();
     for (;;) { const next = steps.next(); if (next.done) return next.value; await new Promise<void>(resolve => setImmediate(resolve)); if (Date.now() - lastCheck > 100) { await check(); lastCheck = Date.now(); } }
@@ -47,21 +62,21 @@ port.on('message', async (message: { type?: string; jobId: string; epoch: number
   const heartbeat = setInterval(() => send('heartbeat'), 5000);
   const publishSummary = async (summary: GenerationSummary) => {
     await check();
-    const current = ++sequence;
+    const sequenceNumber = ++sequence;
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => { acknowledge = undefined; reject(new Error('SUMMARY_UNAVAILABLE')); }, 5000);
-      acknowledge = reply => { if (reply.jobId === jobId && reply.epoch === epoch && reply.sequence === current) { clearTimeout(timeout); acknowledge = undefined; resolve(); } };
-      port.postMessage({ type: 'summary', jobId, epoch, incarnationId, sequence: current, summary });
+      acknowledge = reply => { if (reply.jobId === jobId && reply.epoch === epoch && reply.sequence === sequenceNumber) { clearTimeout(timeout); acknowledge = undefined; resolve(); } };
+      port.postMessage({ type: 'summary', jobId, epoch, incarnationId, sequence: sequenceNumber, summary });
     });
   };
   try {
-    const job = await db.traceDatasetGenerationJob.findFirst({ where: valid });
+    const job = await retryTransient(() => db.traceDatasetGenerationJob.findFirst({ where: valid }));
     if (!job) throw new Error('CANCELLED');
     const config = JSON.parse(job.configJson) as FrozenConfig & { limit: number; policy: Policy & { signatureProtocol: string } };
     if (!supportedProductionPolicy(config.policy)) throw new Error('SOURCE_CORRUPT');
     await stage('read', 0);
     await captureSources(db, job.owner, config, dir, check);
-    await db.traceDatasetGenerationJob.updateMany({ where: valid, data: { captureState: 'sealed' } });
+    await retryTransient(() => db.traceDatasetGenerationJob.updateMany({ where: valid, data: { captureState: 'sealed' } }));
     await stage('dedup', 1);
     const pairs = new Map<string, Candidate>();
     const answers = new Map<string, string>();
@@ -135,7 +150,8 @@ port.on('message', async (message: { type?: string; jobId: string; epoch: number
     await transaction(db, async tx => {
       const claimed = await tx.traceDatasetGenerationJob.updateMany({ where: valid, data: { status: 'succeeded', stage: 'complete', stageIndex: 6, generatedCount: cases.length, cleanupPending: true, leaseUntil: null } });
       if (!claimed.count) throw new Error('CANCELLED');
-      await tx.agentEvalDataset.update({ where: { id: job.datasetId }, data: { casesJson: JSON.stringify(cases), referenceCasesJson: JSON.stringify(reference), caseCount: cases.length, projectionReady: true, generationStatus: 'published' } });
+      const publishedDataset = await tx.agentEvalDataset.update({ where: { id: job.datasetId }, data: { casesJson: JSON.stringify(cases), referenceCasesJson: JSON.stringify(reference), caseCount: cases.length, projectionReady: true, generationStatus: 'published' } });
+      await recordPublishedDatasetVersion(tx, publishedDataset, 'trace-generation');
       await tx.traceDatasetOperationReceipt.updateMany({ where: { jobId, kind: 'create', expiresAt: { lt: receiptExpiry(job.requestId, Date.now()) } }, data: { expiresAt: receiptExpiry(job.requestId, Date.now()) } });
     }, { timeout: 30000, maxWait: 30000 });
   } catch (error) {
@@ -143,6 +159,10 @@ port.on('message', async (message: { type?: string; jobId: string; epoch: number
     if (code !== 'CANCELLED') {
       const errorCode = ['NO_VALID_SAMPLES', 'SOURCE_CORRUPT'].includes(code) ? code : 'RESOURCE_UNAVAILABLE';
       const errorMessage = errorCode === 'NO_VALID_SAMPLES' ? '所选 Trace 中没有可完整配对的问答，请调整 Agent 或时间范围' : errorCode === 'SOURCE_CORRUPT' ? '冻结来源缺失或损坏，请重新生成' : '读取或保存来源失败，请检查存储可用性后重新生成';
+      // Keep the mapped user-facing error, but leave the underlying cause in server logs.
+      const cause = error as { name?: string; code?: string } | null;
+      const detail = String(code).split('\n').map(line => line.trim()).find(Boolean) || '';
+      console.warn('[trace-datasets] generation job failed job=%s stage=%s code=%s cause=%s:%s', jobId, stageName, errorCode, cause?.name || 'Error', detail.slice(0, 200));
       try {
         await transaction(db, async tx => {
           const job = await tx.traceDatasetGenerationJob.findFirst({ where: valid });
@@ -153,6 +173,13 @@ port.on('message', async (message: { type?: string; jobId: string; epoch: number
         });
       } catch { send('storage_error'); }
     }
-  } finally { clearInterval(heartbeat); if (cancelled) await db.$disconnect(); busy = false; send('done'); }
+  } finally {
+    clearInterval(heartbeat);
+    current = undefined;
+    busy = false;
+    send('done');
+    if (shuttingDown) await shutdown();
+    else if (cancelled) await db.$disconnect();
+  }
 });
 port.postMessage({ type: 'ready', incarnationId: workerData.incarnationId });

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
@@ -47,7 +48,7 @@ async function stop(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM') {
 }
 
 async function launch(home: string, t: { after: (fn: () => Promise<void>) => void }) {
-  const child = spawn('python3', [script, home, process.execPath, '-e', probe], {
+  const child = spawn(pythonExecutable, [script, home, process.execPath, '-e', probe], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, AGENT_INSIGHT_RUNTIME_OWNER: '{"id":"untrusted-inherited-value"}' },
   });
@@ -83,7 +84,7 @@ test('container runtime holds a kernel lock across exec and rejects a concurrent
   assert.deepEqual(JSON.parse(await fs.readFile(lock, 'utf8')), {
     version: 1, id: running.owner.id, scope: running.owner.scope,
   });
-  const blocked = spawnSync('python3', [script, home, process.execPath, '-e', 'process.stdout.write("unexpected launch")'], { encoding: 'utf8', timeout: 3000 });
+  const blocked = spawnSync(pythonExecutable, [script, home, process.execPath, '-e', 'process.stdout.write("unexpected launch")'], { encoding: 'utf8', timeout: 3000 });
   assert.equal(blocked.error, undefined);
   assert.notEqual(blocked.status, 0);
   assert.match(blocked.stderr, /already in use/i);
@@ -120,7 +121,7 @@ test('container runtime refuses symlink or non-regular guard paths without modif
     if (kind === 'symlink') await fs.symlink(victim, lock);
     else if (kind === 'hardlink') await fs.link(victim, lock);
     else await fs.mkdir(lock);
-    const result = spawnSync('python3', [script, home, process.execPath, '-e', 'process.stdout.write("unexpected launch")'], { encoding: 'utf8', timeout: 3000 });
+    const result = spawnSync(pythonExecutable, [script, home, process.execPath, '-e', 'process.stdout.write("unexpected launch")'], { encoding: 'utf8', timeout: 3000 });
     assert.equal(result.error, undefined);
     assert.notEqual(result.status, 0);
     assert.equal(result.stdout, '');

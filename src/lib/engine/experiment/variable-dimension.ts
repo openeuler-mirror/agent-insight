@@ -64,7 +64,7 @@ export interface VariableDimension {
   readonly dimension: ExperimentType;
   extractValue(trace: DimensionTrace): string;
   controlledFields(): ControlledField[];
-  queryCandidateTraces(agent: string, value: string): Promise<TraceCandidate[]>;
+  queryCandidateTraces(agent: string, value: string, user?: string): Promise<TraceCandidate[]>;
 }
 
 function normalizeEmpty(v: string | null | undefined): string {
@@ -80,9 +80,9 @@ export const LLM_DIMENSION: VariableDimension = {
     { field: 'skill' },
     { field: 'skillVersion' },
   ],
-  async queryCandidateTraces(agent, model): Promise<TraceCandidate[]> {
+  async queryCandidateTraces(agent, model, user): Promise<TraceCandidate[]> {
     const rows = await prisma.execution.findMany({
-      where: { agentName: agent, model },
+      where: { agentName: agent, model, ...(user === undefined ? {} : { user }) },
       select: {
         id: true,
         taskId: true,

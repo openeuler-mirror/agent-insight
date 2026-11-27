@@ -15,7 +15,9 @@ changefreq: "monthly"
 | `GET /api/experiments/:id` | 返回实验详情，包含 Case、评估结果和阶段信息；返回字段会按实验类别变化，不应复用列表 item 类型解析所有详情 |
 | `GET /api/experiments/cancellations` | 返回当前用户最多 100 条 `pending` 取消记录：`{ cancellations }`，不是全部历史取消列表 |
 
-调用时携带当前账号 Key，避免仅用可覆盖身份的 `user` 参数。缺少身份的普通列表可能扩大查询范围，不能据此确认 Key 有效；写操作和详情归属检查按各自分支处理。
+列表 item 的 `agentName` 保留原有 Agent 标识语义，新增可选展示字段 `agentLabel`，读取自 `configSnapshotJson.agentLabel`。通用实验向导创建 JiuwenSwarm 实验时通过 `configSnapshot.agentLabel` 保存完整名称与平台，供列表和详情展示；详情页面读取详情接口已有的 `configSnapshot.agentLabel`，详情和复用配置中的 `agentName` 仍为 Agent 标识。该名称不用于调度或 Trace 匹配，同配置实验保留该快照。缺少、为空或类型无效的名称快照不返回列表字段 `agentLabel`，列表和详情回退显示 `agentName`；查询不依赖当前客户端 Agent 目录。
+
+调用时携带当前账号 Key，服务端由 Key 解析身份；`user` 参数仅用于核对，不能覆盖认证账号。普通列表和详情在身份缺失或不匹配时返回 `401`；创建、运行、追加 Case 和重试等分支沿用各自的身份错误响应。未指定资产版本的旧请求同样需要认证。
 
 实验详情中的执行进度通过只读事务获取一致性快照。单次事务最长 30 秒，两次尝试共享 35 秒等待预算；仅 `P1008/P2028/P2034` 最多重新读取一次，重读会记录错误码及耗时。读取仅选择必要字段，持续失败仍返回错误，不重跑 Agent 或评估任务，也不改写实验记录。
 
@@ -39,6 +41,14 @@ changefreq: "monthly"
 `name` 去除首尾空白后不能为空；`evaluatorIds` 至少一项。非监听模式至少一个 Case；监听模式需 `watchMode: true` 和非空 `agentName`。Case 可关联已有 `executionId` / `taskId`，还支持 `datasetInput`、参考答案和评估上下文。评估器是否需要参考答案取决于其注册元数据。普通分支成功返回 `200` 和 `{ id }`，此时创建的是草稿，尚未完成评估。
 
 Benchmark 数据集分支使用其绑定、Case 选择和执行配置，成功可能返回 `201`；普通实验不允许直接选用 `benchmark:` 评估器。不要把普通示例套给 Benchmark 或 Skill 冻结快照实验。运行参数见[评估器运行与输出契约](./evaluator-output.md)，执行环境检查见[环境准备接口](./execution-environment.md)。
+
+## SQLite 资产版本与逐轮 Case
+
+普通实验可传 `assetVersions:{agent?:versionId,dataset?:versionId,evaluators?:{[evaluatorId]:versionId}}`。服务端按真实 Key 校验版本归属并冻结定义，不能用客户端自带的定义替换快照。评测集 Case 通过 `datasetId/datasetCaseId` 关联；逐轮定义保存在 `caseValues.turns`，执行端只接收 `{version:1,turns:[{id,input}]}`，不接收预期或评分规则。
+
+多轮生成要求客户端明确上报 OpenCode v2 同会话续接能力。所有轮次和最终 Trace 完整后才开始评分；不支持的目标返回明确错误，不退化为首轮执行。旧请求无逐轮定义时保留单轮流程。
+
+固定数据集版本的实验仅能追加该版本已有 Case；同输入多题须显式选择 Case，重复 Trace 不覆盖原答案、规则或结果。显式 `referenceOverride` 记录本次最终答案覆盖及原版本来源，不能改变冻结逐轮规则。版本接口及草稿 CAS 约束见 [资产版本契约](../platform/api-and-contracts.md#sqlite-评测资产版本与逐轮-case)。
 
 ## 启动与终态
 

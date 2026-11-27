@@ -641,12 +641,14 @@ async function runGeneralAgentWithClient(
       normalizeEvaluatorExecutionInteractions(Array.isArray(rawMessages) ? rawMessages : []),
     );
     tokenStats = {
-      totalTokens: derived.tokens,
+      // 上游未提供 usage 时 derived 为 undefined；本接口的 stats 是数字契约，
+      // 这里保留 0 作为"没有可展示用量"，与 Execution.tokens 的可空语义分开。
+      totalTokens: derived.tokens ?? 0,
       tokens: {
-        input: derived.input_tokens,
-        output: derived.output_tokens,
-        reasoning: derived.reasoning_tokens,
-        cache: { read: derived.cache_read_input_tokens, write: derived.cache_creation_input_tokens },
+        input: derived.input_tokens ?? 0,
+        output: derived.output_tokens ?? 0,
+        reasoning: derived.reasoning_tokens ?? 0,
+        cache: { read: derived.cache_read_input_tokens ?? 0, write: derived.cache_creation_input_tokens ?? 0 },
       },
     };
   } catch (err) {

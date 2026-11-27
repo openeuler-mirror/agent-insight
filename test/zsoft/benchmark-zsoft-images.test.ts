@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from '../helpers/python';
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -79,7 +80,7 @@ def freeze():
 fixture()
 `
 function python(directory: string, code: string) {
-  return execFileSync('python3', ['-c', prelude + code, directory], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
+  return execFileSync(pythonExecutable, ['-c', prelude + code, directory], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })
 }
 async function temporary(t: TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'zsoft-images-'))
@@ -109,7 +110,7 @@ test('Controller submission staging reaches the ZSoft judge and rejects mismatch
   const { generatedEvaluatorDescriptors } = load('../../generated/benchmark-catalog/evaluators.cjs')
   const runtime = generatedEvaluatorDescriptors.find((item: { benchmarkKey: string }) => item.benchmarkKey === 'zsoft-l1')
   const evaluator = new FileEvaluatorEntrypoint({ ...runtime, assets: undefined }, async (_descriptor: unknown, args: string[]) => {
-    execFileSync('python3', ['-c', `
+    execFileSync(pythonExecutable, ['-c', `
 import copy, json, sys
 from pathlib import Path
 from unittest.mock import patch
@@ -417,7 +418,9 @@ test('SWR runtime prefix is shared by publishing and evaluation; prebuilt remote
   }
 })
 
-test('ZSoft fixed registry image uses the shared pool for cold pull, cache reuse and repull after eviction', async (t) => {
+test('ZSoft fixed registry image uses the shared pool for cold pull, cache reuse and repull after eviction', { timeout: 15000 }, async (t) => {
+  // This verifies cache ownership, not filesystem latency against the admission deadline.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const directory = await temporary(t)
   const ref = `swr.example.test/team/zsoft@sha256:${'c'.repeat(64)}`
   const image = { id: `sha256:${'b'.repeat(64)}`, size: 100, arch: 'amd64', references: [], digests: [ref] }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -27,7 +28,7 @@ import { verifyScriptTruth, makeYearAssertion, makeNumericAssertion, makeAbsentA
 // 数据集驱动推导出的断言。覆盖：真值年份过/不过、log_year=None、回显假阳、非日期脚本跳过、
 // 多脚本容错、以及「执行任意断言」的通用性。
 
-function hasPython(): boolean { try { execFileSync('python3', ['--version'], { stdio: 'pipe' }); return true; } catch { return false; } }
+function hasPython(): boolean { try { execFileSync(pythonExecutable, ['--version'], { stdio: 'pipe' }); return true; } catch { return false; } }
 const PY = hasPython();
 const SKIP = !PY ? 'python3 不可用' : false;
 

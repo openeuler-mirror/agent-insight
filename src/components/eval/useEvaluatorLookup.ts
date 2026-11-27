@@ -21,6 +21,7 @@
 // 名称/标签/类目全部从卡片 + registry 派生；找不到卡片时名称回退原 id、类目回退 'res'。
 import { useEffect, useMemo, useState } from 'react';
 
+import { frozenEvaluatorCards } from '@/lib/evaluators/frozen-metadata';
 import { apiFetch } from '@/lib/client/api';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { legacyPresetEvaluators, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
@@ -36,7 +37,7 @@ export interface EvaluatorLookup {
   requiresDatasetInput: (evaluatorId: string) => boolean;
 }
 
-export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLookup {
+export function useEvaluatorLookup(user: string | null | undefined, snapshot?:unknown): EvaluatorLookup {
   const [customCards, setCustomCards] = useState<EvaluatorCard[]>([]);
 
   useEffect(() => {
@@ -56,6 +57,7 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
     const byId = new Map<string, EvaluatorCard>();
     for (const card of [...presetEvaluators, ...legacyPresetEvaluators]) byId.set(card.id, card);
     for (const card of customCards) byId.set(card.id, card);
+    for (const card of frozenEvaluatorCards(snapshot)) byId.set(card.id,card);
     return {
       nameOf: (id: string) => byId.get(id)?.name || id,
       tagsOf: (id: string) => {
@@ -75,5 +77,5 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
         return card ? getEvaluatorMeta(card).requires.includes('dataset_input') : false;
       },
     };
-  }, [customCards]);
+  }, [customCards,snapshot]);
 }

@@ -23,6 +23,10 @@ import { readClaudeOtelEventsForSession } from './spool';
 import type { ClaudeOtelAggregationResult, ClaudeOtelEvent } from './types';
 
 const ROOT_AGENT_NAME = 'Claude Code';
+// 一轮结束信号里,只有 StopFailure 按失败收敛,其余(Stop/SessionEnd)都是正常结束。
+// 其余 hook(尤其 SubagentStop)只代表子 agent 结束,不能用来完成整轮。
+const TURN_END_COMPLETION_HOOKS = new Set(['stop', 'sessionend', 'stopfailure']);
+const TURN_END_FAILED_HOOKS = new Set(['stopfailure']);
 const INTERNAL_CLAUDE_QUERY_SOURCES = new Set([
   'generate_session_title',
   'prompt_suggestion',
@@ -415,6 +419,13 @@ function mergeToolCallIntoInteraction(target: any, toolCall: any): void {
     : [...existing, toolCall];
 }
 
+function drainPendingToolCalls(pending: Map<string, any>, target: any): void {
+  for (const [pendingId, pendingCall] of pending) {
+    mergeToolCallIntoInteraction(target, pendingCall);
+    pending.delete(pendingId);
+  }
+}
+
 function toolUseBlocks(content: any[]): any[] {
   return content.filter((block) => block?.type === 'tool_use' && block.id);
 }
@@ -457,6 +468,57 @@ function dedupeEvents(events: ClaudeOtelEvent[]): ClaudeOtelEvent[] {
     out.push(event);
   }
   return out;
+}
+
+function isTurnEndEvent(event: ClaudeOtelEvent): boolean {
+  return event.eventName === CONTEXT_SUPPLEMENT_EVENT && asString(event.attributes?.kind) === 'turn_end';
+}
+
+function traceActivityMs(events: ClaudeOtelEvent[]): number {
+  let latest = 0;
+  for (const event of events) {
+    const attrs = event.attributes || {};
+    if (isTurnEndEvent(event)) continue;
+    // 内部标题/建议类请求不是用户可见的一轮活动,不参与"最后一轮是否已结束"的比较。
+    if (isInternalClaudeQuerySource(attrs.query_source)) continue;
+    const ms = Date.parse(eventTime(event));
+    if (Number.isFinite(ms) && ms > latest) latest = ms;
+  }
+  return latest;
+}
+
+/**
+ * Claude Code 没有会话级结束事件,一轮结束的唯一显式信号是客户端 Stop hook
+ * (StopFailure 表示失败结束)。客户端用 hook 触发时刻作为事件时间上报,所以完成时刻
+ * 取客户端时间而非服务端接收时间,跨机时钟偏差不会把它推到"最后活动之前"。
+ *
+ * 只有信号不早于最后一次活动才算数:用户接着开下一轮后,新活动时间越过上一次 Stop,
+ * 本次聚合就回落为执行中,不会让上一轮的完成信号把新一轮提前置完成。
+ */
+function resolveClaudeTraceCompletion(
+  events: ClaudeOtelEvent[],
+  turnEndSignals: Array<{ ms: number; hookEvent: string }>,
+): { completedAtMs: number | null; executionStatus: 'in_progress' | 'completed' | 'failed' } {
+  // Stop/StopFailure 是"这一轮"的结束点,优先用它;SessionEnd 只在一轮没收到 Stop
+  // (例如进程直接退出)时兜底,免得把用户几小时后关掉会话的时间当成 trace 结束时间。
+  let latestTurn: { ms: number; hookEvent: string } | null = null;
+  let latestSessionEnd: { ms: number; hookEvent: string } | null = null;
+  for (const signal of turnEndSignals) {
+    const hook = signal.hookEvent.trim().toLowerCase();
+    if (!TURN_END_COMPLETION_HOOKS.has(hook)) continue;
+    if (hook === 'sessionend') {
+      if (!latestSessionEnd || signal.ms >= latestSessionEnd.ms) latestSessionEnd = signal;
+    } else if (!latestTurn || signal.ms >= latestTurn.ms) {
+      latestTurn = signal;
+    }
+  }
+  const activityMs = traceActivityMs(events);
+  const candidate = latestTurn && latestTurn.ms >= activityMs
+    ? latestTurn
+    : latestSessionEnd && latestSessionEnd.ms >= activityMs ? latestSessionEnd : null;
+  if (!candidate) return { completedAtMs: null, executionStatus: 'in_progress' };
+  const failed = TURN_END_FAILED_HOOKS.has(candidate.hookEvent.trim().toLowerCase());
+  return { completedAtMs: candidate.ms, executionStatus: failed ? 'failed' : 'completed' };
 }
 
 type SystemPromptState = {
@@ -593,6 +655,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   if (ordered.every((event) => event.eventName === CONTEXT_SUPPLEMENT_EVENT)) return null;
 
   const interactions: any[] = [];
+  // 兜底路径给纯工具轮落的空壳 interaction,主循环结束后再决定要不要留下
+  const emptyFallbackTurns = new Set<any>();
   const responseMetaByKey = new Map<string, { request?: ClaudeOtelEvent; body: any; content: any[] }>();
   const toolUseById = new Map<string, any>();
   const subagentSessionByToolId = new Map<string, string>();
@@ -638,6 +702,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const supplementTurnsByScope = new Map<string, any[]>();
   // 内部工具的 tool_result 先于该 scope 第一轮到达时的暂存
   const pendingScopeToolCalls = new Map<string, any[]>();
+  // 客户端 Stop/StopFailure hook 上报的轮次结束信号;只用于收敛 trace 状态,不产 interaction。
+  const turnEndSignals: Array<{ ms: number; hookEvent: string }> = [];
 
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
   // assistant_response 兜底路径(见下方主循环)要用同一批 api_request 取 usage/时间。
@@ -677,6 +743,10 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         const toolUseId = asString(attrs.tool_use_id);
         const output = normalizeToolResultOutput(attrs.text);
         if (toolUseId && output !== undefined) supplementToolOutputById.set(toolUseId, output);
+      } else if (attrs.kind === 'turn_end') {
+        const hookEvent = asString(attrs.hook_event).trim();
+        const ms = Date.parse(eventTime(event));
+        if (hookEvent && Number.isFinite(ms) && ms > 0) turnEndSignals.push({ ms, hookEvent });
       } else if (attrs.kind === 'subagent_map') {
         // 重传的映射(会话继续跑、映射长大)取并集,晚到的 agentType 覆盖
         const parsed = parseJsonMaybe(attrs.text);
@@ -847,12 +917,13 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       if (isInternalClaudeQuerySource(attrs.query_source)) continue;
       if (seen < (usableResponseCountByPrompt.get(key) || 0)) continue;
       const text = asString(attrs.response);
-      if (!text.trim()) continue;
       // 子 agent 内部轮次(message.uuid 命中补传映射):归到对应 scope,不算 root 的一轮。
       // 只有 fallback 路径会走到这里,同机部署(有可读响应体)在上面 seen<usable 就跳过了,
       // 行为不受影响。不动 finalResult / model / root system / root pending —— 那些都是 root 的。
       const mappedToolId = uuidToSubagentToolId.get(asString(attrs['message.uuid']));
       if (mappedToolId) {
+        // 子 agent 无文本轮不单独成条,保持原有归属/补传逻辑不变
+        if (!text.trim()) continue;
         const map = subagentMapByToolId.get(mappedToolId) || {};
         const subagentName = normalizeSubagentType(map.agentType);
         agentNames.add(subagentName);
@@ -891,8 +962,6 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         pendingScopeToolCalls.delete(scope);
         continue;
       }
-      finalResult = text;
-      if (attrs.model) model = String(attrs.model);
       // 跨机场景只有这条兜底路径会跑,system prompt 得在这里发射(root scope —— 本事件
       // 不带 tool_use,分不出子 agent)。同机部署走上面的 api_response_body 路径,不受影响。
       const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
@@ -905,7 +974,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
           supplemented: !systemByPromptKey.has(key),
         });
       }
-      interactions.push({
+      const turn = {
         role: 'assistant',
         content: text,
         timestamp: eventTime(event),
@@ -914,15 +983,22 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         prompt_id: event.promptId,
         model: attrs.model,
         usage: normalizeUsage(undefined, requestEvent?.attributes || {}),
-      });
+      };
+      interactions.push(turn);
+      if (!text.trim()) {
+        // 纯工具调用轮:本轮没有可见文本,但确实发生了一次 LLM 调用。此前直接丢弃,
+        // 该轮 tool_result 只能攒到后面那条带最终回答的记录上 —— 工具归属、usage、
+        // 耗时全错。这里给它落地一条 content 为空、只带本轮 tool_calls 的 interaction。
+        emptyFallbackTurns.add(turn);
+      } else {
+        finalResult = text;
+      }
+      if (attrs.model) model = String(attrs.model);
       // 跨机时 tool_result 可能先于本轮助手消息到达 —— 那会儿还没有任何 assistant 可挂,
       // 工具调用只能滞留在 pendingToolResultById。正常路径靠 api_response_body 分支收口,
       // 而跨机根本不会走那条,不在这里收就整批工具调用凭空消失(trace 只剩对话)。
-      const assistantTurn = interactions[interactions.length - 1];
-      for (const [pendingId, pendingCall] of pendingToolResultById) {
-        mergeToolCallIntoInteraction(assistantTurn, pendingCall);
-        pendingToolResultById.delete(pendingId);
-      }
+      // 每轮落地时把 pending 收进**本轮**,而不是留给后面的最终回答。
+      drainPendingToolCalls(pendingToolResultById, turn);
       continue;
     }
 
@@ -1064,6 +1140,13 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     for (const pendingCall of calls) mergeToolCallIntoInteraction(fallbackTurn, pendingCall);
   }
 
+  // 纯工具轮的空壳最终没挂上任何工具调用,只是噪声,去掉
+  for (let i = interactions.length - 1; i >= 0; i--) {
+    const item = interactions[i];
+    if (!emptyFallbackTurns.has(item)) continue;
+    if (!Array.isArray(item.tool_calls) || item.tool_calls.length === 0) interactions.splice(i, 1);
+  }
+
   if (!query) query = `Claude Code Session ${sessionId}`;
 
   if (!finalResult) {
@@ -1071,14 +1154,24 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     finalResult = lastAssistant ? textFromContent(lastAssistant.content) : '';
   }
 
+  const traceCompletion = resolveClaudeTraceCompletion(ordered, turnEndSignals);
+
   return {
     task_id: sessionId,
     query,
     framework: 'claudecode',
+    executionStatus: traceCompletion.executionStatus,
+    // 没等到结束信号(旧版客户端 / 会话仍在跑)就不写完成时间,交给读侧的十分钟无活动兜底,
+    // 避免把"还没有信号"误判成已完成。
+    ...(traceCompletion.completedAtMs !== null
+      ? { trace_completed_at: new Date(traceCompletion.completedAtMs).toISOString() }
+      : {}),
     model,
     tokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
     cost,
-    latency: latencyMs / 1000,
+    // duration_ms 本身就是毫秒,Execution.latency 全链路也统一为毫秒(见 lib/latency-format.ts),
+    // 这里不能再做秒→毫秒的反向换算,否则写入值比真实值小 1000 倍。
+    latency: latencyMs,
     timestamp,
     final_result: finalResult || '[No final text output]',
     interactions: normalizeClaudeCodeInteractionsForStorage(interactions),

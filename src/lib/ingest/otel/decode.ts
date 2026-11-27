@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import { promisify } from 'node:util';
+import { gunzip } from 'node:zlib';
 import otlpRoot from '@opentelemetry/otlp-transformer/build/src/generated/root';
 
 export type OtlpSignal = 'traces';
@@ -45,6 +47,8 @@ const toObjectOptions = {
 };
 
 const traceRequestType = (otlpRoot as any).opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+const gunzipAsync = promisify(gunzip);
+const MAX_DECOMPRESSED_OTLP_BYTES = 64 * 1024 * 1024;
 
 function isJsonContentType(contentType: string): boolean {
   return contentType.toLowerCase().includes('application/json');
@@ -108,12 +112,28 @@ export async function decodeOtlpRequestWithRaw(
   signal: OtlpSignal,
 ): Promise<DecodedOtlpRequest> {
   const contentType = req.headers.get('content-type') || '';
+  const contentEncoding = req.headers.get('content-encoding')?.trim().toLowerCase() || 'identity';
+  if (contentEncoding !== 'identity' && contentEncoding !== 'gzip') {
+    throw new OtlpDecodeError(415, `Unsupported OTLP ${signal} content encoding. Use gzip or identity.`);
+  }
+
   const rawBody = new Uint8Array(await req.arrayBuffer());
+  let payload: Uint8Array = rawBody;
+  if (contentEncoding === 'gzip') {
+    try {
+      payload = await gunzipAsync(rawBody, { maxOutputLength: MAX_DECOMPRESSED_OTLP_BYTES });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') {
+        throw new OtlpDecodeError(413, `Decompressed OTLP ${signal} payload exceeds 64 MiB`);
+      }
+      throw new OtlpDecodeError(400, `Invalid OTLP ${signal} gzip payload`);
+    }
+  }
 
   if (isJsonContentType(contentType)) {
     try {
       return {
-        body: JSON.parse(Buffer.from(rawBody).toString('utf8')),
+        body: JSON.parse(Buffer.from(payload).toString('utf8')),
         rawBody,
         contentType,
         encoding: 'json',
@@ -125,7 +145,7 @@ export async function decodeOtlpRequestWithRaw(
 
   if (isProtobufContentType(contentType)) {
     return {
-      body: decodeOtlpProtobufBody(rawBody, signal),
+      body: decodeOtlpProtobufBody(payload, signal),
       rawBody,
       contentType,
       encoding: 'protobuf',

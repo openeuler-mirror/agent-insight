@@ -100,12 +100,17 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
       }
       if (!runtime.ready) issues.push(issue('AGENT_TRACE_NOT_READY', context.platform === 'jiuwenswarm'
         ? runtime.reason || 'JiuwenSwarm Gateway 不可达，请检查客户端服务环境中的 AGENT_INSIGHT_JIUWEN_WS_URL 和容器端口映射。'
-        : '所选 Agent 的执行或链路回传组件未就绪，请重新执行该 Agent 的链路跟踪安装命令。'))
+        : '所选 Agent 的执行或链路回传组件未就绪，请重新执行该 Agent 的链路追踪安装命令。'))
       else {
         if (context.platform === 'jiuwenswarm' && context.model && !runtime.models?.includes(context.model)) {
           issues.push(issue('MODEL_UNAVAILABLE', '所选 JiuwenSwarm 模型已不可用，请刷新模型列表。'))
         }
-        recordPlatform(context, { ...enterpriseCatalog, runExperimentCase: { version: 2, returnsTraceId: runtime.canResolveTraceId, ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}) } })
+        recordPlatform(context, { version: runtime.version, ...enterpriseCatalog, runExperimentCase: {
+          version: 2, returnsTraceId: runtime.canResolveTraceId, ready: runtime.ready === true && runtime.canResolveTraceId === true,
+          ...(context.platform === 'opencode' && [1, 2].includes(runtime.major) ? { skillSnapshotVersion: 5 } : {}),
+          ...(context.platform === 'opencode' && runtime.major === 2 && runtime.canResolveTraceId === true
+            ? { multiTurn: true, sessionContinuation: true, conversationVersion: 1 } : {}),
+        } })
         capabilities.components[`agent-runtime/${context.platform}/v1`] = { ready: true }
       }
     }
@@ -157,7 +162,7 @@ function createServices({ cfg, client, signal, env = process.env, command: runCo
     const issues = await checkAgent(context, { sandbox: true, override: local?.models[modelId], runtime, local, modelId })
     if (process.platform !== 'linux' || !['x64', 'arm64'].includes(process.arch)) issues.push(issue('EXECUTION_PLATFORM_UNSUPPORTED', '当前执行方式需要 Linux x64/arm64 主机，请更换运行主机。'))
     if (!local?.runtimes[context.platform]?.agents.includes(context.agent)) return { issues: [...issues, issue('AGENT_UNSUPPORTED', '执行机未配置所选 Agent 对应的执行方式。')], prepare: [] }
-    if (!traceApiKey(local, env)) issues.push(issue('TRACE_AUTH_MISSING', '执行机链路上报认证未配置，请重新执行客户端链路跟踪安装命令。'))
+    if (!traceApiKey(local, env)) issues.push(issue('TRACE_AUTH_MISSING', '执行机链路上报认证未配置，请重新执行客户端链路追踪安装命令。'))
     try {
       const docker = await run(local.dockerExecutable, ['--host', `unix://${local.dockerSocket}`, 'info', '--format', '{{.OSType}} {{.CgroupVersion}}'])
       if (docker.trim() !== 'linux 2') issues.push(issue('DOCKER_UNSUPPORTED', '请在执行机配置 Linux Docker 和 cgroup v2，然后再次点击“下一步”。'))

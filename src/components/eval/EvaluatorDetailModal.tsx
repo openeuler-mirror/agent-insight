@@ -16,11 +16,14 @@
 
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, getEvaluatorMeta } from '@/lib/evaluators/registry';
+import type { AssetVersionView } from '@/lib/client/evaluation-assets';
+import { AssetVersionPicker } from './AssetVersionPicker';
+import { EvaluatorVersionDetails, EvaluatorDefinitionDetails } from './EvaluatorVersionDetails';
 
 /** 详情弹窗分节：节标题小号大写 + 主题色强调，正文浅底内容框 */
 function DetailSection({ title, children }: { title: string; children: ReactNode }) {
@@ -60,20 +63,25 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
  * 内容全部由卡片元数据派生（registry 单一事实来源），自建卡提供「编辑」入口。
  */
 export default function EvaluatorDetailModal({
-  card,
+  card: initialCard,
   onClose,
 }: {
   card: EvaluatorCard;
   onClose: () => void;
 }) {
   const router = useRouter();
+  const [loadedView,setLoadedView]=useState<AssetVersionView|null>(null);
+  const [versionStatus,setVersionStatus]=useState('loading');
+  const view=loadedView?.head.businessId===initialCard.id?loadedView:null;
+  const card=view?view.selectedVersion.content as unknown as EvaluatorCard:initialCard;
+  const historical=Boolean(view&&view.selectedVersion.version!==view.head.publishedVersion);
   const meta = getEvaluatorMeta(card);
   const tags = deriveEvaluatorTags(card);
   const isBenchmarkService = meta.executionBackend === 'benchmark-service';
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -135,6 +143,10 @@ export default function EvaluatorDetailModal({
           </button>
         </div>
 
+        <div className="mb-3">{isBenchmarkService?<p className="text-xs text-foreground-muted">Benchmark 评估器由接入包维护，当前入口展示接入包的当前定义。</p>:<AssetVersionPicker key={initialCard.id} kind="evaluator" businessId={initialCard.id} selectModal={false} selectContentClassName="z-[200]" onLoad={setLoadedView} onStatus={setVersionStatus}/>}</div>
+        {view&&<EvaluatorVersionDetails view={view} loading={versionStatus==='loading'}/>}
+        {!isBenchmarkService&&versionStatus==='unsupported'&&<p className="mb-3 text-xs text-foreground-muted">当前部署不支持版本管理，以下展示当前配置。</p>}
+
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
           {tags.map(tag => (
             <span
@@ -154,6 +166,8 @@ export default function EvaluatorDetailModal({
         </div>
 
         <DetailSection title="描述">{card.description}</DetailSection>
+
+        <EvaluatorDefinitionDetails card={card}/>
 
         <DetailSection title="应用场景">
           {card.scenarios.length > 0 ? card.scenarios.join(' · ') : '—'}
@@ -192,9 +206,10 @@ export default function EvaluatorDetailModal({
               <button
                 type="button"
                 className="ai-btn-p"
-                onClick={() => router.push(`/metrics/evaluators/${encodeURIComponent(card.id)}`)}
+                disabled={versionStatus==='loading'||versionStatus==='error'}
+                onClick={() => router.push(`/metrics/evaluators/${encodeURIComponent(card.id)}${view?'?version='+encodeURIComponent(view.selectedVersion.id):''}`)}
               >
-                编辑
+                {historical?'查看该版本配置':'编辑最新版'}
               </button>
             ) : null}
             <button type="button" className="ai-btn-s" onClick={onClose}>关闭</button>

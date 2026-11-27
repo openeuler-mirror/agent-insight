@@ -9,6 +9,8 @@ changefreq: "monthly"
 
 See [Tutorials](./navigation.md). The [coverage index](../navigation.md) identifies translated bodies and remaining Chinese-only guides.
 
+- [Versioned multi-turn evaluation walkthrough](./evaluation/01-first-experiment.md#try-versioned-multi-turn-evaluation-sqlite)
+
 - [Chinese documentation](../../zh/tutorial/navigation.md)
 - [Start a Benchmark integration with the bundled Skill (Chinese)](../../zh/how-to/evaluation/benchmarks/onboard-custom-benchmark.md#21-使用自动接入-skill): provide the Agent Insight project address and official Benchmark source; the Skill compares its versioned protocol snapshot with the target before discovering runtime capabilities. Validation then covers endpoint contracts, real segments and a full end-to-end run. Live validation is a separate requirement from package self-tests.
 - [English documentation status](https://gitcode.com/openeuler/agent-insight/blob/master/docs/en/README.md)

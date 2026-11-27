@@ -1325,6 +1325,7 @@ interface ReadRecordFilters {
     skill?: string;
     skillVersion?: number;
     showAllUsers?: boolean;
+    visibleBuiltinTraceIds?: string[];
     /** 显式 true 才会把 sub-agent execution 行也返回（默认不返回，保持主列表干净） */
     includeSubagents?: boolean;
     /** 只返回 sub-agent 行（不含 root），与 includeSubagents 互斥；优先级高于 includeSubagents */
@@ -1993,6 +1994,15 @@ async function readRecordsInternal(
         // 严格按 owner 隔离：用户只看见 user=自己的记录；无主(user=null)记录不可见。
         // 全看(ownership=all / admin)走 showAllUsers ⇒ 不加 user 过滤、返回全部。
         where.user = user;
+    }
+    if (filters?.showAllUsers && filters.visibleBuiltinTraceIds) {
+        where.AND = [...(where.AND ?? []), {
+            OR: [
+                { id: { in: filters.visibleBuiltinTraceIds } },
+                { taskId: null },
+                { NOT: { taskId: { startsWith: 'builtin_msg_' } } },
+            ],
+        }];
     }
 
     const subagentFilter = resolveExecutionSubagentFilter(filters);
@@ -2891,17 +2901,19 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
             if (derived.model) targetRecord.model = derived.model;
             if (derived.final_result) targetRecord.final_result = derived.final_result;
             if (derived.agentName && !targetRecord.agentName) targetRecord.agentName = derived.agentName;
-            targetRecord.tokens = derived.tokens;
+            // Token 字段只在 derived 明确算出有效用量时才覆盖：undefined 表示上游没提供
+            // usage，不能写成 0，否则界面会把「未提供」误报成有效用量。
+            if (derived.tokens !== undefined) targetRecord.tokens = derived.tokens;
             targetRecord.latency = derived.latency;
-            targetRecord.input_tokens = derived.input_tokens;
-            targetRecord.output_tokens = derived.output_tokens;
+            if (derived.input_tokens !== undefined) targetRecord.input_tokens = derived.input_tokens;
+            if (derived.output_tokens !== undefined) targetRecord.output_tokens = derived.output_tokens;
             targetRecord.tool_call_count = derived.tool_call_count;
             targetRecord.tool_call_error_count = derived.tool_call_error_count;
             targetRecord.llm_call_count = derived.llm_call_count;
-            targetRecord.cache_read_input_tokens = derived.cache_read_input_tokens;
-            targetRecord.cache_creation_input_tokens = derived.cache_creation_input_tokens;
-            targetRecord.max_single_call_tokens = derived.max_single_call_tokens;
-            targetRecord.reasoning_tokens = derived.reasoning_tokens;
+            if (derived.cache_read_input_tokens !== undefined) targetRecord.cache_read_input_tokens = derived.cache_read_input_tokens;
+            if (derived.cache_creation_input_tokens !== undefined) targetRecord.cache_creation_input_tokens = derived.cache_creation_input_tokens;
+            if (derived.max_single_call_tokens !== undefined) targetRecord.max_single_call_tokens = derived.max_single_call_tokens;
+            if (derived.reasoning_tokens !== undefined) targetRecord.reasoning_tokens = derived.reasoning_tokens;
         }
     }
     let isSkillCorrect = false; // Reset to false and recalculate based on current config
@@ -3444,6 +3456,10 @@ async function saveExecutionRecordInternal(data: ExecutionRecord, options?: { re
         ));
         if (hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
+        } else if (targetRecord.framework === 'claudecode' && targetRecord.executionStatus === 'in_progress') {
+            // 多轮会话:trace = 整个 session,上一轮的 Stop 已把 endTime 置过。用户接着开下一轮后,
+            // 聚合器发现最后活动晚于上一次结束信号、本轮还没结束,这里把执行状态翻回"执行中"。
+            await db.updateSession(targetRecord.task_id, { endTime: null });
         }
         if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true && !hasTraceCompletion) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });

@@ -33,7 +33,26 @@ Agent RAS on Linux, WSL, or macOS needs Python 3.10+, pip, and shared libpython.
 
 Open the dashboard and sign in using the configured deployment mode:
 
-- Default `LOGIN_MODE=standalone`: enter your email on the login page, then press Enter or select **Sign In**. If sign-in fails, follow the message shown and retry.
+- Default `LOGIN_MODE=standalone` uses an account and password. Follow these steps to **sign in for the first time and set a password**.
+
+  1. **Get the initial password.** On a fresh deployment, the administrator username is `admin`. If the service started with a valid `AGENT_INSIGHT_ADMIN_PASSWORD`, use that password. Otherwise, the service generates a temporary password on startup and writes it to `$AGENT_INSIGHT_HOME/.admin_activation_password` on the machine running the service. For a source deployment or the default Docker bind mount, run the following command on the deployment host.
+
+     ```sh
+     cat ~/.agent-insight/.admin_activation_password
+     ```
+
+     With a named Docker volume, read it inside the container. Replace `agent-insight` with the container name.
+
+     ```sh
+     docker exec agent-insight sh -c 'cat "${AGENT_INSIGHT_HOME:-/data/agent-insight}/.admin_activation_password"'
+     ```
+
+     For a regular account, use the username and one-time activation credential from the administrator who created it under **Settings → Accounts**.
+
+  2. **Sign in.** Open `/login` at the deployment address. Enter the username and put the initial password or activation credential in the **Password** field. Select **Sign In**.
+  3. **Set a new password.** On the **Set Password** page, enter and confirm a new password, then select **Save** to enter the Workspace. Use this new password for future sign-ins.
+
+  Existing users without a password can set one using a valid sign-in credential already stored in their browser. If that credential is unavailable, ask an administrator to reset the password.
 - `LOGIN_MODE=idaas_oauth`: choose unified identity login and authenticate through IDaaS. Its unique UUID becomes the local account and data owner. The sidebar prefers an account alias when provided, otherwise the UUID. Signing out and back in returns to unified authorization.
 - Legacy `ORGANIZATION_MODE=true`: keep using the existing organization gateway and Cookie flow; this is different from IDaaS OAuth.
 
@@ -94,7 +113,7 @@ Return to **Observability → Traces (运行观测 → 链路追踪)** and locat
 
 ![Trace details showing the call timeline and message content](../../../images/example_trace.png)
 
-Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
+Confirm a new Trace appears, basic status/duration/Token information is available, and its detail page can expand the Trace tree and Spans. Tools and child Agents should appear when the execution used them. To review the conversation, open the Span list filters and select both **User** and **LLM**; click **All** to restore every type. For long sessions, **Jump to bottom** starts following refreshed content; scroll upward to pause and read history. Start by proving that data arrives and the main steps are readable; complete field coverage is a later check.
 
 To locate a specific window, choose **Time → Custom time range**, enter a start and/or end date and time in the displayed browser time zone, and select **Apply**. Bounds include the selected second and apply to both the list and statistics. Cancel discards edits; choosing a preset clears the custom bounds. See the [Trace filtering guide (Chinese)](../../../zh/how-to/observability/view-traces.md#2-筛选区).
 

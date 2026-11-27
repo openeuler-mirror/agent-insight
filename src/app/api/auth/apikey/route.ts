@@ -17,11 +17,60 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
 import { resolveLoginMode } from '@/lib/auth/login-mode';
-import { findOrCreateLocalUser, syncLocalUserExternalAccount } from '@/lib/auth/local-user';
+import {
+  authenticateOrRegisterLocalUser,
+  LocalUserAuthenticationError,
+  syncLocalUserExternalAccount,
+} from '@/lib/auth/local-user';
+import { isAdminUser } from '@/lib/auth/admin';
+import { verifyPassword } from '@/lib/auth/password';
+import { createPasswordSetupToken, passwordVersionOf } from '@/lib/auth/password-setup-token';
+import {
+  checkLoginRateLimit,
+  clearLoginFailures,
+  loginRateLimitKey,
+  recordLoginFailure,
+} from '@/lib/auth/login-rate-limit';
 import {
   inspectIdaasRegionAccess,
   describeIdaasRegionAccessError,
 } from '@/lib/auth/idaas-region-access';
+
+const NO_STORE = { 'Cache-Control': 'no-store' };
+
+function invalidCredentials() {
+  return NextResponse.json(
+    { error: 'Invalid username or password' },
+    { status: 401, headers: NO_STORE },
+  );
+}
+
+// 需要先改密的账号只拿到改密用途的短时凭据，正式 API Key 等新密码落库后再发放。
+function pendingPasswordResponse(user: any) {
+  return NextResponse.json(
+    {
+      username: user.username,
+      isAdmin: isAdminUser(user.username),
+      passwordChangeRequired: true,
+      passwordInitialized: Boolean(user.passwordHash),
+      passwordSetupToken: createPasswordSetupToken(user.username, passwordVersionOf(user)),
+    },
+    { headers: NO_STORE },
+  );
+}
+
+function authenticatedResponse(user: any) {
+  return NextResponse.json(
+    {
+      username: user.username,
+      apiKey: user.apiKey,
+      isAdmin: isAdminUser(user.username),
+      passwordChangeRequired: false,
+      passwordInitialized: true,
+    },
+    { headers: NO_STORE },
+  );
+}
 
 export async function POST(request: Request) {
   try {
@@ -80,13 +129,68 @@ export async function POST(request: Request) {
       });
     }
 
-    const user = await findOrCreateLocalUser(username);
+    if (loginMode === 'organization') {
+      const apiKey = request.headers.get('x-witty-api-key')?.trim() || null;
+      const user = await authenticateOrRegisterLocalUser(username, apiKey);
+      return NextResponse.json({
+        username: user.username,
+        apiKey: user.apiKey,
+      });
+    }
 
-    return NextResponse.json({
-      username: user.username,
-      apiKey: user.apiKey,
-    });
+    const rateLimitKey = loginRateLimitKey(request, username);
+    const limit = checkLoginRateLimit(rateLimitKey);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        {
+          error: 'Too many login attempts',
+          code: 'too_many_attempts',
+          retryAfterSeconds: limit.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(limit.retryAfterSeconds), ...NO_STORE },
+        },
+      );
+    }
+
+    const user = await db.findUserByUsername(username);
+    if (!user || user.disabledAt) {
+      recordLoginFailure(rateLimitKey);
+      return invalidCredentials();
+    }
+
+    // 存量浏览器会话或 Agent 凭据可凭既有 API Key 恢复身份，但改密前仍只发改密凭据。
+    const presentedApiKey = request.headers.get('x-witty-api-key')?.trim() || '';
+    if (presentedApiKey) {
+      if (presentedApiKey !== user.apiKey) {
+        recordLoginFailure(rateLimitKey);
+        return invalidCredentials();
+      }
+      clearLoginFailures(rateLimitKey);
+      return user.mustChangePassword || !user.passwordHash
+        ? pendingPasswordResponse(user)
+        : authenticatedResponse(user);
+    }
+
+    // 未设置密码的存量账号不再凭用户名换取正式 API Key，必须出示既有 Key 或管理员激活凭据。
+    const password = typeof body?.password === 'string' ? body.password : '';
+    if (!password || !user.passwordHash || !await verifyPassword(password, user.passwordHash)) {
+      recordLoginFailure(rateLimitKey);
+      return invalidCredentials();
+    }
+
+    clearLoginFailures(rateLimitKey);
+    return user.mustChangePassword
+      ? pendingPasswordResponse(user)
+      : authenticatedResponse(user);
   } catch (err: any) {
+    if (err instanceof LocalUserAuthenticationError) {
+      return NextResponse.json(
+        { error: 'Existing account requires its API key', code: 'credential_required' },
+        { status: 401 },
+      );
+    }
     console.error('[Auth/Apikey] Error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

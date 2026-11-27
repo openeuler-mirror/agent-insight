@@ -15,27 +15,29 @@
  */
 
 
+import { canManageSkill, resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { name, version, user } = body;
+        const { name, version, user: explicitUser } = body;
 
         if (!name) {
             return NextResponse.json({ error: 'Missing skill name' }, { status: 400 });
         }
 
-        if (!user) {
-            return NextResponse.json({ error: 'Missing user' }, { status: 400 });
-        }
+        const { username: user } = await resolveUser(request, explicitUser);
+        if (!user) return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
 
         const skill = await db.findSkill(name, user);
 
         if (!skill) {
             return NextResponse.json({ error: `Skill '${name}' for user '${user}' not found` }, { status: 404 });
         }
+        const { allowed } = await canManageSkill(skill.id, user);
+        if (!allowed) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
 
         let targetVersion = version;
 

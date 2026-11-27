@@ -36,6 +36,17 @@ Default models use consecutive `DEFAULT_MODEL_<N>_<FIELD>` groups starting at `1
 
 See [client installation, Chinese](../../../zh/how-to/platform/settings/access-control.md) for addresses and Keys. Each client has its own environment. Do not share one runtime directory across machines or instances; use separate roots, databases, and ports.
 
+## Built-in agent runtimes
+
+Built-in platform features probe the deployment environment for agent runtimes. Executable lookup order is: explicit environment variable → bundled path under the installation root → `PATH`. An explicitly configured path that does not exist does not fall back to another source.
+
+| Variable | Purpose/default | Location and notes |
+| --- | --- | --- |
+| `OPENCODE_BIN` | OpenCode executable path; empty searches `node_modules/.bin/opencode` under the installation root, then `PATH` | Platform settings or launch environment; container images usually point this at the bundled executable |
+| `AGENT_RUNTIME_PI_BIN` | Pi executable path; empty searches `node_modules/.bin/pi` under the installation root, then `PATH` | This version only probes Pi; no execution adapter is provided yet |
+
+The probe only reads files accessible to the service process; it does not call a model, install dependencies, or upgrade them. See [agent runtimes](agent-runtime.md) for the UI entry point and capability boundaries.
+
 ## Evaluation service and business settings
 
 | Setting | Scope | Application |

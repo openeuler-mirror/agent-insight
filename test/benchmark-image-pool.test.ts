@@ -194,7 +194,9 @@ test('online image management lists ownership and purges only idle pool-owned im
   assert.ok(await store.inspect(reused.imageId))
 })
 
-test('online purge does not delete while a Docker pull operation is recorded', async (t) => {
+test('online purge does not delete while a Docker pull operation is recorded', { timeout: 15000 }, async (t) => {
+  // Exercise purge ownership independently of filesystem latency; admission deadlines have a separate test.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const { pool, store } = await fixture(t)
   await cache(pool, 'idle-during-pull')
   pool.state.operations.pull = { bytes: 100, startedAt: Date.now(), uncertain: false }
@@ -215,8 +217,8 @@ test('live management protocol serializes list and dry-run purge through the Con
   assert.equal(store.removed.length, 0)
 })
 
-test('management helper reaches the live pool over its Unix socket', async (t) => {
-  const directory = await fs.mkdtemp('/tmp/benchmark-image-pool-control-')
+test('management helper reaches the live pool over its Unix socket', { skip: process.platform === 'win32' ? 'Unix socket protocol; validated under Linux/WSL' : false }, async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'benchmark-image-pool-control-'))
   const store = new FakeDocker()
   const pool = new BenchmarkImagePool({ dataDir: directory, store, estimator: { estimate: async () => ({ bytes: 100, source: 'test' }) },
     config, log: () => {} })
@@ -273,6 +275,28 @@ test('no deletion candidate produces bounded capacity error without starting a p
   await new Promise((resolve) => setTimeout(resolve, 110))
   assert.equal(store.pulls.length, 0)
   assert.deepEqual(pool.state.operations, {})
+})
+
+test('an admission deadline rejects its waiter while retaining the unfinished pull budget', { timeout: 5000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+  const { pool, store } = await fixture(t)
+  let finish!: () => void
+  let started!: () => void
+  const pulling = new Promise<void>((resolve) => { started = resolve })
+  store.beforePull = () => { started(); return new Promise<void>((resolve) => { finish = resolve }) }
+  const requested = pool.acquire(owner('deadline'), [spec('deadline')])
+  const rejected = assert.rejects(requested, { code: 'IMAGE_POOL_WAIT_TIMEOUT' })
+  await pulling
+  try {
+    t.mock.timers.tick(config.waitMs)
+    await rejected
+    assert.equal(Object.keys(pool.state.operations).length, 1)
+    assert.equal(pool.activePulls, 1)
+  } finally { finish() }
+  await Promise.all([...pool.inflight.values()])
+  assert.equal(Object.keys(pool.state.operations).length, 0)
+  assert.equal(pool.activePulls, 0)
+  assert.deepEqual((Object.values(pool.state.images)[0] as any).users, {})
 })
 
 test('cancelling a waiter does not pretend that an in-flight Docker pull stopped', async (t) => {
@@ -500,7 +524,7 @@ test('Desktop classic/containerd checks actual mounts and budgets against the ti
     f.free['/host-mac-space'] = 4000
     assert.equal(await f.store.freeSpace(), containerd ? 1500 : 2000)
     assert.equal(f.store.diskStatus.hostFreeBytes, 4000)
-    assert.deepEqual(f.accessed, containerd ? ['/host-containerd/daemon/io.containerd.content.v1.content'] : [])
+    assert.deepEqual(f.accessed, containerd ? [path.join('/host-containerd', 'daemon', 'io.containerd.content.v1.content')] : [])
   }
 })
 

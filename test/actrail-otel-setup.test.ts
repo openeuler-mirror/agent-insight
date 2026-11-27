@@ -70,7 +70,7 @@ test('Unix curl setup configures AcTrail otel-http without installing AcTrail', 
   }
 });
 
-test('AcTrail Unix setup writes a full authenticated config and persistently loads the plugin', (t) => {
+test('AcTrail Unix setup writes a full authenticated config and persistently loads the plugin', { skip: process.platform === 'win32' ? 'POSIX plugin permissions and services; validated under Linux/WSL' : false }, (t) => {
   const homeDir = mkdtempSync(join(tmpdir(), 'actrail-setup-'));
   const binDir = join(homeDir, 'bin');
   const pluginRoot = join(homeDir, '.actrail', 'plugins');

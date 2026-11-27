@@ -15,13 +15,18 @@
  */
 
 import type { PrismaClient, Prisma } from '@prisma/client';
-export async function transaction<T>(db: PrismaClient, callback: (tx: Prisma.TransactionClient) => Promise<T>, options = { maxWait: 30000, timeout: 30000 }): Promise<T> {
+// SQLite has a single writer: P1008 (lock past busy_timeout), P2028 (abandoned transaction) and P2034 (write conflict) are transient.
+const TRANSIENT = ['P1008', 'P2028', 'P2034'];
+export function isTransient(error: unknown) { return TRANSIENT.includes((error as { code?: string } | null)?.code || ''); }
+export async function retryTransient<T>(operation: () => Promise<T>, attempts = 4): Promise<T> {
   for (let attempt = 0; ; attempt++) {
-    try { return await db.$transaction(callback, options); }
+    try { return await operation(); }
     catch (error) {
-      const code = (error as { code?: string }).code;
-      if (attempt >= 4 || !['P1008', 'P2028', 'P2034'].includes(code || '')) throw error;
+      if (attempt >= attempts || !isTransient(error)) throw error;
       await new Promise(resolve => setTimeout(resolve, 25 * 2 ** attempt));
     }
   }
+}
+export async function transaction<T>(db: PrismaClient, callback: (tx: Prisma.TransactionClient) => Promise<T>, options = { maxWait: 30000, timeout: 30000 }): Promise<T> {
+  return retryTransient(() => db.$transaction(callback, options));
 }

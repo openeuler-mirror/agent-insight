@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from '../helpers/python';
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs/promises'
@@ -133,7 +134,7 @@ test('Controller passes the YAML snapshot and resolved release directory to the 
   const runtimeEnv = Object.fromEntries(args.flatMap((value, index) => value === '--env' ? [args[index + 1]] : []).map(value => [value.slice(0, value.indexOf('=')), value.slice(value.indexOf('=') + 1)]))
   assert.equal(runtimeEnv.AGENT_INSIGHT_EVALUATOR_CONFIG_JSON, snapshot)
   assert.equal(runtimeEnv.EVALUATOR_ASSETS_DIR, release)
-  execFileSync('python3', ['-c', `
+  execFileSync(pythonExecutable, ['-c', `
 import os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / 'benchmarks/zsoft-l1/evaluator'))
@@ -147,7 +148,7 @@ assert str(entrypoint.asset_root()) == os.environ['EVALUATOR_ASSETS_DIR']
 
 test('standalone ZSoft validation translates YAML acceleration into the native framework environment', async t => {
   const root = await fixture(t)
-  execFileSync('python3', ['-c', `
+  execFileSync(pythonExecutable, ['-c', `
 import importlib.util, json, sys
 from pathlib import Path
 from types import SimpleNamespace

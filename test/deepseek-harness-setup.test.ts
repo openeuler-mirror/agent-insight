@@ -17,10 +17,21 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 
 import { GET as getAsset } from '@/app/api/ingest/setup/deepseek-harness/assets/[asset]/route';
 import { deepSeekHarnessPluginFiles } from '@/app/api/ingest/setup/deepseek-harness/files';
 import { GET as getInstaller } from '@/app/api/ingest/setup/deepseek-harness/route';
+
+test('Untested Harness versions are rejected before downloading or changing configuration', { skip: process.platform === 'win32' ? 'Bash execution is covered by the Linux suite' : false }, async () => {
+  const response=await getInstaller(new Request('http://localhost/api/ingest/setup/deepseek-harness'));
+  const script=(await response.text()).replaceAll('\r','');
+  for(const version of ['0.2.9','0.9.0','0.1.0-rc.9','0.2.2-rc.1']) {
+    const stubs=`node(){ ${version==='0.2.2-rc.1'?'return 1':':'}; }; npm(){ :; }; curl(){ echo UNEXPECTED_DOWNLOAD; return 99; }; pnpm(){ :; }; dsh(){ echo '${version}'; }; export AGENT_INSIGHT_API_KEY=test-only;\n`;
+    const result=spawnSync('bash',['-s'],{input:stubs+script,encoding:'utf8'});
+    assert.equal(result.status,1);assert.match(result.stderr,version==='0.2.2-rc.1'?/Node.js 24.9/:/unsupported Harness version/);assert.match(result.stderr,/was not changed/);assert.ok(!result.stdout.includes('UNEXPECTED_DOWNLOAD'));
+  }
+});
 
 test('Harness plugin files are deterministic, complete, and served from an allow-list', async () => {
   const first = deepSeekHarnessPluginFiles();
@@ -31,6 +42,10 @@ test('Harness plugin files are deterministic, complete, and served from an allow
     'package.json',
     'index.js',
     'cordis.patch.yml',
+    'process-lock.mjs',
+    'dsh-context-source.mjs',
+    'dsh-context-details.mjs',
+    'replay-compat.mjs',
   ]);
   for (const file of first.files) {
     assert.equal(file.sha256, createHash('sha256').update(file.content).digest('hex'));

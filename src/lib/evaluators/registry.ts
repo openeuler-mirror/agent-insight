@@ -47,6 +47,7 @@ export interface EvaluatorMeta {
 const PRESET_META: Record<string, EvaluatorMeta> = {
   'skill-trigger-analyzer': { category: 'res', requires: [] },
   // 任务完成度：对照预期输出判定目标达成（团队评审确定为依赖预期输出）
+  'preset-conversation-rules': { category: 'traj', requires: [] },
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖预期输出
   'preset-agent-trace-quality': { category: 'traj', requires: [] },

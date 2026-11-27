@@ -32,7 +32,10 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const { username } = await resolveUser(req, url.searchParams.get('user'));
-    const userFilter = username ? { user: username } : {};
+    if (!username) {
+      return NextResponse.json({ error: 'user is required' }, { status: 401 });
+    }
+    const userFilter = { user: username };
     const userOwnershipWhere = await buildExecutionOwnershipWhere('user');
 
     const [grouped, faultInjectionTargets, genericTraceAvailability, benchmarkTargets] = await Promise.all([
@@ -50,20 +53,19 @@ export async function GET(req: Request) {
       }),
       listWorkerExecutionTargets(username),
       listClientTraceGenerationAvailability(username),
-      username
-        ? Promise.all(listBenchmarkAdapters().map(async (manifest) => (
+      Promise.all(listBenchmarkAdapters().map(async (manifest) => (
             (await listBenchmarkExecutionTargets(username, manifest)).map((target) => ({
               ...target,
               adapterKey: manifest.adapterKey,
             }))
-          ))).then((groups) => groups.flat())
-        : Promise.resolve([]),
+          ))).then((groups) => groups.flat()),
     ]);
 
     type CandidateTarget = (typeof faultInjectionTargets)[number] & {
       supportsGenericTrace: boolean;
       supportsSkillSnapshot?: boolean;
       supportsTriggerRouting?: boolean;
+      supportsMultiTurn?: boolean;
       supportsFaultInjection: boolean;
       supportsBenchmark: boolean;
       benchmarkKeys: string[];
@@ -115,6 +117,7 @@ export async function GET(req: Request) {
         if (capability === 'generic') existing.parameterDefinitions = target.parameterDefinitions || [];
         if (capability === 'generic') existing.supportsSkillSnapshot = Boolean((target as { supportsSkillSnapshot?: boolean }).supportsSkillSnapshot);
         if (capability === 'generic') existing.supportsTriggerRouting = Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting);
+        if (capability === 'generic') existing.supportsMultiTurn = Boolean((target as { supportsMultiTurn?: boolean }).supportsMultiTurn);
         existing.supportsFaultInjection ||= capability === 'fault-injection';
         existing.supportsEnvironmentPreparation ||= target.supportsEnvironmentPreparation === true;
         if (capability !== 'benchmark') {
@@ -128,6 +131,7 @@ export async function GET(req: Request) {
           supportsGenericTrace: capability === 'generic',
           supportsSkillSnapshot: capability === 'generic' && Boolean((target as { supportsSkillSnapshot?: boolean }).supportsSkillSnapshot),
           supportsTriggerRouting: capability === 'generic' && Boolean((target as { supportsTriggerRouting?: boolean }).supportsTriggerRouting),
+          supportsMultiTurn: capability === 'generic' && Boolean((target as { supportsMultiTurn?: boolean }).supportsMultiTurn),
           supportsFaultInjection: capability === 'fault-injection',
           supportsBenchmark: false,
           benchmarkKeys: [],
@@ -225,6 +229,7 @@ export async function GET(req: Request) {
           supportsGenericTrace: target.supportsGenericTrace,
           supportsSkillSnapshot: target.supportsSkillSnapshot,
           supportsTriggerRouting: target.supportsTriggerRouting,
+          supportsMultiTurn: target.supportsMultiTurn,
           supportsFaultInjection: target.supportsFaultInjection,
           supportsBenchmark: target.supportsBenchmark,
           benchmarkKeys: target.benchmarkKeys,

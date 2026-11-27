@@ -9,6 +9,8 @@ changefreq: "monthly"
 
 See [Explanation translation status](./navigation.md). The [coverage index](../navigation.md) identifies translated bodies and remaining Chinese-only guides.
 
+- [Asset versions, frozen experiments and multi-turn execution (Chinese)](../../zh/explanation/evaluation/overview.md#资产版本实验冻结与多轮执行)
+
 Optimization-created temporary verification experiments are soft-deleted when their task settles. Cleanup atomically records internal archive IDs and removes report links while preserving verification rows for hash validation. Only internally archived evidence can be reused after deletion; source experiments, explicit retests and cancellation invalidation keep their existing semantics. See the [Chinese optimization loop](../../zh/explanation/optimization/skills/optimization-loop.md).
 
 The [Benchmark onboarding Skill](../../../skills/benchmark-onboarding/SKILL.md) guides the host coding Agent and bundles deterministic validation helpers. Its bundled protocol snapshot records stable contracts and provenance; compare it with the authoritative target revision and discover dynamic capabilities separately. Validation progresses from endpoint contracts to real execution/evaluation segments and then a complete end-to-end run, with independent evidence for each layer and bounded waiting/cleanup. It reuses Agent Insight's existing execution and evaluation roles, keeps run records outside the Skill, and resumes only when invoked again. It does not introduce a workflow service or remove a Benchmark's container, sandbox or state requirements. See the [Chinese architecture guide](../../zh/explanation/evaluation/benchmarks/navigation.md).

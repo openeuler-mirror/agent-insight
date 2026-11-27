@@ -17,10 +17,13 @@
 'use client';
 
 import { buildCollaborationTraceTree, collaborationSource, sameCollaborationSource } from '@/lib/collaboration/display-tree';
+import { resolveTraceStepSelection } from '@/lib/engine/experiment/conversation-anchors';
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
+import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
+import { HarnessContextTabs } from './HarnessContextTabs';
 import { InferenceAnalysisButton } from './InferenceAnalysisButton';
-import { inferenceAnalysisTarget } from '@/lib/trace/inference-analysis';
+import { inferenceAnalysisTarget, interactionUpstreamRequestIds } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
 import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
@@ -108,6 +111,34 @@ const STATUS_DOT: Record<NodeStatus, string> = {
     error: 'bg-error',
 };
 
+// 左侧执行记录的时间列：窄容器整列隐藏，避免挤压名称区；格式统一为 MM-DD HH:mm:ss（秒级）。
+const SPAN_CLOCK_CELL = 'hidden @min-[600px]/span-tree:inline-block w-[7rem] whitespace-nowrap text-right text-xs tabular-nums font-mono text-foreground-muted shrink-0';
+
+// 表头与各层级行共用同一套右侧单元格宽度与外边距，保证表头和数字严格对齐。
+const SPAN_TOKEN_CELL = 'w-16 ml-1 text-right text-xs tabular-nums font-mono text-foreground-muted shrink-0';
+const SPAN_DURATION_CELL = 'w-24 whitespace-nowrap text-right text-xs tabular-nums font-mono shrink-0';
+const SPAN_STATUS_CELL = 'w-2 ml-1 shrink-0';
+
+/** 执行记录行内时间点：统一 `MM-DD HH:mm:ss`，跨天不需要额外补日期。 */
+function formatSpanClock(ts: number | undefined): string | null {
+    if (ts == null) return null;
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return null;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** 只有 LLM 和 TOOL 行显示开始时间；其他行留同宽空列保持对齐。 */
+function SpanClockCell({ event, title }: { event: AgentEvent; title?: string }) {
+    if (event.kind !== 'llm' && event.kind !== 'tool') return <span className={SPAN_CLOCK_CELL} aria-hidden />;
+    const clock = formatSpanClock(event.startedAt);
+    return (
+        <span className={cn(SPAN_CLOCK_CELL, 'truncate')} title={title}>
+            {clock ?? '-'}
+        </span>
+    );
+}
+
 // design/components.md §2 E.13 — span types color-coded per chart palette 1-4 (+ violet for Skill).
 const KIND_META: Record<string, { label: string; chip: string; bar: string; text: string }> = {
     agent: { label: 'AGENT', ...SPAN_KIND_CLASSES.agent },
@@ -169,7 +200,7 @@ function CollaborationRelationBadge({ relation }: { relation: NonNullable<RawInt
     );
 }
 
-type DetailTab = 'timeline' | 'prompt' | 'hooks' | 'overview' | 'skills' | 'infra';
+type DetailTab = 'prompt' | 'hooks' | 'overview' | 'skills' | 'infra';
 type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
 
 interface TraceSkillCall {
@@ -207,6 +238,9 @@ interface PromptSnapshotMessage {
     /** Tool calls made on this turn + their results, shown as a list with each
      *  result foldable (the tool_result the model received as context). */
     toolCalls?: { name: string; args: string; output: string }[];
+    /** 工具调用确实发生在本轮可见文本之前(历史混合记录:工具调用被并进了最终回答)。
+     *  为 true 时 Output 先渲染工具调用、再渲染 Response。 */
+    toolsFirst?: boolean;
     source: 'system' | 'compaction' | 'history';
     position: number;
 }
@@ -343,10 +377,10 @@ function getAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
     return roots;
 }
 
-type TraceTreeFilters = { treeKindFilter: string; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
+type TraceTreeFilters = { treeKindFilter: string[]; minDurationMs: number; minTokenK: number; ctxSlowOnly: boolean; searchQuery: string; matchedKeys: Set<string> };
 
 function traceAgentMatchesFilters(node: AgentNode, filters: TraceTreeFilters): boolean {
-    if (filters.treeKindFilter !== 'all' || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
+    if (filters.treeKindFilter.length > 0 || !filters.searchQuery || !filters.matchedKeys.has(agentKey(node.id))) return false;
     const duration = getAgentActiveDurationMs(node);
     if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
     if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
@@ -360,7 +394,7 @@ function traceEventMatchesFilters(
     const child = event.spawnedChildId ? nodes.get(event.spawnedChildId) : undefined;
     const duration = event.kind === 'task' ? getAgentActiveDurationMs(child)
         : event.startedAt != null && event.completedAt != null ? event.completedAt - event.startedAt : undefined;
-    if (filters.treeKindFilter !== 'all' && event.kind !== filters.treeKindFilter) return false;
+    if (filters.treeKindFilter.length > 0 && !filters.treeKindFilter.includes(event.kind)) return false;
     if (filters.minDurationMs > 0 && (duration == null || duration <= filters.minDurationMs)) return false;
     if (filters.minTokenK > 0 && (event.usage?.total || 0) < filters.minTokenK * 1000) return false;
     if (filters.ctxSlowOnly && !(duration != null && duration > SLOW_MS)) return false;
@@ -419,6 +453,8 @@ type SubtreeStats = {
     cacheWriteTokens: number;
     reasoningTokens: number;
     totalTokens: number;
+    /** 至少一次 LLM 调用带回了非零 usage；全 0 且未上报时界面显示「未提供」。 */
+    usageReported: boolean;
 };
 
 const subtreeStatsCache = new WeakMap<AgentNode, SubtreeStats>();
@@ -437,6 +473,7 @@ function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
         cacheWriteTokens: node.stats.cacheWriteTokens,
         reasoningTokens: node.stats.reasoningTokens,
         totalTokens: node.stats.totalTokens,
+        usageReported: node.stats.usageReported === true,
     };
     for (const child of node.children) {
         const c = aggregateSubtreeStats(child);
@@ -451,6 +488,7 @@ function aggregateSubtreeStats(node: AgentNode): SubtreeStats {
         stats.cacheWriteTokens += c.cacheWriteTokens;
         stats.reasoningTokens += c.reasoningTokens;
         stats.totalTokens += c.totalTokens;
+        stats.usageReported = stats.usageReported || c.usageReported;
     }
     subtreeStatsCache.set(node, stats);
     return stats;
@@ -578,7 +616,8 @@ interface TraceCtxValue {
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
-    treeKindFilter: string;
+    treeKindFilter: string[];
+    revealAllSpans: boolean;
     minDurationMs: number;
     minTokenK: number;
     slowOnly: boolean;
@@ -595,7 +634,7 @@ interface TraceCtxValue {
 
 const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
-    treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
+    treeKindFilter: [], revealAllSpans: false, minDurationMs: 0, minTokenK: 0, slowOnly: false,
     onJumpToKey: () => {},
     topNDuration: [], topNTokens: [], slowNodesList: [], rasNodeList: [],
     onSubagentNavigate: undefined,
@@ -631,6 +670,7 @@ export interface AgentTraceViewProps {
     rootExecutionId?: string;
     /** 跨增量刷新保持树交互状态的稳定 Trace 标识。 */
     traceIdentity?: string;
+    initialStep?: string;
     /** RAS 异常 markers；注入单一 kind:'ras' 节点并支持右栏详情。 */
     rasMarkers?: RasTraceMarker[];
 }
@@ -648,6 +688,7 @@ export default function AgentTraceView({
     rootSessionId,
     rootExecutionId,
     traceIdentity,
+    initialStep,
     rasMarkers = EMPTY_RAS_MARKERS,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
@@ -724,7 +765,7 @@ export default function AgentTraceView({
                     if (previousTraceIdentityRef.current === requestedTraceId && sourceInteractionsRef.current === requestedSource
                         && loaded.length === requestedSource.length
                         && loaded.every((item, index) => item._payloadVersion && item._payloadVersion === requestedSource[index]._payloadVersion)) {
-                        // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
+                        // 同上：整条 trace 补全正文（切到 Prompt 或搜索时触发），同样保留选中
                         sameTraceReloadRef.current = true;
                         setInteractions(loaded);
                         return loaded;
@@ -759,9 +800,10 @@ export default function AgentTraceView({
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
 
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
+    const appliedInitialStep = React.useRef('');
+    const initialStepTarget = React.useRef('');
     const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
     const [activeDetailTab, setActiveDetailTab] = useState<DetailTab>('overview');
-    const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>('all');
     // design/patterns.md §11 — slow-only flag persisted to URL so reload preserves user intent.
     const [slowOnlyParam, setSlowOnlyParam] = useQueryState('slowOnly', parseAsString);
     const slowOnly = slowOnlyParam === '1';
@@ -773,11 +815,34 @@ export default function AgentTraceView({
     // ── Search + extended filter state ──────────────────────────────────────
     const [searchQuery, setSearchQuery] = useState('');
     const [searchMatchIdx, setSearchMatchIdx] = useState(0);
-    const [treeKindFilter, setTreeKindFilter] = useState('all');
+    const [treeKindFilter, setTreeKindFilter] = useState<string[]>([]);
     const [minDurationMs, setMinDurationMs] = useState(0);
     const [minTokenK, setMinTokenK] = useState(0);
     const [showFilters, setShowFilters] = useState(false);
     const searchInputRef = React.useRef<HTMLInputElement>(null);
+    const spanTraceKey = stableTraceIdentity ?? rootSessionId ?? tree?.id ?? null;
+    const [spanTailTrace, setSpanTailTrace] = useState<string | null>(null);
+    const revealAllSpans = spanTraceKey !== null && spanTailTrace === spanTraceKey;
+    const revealSpanRows = useCallback(() => {
+        if (spanTraceKey !== null) setSpanTailTrace(spanTraceKey);
+    }, [spanTraceKey]);
+    useEffect(() => { setSpanTailTrace(null); }, [spanTraceKey]);
+    const spanViewportRef = React.useRef<TraceSpanViewportHandle>(null);
+    const spanFocusKeyRef = React.useRef<string | null>(null);
+    const spanJumpTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelPendingSpanJump = useCallback(() => {
+        if (spanJumpTimerRef.current !== null) clearTimeout(spanJumpTimerRef.current);
+        spanJumpTimerRef.current = null;
+    }, []);
+    useEffect(() => {
+        spanFocusKeyRef.current = null;
+        return cancelPendingSpanJump;
+    }, [stableTraceIdentity, cancelPendingSpanJump]);
+    const captureSpanContext = useCallback(() => {
+        cancelPendingSpanJump();
+        spanViewportRef.current?.captureAnchor(spanFocusKeyRef.current);
+        revealSpanRows();
+    }, [cancelPendingSpanJump, revealSpanRows]);
 
     const defaultExpandedKeys = useMemo(() => tree ? buildDefaultExpandedKeys(tree) : new Set<string>(), [tree]);
 
@@ -824,7 +889,7 @@ export default function AgentTraceView({
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
-        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0;
+        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0, usageReported = false;
         walkTree(tree, n => {
             agents++;
             tasks += n.stats.taskCalls;
@@ -833,13 +898,17 @@ export default function AgentTraceView({
             skills += n.stats.skillCalls;
             llm += n.stats.llmCalls;
             tokens += n.stats.totalTokens;
+            usageReported = usageReported || n.stats.usageReported === true;
         });
-        return { agents, tasks, chains, tools, skills, llm, tokens };
+        return { agents, tasks, chains, tools, skills, llm, tokens, usageReported };
     }, [tree]);
     const tokenUsageEstimated = useMemo(
         () => interactions.some(interaction => interaction.usage?.estimated === true),
         [interactions],
     );
+    // 汇总为 0 且没有任何一次调用上报 usage 时，说明上游没提供用量；此时不能把
+    // 0 当成有效值展示（CLI 模式丢失 message.updated 的典型表现）。
+    const tokensNotProvided = Boolean(totalStats && totalStats.tokens === 0 && !totalStats.usageReported);
 
     const traceTimeline = useMemo(
         () => resolveTraceTimelineBounds(tree, executionDurationMs),
@@ -889,7 +958,7 @@ export default function AgentTraceView({
     }, [selectedEvent, ensureInteractionLoaded]);
 
     useEffect(() => {
-        if (activeDetailTab === 'prompt' || activeDetailTab === 'timeline' || searchQuery.trim()) {
+        if (activeDetailTab === 'prompt' || searchQuery.trim()) {
             void ensureAllInteractionsLoaded();
         }
     }, [activeDetailTab, searchQuery, ensureAllInteractionsLoaded]);
@@ -940,9 +1009,10 @@ export default function AgentTraceView({
         return n;
     }, [tree]);
 
-    const handleStatChipClick = (kind: EventTypeFilter) => {
-        setActiveDetailTab('timeline');
-        setEventTypeFilter(prev => prev === kind ? 'all' : kind);
+    // 统计芯片过滤的就是左侧执行记录本身——时间线 tab 移除后不再有第二个事件列表。
+    const handleStatChipClick = (kind: Exclude<EventTypeFilter, 'all'>) => {
+        captureSpanContext();
+        setTreeKindFilter(prev => prev.includes(kind) ? prev.filter(k => k !== kind) : [...prev, kind]);
     };
 
     // ── Flat span list for search + TopN ────────────────────────────────────
@@ -1018,6 +1088,8 @@ export default function AgentTraceView({
         return { allSpans: spans, rasNodeList: rasList };
     }, [tree, nodeMap, rasMarkers]);
 
+    const spanContentKeys = useMemo(() => allSpans.map(span => span.key), [allSpans]);
+
     const searchMatches = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
         if (!q) return [];
@@ -1033,16 +1105,21 @@ export default function AgentTraceView({
         setExpandedKeys(prev => {
             const next = new Set(prev);
             searchMatches.forEach(m => m.parentKeys.forEach(pk => next.add(pk)));
-            return next;
+            return sameStringSet(prev, next) ? prev : next;
         });
     }, [searchMatches]);
 
     useEffect(() => {
         if (!activeMatchKey) return;
-        setTimeout(() => {
+        spanFocusKeyRef.current = activeMatchKey;
+        spanViewportRef.current?.pauseFollowing();
+        cancelPendingSpanJump();
+        spanJumpTimerRef.current = setTimeout(() => {
+            spanJumpTimerRef.current = null;
             document.querySelector(`[data-span-key="${activeMatchKey}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
-    }, [activeMatchKey]);
+        return cancelPendingSpanJump;
+    }, [activeMatchKey, cancelPendingSpanJump]);
 
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
@@ -1068,19 +1145,65 @@ export default function AgentTraceView({
     }, [allSpans]);
 
     const onJumpToKey = (key: string) => {
+        spanFocusKeyRef.current = key;
+        spanViewportRef.current?.pauseFollowing();
+        cancelPendingSpanJump();
         const span = allSpans.find(s => s.key === key);
         if (span) {
             setExpandedKeys(prev => {
                 const next = new Set(prev);
                 span.parentKeys.forEach(pk => next.add(pk));
-                return next;
+                return sameStringSet(prev, next) ? prev : next;
             });
         }
         setSelectedKey(key);
-        setTimeout(() => {
+        spanJumpTimerRef.current = setTimeout(() => {
+            spanJumpTimerRef.current = null;
             document.querySelector(`[data-span-key="${key}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
     };
+
+    const harnessRequests = framework === 'deepseek-harness'
+        ? [...nodeMap.values()].flatMap(node => node.events.flatMap((event, index) =>
+            event.kind === 'llm' && !event.treeHidden
+                ? (event.interaction?.harnessRequests ?? []).map(request => ({
+                    request,
+                    usage: event.interaction?.usage,
+                    key: eventKey(node.id, index),
+                }))
+                : [],
+        ))
+        : [];
+
+    useEffect(() => {
+        if (!initialStep) { appliedInitialStep.current = ''; initialStepTarget.current = ''; return; }
+        if (!tree) return;
+        const request = `${stableTraceIdentity ?? rootSessionId ?? ''}:${initialStep}`;
+        if (appliedInitialStep.current === request) return;
+        if (sourceInteractions.length !== interactions.length || sourceInteractions.some((source, index) => {
+            const loaded = interactions[index];
+            return source !== loaded && !((source as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred && source._payloadVersion && source._payloadVersion === loaded?._payloadVersion && sameCollaborationSource(source, loaded));
+        })) return;
+        const target = resolveTraceStepSelection(displayInteractions, initialStep, tree, rootSessionId);
+        if (!target) return;
+        appliedInitialStep.current = request;
+        initialStepTarget.current = target.selectedKey;
+        setSelectedKey(target.selectedKey);
+        setExpandedKeys(current => new Set([...current, ...target.expandedKeys]));
+        setTreeKindFilter([]); setSearchQuery('');
+        setMinDurationMs(0); setMinTokenK(0);
+        if (slowOnly) void setSlowOnlyParam(null);
+    }, [initialStep, tree, sourceInteractions, interactions, displayInteractions, stableTraceIdentity, rootSessionId, slowOnly, setSlowOnlyParam]);
+
+    useEffect(() => {
+        if (!initialStep || !selectedKey || selectedKey !== initialStepTarget.current) return;
+        const timer = setTimeout(() => {
+            Array.from(document.querySelectorAll('[data-span-key]'))
+                .find(element => element.getAttribute('data-span-key') === selectedKey)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 80);
+        return () => clearTimeout(timer);
+    }, [initialStep, selectedKey, tree]);
 
     const findEventAnomalies = useCallback(
         (event: AgentEvent) => findEventAnomaliesForMarkers(event, rasMarkers),
@@ -1101,14 +1224,18 @@ export default function AgentTraceView({
         framework: framework?.trim().toLowerCase(),
         rootSessionId,
         searchQuery, matchedKeys, activeMatchKey,
-        treeKindFilter, minDurationMs, minTokenK, slowOnly,
+        treeKindFilter, revealAllSpans, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList, rasNodeList,
         onSubagentNavigate: onSubagentNavigate ? navigateToAgentTrace : undefined,
         loadFullContext: ensureAllInteractionsLoaded,
         findEventAnomalies,
     };
 
-    const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
+    const scrollNavigationKey = useMemo(() => ({
+        searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly,
+    }), [searchQuery, activeMatchKey, expandedKeys, treeKindFilter, minDurationMs, minTokenK, slowOnly]);
+
+    const hasActiveFilters = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0 || slowOnly;
 
     if (!tree || !selectedAgentNode) {
         return (
@@ -1121,7 +1248,7 @@ export default function AgentTraceView({
     return (
         <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
             <TraceCtx.Provider value={ctxValue}>
-            <div className="@container/agent-trace flex min-w-0 flex-col gap-2.5">
+            <div className="@container/agent-trace flex h-full min-h-0 min-w-0 flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1132,31 +1259,30 @@ export default function AgentTraceView({
             )}
             {/* Stats bar */}
             {totalStats && (
-                <div className="flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
+                <div className="flex shrink-0 flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
                     <StatChip label="AGENTS" value={totalStats.agents} />
                     <Sep />
-                    <StatChip label="TASK SPAWNS" value={totalStats.tasks} accentClass={KIND_META.task.text} isActive={eventTypeFilter === 'task'} onClick={() => handleStatChipClick('task')} hint={tt('traceTree.filterType') + ' Task'} />
-                    {totalStats.chains > 0 && <StatChip label="CHAIN SPANS" value={totalStats.chains} accentClass={KIND_META.chain.text} isActive={eventTypeFilter === 'chain'} onClick={() => handleStatChipClick('chain')} hint={tt('traceTree.filterType') + ' Chain'} />}
-                    <StatChip label="TOOL CALLS"  value={totalStats.tools} accentClass={KIND_META.tool.text}  isActive={eventTypeFilter === 'tool'}  onClick={() => handleStatChipClick('tool')}  hint={tt('traceTree.filterType') + ' Tool'} />
-                    <StatChip label="SKILL CALLS" value={totalStats.skills} accentClass={KIND_META.skill.text} isActive={eventTypeFilter === 'skill'} onClick={() => handleStatChipClick('skill')} hint={tt('traceTree.filterType') + ' Skill'} />
-                    <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={eventTypeFilter === 'llm'}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
+                    <StatChip label="TASK SPAWNS" value={totalStats.tasks} accentClass={KIND_META.task.text} isActive={treeKindFilter.includes('task')} onClick={() => handleStatChipClick('task')} hint={tt('traceTree.filterType') + ' Task'} />
+                    {totalStats.chains > 0 && <StatChip label="CHAIN SPANS" value={totalStats.chains} accentClass={KIND_META.chain.text} isActive={treeKindFilter.includes('chain')} onClick={() => handleStatChipClick('chain')} hint={tt('traceTree.filterType') + ' Chain'} />}
+                    <StatChip label="TOOL CALLS"  value={totalStats.tools} accentClass={KIND_META.tool.text}  isActive={treeKindFilter.includes('tool')}  onClick={() => handleStatChipClick('tool')}  hint={tt('traceTree.filterType') + ' Tool'} />
+                    <StatChip label="SKILL CALLS" value={totalStats.skills} accentClass={KIND_META.skill.text} isActive={treeKindFilter.includes('skill')} onClick={() => handleStatChipClick('skill')} hint={tt('traceTree.filterType') + ' Skill'} />
+                    <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={treeKindFilter.includes('llm')}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
                     <Sep />
                     <StatChip
                         label="TOKENS"
-                        value={`${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
-                        hint={tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                        value={tokensNotProvided
+                            ? tt('traceTree.tokensNotProvided')
+                            : `${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
+                        hint={tokensNotProvided
+                            ? tt('traceTree.tokensNotProvidedHint')
+                            : tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
                     />
-                    {eventTypeFilter !== 'all' && (
-                        <Button variant="ghost" size="sm" onClick={() => setEventTypeFilter('all')} className="ml-auto h-6 text-xs">
-                            <XIcon className="size-3" />{tt('traceTree.clearFilter')}
-                        </Button>
-                    )}
                 </div>
             )}
 
-            <div className="grid min-w-0 grid-cols-1 gap-3 @min-[900px]/agent-trace:min-h-[520px] @min-[900px]/agent-trace:h-[calc(100vh-200px)] @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
+            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 @min-[900px]/agent-trace:grid-cols-[minmax(400px,62%)_minmax(0,1fr)]">
                 {/* ─── Left: Unified Span Tree ─── */}
-                <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                <div className="@container/span-tree rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(60vh,620px)] min-h-[320px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
                     {['qoder', 'opencode'].includes(ctxValue.framework || '') && (
                         <div className="flex justify-end px-2.5 py-1.5 border-b border-border">
                             <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'trace', rootSessionId, interactions: displayInteractions })} />
@@ -1164,7 +1290,7 @@ export default function AgentTraceView({
                     )}
                     {/* Toolbar: expand/collapse + search + filters */}
                     <div className={cn(
-                        'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
+                        'flex shrink-0 flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
                         <TermPopover
@@ -1192,10 +1318,10 @@ export default function AgentTraceView({
                                 ref={searchInputRef}
                                 type="text"
                                 value={searchQuery}
-                                onChange={e => { setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
+                                onChange={e => { if (searchQuery.trim() && !e.target.value.trim()) captureSpanContext(); setSearchQuery(e.target.value); setSearchMatchIdx(0); }}
                                 onKeyDown={e => {
                                     if (e.key === 'Enter' && !e.nativeEvent.isComposing) setSearchMatchIdx(i => e.shiftKey ? i - 1 : i + 1);
-                                    if (e.key === 'Escape') { setSearchQuery(''); setSearchMatchIdx(0); }
+                                    if (e.key === 'Escape') { if (searchQuery.trim()) captureSpanContext(); setSearchQuery(''); setSearchMatchIdx(0); }
                                 }}
                                 placeholder={tt('traceTree.searchPlaceholder')}
                                 className="flex-1 border-0 bg-transparent outline-none text-xs text-foreground min-w-0"
@@ -1212,7 +1338,7 @@ export default function AgentTraceView({
                                 </>
                             )}
                             {searchQuery && (
-                                <button onClick={() => { setSearchQuery(''); setSearchMatchIdx(0); }} aria-label="Clear" className="px-0.5 bg-transparent border-0 text-foreground-muted hover:text-foreground cursor-pointer text-xs leading-none shrink-0">
+                                <button onClick={() => { captureSpanContext(); setSearchQuery(''); setSearchMatchIdx(0); }} aria-label="Clear" className="px-0.5 bg-transparent border-0 text-foreground-muted hover:text-foreground cursor-pointer text-xs leading-none shrink-0">
                                     <XIcon className="size-3" />
                                 </button>
                             )}
@@ -1222,7 +1348,7 @@ export default function AgentTraceView({
                         <Button
                             variant={slowOnly ? 'default' : 'outline'}
                             size="sm"
-                            onClick={() => setSlowOnly(b => !b)}
+                            onClick={() => { captureSpanContext(); setSlowOnly(b => !b); }}
                             className={cn(
                                 'h-7 text-xs px-2 gap-1',
                                 slowOnly && 'bg-warning text-warning-foreground hover:bg-warning/90 border-warning',
@@ -1255,16 +1381,16 @@ export default function AgentTraceView({
 
                     {/* Extended filter row */}
                     {(showFilters || hasActiveFilters) && (
-                        <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
-                            <FilterPill label={tt('traceTree.filterType')} value={treeKindFilter} options={[
+                        <div className="flex shrink-0 flex-wrap items-center gap-2 px-2.5 py-1.5 border-b border-border bg-background-secondary">
+                            <FilterPill multiple label={tt('traceTree.filterType')} value={treeKindFilter} options={[
                                 { value: 'all', label: tt('traceTree.filterAll') },
+                                { value: 'user', label: 'User' },
                                 { value: 'llm', label: 'LLM', accentClass: KIND_META.llm.text },
                                 { value: 'tool', label: 'Tool', accentClass: KIND_META.tool.text },
                                 { value: 'task', label: 'Task', accentClass: KIND_META.task.text },
                                 ...((totalStats?.chains || 0) > 0 ? [{ value: 'chain', label: 'Chain', accentClass: KIND_META.chain.text }] : []),
                                 { value: 'skill', label: 'Skill', accentClass: KIND_META.skill.text },
-                                { value: 'user', label: 'User' },
-                            ]} onChange={setTreeKindFilter} />
+                            ]} onChange={value => { captureSpanContext(); setTreeKindFilter(value); }} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterDuration')} value={String(slowOnly ? SLOW_MS : minDurationMs)} disabled={slowOnly} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
@@ -1273,16 +1399,16 @@ export default function AgentTraceView({
                                 { value: '10000', label: '>10s' },
                                 { value: '30000', label: '>30s' },
                                 { value: String(SLOW_MS), label: '>60s' },
-                            ]} onChange={v => setMinDurationMs(Number(v))} />
+                            ]} onChange={v => { if (Number(v) !== minDurationMs) captureSpanContext(); setMinDurationMs(Number(v)); }} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
                             <FilterPill label={tt('traceTree.filterToken')} value={String(minTokenK)} options={[
                                 { value: '0', label: tt('traceTree.filterAll') },
                                 { value: '10', label: '>10k' },
                                 { value: '50', label: '>50k' },
                                 { value: '100', label: '>100k' },
-                            ]} onChange={v => setMinTokenK(Number(v))} />
+                            ]} onChange={v => { if (Number(v) !== minTokenK) captureSpanContext(); setMinTokenK(Number(v)); }} />
                             {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={() => { setTreeKindFilter('all'); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
+                                <Button variant="ghost" size="sm" onClick={() => { captureSpanContext(); setTreeKindFilter([]); setMinDurationMs(0); setMinTokenK(0); setSlowOnly(false); }} className="h-6 ml-auto text-xs text-foreground-muted">
                                     <XIcon className="size-3" />{tt('traceTree.resetFilter')}
                                 </Button>
                             )}
@@ -1290,15 +1416,23 @@ export default function AgentTraceView({
                     )}
 
                     {/* Column headers */}
-                    <div className="flex items-center px-2.5 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider gap-2">
+                    <div className="flex shrink-0 items-center pl-2.5 pr-2 py-1 border-b border-border text-xs text-foreground-muted uppercase tracking-wider">
                         <span className="flex-1">{tt('traceTree.spanColumn')}</span>
-                        <span className="w-20 text-left">{tt('traceTree.spanShare')}</span>
-                        <span className="w-24 text-right shrink-0">{tt('traceTree.spanDuration')}</span>
-                        <span className="w-11 text-right">{tt('traceTree.spanTokens')}</span>
-                        <span className="w-2" />
+                        <span className="flex-1 mx-2 text-left">{tt('traceTree.spanShare')}</span>
+                        <span className={SPAN_TOKEN_CELL}>{tt('traceTree.spanTokens')}</span>
+                        <span className={SPAN_CLOCK_CELL}>{tt('traceTree.spanStart')}</span>
+                        <span className={SPAN_DURATION_CELL}>{tt('traceTree.spanDuration')}</span>
+                        <span className={SPAN_STATUS_CELL} />
                     </div>
 
-                    <div role="tree" className="overflow-y-auto overflow-x-auto flex-1 py-1">
+                    <TraceSpanViewport
+                        key={stableTraceIdentity ?? rootSessionId ?? tree.id}
+                        ref={spanViewportRef}
+                        navigationKey={scrollNavigationKey}
+                        contentKeys={spanContentKeys}
+                        onFollowingLatest={revealSpanRows}
+                        onUserNavigation={cancelPendingSpanJump}
+                    >
                         <UnifiedSpanTree
                             key={stableTraceIdentity ?? 'trace'}
                             node={tree}
@@ -1306,18 +1440,19 @@ export default function AgentTraceView({
                             expandedKeys={expandedKeys}
                             onToggleKey={toggleKey}
                             selectedKey={selectedKey}
-                            onSelect={key => { setSelectedKey(key); }}
+                            onSelect={key => { spanFocusKeyRef.current = key; cancelPendingSpanJump(); spanViewportRef.current?.pauseFollowing(); setSelectedKey(key); }}
                             totalStart={totalStart}
                             totalDuration={totalDuration}
                             depth={0}
                             isLast={true}
                             prefixBits={[]}
                         />
-                    </div>
+                    </TraceSpanViewport>
                 </div>
 
                 {/* ─── Right: Detail Panel ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                    <HarnessContextTabs entries={harnessRequests} selectedKey={selectedKey} onSelect={onJumpToKey} zh={locale === 'zh'} taskId={rootSessionId}>
                     {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
                         <div className="p-4 space-y-3">
                             <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
@@ -1355,19 +1490,17 @@ export default function AgentTraceView({
                             highlightEvent={null}
                             activeTab={activeDetailTab}
                             onTabChange={setActiveDetailTab}
-                            eventTypeFilter={eventTypeFilter}
-                            onEventTypeFilterChange={setEventTypeFilter}
                             totalDurationMs={totalActiveDuration}
                             onSelectChild={(id) => {
                                 const n = findNode(tree, id);
                                 if (n) setSelectedKey(agentKey(n.id));
                             }}
-                            interactions={displayInteractions}
                             traceSkills={selectedTraceSkillUsages}
                             currentUser={user}
                             rootExecutionId={rootExecutionId}
                         />
                     ) : null}
+                    </HarnessContextTabs>
                 </div>
             </div>
             </div>
@@ -1377,25 +1510,34 @@ export default function AgentTraceView({
 }
 
 // ─── FilterPill ──────────────────────────────────────────────────────────────
-function FilterPill({ label, value, options, onChange, disabled = false }: {
+function FilterPill(props: {
     label: string;
-    value: string;
     options: { value: string; label: string; accentClass?: string }[];
-    onChange: (v: string) => void;
     disabled?: boolean;
-}) {
+} & ({ multiple: true; value: string[]; onChange: (value: string[]) => void }
+    | { multiple?: false; value: string; onChange: (value: string) => void })) {
+    const { label, options, disabled = false } = props;
     return (
         <div className="flex items-center gap-1.5">
             <span className="text-xs text-foreground-muted font-medium shrink-0">{label}:</span>
             <div className="flex border border-border rounded-md overflow-hidden">
                 {options.map((o, idx) => {
-                    const isActive = o.value === value;
+                    const isActive = props.multiple
+                        ? o.value === 'all' ? props.value.length === 0 : props.value.includes(o.value)
+                        : o.value === props.value;
                     return (
                         <button
                             key={o.value}
                             disabled={disabled}
                             aria-pressed={isActive}
-                            onClick={() => onChange(o.value)}
+                            onClick={() => {
+                                if (props.multiple) {
+                                    props.onChange(o.value === 'all' ? []
+                                        : isActive ? props.value.filter(value => value !== o.value) : [...props.value, o.value]);
+                                } else {
+                                    props.onChange(o.value);
+                                }
+                            }}
                             className={cn(
                                 'px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
                                 idx < options.length - 1 && 'border-r border-border',
@@ -1503,12 +1645,13 @@ function UnifiedSpanTree({
     isLast: boolean;
     prefixBits: boolean[];
 }) {
-    const { locale } = useLocale();
+    const { locale, t: tt } = useLocale();
     const aKey = agentKey(node.id);
     const isExpanded = expandedKeys.has(aKey);
     const isSelected = selectedKey === aKey;
     const status = getStatus(node);
     const displayStats = aggregateSubtreeStats(node);
+    const displayTokensNotProvided = displayStats.totalTokens === 0 && !displayStats.usageReported;
 
     // Gantt bar for this agent
     const barLeft = (totalStart != null && totalDuration && node.startedAt != null)
@@ -1528,7 +1671,7 @@ function UnifiedSpanTree({
     // 一次渲染的顶层事件行数。超大 Trace 首屏先给出前几批调用，其余按需追加；
     // 搜索、筛选和跳转到深层节点时自动放开，避免命中的行不在 DOM 里。
     const [eventRenderLimit, setEventRenderLimit] = React.useState(TRACE_EVENT_RENDER_BATCH);
-    const filtersActive = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0
+    const filtersActive = treeKindFilter.length > 0 || minDurationMs > 0 || minTokenK > 0
         || ctxSlowOnly || Boolean(searchQuery.trim());
     const eventRootIndexes = React.useMemo(
         () => eventTree.map(entry => entry.eventIndex),
@@ -1543,7 +1686,7 @@ function UnifiedSpanTree({
         return Number.isFinite(index) ? index : null;
     }, [selectedKey, node.id]);
     const renderedEventCount = resolveEventRenderCount(eventRootIndexes, eventRenderLimit, {
-        revealAll: filtersActive,
+        revealAll: filtersActive || ctx.revealAllSpans,
         revealThrough: selectedEventIndex,
     });
     const renderedEventEntries = renderedEventCount >= eventTree.length
@@ -1735,16 +1878,17 @@ function UnifiedSpanTree({
                     </span>
                 )}
                 {/* Metrics */}
+                <span className={SPAN_TOKEN_CELL} title={displayTokensNotProvided ? tt('traceTree.tokensNotProvidedHint') : undefined}>
+                    {displayTokensNotProvided ? tt('traceTree.tokensNotProvided') : formatTokens(displayStats.totalTokens)}
+                </span>
+                <span className={SPAN_CLOCK_CELL} aria-hidden />
                 <span className={cn(
-                    'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
+                    SPAN_DURATION_CELL,
                     status === 'slow' ? 'text-warning' : 'text-foreground-muted',
                 )}>
                     {formatDuration(getAgentActiveDurationMs(node))}
                 </span>
-                <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                    {formatTokens(displayStats.totalTokens)}
-                </span>
-                <span className="w-2 ml-1 flex items-center justify-center">
+                <span className={cn(SPAN_STATUS_CELL, 'flex items-center justify-center')}>
                     {status !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[status])} />}
                 </span>
             </div>
@@ -1829,6 +1973,12 @@ function UnifiedEventRow({
 
     const isSlow = spanDurationMs != null && spanDurationMs > SLOW_MS;
     const hasError = isErrorToolStatus(event.toolStatus);
+
+    const clockTitle = event.kind === 'llm' || event.kind === 'tool'
+        ? (locale === 'zh'
+            ? `开始 ${formatClockMs(event.startedAt) ?? '-'} · 结束 ${formatClockMs(event.completedAt) ?? '-'} · 耗时 ${formatDuration(spanDurationMs)}`
+            : `Start ${formatClockMs(event.startedAt) ?? '-'} · End ${formatClockMs(event.completedAt) ?? '-'} · Duration ${formatDuration(spanDurationMs)}`)
+        : undefined;
 
     const { matchedKeys: ctxMatchedKeys, activeMatchKey: ctxActiveMatchKey, searchQuery: ctxSearch } = React.useContext(TraceCtx);
     const evKey = eventKey(parentNodeId, evIdx);
@@ -1920,16 +2070,17 @@ function UnifiedEventRow({
             />
 
             {/* Metrics */}
+            <span className={SPAN_TOKEN_CELL}>
+                {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
+            </span>
+            <SpanClockCell event={event} title={clockTitle} />
             <span className={cn(
-                'w-24 whitespace-nowrap text-right text-xs tabular-nums shrink-0 font-mono',
+                SPAN_DURATION_CELL,
                 isSlow ? 'text-warning' : 'text-foreground-muted',
             )}>
                 {formatDuration(spanDurationMs)}
             </span>
-            <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
-            </span>
-            <span className="w-2 ml-1 flex items-center justify-center">
+            <span className={cn(SPAN_STATUS_CELL, 'flex items-center justify-center')}>
                 {hasError ? <span className="size-1.5 rounded-full bg-error" /> : isSlow && <span className="size-1.5 rounded-full bg-warning" />}
             </span>
         </div>
@@ -2085,10 +2236,9 @@ function summarizePromptArgs(raw: unknown): string {
 
 function interactionToPromptText(m: RawInteraction): string {
     const text = typeof m.content === 'string' ? m.content : '';
-    if (text.trim()) return text;
-
+    const hasText = text.trim().length > 0;
     const blocks: string[] = [];
-    if (Array.isArray(m.parts)) {
+    if (!hasText && Array.isArray(m.parts)) {
         const reasoning = m.parts
             .filter(p => (p?.type || '').toLowerCase() === 'reasoning')
             .map(p => (typeof p.text === 'string' ? p.text.trim() : ''))
@@ -2096,6 +2246,7 @@ function interactionToPromptText(m: RawInteraction): string {
             .join('\n\n');
         if (reasoning) blocks.push(`[reasoning]\n${reasoning}`);
     }
+    let toolBlock = '';
     if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
         const lines = m.tool_calls.map(tc => {
             const name = tc.function?.name || tc.name || 'tool';
@@ -2103,9 +2254,14 @@ function interactionToPromptText(m: RawInteraction): string {
             const argSummary = summarizePromptArgs(args);
             return argSummary ? `-> ${name}(${argSummary})` : `-> ${name}()`;
         });
-        blocks.push(`[tool calls x ${m.tool_calls.length}]\n${lines.join('\n')}`);
+        toolBlock = `[tool calls x ${m.tool_calls.length}]\n${lines.join('\n')}`;
     }
-    if (typeof m.content !== 'string' && m.content != null) {
+    // 同一轮既有文本又有工具调用时两者都要保留:历史混合记录里工具先于最终回答执行。
+    const toolsFirst = hasText && !!toolBlock && toolsPrecedeResponse(m);
+    if (toolsFirst) blocks.push(toolBlock);
+    if (hasText) blocks.push(text);
+    if (toolBlock && !toolsFirst) blocks.push(toolBlock);
+    if (!hasText && typeof m.content !== 'string' && m.content != null) {
         blocks.push(JSON.stringify(m.content, null, 2));
     }
     return blocks.join('\n\n');
@@ -2132,6 +2288,27 @@ function interactionContentText(m: RawInteraction): string {
     if (text.trim()) return text;
     if (typeof m.content !== 'string' && m.content != null) return JSON.stringify(m.content, null, 2);
     return '';
+}
+
+function interactionTimestampMs(value: unknown): number | undefined {
+    if (value == null) return undefined;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const parsed = Date.parse(String(value));
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** 工具调用是否早于本轮可见文本 —— 兜底采集/历史混合记录会把前面几轮的工具调用并进
+ *  最终回答,那条 interaction 的 timeInfo.completed 是文本产出时间,工具的 started_at
+ *  却更早。正常的「过渡语 + 工具」轮次里工具有本次响应完成后才开始,不满足这条。 */
+function toolsPrecedeResponse(m: RawInteraction): boolean {
+    if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) return false;
+    const completed = interactionTimestampMs(m.timeInfo?.completed);
+    if (completed == null) return false;
+    const starts = m.tool_calls
+        .map(tc => interactionTimestampMs(tc.timing?.started_at))
+        .filter((v): v is number => v != null);
+    if (starts.length === 0) return false;
+    return Math.min(...starts) < completed;
 }
 
 /** Tool calls of a turn + their results, for the prompt snapshot. OpenCode keeps
@@ -2213,6 +2390,7 @@ function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInterac
             reasoning: hasTools ? extractReasoningText(m) : undefined,
             reasoningTokens: hasTools ? m.usage?.reasoning : undefined,
             toolCalls: calls,
+            toolsFirst: hasTools && toolsPrecedeResponse(m),
             source: 'history',
             position: ++position,
         });
@@ -2520,6 +2698,8 @@ function SnapshotMessageRow({
     const reasoning = (message.reasoning || '').trim();
     const toolCalls = message.toolCalls || [];
     const hasToolCalls = toolCalls.length > 0;
+    // 工具确实先于本轮文本执行(历史混合记录):按真实顺序先工具后回答
+    const toolsFirst = !!message.toolsFirst && hasToolCalls && !!trimmed;
     const hasBody = !!(trimmed || reasoning || hasToolCalls);
     const [expanded, setExpanded] = useState(!!defaultExpanded);
     const [showModal, setShowModal] = useState(false);
@@ -2583,6 +2763,9 @@ function SnapshotMessageRow({
                                 modalTitle={`${rowTitle} · thinking`}
                             />
                         )}
+                        {toolsFirst && hasToolCalls && (
+                            <ToolCallList calls={toolCalls} modalTitle={rowTitle} />
+                        )}
                         {trimmed ? (
                             isAssistant ? (
                                 <DisclosureBar
@@ -2610,7 +2793,7 @@ function SnapshotMessageRow({
                                 </>
                             )
                         ) : null}
-                        {hasToolCalls && (
+                        {hasToolCalls && !toolsFirst && (
                             <ToolCallList calls={toolCalls} modalTitle={rowTitle} />
                         )}
                         {!trimmed && !hasToolCalls && reasoning ? (
@@ -2867,6 +3050,7 @@ function HierarchicalSpanSnapshot({
                             // Tool calls are part of the assistant's response (tool_use
                             // blocks), so they belong in Output — same rendering as input.
                             toolCalls: outputToolCalls,
+                            toolsFirst: toolsPrecedeResponse(event.interaction),
                             source: 'history',
                             position: 1,
                         }}
@@ -2888,12 +3072,13 @@ function isErrorToolStatus(status?: string): boolean {
     return /error|fail|cancel|denied|interrupted/i.test(status ?? '');
 }
 
-/** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
+/** 完整本地日期时间，避免跨天会话中的时钟歧义。 */
 function formatClockMs(ts?: number): string | null {
     if (ts == null) return null;
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return null;
-    return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${date} ${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 function eventDetailIdentifier(event: AgentEvent): { label: string; value: string } | null {
@@ -3010,7 +3195,7 @@ function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSel
                     </span>
                 )}
                 <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(getAgentActiveDurationMs(child))}</b></span>
-                <span>Token <b className="font-semibold text-foreground tabular-nums">{exactTokens(s.totalTokens)}</b></span>
+                <span>Token <b className="font-semibold text-foreground tabular-nums">{s.totalTokens === 0 && !s.usageReported ? (locale === 'zh' ? '未提供' : 'N/A') : exactTokens(s.totalTokens)}</b></span>
                 <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
                 <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>
                 {s.skillCalls > 0 && <span>Skill <b className="font-semibold text-foreground tabular-nums">{s.skillCalls}</b></span>}
@@ -3118,7 +3303,10 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
-                    <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
+                    event.interaction.harnessRequests?.length ? <details className="rounded-md border border-border p-3">
+                        <summary className="cursor-pointer text-sm font-medium">{locale === 'zh' ? '查看输入与输出' : 'View input and output'}</summary>
+                        <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
+                    </details> : <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
                 )}
 
                 {/* ── User message ── */}
@@ -3204,9 +3392,12 @@ function LLMEventBody({ event, responseText, interactions, node }: {
 
     const usage = event.usage;
     const hasUsage = usage && (usage.total || usage.input || usage.output);
+    const upstreamRequestIds = interactionUpstreamRequestIds(it);
+    const hasInferenceIdentity = Boolean(it.inference_call_ids?.length || it.inference_attempts?.length || upstreamRequestIds.length);
 
     const hasParams = modelId || provider || temperature != null || maxTokens != null
-        || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
+        || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null
+        || hasInferenceIdentity;
 
     const snapshot = useMemo(
         () => buildLlmPromptSnapshot(
@@ -3274,6 +3465,19 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                             )}
                         </div>
                     )}
+                    {hasInferenceIdentity && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 1rem', alignItems: 'center' }}>
+                            {upstreamRequestIds.length === 1 ? (
+                                <CopyableId label="X-Request-Id" value={upstreamRequestIds[0]} />
+                            ) : (
+                                <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)' }}>
+                                    {upstreamRequestIds.length
+                                        ? (locale === 'zh' ? `X-Request-Id ×${upstreamRequestIds.length}，见推理分析` : `X-Request-Id ×${upstreamRequestIds.length}, see inference analysis`)
+                                        : (locale === 'zh' ? 'X-Request-Id 未提供' : 'X-Request-Id not provided')}
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -3306,18 +3510,15 @@ function EmptyDetail() {
 
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
-    node, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
-    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId, parentAgent, childAgents, relationsUnavailable
+    node, activeTab, onTabChange,
+    totalDurationMs, onSelectChild, traceSkills, currentUser, rootExecutionId, parentAgent, childAgents, relationsUnavailable
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;
     activeTab: DetailTab;
     onTabChange: (t: DetailTab) => void;
-    eventTypeFilter: EventTypeFilter;
-    onEventTypeFilterChange: (f: EventTypeFilter) => void;
     totalDurationMs?: number;
     onSelectChild: (id: string) => void;
-    interactions: RawInteraction[];
     traceSkills: TraceSkillUsage[];
     currentUser?: string | null;
     rootExecutionId?: string;
@@ -3328,11 +3529,9 @@ function AgentDetail({
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
     const hasHookContexts = !!(node.hookContexts && node.hookContexts.length > 0);
-    const visibleEvents = node.events.filter(event => !event.treeHidden);
 
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
         { id: 'overview', label: '概览' },
-        { id: 'timeline', label: '时间线', count: visibleEvents.length },
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
         ...(hasHookContexts ? [{ id: 'hooks' as DetailTab, label: 'Hook 上下文', count: node.hookContexts!.length }] : []),
@@ -3360,22 +3559,6 @@ function AgentDetail({
                     )}
                 </div>
 
-                {/* Duration bar */}
-                {totalDurationMs && getAgentActiveDurationMs(node) != null && (
-                    <div className="mb-2">
-                        <div className="h-1 bg-background-secondary rounded-sm overflow-hidden">
-                            <div
-                                className={cn('h-full rounded-sm transition-[width]', status === 'slow' ? 'bg-warning' : 'bg-primary')}
-                                style={{ width: `${Math.min(100, ((getAgentActiveDurationMs(node) ?? 0) / totalDurationMs) * 100)}%` }}
-                            />
-                        </div>
-                        <div className="flex justify-between text-xs text-foreground-muted mt-0.5">
-                            <span className={cn('font-semibold', status === 'slow' ? 'text-warning' : 'text-foreground')}>{formatDuration(getAgentActiveDurationMs(node))}</span>
-                            <span>{Math.round(((getAgentActiveDurationMs(node) ?? 0) / totalDurationMs) * 100)}% of total</span>
-                        </div>
-                    </div>
-                )}
-
                 {/* Tabs */}
                 <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginTop: '0.25rem' }}>
                     {tabs.map(tab => (
@@ -3400,16 +3583,6 @@ function AgentDetail({
 
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.75rem 1rem' }}>
                 {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} parentAgent={parentAgent} childAgents={childAgents} relationsUnavailable={relationsUnavailable} />}
-                {activeTab === 'timeline' && (
-                    <TimelineTab
-                        events={visibleEvents}
-                        eventTypeFilter={eventTypeFilter}
-                        onEventTypeFilterChange={onEventTypeFilterChange}
-                        onSelectChild={onSelectChild}
-                        node={node}
-                        interactions={interactions}
-                    />
-                )}
                 {activeTab === 'skills' && <SkillsTab skills={traceSkills} currentUser={currentUser} />}
                 {activeTab === 'prompt' && hasPrompt && <SystemPromptsBlock prompts={node.systemPrompts!} />}
                 {activeTab === 'hooks' && hasHookContexts && <HookContextsBlock entries={node.hookContexts!} />}
@@ -4001,204 +4174,6 @@ function TopNPanel() {
     );
 }
 
-// ─── TimelineTab ──────────────────────────────────────────────────────────────
-function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelectChild, node, interactions }: {
-    events: AgentEvent[];
-    eventTypeFilter: EventTypeFilter;
-    onEventTypeFilterChange: (f: EventTypeFilter) => void;
-    onSelectChild: (id: string) => void;
-    node: AgentNode;
-    interactions: RawInteraction[];
-}) {
-    const counts = useMemo(() => {
-        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, chain: 0, user: 0 };
-        events.forEach(ev => { if (c[ev.kind] != null) c[ev.kind]++; });
-        return c;
-    }, [events]);
-
-    const filtered = useMemo(() => {
-        if (eventTypeFilter === 'all') return events;
-        return events.filter(ev => ev.kind === eventTypeFilter);
-    }, [events, eventTypeFilter]);
-
-    const filterTypes: { kind: EventTypeFilter; label: string }[] = [
-        { kind: 'all', label: 'All' },
-        { kind: 'llm', label: 'LLM' },
-        { kind: 'tool', label: 'Tool' },
-        { kind: 'task', label: 'Task' },
-        { kind: 'chain', label: 'Chain' },
-        { kind: 'skill', label: 'Skill' },
-        { kind: 'user', label: 'User' },
-    ];
-
-    return (
-        <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-                {filterTypes.map(({ kind, label }) => {
-                    const meta = kind !== 'all' ? KIND_META[kind] : null;
-                    const count = kind === 'all' ? events.length : counts[kind] ?? 0;
-                    if (kind !== 'all' && count === 0) return null;
-                    const isActive = eventTypeFilter === kind;
-                    return (
-                        <button
-                            key={kind}
-                            onClick={() => onEventTypeFilterChange(kind)}
-                            className={cn(
-                                'inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border rounded-full transition-colors',
-                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                                isActive && meta
-                                    ? meta.chip + ' font-bold'
-                                    : isActive
-                                        ? 'bg-background-tertiary border-border text-foreground font-bold'
-                                        : 'bg-transparent border-border text-foreground-muted hover:bg-background-secondary',
-                            )}
-                        >
-                            {label}
-                            <span className={cn(
-                                'inline-flex items-center justify-center px-1 min-w-[16px] rounded-full tabular-nums text-xs font-semibold',
-                                isActive && meta ? 'bg-background/40' : 'bg-background-tertiary text-foreground-muted',
-                            )}>
-                                {count}
-                            </span>
-                        </button>
-                    );
-                })}
-            </div>
-            {filtered.length === 0
-                ? <div className="text-sm text-foreground-muted py-3">{eventTypeFilter !== 'all' ? `No ${eventTypeFilter.toUpperCase()} events` : '(no events)'}</div>
-                : <TimelineTree events={filtered} onSelectChild={onSelectChild} node={node} interactions={interactions} />
-            }
-        </div>
-    );
-}
-
-// ─── TimelineTree ─────────────────────────────────────────────────────────────
-interface TimelineNode { event: AgentEvent; children: AgentEvent[]; index: number; }
-
-function groupEventsAsTree(events: AgentEvent[]): TimelineNode[] {
-    const roots: TimelineNode[] = [];
-    let currentParent: TimelineNode | null = null;
-    events.forEach((ev, i) => {
-        if (ev.kind === 'user' || ev.kind === 'llm') {
-            const node: TimelineNode = { event: ev, children: [], index: i };
-            roots.push(node);
-            currentParent = node;
-        } else {
-            if (currentParent) currentParent.children.push(ev);
-            else roots.push({ event: ev, children: [], index: i });
-        }
-    });
-    return roots;
-}
-
-function TimelineTree({ events, onSelectChild, node, interactions }: { events: AgentEvent[]; onSelectChild: (id: string) => void; node: AgentNode; interactions: RawInteraction[]; }) {
-    const [expandedIdx, setExpandedIdx] = useState<Set<number>>(() => {
-        const s = new Set<number>();
-        events.forEach((ev, i) => { if (ev.kind === 'llm' || ev.kind === 'user') s.add(i); });
-        return s;
-    });
-    const tree = useMemo(() => groupEventsAsTree(events), [events]);
-
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {tree.map((tNode, ti) => {
-                const hasChildren = tNode.children.length > 0;
-                const isExpanded = expandedIdx.has(tNode.index);
-                return (
-                    <div key={tNode.index}>
-                        <TimelineEventRow event={tNode.event} hasChildren={hasChildren} isExpanded={isExpanded}
-                            onToggle={() => setExpandedIdx(s => { const n = new Set(s); if (n.has(tNode.index)) { n.delete(tNode.index); } else { n.add(tNode.index); } return n; })}
-                            onSelectChild={onSelectChild} indent={0} isLast={ti === tree.length - 1 && (!hasChildren || !isExpanded)} showVerticalLine={ti !== tree.length - 1 || (hasChildren && isExpanded)} node={node} interactions={interactions} />
-                        {hasChildren && isExpanded && (
-                            <div style={{ borderLeft: '1px solid var(--border)', marginLeft: 18 }}>
-                                {tNode.children.map((child, ci) => (
-                                    <TimelineEventRow key={ci} event={child} hasChildren={false} isExpanded={false}
-                                        onToggle={() => { }} onSelectChild={onSelectChild}
-                                        indent={1} isLast={ci === tNode.children.length - 1} showVerticalLine={false} node={node} interactions={interactions} />
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-// ─── TimelineEventRow ─────────────────────────────────────────────────────────
-function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectChild, indent, isLast, node, interactions }: {
-    event: AgentEvent; hasChildren: boolean; isExpanded: boolean;
-    onToggle: () => void; onSelectChild: (id: string) => void;
-    indent: number; isLast: boolean; showVerticalLine: boolean;
-    node: AgentNode; interactions: RawInteraction[];
-}) {
-    const { locale } = useLocale();
-    const [modalOpen, setModalOpen] = useState(false);
-    const { findEventAnomalies } = React.useContext(TraceCtx);
-    const eventAnomalies = findEventAnomalies?.(event) ?? [];
-    const dur = (event.startedAt != null && event.completedAt != null) ? formatDuration(event.completedAt - event.startedAt) : null;
-    const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
-    const showDetail = !!(event.args !== undefined || event.output !== undefined || event.interaction?.content || event.summary);
-    const summaryText = event.summary || event.name || '(empty)';
-
-    return (
-        <>
-            <div className="flex items-start py-1.5 px-2 rounded-md gap-1.5 relative">
-                {indent === 1 && (
-                    <>
-                        <span className={cn('absolute left-[-18px] top-0 w-3.5', isLast ? 'h-1/2 border-b border-border' : 'h-full')} />
-                        <span className="absolute left-[-5px] top-1/2 -translate-y-1/2 w-1.5 h-px bg-border" />
-                    </>
-                )}
-                <button
-                    onClick={hasChildren ? onToggle : undefined}
-                    aria-label={hasChildren ? (isExpanded ? 'Collapse' : 'Expand') : undefined}
-                    className={cn(
-                        'size-4 mt-0.5 p-0 flex items-center justify-center text-foreground-muted shrink-0',
-                        hasChildren ? 'cursor-pointer hover:text-foreground' : 'cursor-default',
-                    )}
-                >
-                    {hasChildren ? (isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />) : null}
-                </button>
-                <KindBadge kind={event.kind} className="mt-0.5" />
-                {isErrorToolStatus(event.toolStatus) && <span className="text-xs text-error shrink-0">{locale === 'zh' ? '失败' : 'Failed'}</span>}
-                <div
-                    className={cn('flex-1 min-w-0', showDetail ? 'cursor-pointer' : 'cursor-default')}
-                    onClick={() => { if (showDetail) setModalOpen(true); }}
-                >
-                    <div className="text-sm text-foreground line-clamp-2 break-words leading-snug">
-                        {summaryText}
-                    </div>
-                    {eventAnomalies.length > 0 && (
-                        <RasNodeBadge markers={eventAnomalies} className="mt-1" />
-                    )}
-                    <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
-                        {time && <span>{time}</span>}
-                        {dur && <span className="tabular-nums">{dur}</span>}
-                        {event.usage?.total ? <span className="tabular-nums">{exactTokens(event.usage.total)} tok</span> : null}
-                        {event.spawnedChildId && (
-                            <button
-                                onClick={e => { e.stopPropagation(); onSelectChild(event.spawnedChildId!); }}
-                                className="bg-transparent border-0 text-primary hover:underline cursor-pointer p-0 text-xs font-semibold"
-                            >
-                                → Go to sub-agent
-                            </button>
-                        )}
-                    </div>
-                </div>
-                {showDetail && (
-                    <span onClick={() => setModalOpen(true)} style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', flexShrink: 0, cursor: 'pointer', marginTop: 3, whiteSpace: 'nowrap' }}>
-                        查看 ›
-                    </span>
-                )}
-            </div>
-            {modalOpen && (
-                <EventDetailModal event={event} dur={dur} time={time} onClose={() => setModalOpen(false)} node={node} interactions={interactions} />
-            )}
-        </>
-    );
-}
-
 // ─── SystemPromptsBlock ───────────────────────────────────────────────────────
 function SystemPromptsBlock({ prompts }: { prompts: NonNullable<AgentNode['systemPrompts']> }) {
     const [modalIdx, setModalIdx] = useState<number | null>(null);
@@ -4327,52 +4302,6 @@ function SystemPromptModal({ prompt, index, total, onClose, title = 'SYSTEM PROM
     );
 }
 
-// ─── EventDetailModal ─────────────────────────────────────────────────────────
-function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
-    event: AgentEvent;
-    dur: string | null; time: string; onClose: () => void;
-    node: AgentNode; interactions: RawInteraction[];
-}) {
-    const { findEventAnomalies, framework, rootSessionId } = React.useContext(TraceCtx);
-    const eventAnomalies = findEventAnomalies?.(event) ?? [];
-    const km = KIND_META[event.kind] ?? KIND_META.tool;
-    const title = event.name || event.summary?.slice(0, 60) || km.label;
-
-    return (
-        <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-            <DialogContent className="max-w-[700px] max-h-[82vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-2 p-4 pr-12 border-b border-border space-y-0">
-                    <KindBadge kind={event.kind} size="sm" />
-                    <DialogTitle className="flex-1 font-semibold text-sm truncate text-foreground">{title}</DialogTitle>
-                    {event.kind === 'llm' && ['qoder', 'opencode'].includes(framework || '') && (
-                        <InferenceAnalysisButton target={inferenceAnalysisTarget({ framework, scope: 'llm', rootSessionId, interaction: event.interaction })} />
-                    )}
-                    <div className="flex gap-3 items-center shrink-0 text-xs text-foreground-muted">
-                        {time && <span>{time}</span>}
-                        {dur && <span className="tabular-nums">{dur}</span>}
-                        {event.usage?.total ? <span className="tabular-nums">{exactTokens(event.usage.total)} tok</span> : null}
-                    </div>
-                </DialogHeader>
-                <div className="overflow-auto p-4 flex flex-col gap-4">
-                    <RasReliabilityDetails markers={eventAnomalies} />
-                    {event.kind === 'llm' && (
-                        <LLMEventBody
-                            event={event}
-                            responseText={event.interaction?.content || event.summary || ''}
-                            interactions={interactions}
-                            node={node}
-                        />
-                    )}
-                    {event.kind === 'user' && (event.summary || event.interaction?.content) && <ModalSection label="Message"><LLMContent text={event.summary || event.interaction?.content || ''} /></ModalSection>}
-                    {event.kind !== 'llm' && event.kind !== 'ras' && event.args !== undefined && <ModalSection label="Input"><ModalCodeBlock value={event.args} /></ModalSection>}
-                    {event.kind !== 'llm' && event.kind !== 'ras' && event.output !== undefined && event.output !== null && <ModalSection label="Output"><ModalCodeBlock value={event.output} /></ModalSection>}
-                    {event.spawnedChildId && <div className="text-sm text-primary">Sub-agent spawned — click in the tree to jump.</div>}
-                </div>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function LLMParam({ label, value }: { label: string; value: string | number }) {
     return (
@@ -4391,29 +4320,6 @@ function SectionTitle({ children, accentColor }: { children: ReactNode; accentCo
     );
 }
 
-function ModalSection({ label, children }: { label: string; children: ReactNode }) {
-    return (
-        <div>
-            <div style={{ fontSize: '0.5625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--foreground-muted)', marginBottom: '0.5rem', paddingBottom: '0.25rem', borderBottom: '1px solid var(--border)' }}>{label}</div>
-            {children}
-        </div>
-    );
-}
-
-function LLMContent({ text }: { text: string }) {
-    return (
-        <SmartViewer
-            text={text}
-            toolbar={false}
-            maxHeight="none"
-            theme="light"
-            unescape={false}
-            className="sv-inline"
-        />
-    );
-}
-
-
 function MarkdownContent({ text }: { text: string }) {
     return (
         <SmartViewer
@@ -4423,18 +4329,6 @@ function MarkdownContent({ text }: { text: string }) {
             maxHeight="none"
             theme="light"
             unescape={false}
-        />
-    );
-}
-
-function ModalCodeBlock({ value }: { value: unknown }) {
-    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-    return (
-        <SmartViewer
-            text={text}
-            toolbar
-            maxHeight={560}
-            theme="light"
         />
     );
 }

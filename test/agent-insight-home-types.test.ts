@@ -45,7 +45,7 @@ test('home environment types accept dotenv maps without requiring Next NODE_ENV'
   const host = ts.createCompilerHost(options)
   const getSourceFile = host.getSourceFile.bind(host)
   host.getSourceFile = (name, version, onError, shouldCreateNewSourceFile) =>
-    name === filename ? ts.createSourceFile(name, source, version, true)
+    path.normalize(name) === filename ? ts.createSourceFile(name, source, version, true)
       : getSourceFile(name, version, onError, shouldCreateNewSourceFile)
   const program = ts.createProgram([filename, path.resolve('next.config.ts'), path.resolve('src/lib/env.ts')], options, host)
   const diagnostics = ts.getPreEmitDiagnostics(program)

@@ -656,7 +656,7 @@ OpenCode uploader / Trace 树测试。真实验证使用 OpenCode 2.0.32 + 本�
 
 v2 在启动前分配会话 ID，以免订阅晚于 `session.created` 时丢失关联；只接受该会话的事件和 Trace ID，并要求 `session.execution.succeeded` 才视作正常结束。原生 retry attempt 从 2 开始，转换为共享失败监测器的首轮 attempt=1。鉴权失败、持续断连和取消沿用现有终止及回报流程。采集器仍经 JSONL/uploader 上传，服务端以真实入库记录校验归属并绑定 Case；执行结果不能直接替代入库证据。v1/v2 就绪运行时均可上报 `skillSnapshotVersion: 4`。v2 使用原生配置来源和模型目录读取连接配置，在独立工作区禁用项目配置发现并限制 Skill 白名单，以 `permissions` 控制工具权限；仍发现工作区外的系统或组织配置来源时返回 `SKILL_ISOLATION_UNAVAILABLE`。v2 的 Skill 路由以成功工具事件中的 `input.id` 为主，兼容历史 `name/skill` 字段；只处理当前根会话。1.x 保留原配置和执行路径。
 
-监测插件发布到临时目录时，把共享诊断模块转为 ESM，兼容旧版 OpenCode 无法加载 CJS 导出的情况。v1 受控实验按事件同步写入 spool，避免 CLI 退出丢失异步缓冲；手动会话仍沿用异步 writer，v2 使用原生插件清理生命周期。uploader 使用原子 PID 锁，普通重复触发仍直接让位，客户端最终 recheck 最多等待 15 秒取得锁，防止前一次进行中上传占锁时漏掉完成快照。
+监测插件发布到临时目录时，把共享诊断模块转为 ESM，兼容旧版 OpenCode 无法加载 CJS 导出的情况。v1 受控实验按事件同步写入 spool，避免 CLI 退出丢失异步缓冲；手动会话仍沿用异步 writer，v2 使用原生插件清理生命周期。uploader 使用原子 PID 锁，普通重复触发仍直接让位，客户端最终 recheck 最多等待 15 秒取得锁，防止前一次进行中上传占锁时漏掉完成快照。 本机孤儿锁回收在持有恢复标记期间发布新的 owner 锁，再释放恢复标记，避免迟到的回收竞争者让成功回收的一方丢失所有权；不能通过删除仍存活或其他主机的 owner 锁来强制抢占。
 
 回归入口还包括 `test/opencode-runtime.test.ts`、`test/opencode-event-channel.test.ts`、`test/opencode-native-trace-generation.test.ts` 和 Python `test_opencode_catalog`。原生事件测试通过 `OPENCODE_EVENT_TEST_CLI` 指定二进制；完整上传及 Case 绑定测试使用 `OPENCODE_TRACE_TEST_CLI`、`OPENCODE_TRACE_TEST_MAJOR=1|2`，运行本地模拟模型和隔离数据库，不需要真实模型凭证。
 
