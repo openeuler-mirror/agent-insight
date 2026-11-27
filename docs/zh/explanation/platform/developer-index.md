@@ -49,6 +49,7 @@ changefreq: monthly
 | 端到端跟踪接入 / 评测流程 | [data-control-flow.md](./data-control-flow.md) |
 | 接入新的 Benchmark | [Benchmark 文档关系与开发指南](../evaluation/benchmarks/navigation.md) · [conventions-and-extension.md](../../how-to/platform/conventions-and-extension.md) |
 | 部署 Benchmark 服务与数据 | [通用服务部署](../../how-to/evaluation/benchmarks/deploy-services.md) · [SWE-bench](../../how-to/evaluation/benchmarks/deploy-swe-bench.md) · [ZSoft](../../how-to/evaluation/benchmarks/deploy-zsoft.md) |
+| 设计或评审前后端重构接口 | [模块接口与依赖规则](../../how-to/platform/refactor-module-boundaries.md) |
 | 新增 API 路由或页面 | [architecture.md](./architecture.md) · [conventions-and-extension.md](../../how-to/platform/conventions-and-extension.md) |
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [design-system.md](../../reference/platform/design-system.md) |
 | 遵循项目的模式 | [conventions-and-extension.md](../../how-to/platform/conventions-and-extension.md) |

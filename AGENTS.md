@@ -8,6 +8,10 @@
 
 ***
 
+## 前后端重构的开发与评审约束
+
+涉及 `apps/`、`packages/core/` 或 `extensions/` 的重构代码，开发者和评审者必须按[模块接口与依赖规则](docs/zh/how-to/platform/refactor-module-boundaries.md)核对接口归属、依赖方向和验收用例。目标目录和跨实例流程见[主方案](design/platform/frontend-backend-separation/Agent-Insight前后端重构方案.md)。
+
 ## 1. 分支与 PR 流程
 
 当前仓库协作依赖两个固定 remote：
