@@ -6,11 +6,15 @@ import type { DeviceTransport } from '../../../../packages/core/foundation/devic
 import type { TraceBatch } from '../../../../packages/core/observation/trace-service';
 
 /** 供 tsc 检查的调用示例，覆盖 SDK 导出、平台身份、版本化证据与设备收件确认。 */
-export async function readEvidence(context: CallContext, service: TraceService): Promise<ArtifactRef | undefined> {
+export async function readEvidence(
+  context: CallContext,
+  service: TraceService,
+  idempotencyKey: string,
+): Promise<ArtifactRef | undefined> {
   const page = await service.listTraces(context, { filter: { status: 'failed' }, limit: 10 });
   const trace = page.items[0];
   if (!trace) return undefined;
-  const evidence = await service.freeze(context, trace.id, { revision: trace.revision }, context.requestId);
+  const evidence = await service.freeze(context, trace.id, { revision: trace.revision }, idempotencyKey);
   return evidence.artifact;
 }
 
