@@ -239,6 +239,23 @@ export const presetEvaluators: EvaluatorCard[] = [
     status: 'ready',
     runtimeNote: 'text-preset-evaluators.ts · entity-f1',
   },
+  {
+    id: 'preset-text-json-fields',
+    name: '结构化信息抽取准确率评估器',
+    description: '对照人工标准答案，逐字段比较 Agent 从订单、工单或表单中抽取的 JSON 结果，按正确字段数占比计分，并指出错误或缺失的字段。',
+    evaluatorType: 'Code',
+    source: 'preset',
+    category: 'res',
+    targetTypes: ['结果'],
+    objectives: ['结果准确', '信息抽取'],
+    scenarios: ['信息抽取验收', '结构化结果验收', '表单抽取评估'],
+    runMode: 'Deterministic Code',
+    scoreRange: '0-100',
+    popularity: 79,
+    mappedMetrics: ['字段正确率'],
+    status: 'ready',
+    runtimeNote: 'text-preset-evaluators.ts · json-fields',
+  },
   // ── 内容质量评估器 ──
   // 实现：content-preset-evaluators.ts
   {

@@ -42,9 +42,9 @@ function context(actualOutput: string, referenceOutput: string | null): Faithful
 }
 
 describe('文本预置评估器接入', () => {
-  it('三张 Code 卡均登记为结果评估且依赖参考答案', () => {
-    assert.equal(TEXT_PRESET_IDS.length, 7);
-    for (const id of ['preset-text-rouge', 'preset-text-exact-match', 'preset-text-entity-f1'] as const) {
+  it('四张 Code 卡均登记为结果评估且依赖参考答案', () => {
+    assert.equal(TEXT_PRESET_IDS.length, 8);
+    for (const id of ['preset-text-rouge', 'preset-text-exact-match', 'preset-text-entity-f1', 'preset-text-json-fields'] as const) {
       assert.ok(isTextPresetId(id));
       const card = presetEvaluators.find((candidate) => candidate.id === id);
       assert.ok(card, `${id} 缺少预置卡`);
@@ -197,7 +197,7 @@ import {
 import { TEXT_FORMAT_RISK_CONFIG } from '../src/lib/engine/experiment/text-format-preset-evaluator';
 import { TEXT_LANGUAGE_RISK_CONFIG } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
 
-type JudgeTextPresetId = Exclude<TextPresetId, 'preset-text-rouge' | 'preset-text-exact-match' | 'preset-text-entity-f1'>;
+type JudgeTextPresetId = Exclude<TextPresetId, 'preset-text-rouge' | 'preset-text-exact-match' | 'preset-text-entity-f1' | 'preset-text-json-fields'>;
 
 const SEVERITIES = ['safe', 'minor', 'moderate', 'severe'] as const;
 const dimensions: Record<JudgeTextPresetId, readonly string[]> = {

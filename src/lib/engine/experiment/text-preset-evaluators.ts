@@ -31,11 +31,16 @@ import {
   runTextLanguageConsistencyPreset,
   TEXT_LANGUAGE_CONSISTENCY_PRESET_ID,
 } from './text-language-consistency-preset-evaluator';
+import {
+  runTextJsonFieldsPreset,
+  TEXT_JSON_FIELDS_PRESET_ID,
+} from './text-json-fields-evaluator';
 
 export const TEXT_PRESET_IDS = [
   'preset-text-rouge',
   'preset-text-exact-match',
   'preset-text-entity-f1',
+  TEXT_JSON_FIELDS_PRESET_ID,
   TEXT_AI_FLAVOR_PRESET_ID,
   TEXT_FORMAT_PRESET_ID,
   TEXT_LANGUAGE_CONSISTENCY_PRESET_ID,
@@ -46,7 +51,7 @@ export type TextPresetId = (typeof TEXT_PRESET_IDS)[number];
 
 type ReferenceTextPresetId = Extract<
   TextPresetId,
-  'preset-text-rouge' | 'preset-text-exact-match' | 'preset-text-entity-f1'
+  'preset-text-rouge' | 'preset-text-exact-match' | 'preset-text-entity-f1' | 'preset-text-json-fields'
 >;
 
 export function isTextPresetId(id: string): id is TextPresetId {
@@ -107,6 +112,7 @@ const REFERENCE_TEXT_PRESET_NAMES: Record<ReferenceTextPresetId, string> = {
   'preset-text-rouge': 'ROUGE 指标评估',
   'preset-text-exact-match': '完全精确匹配评估',
   'preset-text-entity-f1': '实体 F1 匹配评估',
+  'preset-text-json-fields': '结构化信息抽取准确率评估',
 };
 
 async function runReferenceTextPreset(
@@ -114,6 +120,8 @@ async function runReferenceTextPreset(
   ctx: FaithfulPresetContext,
   config?: EvaluatorRunConfigMap[ConfigurableTextEvaluatorId],
 ): Promise<EvaluatorOutput> {
+  if (id === TEXT_JSON_FIELDS_PRESET_ID) return runTextJsonFieldsPreset(ctx);
+
   if (ctx.referenceOutput === null || !ctx.referenceOutput.trim()) {
     return missingReference(REFERENCE_TEXT_PRESET_NAMES[id]);
   }
