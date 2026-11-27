@@ -49,7 +49,7 @@ Agent Insight 服务端通过 npm 安装；LlamaIndex 可观测插件源码随�
 npm run build
 mkdir -p dist-local
 npm pack --pack-destination dist-local
-npm install --global ./dist-local/agent-insight-0.5.4.tgz
+npm install --global ./dist-local/agent-insight-0.9.0.tgz
 agent-insight start
 ```
 

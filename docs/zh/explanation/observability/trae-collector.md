@@ -25,10 +25,10 @@ TRAE Collector 是一个 **VS Code Extension**，安装在 Trae IDE 中以采集
 │  │  └──────────┘    └────────────────┘  │   │
 │  │        │                              │   │
 │  │        ▼                              │   │
-│  │  ┌──────────────────┐                │   │
-│  │  │  ~/.agent-insight │                │   │
-│  │  │  /trae-spool/     │                │   │
-│  │  └──────────────────┘                │   │
+│  │  ┌──────────────────────┐            │   │
+│  │  │ ~/.agent-insight     │            │   │
+│  │  │ /otel_data/trae/     │            │   │
+│  │  └──────────────────────┘            │   │
 │  └──────────────────────────────────────┘   │
 └─────────────────────────────────────────────┘
 ```
@@ -84,7 +84,7 @@ scripts/trae-collector/
 ### spool.ts — Spool 读取器
 
 **职责**：
-- 扫描 `~/.agent-insight/trae-spool/` 目录下的 JSONL 文件
+- 扫描 `~/.agent-insight/otel_data/trae/` 目录下的 JSONL 文件
 - 解析每行 JSON 为 `SpoolEvent`（事件类型、时间戳、payload）
 - 按文件名和行偏移维护消费进度
 
@@ -150,7 +150,7 @@ Hook Script (Bash / PowerShell)
 TRAE IDE Hook Event
   → Hook 脚本 (session-start / pre-tool-use / ...)
     → JSON 序列化 + 脱敏
-      → 追加 ~/.agent-insight/trae-spool/<session-id>.jsonl
+      → 追加 ~/.agent-insight/otel_data/trae/<session-id>.jsonl
         → UploadEngine 轮询扫描
           → 读取新行（checkpoint + 增量）
             → 内容截断
