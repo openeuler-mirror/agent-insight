@@ -7,7 +7,7 @@
   "paths": {
     "/v1/projects/{projectId}/observation/traces": {
       "get": {
-        "operationId": "TraceService_list",
+        "operationId": "TraceService_listTraces",
         "tags": [
           "观测"
         ],

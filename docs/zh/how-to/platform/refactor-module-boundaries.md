@@ -20,4 +20,10 @@
 - 查询、导出和产物读取都受项目权限约束。客户端能看到的错误携带稳定错误码、error_id 和 request_id。日志能按这些标识定位并执行脱敏、分级和保留策略。
 - 单元验证放 `test/UT/<范围>/`；跨 HTTP、数据库、客户端的完整流程放平铺的 `test/ST/`。新增或变更公开行为时，同步对应契约、调用者和指南，列出实际执行过的验证。
 
-参考实现的接口声明见[观测服务](../../../../packages/core/observation/trace-service.ts)、[设备命令](../../../../packages/core/foundation/device-commands/device-command-service.ts)和[设备协议](../../../../packages/core/foundation/device-protocol/index.ts)。完整示例与扩展注册流程见[重构方案](../../../../design/platform/frontend-backend-separation/Agent-Insight前后端重构方案.md)。
+首批接口声明见[观测服务](../../../../packages/core/observation/trace-service.ts)、[设备命令](../../../../packages/core/foundation/device-commands/device-command-service.ts)和[设备协议](../../../../packages/core/foundation/device-protocol/index.ts)。完整示例与扩展注册流程见[重构方案](../../../../design/platform/frontend-backend-separation/Agent-Insight前后端重构方案.md)。
+
+在仓库根目录执行以下命令，可检查观测和设备的 SDK 调用示例。
+
+```sh
+npx --no-install tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM --types node test/UT/core/observation/trace-contract.types.ts
+```

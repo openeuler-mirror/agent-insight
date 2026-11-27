@@ -1,33 +1,15 @@
-/** 第一部分：目标 SDK、领域类型和执行端口。 */
-/** 目标契约评审稿。context 由可信入口构造。 */
+/** 已落地的模块类型从源码导出。其他模块和 HTTP 客户端类型仍为设计草案。 */
+import type { CallContext } from '../../../packages/core/foundation/common/context/call-context';
+export type { CallContext } from '../../../packages/core/foundation/common/context/call-context';
+import type { PageRequest } from '../../../packages/core/foundation/common/shared-interfaces/pagination';
+export type { PageRequest } from '../../../packages/core/foundation/common/shared-interfaces/pagination';
+import type { ApiError } from '../../../packages/core/foundation/common/errors/safe-error';
+export type { ApiError } from '../../../packages/core/foundation/common/errors/safe-error';
+export type { AgentRuntimeInput, AgentRuntimeOutput, AgentRuntime, AgentRuntimeProvider } from '../../../packages/core/foundation/agent-runtime';
+export type { Ack, Envelope, HandlerResult, Messages, DeviceTransport, MessageHandler, MessageChannel } from '../../../packages/core/foundation/device-protocol';
+export type { DeviceCommandService, Delivery } from '../../../packages/core/foundation/device-commands/device-command-service';
+export type { TraceBatch, Receipt, TraceService, TraceTagService, TraceTransferService, ObservationAdapter, ObservationProcessor } from '../../../packages/core/observation/trace-service';
 
-export interface CallContext { readonly projectId: string; readonly principalId: string; readonly requestId: string; readonly signal?: AbortSignal }
-
-/** 平台内部任务的运行契约。agentKey 标识系统 Agent，运行时由宿主装配。 */
-export interface AgentRuntimeInput {
-  readonly agentKey: string;
-  readonly prompt: string;
-  readonly inputs?: ReadonlyArray<Asset>;
-  readonly timeoutMs?: number;
-}
-
-export interface AgentRuntimeOutput {
-  readonly text: string;
-  readonly artifacts: ReadonlyArray<Asset>;
-  readonly traceId?: string;
-}
-
-export interface AgentRuntime {
-  run(context: CallContext, input: AgentRuntimeInput): Promise<AgentRuntimeOutput>;
-}
-
-/** 扩展作者实现 run，另外声明供启动时选择和校验的身份。 */
-export interface AgentRuntimeProvider extends AgentRuntime {
-  readonly key: string;
-  readonly version: string;
-}
-
-export interface PageRequest { cursor?: string; limit?: number }
 
 export interface Ref {
   readonly id: string;
@@ -93,16 +75,6 @@ export interface Members {
 export interface Evidence {
   readonly artifact: Asset;
   readonly traceId?: string;
-}
-
-export interface TraceBatch {
-  readonly source: string;
-  readonly batch: Asset;
-}
-
-export interface Receipt {
-  readonly receiptId: string;
-  readonly state: 'accepted' | 'indexed';
 }
 
 export interface Trace {
@@ -224,39 +196,6 @@ export interface Cancel {
   readonly state: 'cancel_requested' | 'cancelled' | 'already_terminal';
 }
 
-export interface Envelope {
-  readonly messageId: string;
-  readonly type: string;
-  readonly version: string;
-  readonly correlationId: string;
-  readonly payload: Asset;
-  readonly attempt?: number;
-  readonly sequence?: number;
-}
-
-export interface Ack {
-  readonly messageId: string;
-  readonly receivedDigest: string;
-}
-
-export interface Messages {
-  readonly items: ReadonlyArray<Envelope>;
-}
-
-export interface Delivery {
-  readonly messageId: string;
-  readonly state: 'queued' | 'received' | 'processed' | 'failed';
-  readonly error?: ApiError;
-}
-
-export interface ApiError {
-  readonly code: string;
-  readonly error_id: string;
-  readonly request_id: string;
-  readonly message: string;
-  readonly retryable: boolean;
-}
-
 export interface RunSpec {
   readonly jobId: string;
   readonly attempt: number;
@@ -278,23 +217,9 @@ export interface Artifacts {
   readonly items: ReadonlyArray<Asset>;
 }
 
-export interface HandlerResult {
-  readonly messageId: string;
-  readonly outcome: 'processed' | 'failed';
-  readonly result?: Asset;
-  readonly error?: ApiError;
-}
-
 export type JobSpec = ScoreSpec | ExecuteSpec;
 
 export type CaseResult = Score | FailedCase;
-
-export interface TraceService {
-  /** 平台内部在保存上报原文后登记批次。采集器通过观测 REST 接口直接发送 Span。 */
-  accept(context: CallContext, input: TraceBatch, key: string): Promise<Receipt>;
-  list(context: CallContext, page?: PageRequest): Promise<Traces>;
-  freeze(context: CallContext, traceId: string, input: Freeze, key: string): Promise<Evidence>;
-}
 
 export interface ExperimentService {
   create(context: CallContext, input: ExperimentInput, key: string): Promise<Ref>;
@@ -312,17 +237,6 @@ export interface OptimizationService {
   retest(context: CallContext, candidateId: string, input: Retest, key: string): Promise<Ref>;
 }
 
-export interface DeviceCommandService {
-  enqueue(context: CallContext, clientId: string, input: Envelope, key: string): Promise<Ref>;
-  getReceipt(context: CallContext, clientId: string, messageId: string): Promise<Delivery>;
-}
-
-export interface DeviceTransport {
-  upload(context: CallContext, clientId: string, input: Envelope): Promise<Ack>;
-  poll(context: CallContext, clientId: string): Promise<Messages>;
-  ack(context: CallContext, clientId: string, messageId: string, input: Ack): Promise<Ack>;
-}
-
 export interface AccessService {
   identity(context: CallContext): Promise<Scope>;
   authorize(context: CallContext, input: AccessCheck): Promise<Grant>;
@@ -338,12 +252,6 @@ export interface EvaluationScheduler {
 
 export interface CredentialVerifier {
   authenticate(credential: string, projectId: string): Promise<Scope>;
-}
-export interface MessageChannel {
-  send(context: CallContext, envelope: Envelope): Promise<Ref>;
-}
-export interface MessageHandler {
-  handle(context: CallContext, envelope: Envelope): Promise<HandlerResult>;
 }
 /** 评测模块需要隔离运行时使用的执行接口。 */
 export interface EvaluationBackend {

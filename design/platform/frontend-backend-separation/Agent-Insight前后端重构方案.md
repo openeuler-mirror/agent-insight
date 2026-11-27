@@ -323,7 +323,7 @@ A、B、D 取自现有观测页，表中服务和函数名是重构建议。C �
 
 ### 3.3 Trace 页面上的操作分别调用什么方法？
 
-下面用现有页面举例。中列是**建议的方法名**，便于讨论。现有 SDK 草案用 `TraceService.list()` 查询列表，表中建议命名为 `listTraces()`。[Trace 页面实现](https://atomgit.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/app/%28main%29/trace/page.tsx#L835) · [SDK 草案](Agent-Insight平台SDK.d.ts)
+下面用现有页面举例。中列是**建议的方法名**，便于讨论。已定义的观测接口见[观测模块服务契约](../../../packages/core/observation/trace-service.ts)。[Trace 页面实现](https://atomgit.com/openeuler/agent-insight/blob/eabde5b02f69797fe7e09b446b3f178374325d82/src/app/%28main%29/trace/page.tsx#L835) · [SDK 草案](Agent-Insight平台SDK.d.ts)
 
 | 用户做什么 | 后端提供什么方法（建议） | 为什么这样分 |
 | --- | --- | --- |
