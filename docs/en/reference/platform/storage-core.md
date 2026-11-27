@@ -7,7 +7,7 @@ description: "SQLite, PostgreSQL and openGauss control storage, authorized Click
 
 ## Single storage runtime
 
-The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 020 (77 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
+The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
 
 Web startup checks the Core origin, private controller file and readiness of both stores. Core startup and /v1/health verify transaction migrations and required ClickHouse tables, columns and SELECT access. This does not replace ingestion and business acceptance tests. Outbox work survives ClickHouse outages without falling back to a relational analytical store. The private Core configuration accepts max_pending_ingest_batches (per workspace, default 256, range 1–10000). New ingestion receives 429/QUEUE_LIMIT when full; retries of accepted receipts remain idempotent.
 
@@ -20,7 +20,7 @@ Dashboard and quality-analysis registration reads share the verified Core contro
 This implementation run validates SQLite + ClickHouse only. PostgreSQL/openGauss remain supported but are not exercised against real servers in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 50 are supported.
 
 
-The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 020 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
+The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 021 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
 
 **Product compatibility status (2026-11-14):** The original frontend is restored, with server compatibility for existing Trace contracts. Complete domain migration and regressions remain unfinished. This is isolated validation, not a production cutover.
 
@@ -42,7 +42,7 @@ The004 observation materializer rejects changed content at the same source revis
 
 `AuthorizedStorage(iam, facts)` defaults to `default`; an explicit `project_id='default'` is accepted. Empty/blank/other selectors fail closed. `project_context(credential, workspace_id)` returns an immutable context after workspace authorization. Scopes, list/analytics envelopes and cache fingerprints include the project; individual CH rows keep their existing workspace keys.
 
-New targets apply001–020. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; current startup requires020 (basic Trace007, Dataset008, generation009, experiments010, DiagnosisRun011, Benchmark013, issue resolution014, analytics015, private preparation016 and collector graphs017) after explicit migration. Project UI, invitations and project-owner administration are future work. The Web runtime always uses Core; existing production data is not migrated by this setting.
+New targets apply001–021. Existing001/002/003 prefixes are validated without implicit upgrades. IAM/project contexts require003; current startup requires020 (basic Trace007, Dataset008, generation009, experiments010, DiagnosisRun011, Benchmark013, issue resolution014, analytics015, private preparation016 and collector graphs017) after explicit migration. Project UI, invitations and project-owner administration are future work. The Web runtime always uses Core; existing production data is not migrated by this setting.
 
 ### IAM and authorization
 
@@ -508,3 +508,18 @@ Each GET is limited to 32 read attempts (including the initial attempt) and a 15
 Top-level `trace_list_optimization.enabled` defaults to `true` and is forwarded by project startup. Disabling it restores compatibility queries. Optimized paths cover ordinary timestamp pagination, summary filters, tag/user ID selections, statistics, and framework/source/Agent options. Historical sources, page outcome overrides, and complex filters fall back; statistics with nonempty `legacy_execution_metrics` also fall back to preserve overrides. Average latency retains all matching records in its denominator; tool error rates combine counts before rounding.
 
 The in-process `connection_pool.snapshot()` exposes total/active/idle/creating and cumulative counters. Standard Python INFO logging reports database paths and compatibility fallback reasons without credentials or content. Database scans may still cover all candidate summaries.
+
+
+## Core request capacity and ingest retries (021)
+
+The top-level `max_concurrent_requests` field in project storage configuration and generated private Core JSON defaults to `64`, accepts integers from `1` to `256`, and takes effect after restarting Core. The socket backlog uses the same value. This caps active connections/requests, not logged-in users, and does not resize database pools or alter write locking. Overload returns `503`, `code=CORE_BUSY`, `Retry-After: 1` and `X-Storage-Retry: core-busy`. Core and primary compatibility Web forwarding preserve the marker. `apiFetch` retries marked GETs at most three times with approximately 1/2/4 second waits plus jitter, within a 15-second retry budget. Cancellation or identity changes stop retries; mutations are not replayed. This is not a claim of doubled throughput or thousand-user capacity.
+
+`GET /v1/health` includes `http.capacity`, `active`, `peak`, `rejected`, `completed`, `duration_ms_total` and `duration_ms_max`. These process counters reset on restart. Active includes the health request itself; health can also be rejected under overload. Duration covers slot acquisition through request reading, processing and response delivery, excluding backlog waiting.
+
+Observation batches allow five executions (initial plus four retries), with 2/4/8/16 second backoff. Overall duration also includes execution, I/O timeouts and expired-lease waiting; it is not a fixed 30 seconds. Claimed executions count even if the worker crashes. Dataset and Experiment delivery policies are unchanged.
+
+Batches preserve order per workspace/Trace, including every Trace in a mixed batch. Independent Traces bypass delayed or leased batches but still share the current execution time of the single worker and database resources. Terminal predecessors fail dependent batches with `DEPENDENCY_FAILED`; exhausted execution budgets use `RETRY_EXHAUSTED`. Existing permanent source/artifact failures remain terminal. Original packets and frozen plans are retained. Duplicate uploads return the existing receipt without resetting attempts.
+
+The existing batch status API adds `attempts` (current recovery cycle), `total_attempts`, `max_attempts`, `recovery_generation`, `next_attempt_at_ms`, `last_error_code`, `last_error_message` and `last_error_at_ms`. Errors contain safe categories only. The next-attempt timestamp is eligibility time, not a completion promise; Trace dependencies can delay it further. See [failed batch recovery](../../how-to/platform/storage-core.md#recover-ingest).
+
+Migration 021 recognizes historical failed batches without frozen plans that the old worker had already skipped: for each Trace with a later prepared version, it removes only that historical dependency barrier. The failed receipt remains, and recovery cannot overwrite its successor. New failures do not receive this exception.

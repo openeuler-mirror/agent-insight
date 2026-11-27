@@ -7,7 +7,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 ## 唯一存储运行方式
 
-应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 020（77 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
 
 Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
 
@@ -20,7 +20,7 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 本轮实际验证范围为 SQLite + ClickHouse；PostgreSQL/openGauss 保留配置及实现，本轮不进行真实服务验证。原页面布局、Trace 服务端分页、Span 每批最多 50 条滚动追加及“加载中…”提示保持。
 
 
-下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
+下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 021、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
 
 **产品兼容状态（2026-11-14）**：原前端已恢复为重构前版本，Trace旧接口由服务端兼容。完整功能数据接管与回归仍未完成，不能作为生产切库结果；本页配置只用于隔离验证。
 
@@ -43,7 +43,7 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 
 `AuthorizedStorage(iam, facts)`默认使用default，也可显式传`project_id='default'`；空字符串、空白和其他项目ID拒绝。`service.project_context(credential, workspace_id)`返回经workspace授权校验的不可变上下文。`AccessScope`以及列表/聚合响应包含project_id，缓存指纹也包含项目；单条CH事实仍保持原workspace键。
 
-新初始化应用001–020。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前020（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015、私有采集准备最低016、采集图和Thread最低017），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
+新初始化应用001–021。已有001/002/003前缀只校验，不自动升级；IAM/项目上下文要求003，服务启动要求迁移到当前021（基础Trace最低007、Dataset最低008、Trace生成最低009、实验最低010、DiagnosisRun最低011、Benchmark最低013、派生Issue解决最低014、统计消费者最低015、私有采集准备最低016、采集图和Thread最低017），均须先显式迁移。此批没有项目切换UI、邀请或项目Owner服务，也未改变现有客户端上传配置。后续项目管理按[设计§4.3](../../../../design/platform/analytical-transactional-storage/phase2-requirements-design.md#43-项目预留当前统一归属-default)扩展。
 
 ### IAM 与统一授权
 
@@ -82,7 +82,7 @@ python3 -m services.storage migration-plan --backend sqlite --database /absolute
 python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db --backup /absolute/path/to/new-backup.db
 ```
 
-`schema` 只输出 SQL。新目标初始化应用001–020；已有已知001/002/003只校验，不隐式升级。IAM/项目上下文要求003；Trace HTTP服务启动要求已应用当前020，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
+`schema` 只输出 SQL。新目标初始化应用001–021；已有已知001/002/003只校验，不隐式升级。IAM/项目上下文要求003；Trace HTTP服务启动要求已应用当前021，需先显式迁移。未知版本、历史缺口或 checksum 漂移拒绝操作。已有 Prisma 库不会被原地改表。
 
 SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，再持写锁重核源与备份内容，防止备份后的并发写入被遗漏；变化时拒绝并保留备份。待执行迁移及版本登记同事务成功或回滚，不覆盖旧备份、不删除原数据。新目标启用 WAL/FULL，不能将 SQLite 文件放在 NFS 跨主机共享写入。
 
@@ -527,3 +527,18 @@ collector.source.v1适配原上传协议时，不为未提供、null或空agentN
 Core 顶层 `trace_list_optimization.enabled` 默认 `true`，项目启动配置会转交此项。关闭后保留原兼容列表查询。优化覆盖普通时间排序分页、摘要字段过滤、标签/用户 ID 范围、普通统计及框架/来源/Agent 选项。历史来源、当前页结果覆盖与复杂筛选回退；非空 `legacy_execution_metrics` 的统计也回退，以保留字段覆盖口径。平均延迟分母仍包括延迟为空的匹配记录，工具错误率合并总调用/错误次数后再舍入。
 
 连接池可通过服务内 `connection_pool.snapshot()` 检查 total/active/idle/creating 及累计计数；查询模块通过标准 Python logging 的 INFO 级别记录数据库路径和兼容回退原因，不输出凭证或正文。数据库仍可能扫描所有候选摘要，优化不意味着数据库只读取当前页。
+
+
+## Core 请求容量与采集重试（021）
+
+`max_concurrent_requests` 是项目 `storage.local.json` 和生成的私有 Core JSON 的顶层字段，默认 `64`，只接受 `1–256` 的整数，重启 Core 生效。socket backlog 同步使用该值。它限制正在处理的连接/HTTP 请求，不是登录人数；事务库连接池与写锁策略不随其翻倍。满载返回 `503`、`code=CORE_BUSY`、`Retry-After: 1` 和 `X-Storage-Retry: core-busy`。主要 Core/兼容 Web 转发保留此标记，`apiFetch` 对带标记的 GET 最多再试 3 次，等待约 1/2/4 秒并添加少量随机延迟，重试预算 15 秒；取消或切换身份即停止，写请求不自动重放。64 槽不等于吞吐翻倍，也不是千用户容量承诺。
+
+`GET /v1/health` 的 `http` 返回 `capacity`、`active`、`peak`、`rejected`、`completed`、`duration_ms_total`、`duration_ms_max`。计数按进程累计，重启归零；active 包含当前健康请求，过载时健康请求也可能被拒绝。耗时从占槽到释放，包含请求读取、处理和响应发送；不含 backlog 等待。
+
+观测投递最多执行 5 次（首次 + 4 次重试），失败后等待 2/4/8/16 秒；总时长还包含每次处理、I/O 超时与租约过期等待，不是固定 30 秒。领取后崩溃也计入次数。仅调整观测投递，不改变 Dataset/Experiment 的投递策略。
+
+同 workspace/Trace 的批次按原队列顺序处理；混合批次须等其涉及的所有 Trace 前序完成。独立 Trace 不受其他批次退避或失效租约影响，但仍共享单 worker 的当前执行时间和数据库资源。前序最终失败使后继成为 `failed/DEPENDENCY_FAILED`，不会跳过必要版本。自动尝试耗尽为 `failed/RETRY_EXHAUSTED`；非法源版本、损坏制品或失效 Trace 沿用永久失败处理。原始包和冻结计划保留，重复上报同一接收键返回既有回执，不重置次数。
+
+`GET /v1/batches/:id` 保留原字段，增加 `attempts`（本轮）、`total_attempts`（累计）、`max_attempts`、`recovery_generation`、`next_attempt_at_ms` 、`last_error_code`、`last_error_message`、`last_error_at_ms`。错误正文仅给出安全类别，不包含数据库地址或原始数据。`next_attempt_at_ms` 仅表示待重试最早可领取时间，依赖尚未完成时可能继续等待。人工恢复见[失败批次恢复](../../how-to/platform/storage-core.md#recover-ingest)。
+
+021 回填会识别旧版本已经跳过、且没有冻结计划的失败批次：若该 Trace 已有后来准备的版本，仅解除该历史记录的后继阻塞，失败回执仍保留且拒绝回滚覆盖后继。新失败批次不享有此例外。

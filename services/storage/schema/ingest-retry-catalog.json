@@ -1,0 +1,269 @@
+{
+  "version": 21,
+  "tables": [
+    {
+      "name": "ingest_deliveries",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "batch_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "attempt_base",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "attempt_limit",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "5"
+        },
+        {
+          "name": "generation",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "last_error_code",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "last_error_message",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "last_error_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "batch_id"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "event_id"
+          ],
+          "table": "outbox_events",
+          "target": [
+            "workspace_id",
+            "event_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "batch_id"
+          ],
+          "table": "ingest_batches",
+          "target": [
+            "workspace_id",
+            "batch_id"
+          ]
+        }
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "event_id"
+        ]
+      ],
+      "indexes": []
+    },
+    {
+      "name": "ingest_batch_traces",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "batch_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "trace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "blocks_successors",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "batch_id",
+        "trace_id"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "workspace_id",
+            "trace_id"
+          ],
+          "table": "trace_locators",
+          "target": [
+            "workspace_id",
+            "trace_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "batch_id"
+          ],
+          "table": "ingest_deliveries",
+          "target": [
+            "workspace_id",
+            "batch_id"
+          ]
+        }
+      ],
+      "unique": [],
+      "indexes": [
+        {
+          "name": "idx_ingest_trace_batches",
+          "columns": [
+            "workspace_id",
+            "trace_id",
+            "batch_id"
+          ],
+          "unique": false
+        }
+      ]
+    },
+    {
+      "name": "ingest_batch_recoveries",
+      "columns": [
+        {
+          "name": "workspace_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "batch_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "generation",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "actor_principal_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "previous_attempts",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "previous_error_code",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "previous_error_message",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "previous_error_at_ms",
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "recovered_at_ms",
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "workspace_id",
+        "batch_id",
+        "request_key"
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "actor_principal_id"
+          ],
+          "table": "iam_principals",
+          "target": [
+            "principal_id"
+          ]
+        },
+        {
+          "columns": [
+            "workspace_id",
+            "batch_id"
+          ],
+          "table": "ingest_deliveries",
+          "target": [
+            "workspace_id",
+            "batch_id"
+          ]
+        }
+      ],
+      "unique": [
+        [
+          "workspace_id",
+          "batch_id",
+          "generation"
+        ]
+      ],
+      "indexes": []
+    }
+  ]
+}

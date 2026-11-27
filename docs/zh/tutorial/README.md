@@ -38,3 +38,5 @@ JiuwenSwarm 升级后，请更新观测扩展并重启 AgentServer，再检查�
 
 
 数据库请先独立部署，然后按[项目配置样例与安装指南](../how-to/platform/storage-core.md)填写项目内配置并一键安装 Core/Web。支持 SQLite＋ClickHouse 和 PostgreSQL＋ClickHouse。
+
+采集批次失败时，先查看回执及有限重试状态，再按[失败批次恢复](../how-to/platform/storage-core.md#recover-ingest)处理；Core 并发请求槽默认 64。

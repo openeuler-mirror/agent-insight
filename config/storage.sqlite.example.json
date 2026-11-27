@@ -1,4 +1,5 @@
 {
+  "max_concurrent_requests": 64,
   "control": {
     "backend": "sqlite",
     "database": "~/.agent-insight/storage/core/core.db"

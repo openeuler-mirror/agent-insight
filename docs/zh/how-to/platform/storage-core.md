@@ -7,7 +7,7 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 ## 唯一存储运行方式
 
-应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 020（77 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
 
 Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
 
@@ -20,7 +20,7 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 本轮验证 SQLite + ClickHouse 与 PostgreSQL + ClickHouse；openGauss 保留实现，暂不实测。原页面布局、Trace 服务端分页、Span 每批最多 50 条滚动追加及“加载中…”提示保持。
 
 
-下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 020、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
+下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 021、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
 
 ## 配置数据库并一键安装
 
@@ -108,7 +108,7 @@ docker compose -f docker-compose.storage-core.yml ps
 docker compose -f docker-compose.storage-core.yml logs --tail=100 storage-core
 ```
 
-首次启动会在新卷中显式初始化 SQLite 001–020 与 ClickHouse 001–004，并生成私有 controller key 和服务配置。再次启动只校验已有版本、表集合和配置；需要升级或更换密码时，先备份并按显式迁移流程处理，不会重建已有库。使用原 `/login` 创建隔离用户后，通过 `/api/ingest/otel/v1/traces` 上报测试 Trace，并检查原 `/trace` 页面或 `/api/observe/data` 及 ClickHouse 对应事实。旧采集兼容接口返回接收结果，batch 回执仅适用于直接调用 Storage Core `/v1/ingest/otlp` 的流程。保留同一个 `CLICKHOUSE_PASSWORD` 才能重启已有卷。停止服务使用 `docker compose -f docker-compose.storage-core.yml down`；不要加 `-v`，以保留验收数据。
+首次启动会在新卷中显式初始化 SQLite 001–021 与 ClickHouse 001–004，并生成私有 controller key 和服务配置。再次启动只校验已有版本、表集合和配置；需要升级或更换密码时，先备份并按显式迁移流程处理，不会重建已有库。使用原 `/login` 创建隔离用户后，通过 `/api/ingest/otel/v1/traces` 上报测试 Trace，并检查原 `/trace` 页面或 `/api/observe/data` 及 ClickHouse 对应事实。旧采集兼容接口返回接收结果，batch 回执仅适用于直接调用 Storage Core `/v1/ingest/otlp` 的流程。保留同一个 `CLICKHOUSE_PASSWORD` 才能重启已有卷。停止服务使用 `docker compose -f docker-compose.storage-core.yml down`；不要加 `-v`，以保留验收数据。
 
 此 Compose 路径选择 SQLite 作为事务后端，仅证明该组合的隔离链路；PostgreSQL/openGauss、真实旧库迁移、生产容量与高可用仍需另行验证。容器内运行时初始化与原源码操作指南如下。
 
@@ -144,7 +144,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-新库应用001–020，当前schema_version=20。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
+新库应用001–021，当前schema_version=21。已有已知前缀只校验，不自动升级；已有core目标须先备份并显式执行：
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -169,7 +169,7 @@ from services.storage.iam import IAMStore
 from services.storage.clickhouse import ClickHouseStore
 
 root = Path('/absolute/path/to/isolated-core')
-control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至020
+control = SQLiteControlStore(root / 'core.db')  # 上一步已显式初始化至021
 facts = ClickHouseStore('http://127.0.0.1:8123',
     database='agent_insight_core_isolated', user='default',
     password=getpass.getpass('ClickHouse password (empty if configured): '))
@@ -263,7 +263,7 @@ OTLP成功响应仍为空JSON对象/空protobuf；`X-Storage-Batch-Id`与`X-Stor
 
 原Trace bundle导入/导出保持v1格式及执行树/旧ID，导入最多50MiB/500个execution。全树先校验，冲突ID及嵌套引用一并重映射；成功仅在全部batch indexed后返回。`Idempotency-Key`可用于同一次导入恢复，不能复用给不同内容。导出及完整会话响应上限128MiB。原Langfuse页面直接消费完整nodes，因此兼容读取需要其完整正文；该特例不能计入普通OTLP的懒加载证明。未覆盖的业务能力及失败边界见实施状态。
 
-当前观测事件流按最早事件强序处理；早期观测重试会阻挡该流的后续事件，Dataset/评测等领域使用各自类型的投递领取。每128 Span批量写正文，先chunks、后manifests，再Span及Trace摘要，重复写依赖相同版本收敛。这是可靠性基线，尚未完成1000在线采集端混合读写压测、分片日志或HA认证。当前浏览器验收状态以[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)为准。
+观测批次按 workspace/Trace 保序；退避中的批次不阻塞独立 Trace，最多执行 5 次。前序最终失败时，同 Trace 后继标记 DEPENDENCY_FAILED，需在前序恢复成功后逐批恢复。Dataset/评测等领域仍使用各自类型的投递领取。每128 Span批量写正文，先chunks、后manifests，再Span及Trace摘要，重复写依赖相同版本收敛。这是可靠性基线，尚未完成1000在线采集端混合读写压测、分片日志或HA认证。当前浏览器验收状态以[实施状态](../../../../design/platform/analytical-transactional-storage/implementation-status.md)为准。
 
 停止时对自己启动的服务使用Ctrl-C/SIGTERM，保留数据库、制品目录和私有配置；不要用全局进程清理命令影响其他worktree。
 
@@ -347,7 +347,7 @@ Skill与Agent动态查询验收：沿用原`/skills`和`/agents`页面，确认�
 
 ## 020 隔离验收与显式旧库导入
 
-当前隔离目标使用事务schema020和CH004。新库初始化与既有目标备份升级必须分别使用对应CLI；不要对原业务库执行Prisma db push。继续使用原登录和页面，原default项目归属不增加前端项目选择流程。
+当前隔离目标使用事务schema021和CH004。新库初始化与既有目标备份升级必须分别使用对应CLI；不要对原业务库执行Prisma db push。继续使用原登录和页面，原default项目归属不增加前端项目选择流程。
 
 先对一致的旧SQLite副本执行export-legacy，再使用独立的plan-legacy-import、apply-legacy-import及verify-legacy-import。每步明确指定导出目录、稳定source ID、owner绑定及隔离目标配置；apply/verify另外提供当前actor凭据和migration ID。原plan-legacy仍是严格只读清点工具，它自身没有apply，不与新语义导入命令混用。
 
@@ -368,3 +368,24 @@ PostgreSQL Storage Core 默认使用进程级公共连接池。登录后的请�
 普通 Trace 列表在数据库分页后批量补充当前页信息；普通统计和框架、来源、Agent 选项在数据库聚合。评估结果覆盖、历史来源、高级筛选及无法等价表达的字段会明确退回兼容路径，可能仍需遍历记录。根 Span 属性只在摘要需要执行元数据时读取，不加载全部子 Span。详情首次及后续每批最多 50 个结构 Span。
 
 可在现有 Core 配置中分别设置 `control.connection_pool.enabled=false` 或 `trace_list_optimization.enabled=false`，重启服务后关闭连接池或查询优化；无需重导数据。不要通过增加超时掩盖数据库不可用。默认池上限为每个 runtime 16 条，空闲保留基线为 2；多个实例的总连接预算需共同考虑。
+
+
+<a id="recover-ingest"></a>
+## 失败采集批次恢复
+
+先解决 ClickHouse、制品或其他失败根因，再查询批次状态。自动执行最多 5 次；普通重复上报不会重新开启失败任务。本机运维命令读取现有私有 Core 配置和当前有效的写凭据文件（0600、非符号链接），不接受命令行明文凭据：
+
+```bash
+python3 -m services.storage recover-ingest \
+  --config /private/core.json \
+  --credential-file /private/ingest-token.txt \
+  --workspace example-workspace \
+  --batch example-batch \
+  --request-key example-recovery-1
+```
+
+操作者须有该空间及所有相关 Trace 的当前写权限。成功会登记恢复历史、开启新一轮最多 5 次执行并复用原始包/冻结计划，不修改旧版本。相同恢复键幂等返回，活动批次不能被其他键重置。服务继续运行时也通过现有事务锁协调，旧 worker 的执行令牌无法提交新轮次。
+
+`DEPENDENCY_FAILED` 后继须等前序变为 indexed 后逐批恢复；已删除或正在删除的 Trace、已有后来准备版本的历史批次拒绝恢复，避免恢复覆盖较新内容。永久非法输入原样恢复仍会失败，此命令不编辑数据或跳过校验。恢复计入现有待采集队列容量。恢复前检查源数据仍在；查询批次回执确认最终结果，不以命令成功作为已索引证明。
+
+本功能要求事务迁移 021（SQLite / PostgreSQL / openGauss），ClickHouse 仍为 004。升级前停写、备份事务库及制品目录，按上文显式迁移；旧程序不识别 021。回退应停止服务并恢复配套备份，同时处理升级后新增数据，不能只把程序切回旧版或清零尝试次数。容量配置与状态字段见[参考](../../reference/platform/storage-core.md#core-请求容量与采集重试021)。

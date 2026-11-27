@@ -113,3 +113,16 @@ test('pool configuration does not silently enable unsupported backends', t => {
   Object.assign(config.control, { connection_pool: { enabled: true } }); save()
   assert.throws(() => storage.readConfig(file), /PostgreSQL/)
 })
+
+test('Core request capacity defaults to 64 and accepts only bounded integer overrides', t=>{
+ const {file,config,save}=fixture(t);
+ assert.equal(storage.configurationFile(storage.readConfig(file),config.runtime.home).cfg.max_concurrent_requests,64);
+ for(const value of [1,32,64,256]){
+  Object.assign(config,{max_concurrent_requests:value});save();
+  assert.equal(storage.configurationFile(storage.readConfig(file),config.runtime.home).cfg.max_concurrent_requests,value);
+ }
+ for(const value of [0,257,true,'64',1.5,null]){
+  Object.assign(config,{max_concurrent_requests:value});save();
+  assert.throws(()=>storage.readConfig(file),/max_concurrent_requests/);
+ }
+});

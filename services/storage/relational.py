@@ -263,6 +263,8 @@ class PostgreSQLControlStore(ControlOperations):
         if applied >= 20:
             catalogs.append(json.loads((root / 'semantic-usage-catalog.json').read_text()))
         tables = []
+        if applied>=21:
+            catalogs.append(json.loads((root / 'ingest-retry-catalog.json').read_text()))
         for name in sorted(table['name'] for catalog in catalogs for table in catalog['tables']):
             if not re.fullmatch(r'[a-z][a-z0-9_]*', name):
                 raise StorageError('invalid managed table identifier')

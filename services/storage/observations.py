@@ -12,6 +12,7 @@ from .contracts import canonical_json, content_hash, identifier, revision
 from .control import Conflict, StorageError
 from .iam import IAMStore, Forbidden
 from .projects import resolve_project
+from .ingest_delivery import IngestDelivery, register_delivery
 
 
 EVENT_TYPE = 'observability.otlp.accepted.v1'
@@ -464,7 +465,10 @@ def summary_status(state):
 
 class ObservationIngest:
     def __init__(self,control,facts):
-        self.control=control;self.facts=facts;self.iam=IAMStore(control)
+        with control.read_transaction() as con:
+            if con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0]<21:
+                raise StorageError('Explicit schema upgrade to version 21 is required for ingestion')
+        self.control=control;self.facts=facts;self.iam=IAMStore(control);self.delivery=IngestDelivery(control)
 
     def _load(self,ref):
         try:
@@ -537,6 +541,7 @@ class ObservationIngest:
             queue_time=max(now,(previous+1) if previous is not None else now)
             con.execute('INSERT INTO outbox_events(workspace_id,event_id,aggregate_id,aggregate_revision,event_type,payload_json,created_at_ms,updated_at_ms) VALUES(?,?,?,1,?,?,?,?)',
                 (workspace_id,event_id,batch_id,EVENT_TYPE,canonical_json({'batch_id':batch_id}),queue_time,now))
+            register_delivery(con,workspace_id,batch_id,event_id,trace_ids)
         return {'batch_id':batch_id,'state':'accepted','trace_ids':trace_ids,'duplicate':False}
 
     def batch_status(self,credential,workspace_id,batch_id):
@@ -552,18 +557,11 @@ class ObservationIngest:
             for trace_id in trace_ids:
                 self.iam._authorize(con,credential,workspace_id,capability,'trace',trace_id)
             return {'batch_id':batch_id,'state':row['state'],'trace_ids':trace_ids,'accepted_at_ms':row['accepted_at_ms'],
-                    'indexed_at_ms':row['indexed_at_ms'],'error_code':row['error_code']}
+                    'indexed_at_ms':row['indexed_at_ms'],'error_code':row['error_code'],
+                    **self.delivery.status(con,workspace_id,batch_id)}
 
     def _claim(self,worker_id,lease_ms):
-        now=self.control.clock()
-        with self.control.transaction() as con:
-            row=con.execute("SELECT * FROM outbox_events WHERE event_type=? AND state IN ('pending','dispatching') ORDER BY created_at_ms,event_id LIMIT 1",(EVENT_TYPE,)).fetchone()
-            if row is None or row['next_attempt_at_ms']>now or (row['state']=='dispatching' and row['lease_until_ms'] is not None and row['lease_until_ms']>now): return None
-            attempt=revision(row['attempts']+1)
-            con.execute("UPDATE outbox_events SET state='dispatching',attempts=?,lease_owner=?,lease_until_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?",
-                (attempt,worker_id,now+lease_ms,now,row['workspace_id'],row['event_id']))
-            result=dict(row);result.update(attempts=attempt,lease_owner=worker_id,lease_until_ms=now+lease_ms)
-            return result
+        return self.delivery.claim(worker_id,lease_ms)
 
     def _owned(self,con,event):
         row=con.execute('SELECT * FROM outbox_events WHERE workspace_id=? AND event_id=?',(event['workspace_id'],event['event_id'])).fetchone()
@@ -733,10 +731,10 @@ class ObservationIngest:
             permanent=isinstance(exc,_RouteRetired) or (not prepared and isinstance(exc,(IngestConflict,ValueError,FileNotFoundError)))
             try:
                 with self.control.transaction() as con:
-                    self._owned(con,event);now=self.control.clock()
-                    if permanent:
-                        con.execute("UPDATE ingest_batches SET state='failed',error_code='invalid_source_revision_or_artifact' WHERE workspace_id=? AND batch_id=?",(event['workspace_id'],event['aggregate_id']))
-                    con.execute('UPDATE outbox_events SET state=?,lease_owner=NULL,lease_until_ms=NULL,next_attempt_at_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?',
-                        ('dead' if permanent else 'pending',now+min(60000,1000*2**min(event['attempts'],6)),now,event['workspace_id'],event['event_id']))
+                    self._owned(con,event)
+                    exhausted=event['attempts']-event['attempt_base']>=event['attempt_limit']
+                    code='invalid_source_revision_or_artifact' if permanent else 'RETRY_EXHAUSTED' if exhausted else 'INGEST_TEMPORARY_FAILURE'
+                    message='Invalid source revision, artifact or inactive Trace' if permanent else 'Automatic execution limit reached' if exhausted else 'Temporary ingestion failure; retry scheduled'
+                    self.delivery.fail(con,event,code,message,terminal=permanent or exhausted)
             except _LeaseLost: pass
         return True

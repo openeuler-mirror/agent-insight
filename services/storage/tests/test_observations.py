@@ -143,16 +143,17 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(self.facts.spans[-1],first_span)
         self.assertEqual(self.service.batch_status(self.tokens['alice'],'w',first['batch_id'])['state'],'indexed')
 
-    def test_source_stale_ignored_conflict_quarantined_and_new_span_accumulates(self):
+    def test_source_stale_ignored_conflict_quarantines_dependent_batch(self):
         self.service.accept(self.tokens['alice'],'w',packet(revision=2,tokens=5)); self.service.work_once('w')
         self.service.accept(self.tokens['alice'],'w',packet(revision=1,tokens=1)); self.service.work_once('w')
         self.assertEqual(len(self.facts.spans),1)
         bad=self.service.accept(self.tokens['alice'],'w',packet(revision=2,tokens=6)); self.service.work_once('w')
         self.assertEqual(self.service.batch_status(self.tokens['alice'],'w',bad['batch_id'])['state'],'failed')
         self.assertEqual(len(self.facts.spans),1)
-        self.service.accept(self.tokens['alice'],'w',packet(span='2'*16,tokens=7)); self.service.work_once('w')
-        self.assertEqual(self.facts.summaries[-1]['span_count'],2)
-        self.assertEqual(self.facts.summaries[-1]['input_tokens'],12)
+        later=self.service.accept(self.tokens['alice'],'w',packet(span='2'*16,tokens=7)); self.service.work_once('w')
+        self.assertEqual(self.service.batch_status(self.tokens['alice'],'w',later['batch_id'])['error_code'],'DEPENDENCY_FAILED')
+        self.assertEqual(self.facts.summaries[-1]['span_count'],1)
+        self.assertEqual(self.facts.summaries[-1]['input_tokens'],5)
         self.assertIsNone(self.facts.summaries[-1]['output_tokens'])
 
     def test_higher_revision_uses_delta_counts_and_unknown_coverage(self):
@@ -655,18 +656,15 @@ class ObservationTests(unittest.TestCase):
         self.service.accept(self.tokens['alice'],'w',body)
         self.assertEqual(self.rows('trace_legacy_ids'),[])
 
-    def test_prefix_four_without_alias_table_still_accepts_and_indexes(self):
+    def test_old_prefix_requires_explicit_upgrade_before_ingestion(self):
         from unittest.mock import patch
         from services.storage.migrations import load_migrations
         known=load_migrations('sqlite')
         store=SQLiteControlStore(Path(self.tmp.name)/'prefix-four.db',clock=lambda:self.now)
         with patch('services.storage.migrations.load_migrations',return_value=known[:4]):store.initialize()
-        iam=IAMStore(store);iam.create_principal('old','old','Old');store.create_workspace('w','W');iam.bind_workspace('w',principal_id='old')
-        token=iam.issue_session_for_provisioning('old');facts=Facts();service=self.cls(store,facts)
-        ack=service.accept(token,'w',packet());self.assertTrue(service.work_once('worker'))
-        self.assertEqual(service.batch_status(token,'w',ack['batch_id'])['state'],'indexed')
+        with self.assertRaisesRegex(StorageError,'Explicit schema upgrade'):
+            self.cls(store,Facts())
         with store.read_transaction() as con:
-            self.assertIsNone(con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trace_legacy_ids'").fetchone())
             self.assertEqual(con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0],4)
 
     def test_trace_level_import_metadata_is_authoritative_over_later_span_inputs(self):

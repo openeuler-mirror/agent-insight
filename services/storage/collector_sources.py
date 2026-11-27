@@ -5,6 +5,7 @@ import hashlib
 import json
 import uuid
 
+from .ingest_delivery import register_delivery
 from .contracts import canonical_json, identifier
 from .control import Conflict, StorageError
 from .iam import IAMStore, Forbidden
@@ -484,7 +485,9 @@ class CollectorSources:
             packet_hash=_hash(packet);_,ref=self.ingest._persist(packet);receipt='collector-source:'+_hash([trace,op['operation_key'],index]);batch=str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,receipt])));now=self.control.clock()
             con.execute('INSERT INTO ingest_batches(workspace_id,batch_id,principal_id,receipt_key,packet_hash,packet_ref,trace_ids_json,accepted_at_ms) VALUES(?,?,?,?,?,?,?,?)',(workspace,batch,op['actor_id'],receipt,packet_hash,ref,canonical_json([trace]),now))
             prior=con.execute('SELECT MAX(created_at_ms) FROM outbox_events WHERE event_type=?',(EVENT_TYPE,)).fetchone()[0];queued=max(now,prior+1 if prior is not None else now)
-            con.execute('INSERT INTO outbox_events(workspace_id,event_id,aggregate_id,aggregate_revision,event_type,payload_json,created_at_ms,updated_at_ms) VALUES(?,?,?,1,?,?,?,?)',(workspace,str(uuid.uuid4()),batch,EVENT_TYPE,canonical_json({'batch_id':batch}),queued,now))
+            event=str(uuid.uuid4())
+            con.execute('INSERT INTO outbox_events(workspace_id,event_id,aggregate_id,aggregate_revision,event_type,payload_json,created_at_ms,updated_at_ms) VALUES(?,?,?,1,?,?,?,?)',(workspace,event,batch,EVENT_TYPE,canonical_json({'batch_id':batch}),queued,now))
+            register_delivery(con,workspace,batch,event,[trace])
             refs.append({'batch_id':batch,'packet_hash':packet_hash,'packet_index':index})
         return refs
 

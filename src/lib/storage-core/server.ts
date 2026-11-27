@@ -15,6 +15,7 @@ function json(body: unknown, status = 200, headers: HeadersInit = {}): Response 
   return Response.json(body, { status, headers: { 'cache-control': 'no-store', ...headers } });
 }
 function failure(error: unknown): Response {
+  if(error instanceof CoreError&&error.status===503&&error.code==='CORE_BUSY')return json({error:'Storage core busy; retry shortly',code:'CORE_BUSY'},503,{'retry-after':'1','x-storage-retry':'core-busy'});
   return error instanceof CoreError ? json({ error: error.message }, error.status) : json({ error: 'Storage core unavailable' }, 502);
 }
 export function coreServiceOrigin(value = process.env.AGENT_INSIGHT_STORAGE_CORE_URL): string {
@@ -75,7 +76,9 @@ async function upstream(path: string, options: { token?: string; method?: string
     if(attempt&&coreServiceOrigin()!==attempt.origin){void response.body?.cancel();throw new CoreError(503,'Storage read origin changed');}
     if (!response.ok) {
       let code:string|undefined;
-      if(path.startsWith('/v1/compat/datasets/generation?')){
+      if(response.status===503&&response.headers.get('x-storage-retry')==='core-busy'){
+        try{const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));if(value?.code==='CORE_BUSY')code='CORE_BUSY';}catch{}
+      }else if(path.startsWith('/v1/compat/datasets/generation?')){
         try{
           const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bytes(response.body,4096,502)));
           if(value&&typeof value==='object'&&['REQUEST_EXPIRED','QUEUE_LIMIT','SOURCE_NOT_AVAILABLE','IDEMPOTENCY_CONFLICT','ALREADY_COMPLETED','INVALID_CONFIG','NOT_FOUND','DATASET_DELETING','DATASET_NOT_READY'].includes(value.code))code=value.code;

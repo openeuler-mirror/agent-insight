@@ -28,8 +28,8 @@ async function preflight(env = process.env, fetcher = fetch) {
   const response = await fetcher(origin + '/v1/health', { redirect: 'error', signal: AbortSignal.timeout(15000), cache: 'no-store' });
   if (!response.ok) throw new Error('Storage Core is not ready; check the transactional database and ClickHouse');
   const health = await response.json();
-  if (health.status !== 'ready' || health.schema_version !== 20 || health.clickhouse?.schema_version !== 4 || health.clickhouse?.tables !== 19) {
-    throw new Error('Storage Core must verify transaction schema 020 and all 19 ClickHouse tables (004); upgrade the Core service before starting Web');
+  if (health.status !== 'ready' || health.schema_version !== 21 || health.clickhouse?.schema_version !== 4 || health.clickhouse?.tables !== 19) {
+    throw new Error('Storage Core must verify transaction schema 021 and all 19 ClickHouse tables (004); upgrade the Core service before starting Web');
   }
   return health;
 }

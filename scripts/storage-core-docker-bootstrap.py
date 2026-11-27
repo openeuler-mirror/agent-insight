@@ -104,7 +104,7 @@ def main():
         prior = json.loads(CONFIG.read_text())
         config['cursor_secret_hex'] = prior['cursor_secret_hex']
     private_file(CONFIG, json.dumps(config, sort_keys=True, separators=(',', ':')))
-    print('Storage core ready: SQLite migration 020 and ClickHouse 004', flush=True)
+    print(f"Storage core ready: SQLite migration {len(load_migrations('sqlite')):03d} and ClickHouse 004", flush=True)
 
 
 if __name__ == '__main__':
