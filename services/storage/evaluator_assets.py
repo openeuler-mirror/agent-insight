@@ -188,7 +188,8 @@ class EvaluatorAssets:
         release=head['release_id'] if unchanged else _id(asset,number,root[0])
         response={'evaluators':copy.deepcopy(evaluators),'releases':members,'etag':self._etag(asset,{'etag':number}),'list_release_id':release}
         receipt_body=self._persist({'format':'agent-insight.evaluator-operation','version':1,'request_hash':digest,'response':response})
-        with self.control.transaction() as con:
+        with self.control.transaction(('evaluator', ws, asset), ('asset', ws, asset),
+                                      *(('asset', ws, family) for _,family,_,_ in prepared)) as con:
             live,_,current=self._head(con,token,ws,True)
             if live.fingerprint!=scope.fingerprint:raise Forbidden('Evaluator authorization changed before save')
             receipt=self._receipt(con,ws,asset,operation_key)

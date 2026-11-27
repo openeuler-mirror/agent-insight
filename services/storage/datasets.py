@@ -197,6 +197,7 @@ class DatasetStore:
         identifier(ws); identifier(identity)
         capability=_capability or ('write' if write else 'read')
         scope=self.iam._scope(con,token); self.iam._workspace(scope,ws,capability)
+        self.control.lock_keys(con, shared=(('dataset', ws, identity),))
         found=con.execute('SELECT * FROM dataset_compat_heads WHERE workspace_id=? AND dataset_id=?',(ws,identity)).fetchone()
         if found is None: raise DatasetNotFound('Dataset not found')
         head=dict(found); self.iam._authorize(con,token,ws,capability,'asset',head['asset_id'])
@@ -274,7 +275,8 @@ class DatasetStore:
 
     def record_operation(self,token,ws,identity,*,operation_key,operation_kind,operation_request,operation_result,expected_revision):
         digest=self._operation(operation_kind,operation_key,operation_request)
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, identity)) as con:
+            self._lock_operation(con,token,ws,identity,operation_kind,operation_key)
             receipt=self._receipt_tx(con,token,ws,operation_kind,operation_key,digest)
             if receipt: root=receipt['root']; meta=receipt['meta']; head=receipt['head']
             else:
@@ -300,16 +302,27 @@ class DatasetStore:
 
     def _artifacts_tx(self,con,ws,artifacts):
         now=self.control.clock()
-        for artifact in artifacts:
+        for artifact in sorted(artifacts, key=lambda value: (value['namespace'], value['hash'])):
             identity=hashlib.sha256((artifact['namespace']+':'+artifact['hash']).encode()).hexdigest()
-            old=con.execute('SELECT * FROM artifact_metadata WHERE workspace_id=? AND artifact_id=?',(ws,identity)).fetchone()
-            if old:
-                if old['content_hash']!=artifact['hash'] or old['object_ref']!=artifact['ref']: raise Conflict('Dataset artifact identity differs')
-                continue
-            con.execute("INSERT INTO artifact_metadata(workspace_id,artifact_id,namespace,object_ref,content_hash,size_bytes,media_type,state,created_at_ms,published_at_ms) VALUES(?,?,?,?,?,?,?,'published',?,?)",(ws,identity,artifact['namespace'],artifact['ref'],artifact['hash'],artifact['size'],'application/json',now,now))
+            con.execute("""INSERT INTO artifact_metadata(workspace_id,artifact_id,namespace,object_ref,content_hash,
+                size_bytes,media_type,state,created_at_ms,published_at_ms)
+                VALUES(?,?,?,?,?,?,?,'published',?,?)""" + self.control.insert_if_absent_clause,
+                (ws,identity,artifact['namespace'],artifact['ref'],artifact['hash'],artifact['size'],'application/json',now,now))
+            old=con.execute('SELECT content_hash,object_ref FROM artifact_metadata WHERE workspace_id=? AND artifact_id=?',(ws,identity)).fetchone()
+            if old['content_hash']!=artifact['hash'] or old['object_ref']!=artifact['ref']:
+                raise Conflict('Dataset artifact identity differs')
+
+    def _lock_operation(self, con, token, ws, identity, kind, operation_key):
+        actor = self.iam._scope(con, token)
+        self.control.lock_keys(con, ('dataset', ws, identity),
+                               ('dataset-receipt', ws, actor.principal_id, kind, operation_key))
+        head = self.control.locked_row(con, 'SELECT asset_id FROM dataset_compat_heads WHERE workspace_id=? AND dataset_id=?', (ws, identity))
+        asset = head[0] if head else str(uuid.uuid5(uuid.NAMESPACE_URL,canonical_json(['dataset',ws,identity])))
+        self.control.lock_keys(con, ('asset', ws, asset))
 
     def _save_tx(self,con,token,ws,prepared,*,operation_key,expected_revision=None,operation_kind='save',operation_result=None,operation_request=None,allow_generated=False,allow_readonly=False):
         value=prepared['record']; identity=value['id']; request=prepared['request'] if operation_request is None else operation_request
+        self._lock_operation(con,token,ws,identity,operation_kind,operation_key)
         digest=self._operation(operation_kind,operation_key,request); old_receipt=self._receipt_tx(con,token,ws,operation_kind,operation_key,digest)
         if old_receipt:
             meta=old_receipt['meta']; return self._envelope(old_receipt['root'],meta,operation_result=meta.get('operation_result'))
@@ -345,6 +358,7 @@ class DatasetStore:
         generation_status=value.get('generationStatus') if allow_generated else head['generation_status'] if head else None
         small={'format':'dataset-manifest-ref/v1','hash':prepared['root']['hash'],'ref':prepared['root']['ref'],'case_count':len(value['cases'])}
         if head:
+            self.control.lock_keys(con, ('asset-draft', ws, draft))
             prior_draft=con.execute('SELECT edit_revision FROM asset_drafts WHERE workspace_id=? AND draft_id=?',(ws,draft)).fetchone()[0]
             changed=con.execute('UPDATE asset_drafts SET manifest_json=?,edit_revision=?,updated_at_ms=? WHERE workspace_id=? AND draft_id=? AND edit_revision=?',(canonical_json(small),number,now,ws,draft,prior_draft))
             if changed.rowcount!=1: raise Conflict('Dataset draft changed concurrently')
@@ -384,7 +398,7 @@ class DatasetStore:
                 if head['generation_source']=='trace' and head['generation_status']!='published': raise Conflict('Trace Dataset is not published')
                 observed=head['revision']
         prepared=self.prepare_for_save(token,ws,record)
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, record['id']), shared=[('trace', ws, proof['trace_id']) for proof in prepared['source_proofs'].values()]) as con:
             result=self._save_tx(con,token,ws,prepared,operation_key=operation_key,expected_revision=expected_revision if expected_revision is not None else observed,operation_kind=operation_kind,operation_result=operation_result,operation_request=operation_request)
             head=self._get_tx(con,token,ws,record['id'],write=True)
         self._verify(token,ws,head,write=True); return result
@@ -466,7 +480,7 @@ class DatasetStore:
         if case is None or case.get('expectedOutput','')!=expected_output: return False
         value={'dataset_id':identity,'case_id':case_id,'output_hash':_hash(expected_output),'root_causes':root_causes,'root_cause_meta':root_cause_meta}
         _bounded(value,MAX_METADATA_BYTES); artifact=self._store(value,'dataset.cache'); cache=self._cache_id(identity,case_id,expected_output)
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, identity)) as con:
             latest=self._get_tx(con,token,ws,identity,write=True)
             if latest!=head: return False
             row=con.execute('SELECT 1 FROM artifact_metadata WHERE workspace_id=? AND artifact_id=?',(ws,cache)).fetchone(); now=self.control.clock()
@@ -489,6 +503,7 @@ class DatasetStore:
         self._verify(token,ws,head); return result
 
     def _delete_tx(self,con,token,ws,identity,*,operation_key,expected_revision=None,operation_kind='delete',operation_request=None):
+        self._lock_operation(con,token,ws,identity,operation_kind,operation_key)
         request={'dataset_id':identity,'expected_revision':str(expected_revision) if expected_revision is not None else None} if operation_request is None else operation_request
         digest=self._operation(operation_kind,operation_key,request); receipt=self._receipt_tx(con,token,ws,operation_kind,operation_key,digest)
         if receipt: return copy.deepcopy(receipt['meta']['result'])
@@ -503,13 +518,14 @@ class DatasetStore:
         return result
 
     def remove(self,token,ws,identity,*,operation_key,expected_revision=None,operation_kind='delete',operation_request=None):
-        with self.control.transaction() as con: result=self._delete_tx(con,token,ws,identity,operation_key=operation_key,expected_revision=expected_revision,operation_kind=operation_kind,operation_request=operation_request)
+        with self.control.transaction(('dataset', ws, identity)) as con: result=self._delete_tx(con,token,ws,identity,operation_key=operation_key,expected_revision=expected_revision,operation_kind=operation_kind,operation_request=operation_request)
         return result
 
     def restore(self,token,ws,identity,*,operation_key,expected_revision=None,operation_request=None):
         request={'dataset_id':identity,'expected_revision':str(expected_revision) if expected_revision is not None else None} if operation_request is None else operation_request
         digest=self._operation('restore',operation_key,request)
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, identity)) as con:
+            self._lock_operation(con,token,ws,identity,'restore',operation_key)
             receipt=self._receipt_tx(con,token,ws,'restore',operation_key,digest)
             if receipt: root=receipt['root']; meta=receipt['meta']; head=receipt['head']
             else:
@@ -556,14 +572,18 @@ class DatasetStore:
     def project_once(self,facts,worker_id,lease_ms=30000):
         identifier(worker_id)
         if type(lease_ms) is not int or not 1<=lease_ms<=3600000: raise ValueError('Invalid projection lease')
-        now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset-projection',)) as con:
+            now=self.control.clock()
             row=con.execute("SELECT * FROM outbox_events WHERE event_type='dataset.release.published.v1' AND state IN ('pending','dispatching') ORDER BY created_at_ms,event_id LIMIT 1").fetchone()
             if row is None or row['next_attempt_at_ms']>now or row['state']=='dispatching' and row['lease_until_ms']>now: return False
             event=dict(row); event.update(attempts=revision(row['attempts']+1),lease_owner=worker_id)
             con.execute("UPDATE outbox_events SET state='dispatching',attempts=?,lease_owner=?,lease_until_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?",(event['attempts'],worker_id,now+lease_ms,max(now,row['updated_at_ms']),row['workspace_id'],row['event_id']))
+        def projection_transaction():
+            return self.control.transaction(('dataset-projection', event['workspace_id'], event['event_id']),
+                                            shared=(('asset', event['workspace_id'], event['aggregate_id']),))
+
         try:
-            with self.control.transaction() as con: release=self._projection_owned(con,event,lease_ms)
+            with projection_transaction() as con: release=self._projection_owned(con,event,lease_ms)
             manifest=self._load(release['content_hash'],release['manifest_ref'])
             bucket=_iso(release['created_at_ms'])[:10]; fields_hash=_hash(manifest['metadata'].get('fields',[])); samples=[]; members=[]
             for member in manifest['members']:
@@ -577,13 +597,13 @@ class DatasetStore:
                 members.append({'workspace_id':event['workspace_id'],'release_bucket':bucket,'dataset_release_id':release['release_id'],'ordinal':member['ordinal'],'case_key':member['case_key'],'sample_revision_id':sample,'sample_bucket':bucket,'content_hash':member['content_hash'],'retry_version':1})
             for table,rows in [('dataset_sample_revisions',samples),('dataset_release_members',members)]:
                 for offset in range(0,len(rows),128):
-                    with self.control.transaction() as con: self._projection_owned(con,event,lease_ms)
+                    with projection_transaction() as con: self._projection_owned(con,event,lease_ms)
                     facts._insert(table,rows[offset:offset+128])
-            with self.control.transaction() as con:
+            with projection_transaction() as con:
                 self._projection_owned(con,event)
                 con.execute("UPDATE outbox_events SET state='sent',lease_owner=NULL,lease_until_ms=NULL,updated_at_ms=? WHERE workspace_id=? AND event_id=?",(max(self.control.clock(),event['updated_at_ms']),event['workspace_id'],event['event_id']))
         except Exception as cause:
-            with self.control.transaction() as con:
+            with projection_transaction() as con:
                 row=con.execute('SELECT * FROM outbox_events WHERE workspace_id=? AND event_id=?',(event['workspace_id'],event['event_id'])).fetchone()
                 if row and row['state']=='dispatching' and row['lease_owner']==worker_id and row['attempts']==event['attempts']:
                     dead=isinstance(cause,(DatasetNotFound,StorageError,ValueError)) and not isinstance(cause,Conflict)

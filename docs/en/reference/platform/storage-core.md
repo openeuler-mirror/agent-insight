@@ -60,7 +60,9 @@ Members currently supply1..1000 authorized Trace roots per selected workspace fo
 
 ### Drivers and concurrency
 
-SQLite uses `BEGIN IMMEDIATE` for writes. PostgreSQL/openGauss currently serialize control writes with a `schema_meta` row lock. Read-only transactions use WAL snapshots or `REPEATABLE READ READ ONLY` without this write lock. Password derivation and CH HTTP run outside write transactions. This verifies correctness, not thousand-client capacity; finer-grained CAS/queue partitioning and load testing remain necessary.
+SQLite uses `BEGIN IMMEDIATE`. PostgreSQL and openGauss business writers take a compatible `ROW SHARE` schema guard. Migrations acquire `EXCLUSIVE` before verifying backup evidence. The same connection holds transaction-scoped resource locks, including for identities that do not yet exist. Independent datasets can commit concurrently. Competing saves recheck the revision and operation receipt. Ordinary experiments coordinate on experiment ID. Benchmark checks admission within the workspace. Queue claims, bulk operations and historical import can still wait within their respective domains. Relational read-only transactions use `REPEATABLE READ READ ONLY`.
+
+Declare write keys with `control.transaction((domain, workspace, resource_id))` before reading mutable state. Supply multiple keys together so the adapter acquires them in a consistent order. Writers share the ancestor keys, allowing a whole-workspace replacement to exclude concurrent changes to members of that domain. If an identity needs a lookup, resolve its stable identifier, acquire it with `control.lock_keys` on the same connection, then read the current revision, authorization or lease again. Read-only lists and details use `read_transaction()`. Cross-store projections replay stable events and versions.
 
 The pinned optional PostgreSQL test driver is in `services/storage/requirements-relational.txt`. openGauss requires a driver/libpq matching the deployment version: protocol compatibility does not imply authentication compatibility. Actual tests cover PostgreSQL15.19 and openGauss7.0.0 in PG compatibility mode. Native openGauss SHA256 authentication was tested with the official Linux ARM64 Python bundle; the ordinary macOS psycopg2-binary wheel failed that handshake. An isolated MD5 fixture was only supplementary, not a production recommendation. Inject the validated driver through `OpenGaussControlStore(connection_factory, schema=..., artifact_directory=...)`; `from_dsn` imports the environment's psycopg2.
 
@@ -94,7 +96,7 @@ Relational commands are `init-relational`, `migration-plan`, `source-evidence` a
 | Web protocol | JSON/protobuf/gzip through `/api/ingest/otel/v1/traces`; loopback backend receives JSON and API credentials |
 | Identity | Default namespace `otlp`; service.name affects display only; cross-service native Trace IDs aggregate; explicit `agent_insight.source_namespace` isolates sources |
 | Revision | Span `agent_insight.revision` defaults to1; stale ignored, same-version changed content quarantined; internal revisions allocated separately |
-| Queue | Global earliest unsent `observability.otlp.accepted.v1`; active leases/retry delays block later events |
+| Queue | Claim the earliest eligible batch after checking its Trace predecessors. Independent Traces can progress during another batch’s lease or retry delay. |
 | Payload | At most128 Spans per bulk,4MiB per HTTP request; chunks up to256KiB and bundles up to64MiB; all chunks before manifests |
 | Completion | Freeze heads/plan first, then payload→Span→summary; replay exact versions; indexed/sent only after every sink and valid fence |
 | Summary | Delta counters, nullable unknown token totals and coverage; done/failed/running/unknown states |
@@ -115,7 +117,7 @@ Compatibility retains existing observe/data, observe/session, tags, execution ta
 Bundle v1 imports cap at50MiB/500 executions, preflight the tree, remap IDs/references and return success only after indexing all batches. A receipt can resume the same input. Metadata edits do not rewrite source payloads. Result editing still requires the evaluation handoff and currently reports conflict. Trace backflow, ordinary experiment/result/RunPlan consumers and DiagnosisRun consumers use the new storage protocols below. Infra and non-OTLP external writers still have unported paths; restoring screens does not establish full feature migration.
 
 
-This is an ordered single-queue/write-lock correctness baseline, not thousand-collector throughput, sharded durable logging or HA certification.
+Capacity at a thousand concurrent clients requires a workload test with representative packet sizes, Trace distribution and read traffic.
 
 ## Legacy migration inputs
 

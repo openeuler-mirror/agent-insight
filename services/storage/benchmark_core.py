@@ -55,6 +55,7 @@ class BenchmarkStore:
         if cap=='execute':
             from .legacy_history import assert_control_live
             assert_control_live(con,ws,'experiment',exp)
+        self.control.lock_keys(con, ('evaluation', ws, exp))
         self.iam._authorize_scope(con,scope,ws,cap,'run',exp)
         row=con.execute('SELECT * FROM experiment_heads WHERE workspace_id=? AND experiment_id=?',(ws,exp)).fetchone()
         if not row or row['scope']!='benchmark' or row['state']!='active' and not deleted:raise BenchmarkNotFound('Benchmark experiment unavailable')
@@ -125,7 +126,7 @@ class BenchmarkStore:
         self._trusted(token,ws,body)
         if action=='dataset_import':prepared=self._prepare_dataset(body)
         else:prepared=None
-        with self.control.transaction() as con:
+        with self.control.transaction(('benchmark', ws), ('evaluation', ws), ('dataset', ws), ('platform', ws), ('trace', ws)) as con:
             scope=self._scope(con,token,ws,'write');self.iam._workspace(scope,ws,'read');key,digest,old=self._receipt(con,scope,ws,action,body)
             if old:return self._receipt_response(con,token,ws,old)
             if action=='dataset_import':
@@ -261,7 +262,7 @@ class BenchmarkStore:
                 if row['request_hash'] is None:raise Conflict('Benchmark dispatch has not been sealed')
                 request=self._load(row['request_hash'],row['request_ref']);request['callbackHeaders']={'x-agent-insight-callback-token':self._capability(row)}
                 return {'request':request,'job':self._job_dto(row),'handle':self._handle(row,attempt)}
-        with self.control.transaction() as con:
+        with self.control.transaction(('benchmark', ws), shared=(('evaluation', ws), ('dataset', ws), ('platform', ws), ('trace', ws))) as con:
             scope=self._scope(con,token,ws,'write');self.iam._workspace(scope,ws,'execute')
             if action=='retry_case':
                 self._head_scope(con,scope,ws,body['experiment_id'],'execute');key,digest,old=self._receipt(con,scope,ws,action,body)
@@ -505,13 +506,18 @@ class BenchmarkStore:
         except (OSError,ValueError,TypeError):raise BenchmarkUnavailable('Private Benchmark callback credential unavailable') from None
         signature=hmac.new(key,(CAP_PURPOSE+'\0'+encoded).encode(),hashlib.sha256).hexdigest();return 'bcap_'+encoded+'.'+signature
 
-    def _verify_capability(self,con,capability,body,verified_device_client_id):
+    @staticmethod
+    def _callback_target(capability):
         if not isinstance(capability,str) or len(capability)>4096 or not capability.startswith('bcap_'):raise Unauthorized('Benchmark callback capability required')
         try:
             encoded,signature=capability[5:].split('.');raw=base64.b64decode(encoded+'='*(-len(encoded)%4),altchars=b'-_',validate=True);payload=json.loads(raw)
             if base64.urlsafe_b64encode(raw).decode().rstrip('=')!=encoded:raise ValueError()
             ws=identifier(payload['workspace_id']);identity=identifier(payload['job_id'])
         except (ValueError,KeyError,TypeError):raise Unauthorized('Invalid Benchmark callback capability') from None
+        return ws, identity
+
+    def _verify_capability(self,con,capability,body,verified_device_client_id):
+        ws,identity=self._callback_target(capability)
         row=con.execute('SELECT * FROM benchmark_jobs WHERE workspace_id=? AND job_id=?',(ws,identity)).fetchone()
         if row is None:raise Unauthorized('Benchmark callback unavailable')
         row=dict(row)
@@ -614,11 +620,13 @@ class BenchmarkStore:
     def callback(self,action,capability,body,*,verified_device_client_id=None):
         body=copy.deepcopy(body);_bounded(body);prepared=None
         if isinstance(capability,str) and capability in _json(body):raise Forbidden('Callback credential cannot be persisted in a payload')
+        ws,_ = self._callback_target(capability)
         if action=='artifact_put':
             with self.control.read_transaction() as con:
-                row,_,_=self._verify_capability(con,capability,body,verified_device_client_id);request=self._load(row['request_hash'],row['request_ref'])
+                row,_,_=self._verify_capability(con,capability,body,verified_device_client_id)
+                request=self._load(row['request_hash'],row['request_ref'])
             prepared=self._prepare_artifact(row,request,body,capability)
-        with self.control.transaction() as con:
+        with self.control.transaction(('benchmark', ws), shared=(('evaluation', ws), ('platform', ws), ('trace', ws))) as con:
             row,scope,attempt=self._verify_capability(con,capability,body,verified_device_client_id)
             if action in {'progress','artifact_put'}:self._close_intent(con,row,'benchmark.dispatch.requested.v1')
             if action=='artifact_read':return self._artifact_read_tx(con,row,body)
@@ -1021,7 +1029,7 @@ class BenchmarkStore:
                 current=self._scope(con,token,ws,'execute');self._intent_job(con,current,ws,body.get('job_id'));_,_,old=self._receipt(con,current,ws,action,body)
                 if old:return self._load(old['response_hash'],old['response_ref'])
             prepared=self._prepare_continuation(token,ws,body)
-        with self.control.transaction() as con:
+        with self.control.transaction(('benchmark', ws), shared=(('evaluation', ws), ('dataset', ws), ('platform', ws), ('trace', ws))) as con:
             current=self._scope(con,token,ws,'write');self.iam._workspace(current,ws,'read');self.iam._workspace(current,ws,'execute');now=self.control.clock()
             if action=='claim_intents':
                 worker=identifier(body.get('worker_id'));limit=body.get('limit',10)

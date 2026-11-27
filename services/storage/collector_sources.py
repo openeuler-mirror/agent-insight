@@ -289,6 +289,7 @@ class CollectorSources:
         else:con.execute('INSERT INTO trace_annotations(workspace_id,trace_id,extra_json,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?)',(workspace,trace,_json(extra),now,now))
 
     def _owned(self,con,token,workspace,trace):
+        self.control.lock_keys(con, ('trace', workspace, trace))
         scope=self._scope(con,token,workspace);route=con.execute('SELECT * FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone()
         if route is None:raise Conflict('Collector route is missing')
         self.iam._authorize(con,token,workspace,'write','trace',trace)
@@ -330,11 +331,13 @@ class CollectorSources:
             'duplicate':duplicate,'resume_pending':resume}
 
     def reserve(self,token,workspace,value):
-        with self.control.transaction() as con:return self._reserve(con,token,workspace,value)
+        with self.control.transaction(shared=(('collector', workspace), ('trace', workspace), ('trace-alias', workspace))) as con:return self._reserve(con,token,workspace,value)
 
     def _reserve(self,con,token,workspace,value):
         identifier(workspace);body,task,execution,framework,started,completed=self._input(value);digest=_hash({key:item for key,item in body.items() if key!='verified_client_id'});slot=_hash(body['operation_key'])
         scope=self._scope(con,token,workspace);task=task or execution or str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,scope.principal_id,slot,'missing-task'])))
+        self.control.lock_keys(con, ('collector', workspace, task), ('trace-alias', workspace, task),
+                               ('trace-alias', workspace, execution or task), shared=(('ras', workspace, scope.principal_id, task),))
         from .trace_analytics import ras_task_deleted
         if ras_task_deleted(con,workspace,scope.principal_id,task):raise Conflict('Collector task has been deleted')
         alias=con.execute("SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind='task' AND alias_id=?",(workspace,task)).fetchone()
@@ -348,6 +351,7 @@ class CollectorSources:
                 trace=route['trace_id']
             else:
                 native=_hash(['collector-source',scope.principal_id,task])[:32];trace=str(uuid.uuid5(uuid.NAMESPACE_URL,canonical_json([workspace,NAMESPACE,native,1])))
+                self.control.lock_keys(con, ('trace', workspace, trace))
                 if con.execute('SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,trace)).fetchone():raise Conflict('Collector native route has no attested alias')
                 for identity in (task,execution):
                     collision=con.execute('SELECT trace_id FROM trace_locators WHERE workspace_id=? AND trace_id=?',(workspace,identity)).fetchone()
@@ -496,7 +500,7 @@ class CollectorSources:
         identifier(workspace);identifier(value['operation_key']);expected=value['expected_revision']
         if not isinstance(expected,str) or not expected.isascii() or not expected.isdigit() or str(int(expected))!=expected:raise ValueError('Exact source revision required')
         _bounded(value['snapshot']);commit_hash=_hash(value['snapshot'])
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace, value['task_id']), ('ingest', workspace), shared=(('trace', workspace),)) as con:
             trace=self._find(con,workspace,value['task_id']);route,scope,state=self._owned(con,token,workspace,trace);slot=_hash(value['operation_key']);op=state['operations'].get(slot)
             if op is None or op['operation']!='snapshot' or op['stage']=='failed':raise Conflict('Collector snapshot reservation unavailable')
             if op.get('preparation_required'):raise Conflict('Collector operation requires its sealed preparation')
@@ -517,7 +521,7 @@ class CollectorSources:
         if value.get('operation')!='complete':raise ValueError('Collector completion operation required')
         reservation=self.reserve(token,workspace,value)
         if reservation.get('resume_pending') or reservation['state']!='reserved':return reservation
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace, reservation['task_id']), ('ingest', workspace), shared=(('trace', workspace),)) as con:
             trace=self._find(con,workspace,reservation['task_id']);route,scope,state=self._owned(con,token,workspace,trace);slot=_hash(reservation['operation_key']);op=state['operations'][slot]
             if op['stage']!='reserved':return self._view(con,workspace,trace,state,op,duplicate=True)
             if op.get('preparation_required'):raise Conflict('Collector operation requires its sealed preparation')
@@ -532,7 +536,7 @@ class CollectorSources:
     def reject_preparation(self,token,workspace,value):
         if not isinstance(value,dict) or set(value)!={'task_id','operation_key','input_hash','error_code'} or value['error_code'] not in ('INVALID_SOURCE_INPUT','SOURCE_BUDGET_EXCEEDED'):raise ValueError('Deterministic collector preparation rejection required')
         identifier(value['operation_key'])
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace, value['task_id']), shared=(('trace', workspace),)) as con:
             trace=self._find(con,workspace,value['task_id']);route,scope,state=self._owned(con,token,workspace,trace);slot=_hash(value['operation_key']);op=state['operations'].get(slot)
             if op is None or op['input_hash']!=value['input_hash']:raise Conflict('Collector rejected source receipt differs')
             if op['stage']=='failed':
@@ -545,7 +549,7 @@ class CollectorSources:
     def status(self,token,workspace,value):
         if not isinstance(value,dict) or set(value)!={'task_id','operation_key'}:raise ValueError('Collector receipt identity required')
         identifier(value['operation_key'])
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace, value['task_id']), shared=(('trace', workspace),)) as con:
             trace=self._find(con,workspace,value['task_id']);route,scope,state=self._owned(con,token,workspace,trace);slot=_hash(value['operation_key']);op=state['operations'].get(slot)
             if op is None:raise Conflict('Collector operation unavailable')
             return self._view(con,workspace,trace,state,op)

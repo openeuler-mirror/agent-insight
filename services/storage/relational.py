@@ -1,5 +1,6 @@
 """Explicit-schema PostgreSQL/openGauss control adapters using DB-API connections."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 from pathlib import Path
@@ -61,6 +62,8 @@ class _Connection:
     def __init__(self, raw):
         self.raw = raw
         self._cursors = []
+        self.business_write = False
+        self.held_keys = {}
 
     def execute(self, sql, parameters=None):
         cursor = self.raw.cursor()
@@ -102,6 +105,7 @@ class PostgreSQLControlStore(ControlOperations):
         if not artifact_directory:
             raise ValueError('an explicit artifact directory is required')
         self.connection_factory = connection_factory
+        self._in_validated_transaction = ContextVar('storage_transaction_validated', default=False)
         self.schema = schema
         self.artifact_directory = Path(artifact_directory).absolute()
         self.clock = clock or (lambda: time.time_ns() // 1_000_000)
@@ -157,6 +161,8 @@ class PostgreSQLControlStore(ControlOperations):
         except Exception as exc:
             self._rollback(connection)
             code = getattr(exc, 'pgcode', None) or getattr(exc, 'sqlstate', None)
+            if code in {'40001', '40P01'}:
+                raise StorageError('concurrent transaction rolled back; retry with the same operation key') from None
             if code and (code.startswith('23') or code == 'P0001'):
                 raise Conflict('relational storage constraint violation') from None
             if code or type(exc).__module__.split('.')[0] in {'psycopg', 'psycopg2', 'opengauss'}:
@@ -167,6 +173,27 @@ class PostgreSQLControlStore(ControlOperations):
                 connection.close()
             elif raw is not None:
                 raw.close()
+
+    def lock_keys(self, con, *keys, shared=()):
+        if not con.business_write:
+            return
+        # A bulk operation locks a prefix exclusively. Individual writers share
+        # the prefix and lock their leaf, including when that row is still absent.
+        modes = {}
+        for key, exclusive in [(k, True) for k in keys] + [(k, False) for k in shared]:
+            for length in range(1, len(key) + 1):
+                prefix = key[:length]
+                modes[prefix] = modes.get(prefix, False) or (exclusive and length == len(key))
+        for key in sorted(modes, key=lambda path: tuple(json.dumps(part, ensure_ascii=False) for part in path)):
+            encoded = json.dumps([self.schema, *key], ensure_ascii=False, separators=(',', ':')).encode()
+            number = int.from_bytes(hashlib.sha256(encoded).digest()[:8], 'big', signed=True)
+            mode = 'exclusive' if modes[key] else 'shared'
+            held = con.held_keys.get(number)
+            if held == mode or held == 'exclusive':
+                continue
+            function = 'pg_advisory_xact_lock' if modes[key] else 'pg_advisory_xact_lock_shared'
+            con.execute(f'SELECT {function}(CAST(? AS BIGINT))', (number,)).fetchone()
+            con.held_keys[number] = mode
 
     def _set_schema(self, connection):
         connection.execute('SET search_path TO "' + self.schema + '"')
@@ -198,20 +225,31 @@ class PostgreSQLControlStore(ControlOperations):
             connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
             connection.execute('SET search_path TO "' + self.schema + '"')
             self._validate_schema(connection)
-            yield connection
-            connection.raw.commit()
+            active = self._in_validated_transaction.set(True)
+            try:
+                yield connection
+                connection.raw.commit()
+            finally:
+                self._in_validated_transaction.reset(active)
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *resources, shared=()):
         with self._connect() as connection:
             self._set_schema(connection)
-            # Baseline serializes business transactions across all clients, not just one process.
-            connection.execute('SELECT version FROM schema_meta WHERE version=1 FOR UPDATE').fetchone()
+            connection.execute(f'LOCK TABLE "{self.schema}".schema_meta IN ROW SHARE MODE')
+            connection.business_write = True
+            self.lock_keys(connection, *resources, shared=shared)
             self._validate_schema(connection)
-            yield connection
-            connection.raw.commit()
+            active = self._in_validated_transaction.set(True)
+            try:
+                yield connection
+                connection.raw.commit()
+            finally:
+                self._in_validated_transaction.reset(active)
 
     def _assert_initialized(self):
+        if self._in_validated_transaction.get():
+            return
         with self.read_transaction():
             pass
 
@@ -328,3 +366,4 @@ class PostgreSQLControlStore(ControlOperations):
 
 class OpenGaussControlStore(PostgreSQLControlStore):
     backend = 'opengauss'
+    insert_if_absent_clause = ' ON DUPLICATE KEY UPDATE NOTHING'

@@ -64,7 +64,9 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 
 ### 事务并发与驱动
 
-SQLite 写事务使用 `BEGIN IMMEDIATE`；PG/openGauss 写事务暂通过 `schema_meta` 基础行锁串行协调，保证跨进程领取、回执和 fence 正确。只读事务分别使用 WAL 读取快照和 `REPEATABLE READ READ ONLY`，不占控制写锁。密码派生与 CH HTTP 在写事务外执行。此粒度是正确性基线，尚不证明 1000 采集端混合读写吞吐；细粒度 CAS/队列分片和容量验证仍需后续批次完成。
+SQLite 使用 `BEGIN IMMEDIATE`。PostgreSQL 和 openGauss 的业务事务以 `ROW SHARE` 锁保护 schema 版本，迁移以 `EXCLUSIVE` 锁等待已有写者提交。业务写在同一连接内按工作空间和资源取得事务级锁，支持锁定尚未创建的资源。同一评测集复核版本和操作回执，不同评测集可以独立提交。普通实验按实验 ID 协调，Benchmark 在工作空间内复核额度。队列领取、跨资源批处理和历史导入仍可能在相应业务范围内排队。只读关系库事务使用 `REPEATABLE READ READ ONLY`。
+
+开发写入口时，在第一次读取可变业务状态前，用 `control.transaction((域, 工作空间, 资源 ID))` 声明写入范围。多个键在同一次调用中传入，按固定顺序获取。子资源写者共享父级键，因此按整个工作空间替换集合的事务可以排斥同域的单对象变更。事务内才能确定对象 ID 时，先取稳定标识，再以同一连接调用 `control.lock_keys`，拿锁后重新读取版本、权限或租约。只读详情、列表继续使用 `read_transaction()`。跨库事实以稳定事件和版本重放。
 
 PG 可安装 `services/storage/requirements-relational.txt` 固定测试驱动。openGauss 必须按部署版本使用兼容驱动/libpq，不把 PG 协议兼容当作认证兼容。此前迁移阶段的验证记录涵盖 PG 15.19 与 openGauss 7.0.0（PG 兼容模式）：后者使用官方 Linux ARM64 Python 包与原生 SHA256 认证；macOS 的普通 psycopg2-binary 在原生认证上不兼容。兼容 MD5 的隔离测试只用作补充，不作为生产配置建议。通过 `OpenGaussControlStore(connection_factory, schema=..., artifact_directory=...)` 注入认证过的驱动；`from_dsn` 使用当前环境导入的 psycopg2。
 
@@ -98,7 +100,7 @@ SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，�
 | Web协议 | `/api/ingest/otel/v1/traces`接收JSON/protobuf/gzip，解码后转JSON；后端HTTP只接JSON/API凭据 |
 | 来源/路由 | 默认`otlp`，service.name仅显示；跨service同原生Trace合并，显式`agent_insight.source_namespace`隔离；UUID5/首个bucket固定 |
 | 源版本 | `agent_insight.revision`默认1；旧版本忽略，同版本不同内容失败；内部head版本独立分配 |
-| 队列 | 复用Outbox事件`observability.otlp.accepted.v1`，全局最早未完成事件强序，活动租约/退避不被越过 |
+| 队列 | 按批次涉及的 Trace 检查前序依赖。独立 Trace 可在其他批次租约或退避期间领取。 |
 | 正文 | 每128 Span批量；每HTTP≤4MiB；chunk≤256KiB、单bundle≤64MiB；先全部chunks再manifests |
 | 完成 | 冻结计划/head先提交，随后正文→Span→Trace摘要；重试固定版本；全部sink成功且fence有效才indexed/sent |
 | 汇总 | 最新Span差量计数/Token；未知Token总数NULL并保留覆盖度，不叠加累计快照；状态done/failed/running/unknown |
@@ -118,7 +120,7 @@ Web使用仅服务端`AGENT_INSIGHT_TRACE_STORAGE=core`、`AGENT_INSIGHT_STORAGE
 
 Trace bundle v1导入50MiB/500 execution、全树预检、ID/引用重映射，同一receipt可恢复，全部batch indexed才返回原成功DTO。兼容元数据写不回写采集原文；final_result编辑关联评测交接尚未实现，当前明确冲突。Trace回流、普通实验/评测结果/RunPlan及DiagnosisRun消费者已使用下述新存储协议；infra和非OTLP既有写入口仍有未接入范围，不能把页面恢复视为全部功能迁移完成。
 
-此为单队列/控制写锁正确性基线，不是分片事件日志、HA或1000采集端吞吐认证。封存快照与评测投影已接入；超大数据规模和千级并发仍需独立容量验证。
+千级并发容量需要按实际采集包大小、Trace 分布和查询负载压测。
 
 ## 旧库迁移输入
 

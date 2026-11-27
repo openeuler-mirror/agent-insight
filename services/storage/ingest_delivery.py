@@ -44,28 +44,38 @@ class IngestDelivery:
             next_attempt_at_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?''',
             ('dead' if terminal else 'pending', now + delay, now, ws, event['event_id']))
 
+    @staticmethod
+    def _eligible(con, now, event=None):
+        target = 'e.workspace_id=? AND e.event_id=? AND' if event is not None else ''
+        parameters = (event['workspace_id'], event['event_id'], now, now) if event is not None else (now, now)
+        return con.execute(f"""SELECT e.*,d.attempt_base,d.attempt_limit
+            FROM outbox_events e JOIN ingest_deliveries d
+                ON d.workspace_id=e.workspace_id AND d.event_id=e.event_id
+            WHERE {target} e.state IN ('pending','dispatching') AND e.next_attempt_at_ms<=?
+                AND (e.state='pending' OR e.lease_until_ms IS NULL OR e.lease_until_ms<=?)
+                AND NOT EXISTS (
+                    SELECT 1 FROM ingest_batch_traces t JOIN ingest_batch_traces p
+                        ON p.workspace_id=t.workspace_id AND p.trace_id=t.trace_id
+                    JOIN ingest_batches b ON b.workspace_id=p.workspace_id AND b.batch_id=p.batch_id
+                    JOIN ingest_deliveries pd ON pd.workspace_id=b.workspace_id AND pd.batch_id=b.batch_id
+                    JOIN outbox_events pe ON pe.workspace_id=pd.workspace_id AND pe.event_id=pd.event_id
+                    WHERE t.workspace_id=e.workspace_id AND t.batch_id=e.aggregate_id
+                        AND p.blocks_successors=1 AND b.state IN ('accepted','prepared')
+                        AND (pe.created_at_ms<e.created_at_ms OR (pe.created_at_ms=e.created_at_ms AND pe.event_id<e.event_id)))
+            ORDER BY e.created_at_ms,e.event_id LIMIT 1""", parameters).fetchone()
+
     def claim(self, worker, lease_ms):
-        now = self.control.clock()
-        with self.control.transaction() as con:
-            # Dependency ordering applies across users and includes mixed-Trace batches.
+        with self.control.transaction(shared=(('ingest',),)) as con:
             for _ in range(64):
-                row = con.execute('''SELECT e.*,d.attempt_base,d.attempt_limit
-                    FROM outbox_events e JOIN ingest_deliveries d
-                        ON d.workspace_id=e.workspace_id AND d.event_id=e.event_id
-                    WHERE e.state IN ('pending','dispatching') AND e.next_attempt_at_ms<=?
-                        AND (e.state='pending' OR e.lease_until_ms IS NULL OR e.lease_until_ms<=?)
-                        AND NOT EXISTS (
-                            SELECT 1 FROM ingest_batch_traces t JOIN ingest_batch_traces p
-                                ON p.workspace_id=t.workspace_id AND p.trace_id=t.trace_id
-                            JOIN ingest_batches b ON b.workspace_id=p.workspace_id AND b.batch_id=p.batch_id
-                            JOIN ingest_deliveries pd ON pd.workspace_id=b.workspace_id AND pd.batch_id=b.batch_id
-                            JOIN outbox_events pe ON pe.workspace_id=pd.workspace_id AND pe.event_id=pd.event_id
-                            WHERE t.workspace_id=e.workspace_id AND t.batch_id=e.aggregate_id
-                                AND p.blocks_successors=1 AND b.state IN ('accepted','prepared')
-                                AND (pe.created_at_ms<e.created_at_ms OR (pe.created_at_ms=e.created_at_ms AND pe.event_id<e.event_id)))
-                    ORDER BY e.created_at_ms,e.event_id LIMIT 1''', (now, now)).fetchone()
-                if row is None:
+                candidate = self._eligible(con, self.control.clock())
+                if candidate is None:
                     return None
+                self.control.lock_keys(con, ('ingest', candidate['workspace_id'], candidate['aggregate_id']))
+                # The lease or a predecessor may have changed while waiting for this batch.
+                now = self.control.clock()
+                row = self._eligible(con, now, candidate)
+                if row is None:
+                    continue
                 event = dict(row)
                 if self._predecessors(con, event):
                     self.fail(con, event, 'DEPENDENCY_FAILED', 'An earlier batch for this Trace failed', terminal=True)
@@ -96,7 +106,7 @@ class IngestDelivery:
     def recover(self, credential, workspace, batch, request_key):
         for value in (workspace, batch, request_key):
             identifier(value)
-        with self.control.transaction() as con:
+        with self.control.transaction(('ingest', workspace), ('trace', workspace)) as con:
             scope = self.iam._scope(con, credential)
             self.iam._workspace(scope, workspace, 'write')
             row = con.execute('SELECT * FROM ingest_batches WHERE workspace_id=? AND batch_id=?',

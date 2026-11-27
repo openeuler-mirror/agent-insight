@@ -176,7 +176,7 @@ class TraceAnalytics:
             if old and old['projection_hash']!=digest:raise Conflict('Analytics parser produced divergent content for one boundary')
         self.facts.write_analytics({'workspace_id':workspace,'trace_bucket':source['route']['trace_bucket'],'trace_id':trace,'boundary':boundary,
             'parser_version':PARSER_VERSION,'projection_hash':digest,'projection_json':text,'retry_version':1})
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', workspace, trace)) as con:
             current=self.iam._scope(con,token)
             if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed before analytics publication')
             if self._boundary(con,token,workspace,trace,current)[0]!=boundary:raise Conflict('Analytics source boundary changed during publication')
@@ -530,7 +530,7 @@ class TraceAnalytics:
             value=row['value'];bucket=datetime.datetime.fromtimestamp(row['stamp']/1000,datetime.timezone.utc).date().isoformat()
             self.facts.write_ras_event({'workspace_id':workspace,'event_bucket':bucket,'owner_principal_id':scope.principal_id,'task_id':value['taskId'],'event_key':row['identity'][-1],
                 'event_id':value['id'],'content_hash':row['hash'],'event_json':row['text'],'retry_version':1})
-        with self.control.transaction() as con:
+        with self.control.transaction(*( ('ras', workspace, scope.principal_id, row['value']['taskId']) for row in prepared)) as con:
             current=self.iam._scope(con,token);self.iam._workspace(current,workspace,'write')
             if current.fingerprint!=scope.fingerprint:raise Forbidden('Authorization changed during RAS ingestion')
             for row in prepared:
@@ -548,7 +548,7 @@ class TraceAnalytics:
         identifier(workspace)
         if not isinstance(tasks,list) or len(tasks)>200:raise ValueError('Bounded RAS task identities required')
         tasks=list(dict.fromkeys(identifier(task) for task in tasks));deleted={'ras':0,'executions':0,'sessions':0};owned=[]
-        with self.control.transaction() as con:
+        with self.control.transaction(('ras', workspace), ('trace', workspace), ('collector', workspace), ('diagnosis', workspace), ('evaluation', workspace)) as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,workspace,'delete');metadata=TraceMetadata(self.control)
             for task in tasks:
                 if con.execute("SELECT 1 FROM deletion_requests WHERE workspace_id=? AND resource_kind='ras_task' AND resource_id=?",(workspace,ras_task_barrier(scope.principal_id,task))).fetchone():continue
@@ -792,7 +792,7 @@ class TraceAnalytics:
             store._source_assets(con,scope,workspace,experiment,run)
             row,plan=store._plan(con,workspace,experiment,run)
             for source in store._source_routes(plan):store._source_route(con,scope,workspace,source)
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', workspace), ('evaluation', workspace, experiment)) as con:
             current=self.iam._scope(con,token);now=store._head(con,token,workspace,experiment)
             if current.fingerprint!=scope.fingerprint or now['lifecycle_revision']!=head['lifecycle_revision']:raise Conflict('Experiment source indexing scope changed')
             store._source_assets(con,current,workspace,experiment,run)

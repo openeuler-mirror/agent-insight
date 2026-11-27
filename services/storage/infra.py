@@ -89,7 +89,7 @@ class InfraStore:
     def ensure_source(self,token,ws,input):
         if not isinstance(input,dict) or set(input)-{'endpoint','scrapeUrl','kind','model','hardwareName','memBandwidthGBs','scrapeIntervalMs','authHeaders'}:raise ValueError('Infra source input required')
         endpoint=_text(input.get('endpoint'));raw_values=({'scrapeUrl':input.get('scrapeUrl',''),'kind':input.get('kind','pull'),'model':input.get('model'),'hardwareName':input.get('hardwareName'),'memBandwidthGBs':input.get('memBandwidthGBs'),'scrapeIntervalMs':input.get('scrapeIntervalMs',1000),**({'authHeaders':input['authHeaders']} if 'authHeaders' in input else {})})
-        with self.control.transaction() as con:
+        with self.control.transaction(('infra', ws)) as con:
             scope,_=self._scope(con,token,ws,'write');values=self._fields(raw_values);old=con.execute("SELECT * FROM infra_sources WHERE workspace_id=? AND owner_principal_id=? AND endpoint=? AND state='active'",(ws,scope.principal_id,endpoint)).fetchone()
             now=self.control.clock()
             if old:
@@ -102,10 +102,10 @@ class InfraStore:
         updates={**values,'revision':old['revision']+1,'updated_at_ms':max(self.control.clock(),old['updated_at_ms'])};con.execute('UPDATE infra_sources SET '+','.join(k+'=?' for k in updates)+' WHERE workspace_id=? AND source_id=? AND revision=?',(*updates.values(),ws,old['source_id'],old['revision']))
     def patch_source(self,token,ws,source,input):
         if not isinstance(input,dict) or set(input)-{'scrapeUrl','kind','model','hardwareName','memBandwidthGBs','scrapeIntervalMs','authHeaders','enabled'}:raise ValueError('Infra patch required')
-        with self.control.transaction() as con:
+        with self.control.transaction(('infra', ws, source)) as con:
             old=self._source(con,token,ws,source,'write');values=self._fields(input);self._update(con,ws,old,values);return self._view(self._source(con,token,ws,source,'write'))
     def delete_source(self,token,ws,*,source_id=None,endpoint=None):
-        with self.control.transaction() as con:
+        with self.control.transaction(('infra', ws)) as con:
             scope,_=self._scope(con,token,ws,'delete')
             if not source_id:
                 row=con.execute("SELECT source_id FROM infra_sources WHERE workspace_id=? AND owner_principal_id=? AND endpoint=? AND state='active'",(ws,scope.principal_id,_text(endpoint))).fetchone();source_id=row[0] if row else None
@@ -126,7 +126,7 @@ class InfraStore:
             parsed=json.loads(value[key],parse_constant=lambda _:(_ for _ in ()).throw(ValueError('Finite JSON required')))
             if not isinstance(parsed,dict):raise ValueError('Sample partition object required')
         digest=hashlib.sha256(_json([source,text]).encode()).hexdigest()
-        with self.control.transaction() as con:
+        with self.control.transaction(('infra', ws, source), ('infra-receipt', ws, operation)) as con:
             row=self._source(con,token,ws,source,'write');assert_control_live(con,ws,'infraSource',source);owner=row['owner_principal_id'];purpose='infra-accept/v1:'+owner;receipt=con.execute('SELECT content_hash FROM inbox_receipts WHERE workspace_id=? AND source_id=? AND event_id=?',(ws,purpose,operation)).fetchone();sample=str(uuid.uuid5(uuid.NAMESPACE_URL,_json([ws,owner,operation])));event='infra:'+sample
             if receipt:
                 if receipt[0]!=digest:raise Conflict('Infra operation has different input')
@@ -148,7 +148,7 @@ class InfraStore:
             return {'sampleId':sample,'state':'indexed' if event[0]=='sent' else 'accepted'}
     def project_once(self,worker,lease_ms=30000):
         now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('infra',)) as con:
             row=con.execute("SELECT * FROM outbox_events WHERE event_type=? AND ((state='pending' AND next_attempt_at_ms<=?) OR (state='dispatching' AND lease_until_ms<=?)) ORDER BY created_at_ms,event_id LIMIT 1",(EVENT,now,now)).fetchone()
             if row is None:return False
             event=dict(row);attempt=event['attempts']+1;con.execute("UPDATE outbox_events SET state='dispatching',attempts=?,lease_owner=?,lease_until_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?",(attempt,worker,now+lease_ms,now,event['workspace_id'],event['event_id']))
@@ -156,11 +156,11 @@ class InfraStore:
             payload=json.loads(event['payload_json']);fact=self.artifacts._load(payload['artifact_ref'])
             if fact['source_id']!=payload['source_id'] or fact['workspace_id']!=event['workspace_id'] or fact['sample_id']!=event['aggregate_id'] or fact['content_hash']!=payload['content_hash'] or hashlib.sha256(_json([fact['source_id'],fact['sample_json']]).encode()).hexdigest()!=fact['content_hash']:raise StorageError('Infra publication source differs')
             self.facts.write_infra_sample(fact)
-            with self.control.transaction() as con:
+            with self.control.transaction(('infra',)) as con:
                 updated=con.execute("UPDATE outbox_events SET state='sent',lease_owner=NULL,lease_until_ms=NULL,updated_at_ms=? WHERE workspace_id=? AND event_id=? AND state='dispatching' AND lease_owner=? AND attempts=? AND lease_until_ms>?",(max(now,self.control.clock()),event['workspace_id'],event['event_id'],worker,attempt,self.control.clock()))
                 return updated.rowcount==1
         except Exception:
-            with self.control.transaction() as con:con.execute("UPDATE outbox_events SET state='pending',lease_owner=NULL,lease_until_ms=NULL,next_attempt_at_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=? AND state='dispatching' AND lease_owner=? AND attempts=? AND lease_until_ms>?",(self.control.clock()+1000,max(now,self.control.clock()),event['workspace_id'],event['event_id'],worker,attempt,self.control.clock()))
+            with self.control.transaction(('infra',)) as con:con.execute("UPDATE outbox_events SET state='pending',lease_owner=NULL,lease_until_ms=NULL,next_attempt_at_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=? AND state='dispatching' AND lease_owner=? AND attempts=? AND lease_until_ms>?",(self.control.clock()+1000,max(now,self.control.clock()),event['workspace_id'],event['event_id'],worker,attempt,self.control.clock()))
             return False
     def query_samples(self,token,ws,source,*,from_ms=None,to_ms=None,model=None,via=None,limit=512,order='asc',after=None):
         if type(limit) is not int or not 1<=limit<=5000 or order not in ('asc','desc') or via not in (None,'push','pull'):raise ValueError('Infra query required')
@@ -211,7 +211,7 @@ class InfraStore:
             trace,_=self._trace(con,token,ws,execution);rows=con.execute('SELECT source_id,model FROM session_infra_links WHERE workspace_id=? AND root_trace_id=? AND retired_at_ms IS NULL ORDER BY position',(ws,trace));return [{'sourceId':row['source_id'],'model':row['model']} for row in rows]
     def set_links(self,token,ws,execution,links):
         if not isinstance(links,list) or len(links)>256:raise ValueError('Infra links required')
-        with self.control.transaction() as con:
+        with self.control.transaction(('infra', ws), ('trace', ws)) as con:
             self._scope(con,token,ws,'write');trace,_=self._trace(con,token,ws,execution,'write');uniq=[];seen=set()
             for link in links:
                 if not isinstance(link,dict) or set(link)!={'sourceId','model'}:raise ValueError('Infra link required')

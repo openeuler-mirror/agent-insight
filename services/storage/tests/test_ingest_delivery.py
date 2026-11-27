@@ -96,7 +96,7 @@ class DeliveryTests(unittest.TestCase):
         self.exhaust(first)
         self.service.work_once('worker')
         self.assertEqual(self.status(later)['error_code'], 'DEPENDENCY_FAILED')
-        frozen = copy.deepcopy(self.rows('ingest_batches')[0])
+        frozen = copy.deepcopy(next(row for row in self.rows('ingest_batches') if row['batch_id'] == first['batch_id']))
         recovery = self.service.delivery.recover
         with self.assertRaises(Forbidden):
             recovery(self.tokens['bob'], 'w', first['batch_id'], 'recover-1')
@@ -110,7 +110,7 @@ class DeliveryTests(unittest.TestCase):
         with self.assertRaises(Conflict):
             recovery(self.tokens['alice'], 'w', first['batch_id'], 'another-key')
         self.service.work_once('worker')
-        current = self.rows('ingest_batches')[0]
+        current = next(row for row in self.rows('ingest_batches') if row['batch_id'] == first['batch_id'])
         self.assertEqual(current['state'], 'indexed')
         for name in ('plan_ref', 'packet_ref', 'packet_hash'):
             self.assertEqual(current[name], frozen[name])

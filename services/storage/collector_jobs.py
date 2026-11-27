@@ -73,7 +73,7 @@ class CollectorJobs:
         payload['published'][row['operation_key']]=row['plan_hash'];self._save(con,workspace,event['event_id'],payload)
 
     def dispatch(self,token,workspace,action,value):
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             scope=self.sources._scope(con,token,workspace);now=self.control.clock()
             if action=='enqueue_proxy':
                 self.public.iam._workspace(scope,workspace,'execute')

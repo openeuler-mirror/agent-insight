@@ -23,7 +23,17 @@ SCHEMA_PATH = Path(__file__).parent / 'schema' / 'sqlite' / '001_core.sql'
 
 
 class ControlOperations:
+    insert_if_absent_clause = ' ON CONFLICT DO NOTHING'
+
+    def locked_row(self, con, query, params):
+        suffix = ' FOR UPDATE' if getattr(con, 'business_write', False) else ''
+        return con.execute(query + suffix, params).fetchone()
+
+    def lock_keys(self, con, *keys, shared=()):
+        """SQLite's BEGIN IMMEDIATE already excludes competing writers."""
+
     def require_ingest_capacity(self, con, workspace, additional=1):
+        self.lock_keys(con, ('outbox-order', 'ingest'))
         limit = getattr(self, 'max_pending_ingest_batches', 256)
         pending = con.execute("SELECT count(*) FROM ingest_batches WHERE workspace_id=? AND state IN ('accepted','prepared')", (workspace,)).fetchone()[0]
         if pending + additional > limit:
@@ -81,7 +91,7 @@ class ControlOperations:
     def create_workspace(self, workspace_id, name):
         identifier(workspace_id); identifier(name)
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('workspace', workspace_id)) as con:
             applied = con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0]
             if applied >= 3:
                 project = con.execute('SELECT status FROM projects WHERE project_id=?', ('default',)).fetchone()
@@ -94,7 +104,7 @@ class ControlOperations:
     def create_identity(self, workspace_id, asset_id, kind, name):
         for value in (workspace_id, asset_id, kind, name): identifier(value)
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('asset', workspace_id, asset_id)) as con:
             con.execute('INSERT INTO asset_identities(workspace_id,asset_id,kind,name,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?)', (workspace_id,asset_id,kind,name,now,now))
 
     def publish_release(self, workspace_id, asset_id, release_id, version_label, manifest, *, dependencies=(), publisher_id='local'):
@@ -104,7 +114,7 @@ class ControlOperations:
         packed = {'schema_version': 1, 'asset_id': asset_id, 'content': manifest, 'dependencies': [list(dep) for dep in deps]}
         digest, ref = self._manifest(packed)
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('asset', workspace_id, asset_id)) as con:
             old = con.execute('SELECT * FROM asset_releases WHERE workspace_id=? AND release_id=?', (workspace_id,release_id)).fetchone()
             if old:
                 if (old['asset_id'],old['version_label'],old['content_hash']) != (asset_id,version_label,digest):
@@ -122,7 +132,7 @@ class ControlOperations:
         identifier(alias)
         if type(expected_etag) is not int or expected_etag < 0: raise ValueError('invalid expected etag')
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('asset', workspace_id, asset_id)) as con:
             if expected_etag == 0:
                 con.execute('INSERT INTO asset_aliases(workspace_id,asset_id,alias,release_id,etag,created_at_ms,updated_at_ms) VALUES(?,?,?,?,1,?,?)',(workspace_id,asset_id,alias,release_id,now,now))
                 return 1
@@ -134,13 +144,13 @@ class ControlOperations:
     def create_draft(self, workspace_id, draft_id, asset_id, manifest, *, base_release_id=None, branch='main'):
         body = canonical_json(manifest)
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('asset', workspace_id, asset_id)) as con:
             con.execute('INSERT INTO asset_drafts(workspace_id,draft_id,asset_id,branch_name,base_release_id,manifest_json,edit_revision,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,1,?,?)',(workspace_id,draft_id,asset_id,branch,base_release_id,body,now,now))
 
     def edit_draft(self, workspace_id, draft_id, manifest, *, expected_revision):
         revision(expected_revision)
         next_revision = revision(expected_revision + 1)
-        with self.transaction() as con:
+        with self.transaction(('asset-draft', workspace_id, draft_id)) as con:
             result = con.execute('UPDATE asset_drafts SET manifest_json=?,edit_revision=?,updated_at_ms=? WHERE workspace_id=? AND draft_id=? AND edit_revision=?',(canonical_json(manifest),next_revision,self.clock(),workspace_id,draft_id,expected_revision))
             if result.rowcount != 1: raise Conflict('draft changed concurrently')
         return next_revision
@@ -150,7 +160,7 @@ class ControlOperations:
         plan = {'releases': releases, 'config': config, 'expected_case_count': expected_case_count}
         digest, ref = self._manifest(plan)
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('evaluation', workspace_id, run_id)) as con:
             for slot, release_id in releases.items():
                 role = slot.split(':', 1)[0]
                 asset = con.execute('SELECT a.kind FROM asset_release_seals s JOIN asset_identities a ON a.workspace_id=s.workspace_id AND a.asset_id=s.asset_id WHERE s.workspace_id=? AND s.release_id=?',(workspace_id,release_id)).fetchone()
@@ -162,14 +172,14 @@ class ControlOperations:
 
     def enqueue(self, workspace_id, work_item_id, run_id, case_key, *, phase='execute', evaluator_slot='default'):
         now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('evaluation', workspace_id, run_id)) as con:
             con.execute("INSERT INTO work_items(workspace_id,work_item_id,run_id,case_key,phase,evaluator_slot,status,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,'queued',?,?)",(workspace_id,work_item_id,run_id,case_key,phase,identifier(evaluator_slot),now,now))
 
     def claim(self, workspace_id, worker_id, *, lease_ms=30_000):
         identifier(worker_id)
         if type(lease_ms) is not int or not 0 < lease_ms <= 3_600_000: raise ValueError('invalid lease duration')
-        now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('evaluation', workspace_id)) as con:
+            now = self.clock()
             row = con.execute("""SELECT w.* FROM work_items w WHERE w.workspace_id=? AND w.cancel_requested=0
                 AND w.next_attempt_at_ms<=? AND (w.status='queued' OR (w.status='running' AND EXISTS
                 (SELECT 1 FROM work_attempts a WHERE a.workspace_id=w.workspace_id AND a.work_item_id=w.work_item_id AND a.status='running' AND a.lease_until_ms<=?)))
@@ -188,8 +198,8 @@ class ControlOperations:
         revision(fence)
         if type(lease_ms) is not int or not 0 < lease_ms <= 3_600_000:
             raise ValueError('invalid lease duration')
-        now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('evaluation', workspace_id)) as con:
+            now = self.clock()
             result = con.execute("""UPDATE work_attempts SET lease_until_ms=?
                 WHERE workspace_id=? AND attempt_id=? AND fence=? AND status='running' AND lease_until_ms>?
                 AND EXISTS(SELECT 1 FROM work_items w WHERE w.workspace_id=work_attempts.workspace_id
@@ -204,8 +214,8 @@ class ControlOperations:
         for value in (workspace_id,attempt_id,receipt_key,result_id,artifact_ref): identifier(value)
         if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest): raise ValueError('invalid content hash')
         self._verify_artifact(digest, artifact_ref)
-        now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('evaluation', workspace_id)) as con:
+            now = self.clock()
             old = con.execute('SELECT * FROM result_receipts WHERE workspace_id=? AND attempt_id=? AND receipt_key=?',(workspace_id,attempt_id,receipt_key)).fetchone()
             attempt = con.execute('SELECT a.*,w.run_id,w.case_key,w.evaluator_slot,w.etag,w.cancel_requested,w.status AS item_status FROM work_attempts a JOIN work_items w ON a.workspace_id=w.workspace_id AND a.work_item_id=w.work_item_id WHERE a.workspace_id=? AND a.attempt_id=?',(workspace_id,attempt_id)).fetchone()
             if attempt is not None and evaluator_slot != attempt['evaluator_slot']:
@@ -225,8 +235,8 @@ class ControlOperations:
             return dict(con.execute('SELECT * FROM result_receipts WHERE workspace_id=? AND receipt_id=?',(workspace_id,receipt_id)).fetchone())
 
     def cancel(self, workspace_id, work_item_id):
-        now = self.clock()
-        with self.transaction() as con:
+        with self.transaction(('evaluation', workspace_id)) as con:
+            now = self.clock()
             result=con.execute("UPDATE work_items SET status='cancelled',cancel_requested=1,etag=etag+1,updated_at_ms=? WHERE workspace_id=? AND work_item_id=? AND status IN ('queued','running')",(now,workspace_id,work_item_id))
             if result.rowcount:
                 con.execute("UPDATE work_attempts SET status='cancelled',finished_at_ms=? WHERE workspace_id=? AND work_item_id=? AND status='running'",(now,workspace_id,work_item_id))
@@ -344,7 +354,7 @@ class SQLiteControlStore(ControlOperations):
             con.close()
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *resources, shared=()):
         if not self.path.is_file():
             raise StorageError('initialize an explicit new target before writing')
         con = sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True, timeout=10, isolation_level=None)
