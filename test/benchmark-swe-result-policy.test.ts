@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -72,7 +73,7 @@ allowed = ControlledDockerClient(client, "evaluation", 1, 1024, "allow").contain
 assert "network_mode" not in allowed
 assert "network_disabled" not in allowed
 `
-  const result = spawnSync('python3', ['-c', script], { encoding: 'utf8' })
+  const result = spawnSync(pythonExecutable, ['-c', script], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
 
@@ -130,7 +131,7 @@ for malformed in (
     assert error["code"] == "SWE_HARNESS_RESULT_INVALID"
     assert error["retryable"] is True
 `
-  const result = spawnSync('python3', ['-c', script], {
+  const result = spawnSync(pythonExecutable, ['-c', script], {
     encoding: 'utf8',
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
   })

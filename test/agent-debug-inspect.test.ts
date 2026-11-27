@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -133,7 +134,7 @@ function fixture() {
 }
 
 function runJson(script: string, args: string[]) {
-  return JSON.parse(execFileSync('python3', [script, ...args], { encoding: 'utf8' }));
+  return JSON.parse(execFileSync(pythonExecutable, [script, ...args], { encoding: 'utf8' }));
 }
 
 test('agent-debug inspect summary exposes bounded candidate signals for all modules', () => {
@@ -172,7 +173,7 @@ test('agent-debug validator rejects deletion of static evidence', () => {
   assert.equal(valid.ok, true);
 
   fs.writeFileSync(data.finalPath, JSON.stringify({ ...data.finalReport, phase1Grid: [], issues: [] }));
-  const invalid = spawnSync('python3', [validateScript, '--input', data.finalPath, '--static', data.staticPath], { encoding: 'utf8' });
+  const invalid = spawnSync(pythonExecutable, [validateScript, '--input', data.finalPath, '--static', data.staticPath], { encoding: 'utf8' });
   assert.equal(invalid.status, 1);
   assert.match(invalid.stdout, /删除了静态 issue/);
   assert.match(invalid.stdout, /丢失静态单元格/);

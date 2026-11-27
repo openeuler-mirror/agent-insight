@@ -37,7 +37,7 @@ function bootstrapDataset({ key, name, args, describeFailure }) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true })
     logFd = fs.openSync(logPath, 'w', 0o600)
     logReady = true
-    const result = spawnSync('npx', ['tsx', ...args], {
+    const result = spawnSync(process.execPath, [require.resolve('tsx/cli'), ...args], {
       cwd: path.resolve(__dirname, '../..'),
       env: process.env,
       stdio: ['ignore', logFd, logFd],

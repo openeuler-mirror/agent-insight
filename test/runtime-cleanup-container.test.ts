@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -124,7 +125,7 @@ test('ownership of HOME does not authorize recovery in an external or symlinked 
 test('the real entrypoint wrapper passes ownership through exec into the cleanup module', () => fixture(async home => {
   const module = path.resolve('src/lib/runtime-cleanup/ownership.ts');
   const script = `const { runtimeOwner, runtimeLockDirectory } = require(${JSON.stringify(module)}); const owner = runtimeOwner(process.argv[1]); if (!owner) process.exit(2); console.log(JSON.stringify({id:owner.id, directory:runtimeLockDirectory(process.argv[1])}));`;
-  const child = spawnSync('python3', ['scripts/container-runtime.py', home, process.execPath, '--import', 'tsx', '-e', script, home], {
+  const child = spawnSync(pythonExecutable, ['scripts/container-runtime.py', home, process.execPath, '--import', 'tsx', '-e', script, home], {
     encoding: 'utf8', timeout: 10000,
   });
   assert.equal(child.status, 0, child.stderr);

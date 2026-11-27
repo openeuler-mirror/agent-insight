@@ -84,6 +84,17 @@ export interface InteractionPart {
 }
 
 export interface RawInteraction {
+    harnessRequests?: Array<{
+        sourceSessionId: string;
+        eventSequence: number;
+        turn: number;
+        step: number;
+        providerUsage?: { input: number | null; output: number | null; cacheRead: number | null };
+        membership?: Record<string, unknown>;
+        dshContext?: Record<string, any>;
+        membershipDiff?: ReturnType<typeof import('@/lib/ingest/deepseek-harness-otel/context-membership').diffCapturedHarnessRequests>;
+        contextEvents?: Array<{ sourceSessionId: string; eventSequence: number; eventType: string; body: Record<string, unknown> }>;
+    }>;
     _payloadVersion?: string;
     role: InteractionRole;
     content?: string;

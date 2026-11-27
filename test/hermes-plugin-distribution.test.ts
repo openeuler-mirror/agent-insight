@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
@@ -67,7 +68,7 @@ test("Hermes plugin source imports and extracts normalized provider text", () =>
     "assert module._response_text({'assistant_message': {'content': [{'type': 'text', 'text': 'canonical'}]}}) == 'canonical'",
     "assert module._response_text({'response': {'candidates': [{'content': {'parts': [{'text': 'candidate'}]}}]}}) == 'candidate'",
   ].join("\n")
-  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+  const result = spawnSync(pythonExecutable, ["-c", script], { encoding: "utf8" })
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
@@ -111,7 +112,7 @@ test("Hermes plugin derives root agent name from active Hermes profile", () => {
     "assert attrs[\"hermes.agent.name\"] == \"hermes\"",
     "assert attrs[\"hermes.profile.name\"] == \"default\"",
   ].join("\n")
-  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+  const result = spawnSync(pythonExecutable, ["-c", script], { encoding: "utf8" })
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
@@ -159,7 +160,7 @@ test("Hermes plugin retains root snapshots until all subagents finish", () => {
     "assert 'child' not in collector.sessions",
     "assert 'root' not in collector.ended_roots",
   ].join("\n")
-  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+  const result = spawnSync(pythonExecutable, ["-c", script], { encoding: "utf8" })
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
@@ -182,6 +183,6 @@ test("Hermes plugin preserves native observer tool error details", () => {
     "assert captured['tool.status'] == 'error'",
     "assert captured['error.message'] == 'native failure'",
   ].join("\n")
-  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+  const result = spawnSync(pythonExecutable, ["-c", script], { encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })

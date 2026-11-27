@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from '../helpers/python';
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -39,7 +40,7 @@ function fixture(t: TestContext) {
   fs.writeFileSync(path.join(task, 'private/source-manifest.json'), '{"source_id":"synthetic"}')
   fs.writeFileSync(path.join(task, 'private/judge.py'), 'JUDGE_SECRET')
   const env = { ...process.env, PYTHONDONTWRITEBYTECODE: '1', AGENT_INSIGHT_ZSOFT_WORKSPACE: root }
-  const python = (code: string) => spawnSync('python3', ['-c', `import importlib.util, sys
+  const python = (code: string) => spawnSync(pythonExecutable, ['-c', `import importlib.util, sys
 from pathlib import Path
 from types import SimpleNamespace
 root = Path(sys.argv[1])
@@ -184,7 +185,7 @@ assert 'sha256sum -c -' in materializer._download_script(lock)
 Path(os.environ['TEST_UPLOAD_MARKER']).write_text('safe to upload')`)
   fs.writeFileSync(path.join(f.root, 'source-locks/synthetic.json'), JSON.stringify({ source_id: 'synthetic', kind: 'archive',
     url: `https://sources.example.test/${'a'.repeat(40)}.tar.gz`, sha256: 'b'.repeat(64) }))
-  const check = spawnSync('python3', [contract, repository], { encoding: 'utf8', env: f.env, timeout: 10_000 })
+  const check = spawnSync(pythonExecutable, [contract, repository], { encoding: 'utf8', env: f.env, timeout: 10_000 })
   assert.equal(check.status, 0, check.stderr)
   const fingerprint = JSON.parse(check.stdout).sourceDigest
   for (const unsafe of [false, true]) {
@@ -201,7 +202,7 @@ with tarfile.open(root / 'bundle.tar.gz', 'w:gz') as archive:
 `)
     assert.equal(created.status, 0, created.stderr)
     const marker = path.join(f.root, `uploaded-${unsafe}`)
-    const run = spawnSync('python3', [bridge], { encoding: 'utf8', timeout: 10_000, env: { ...f.env,
+    const run = spawnSync(pythonExecutable, [bridge], { encoding: 'utf8', timeout: 10_000, env: { ...f.env,
       AGENT_INSIGHT_MCTS_REPO_DIR: repository, AGENT_INSIGHT_ZSOFT_CONTRACT_DIGEST: fingerprint,
       AGENT_INSIGHT_ZSOFT_SUBMISSION_KIND: 'python', TEST_BUNDLE: path.join(f.root, 'bundle.tar.gz'), TEST_UPLOAD_MARKER: marker } })
     if (unsafe) {

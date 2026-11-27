@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { prepareActionsJob, assertJobContainer } from './actions-job.mjs';
+import { prepareActionsJob, prepareActionsJobWithReport, assertJobContainer } from './actions-job.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-job-'));
@@ -19,7 +19,7 @@ function fixture(t) {
   write(path.join(imageRoot, 'dependencies/node_modules/prisma/build/index.js'), "const fs=require('node:fs');fs.mkdirSync('node_modules/.prisma/client',{recursive:true});fs.copyFileSync(process.argv[4],'node_modules/.prisma/client/schema.prisma');\n");
   for (const args of [['init','-q'],['add','.'],['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','fixture']]) assert.equal(spawnSync('git',args,{cwd:checkout}).status,0);
   write(path.join(checkout, 'not-committed.key'), 'private-fixture');
-  return { root, checkout, imageRoot, envFile:path.join(root, 'env'), sha:spawnSync('git',['rev-parse','HEAD'],{cwd:checkout,encoding:'utf8'}).stdout.trim() };
+  return { root, checkout, imageRoot, dependencyMode:'image', envFile:path.join(root, 'env'), sha:spawnSync('git',['rev-parse','HEAD'],{cwd:checkout,encoding:'utf8'}).stdout.trim() };
 }
 
 function preparedCommand(calls = []) {
@@ -37,6 +37,82 @@ function preparedCommand(calls = []) {
     return {code:0};
   };
 }
+
+test('opt-in lockfile mode installs only drifted dependencies without scripts or inherited credentials', async t => {
+  const f=fixture(t);fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'old image');
+  let installed=0;const execute=preparedCommand();
+  const prepared=await prepareActionsJob({...f,phase:'build',runId:'atomgit-lockfile',dependencyMode:'lockfile',run:async (bin,args,options)=>{
+    if(args[0]==='ci') {
+      installed++;assert.equal(bin,'npm');assert.ok(args.includes('--ignore-scripts'));assert.ok(args.includes('--legacy-peer-deps'));
+      assert.equal(options.env.npm_config_offline,'false');assert.equal(options.env.ATOMGIT_TOKEN,undefined);assert.equal(options.env.E2E_MODEL_API_KEY,undefined);
+      assert.equal(options.cwd.endsWith('source'),true);
+      fs.cpSync(path.join(f.imageRoot,'dependencies/node_modules'),path.join(options.cwd,'node_modules'),{recursive:true});
+      return {code:0};
+    }
+    return execute(bin,args,options);
+  }});
+  assert.equal(installed,1);
+  assert.equal(fs.readFileSync(path.join(prepared.project,'package-lock.json'),'utf8'),'package-lock.json');
+  assert.equal(fs.readFileSync(path.join(prepared.project,'test/e2e/node_modules/playwright/index.mjs'),'utf8'),'fixture');
+});
+
+test('locked installation failure publishes a blocked report and usable artifact directory', async t => {
+  const f=fixture(t);fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'old image');
+  await assert.rejects(prepareActionsJobWithReport({...f,phase:'build',runId:'atomgit-install-failed',dependencyMode:'lockfile',run:async(_bin,_args,{cwd})=>{
+    fs.writeFileSync(path.join(path.dirname(cwd),'dependency-install.log'),'npm ERR! network failure Bearer fixture-log-secret https://user:password@example.invalid/pkg');return {code:1};
+  }}),/Locked dependency installation failed/);
+  const env=fs.readFileSync(f.envFile,'utf8'),root=env.match(/^E2E_CI_ROOT=(.+)$/m)[1];
+  const result=JSON.parse(fs.readFileSync(path.join(root,'public/result.json')));
+  assert.equal(result.status,'BLOCKED');assert.equal(result.testedSha,f.sha);assert.equal(result.phase,'build');
+  assert.match(result.payload.reason,/Locked dependency installation failed/);
+  assert.equal(fs.existsSync(path.join(root,'public/context.json')),false,'preparation failure cannot invent a compiled context');
+  assert.match(fs.readFileSync(path.join(root,'public/summary.md'),'utf8'),/准备|preparation/);
+  assert.ok(fs.existsSync(path.join(root,'public/report.html')));
+  const log=fs.readFileSync(path.join(root,'public/preparation.log'),'utf8');assert.match(log,/network failure/);assert.doesNotMatch(log,/fixture-log-secret|user:password/);
+});
+
+test('browser lock drift installs in its own prefix and matching locks never invoke npm ci', async t => {
+  const f=fixture(t);fs.writeFileSync(path.join(f.imageRoot,'e2e/package-lock.json'),'old browser dependencies');
+  const execute=preparedCommand();let installed=0;
+  const prepared=await prepareActionsJob({...f,phase:'case',runId:'atomgit-browser-lock',dependencyMode:'lockfile',run:async (bin,args,options)=>{
+    if(args[0]==='ci') {
+      installed++;assert.equal(options.cwd,path.join(path.dirname(options.cwd),'e2e'));assert.equal(path.basename(path.dirname(options.cwd)),'test');
+      fs.cpSync(path.join(f.imageRoot,'e2e/node_modules'),path.join(options.cwd,'node_modules'),{recursive:true});return {code:0};
+    }
+    return execute(bin,args,options);
+  }});
+  assert.equal(installed,1);assert.equal(prepared.env.npm_config_offline,'true');
+  const matching=fixture(t);
+  await prepareActionsJob({...matching,phase:'build',runId:'atomgit-matching-locks',dependencyMode:'lockfile',run:preparedCommand()});
+});
+
+test('lockfile fallback rejects npm changing the committed lock', async t => {
+  const f=fixture(t);fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'old image');
+  await assert.rejects(prepareActionsJob({...f,phase:'ut',runId:'atomgit-mutated-lock',dependencyMode:'lockfile',run:async(_bin,_args,{cwd})=>{
+    fs.writeFileSync(path.join(cwd,'package-lock.json'),'mutated');return {code:0};
+  }}),/changed the lockfile/);
+});
+
+test('transient registry failures retry once using the same cache and locked install arguments', async t => {
+  const f=fixture(t);fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'old image');
+  let attempts=0,cache;const execute=preparedCommand();
+  await prepareActionsJob({...f,phase:'build',runId:'atomgit-network-retry',dependencyMode:'lockfile',run:async(bin,args,options)=>{
+    if(args[0]==='ci') {
+      assert.ok(args.includes('--ignore-scripts'));assert.equal(options.timeout,600000);
+      if(++attempts===1){cache=options.env.npm_config_cache;return {code:1,output:'npm error code EIDLETIMEOUT'};}
+      assert.equal(options.env.npm_config_cache,cache);
+      fs.cpSync(path.join(f.imageRoot,'dependencies/node_modules'),path.join(options.cwd,'node_modules'),{recursive:true});return {code:0};
+    }
+    return execute(bin,args,options);
+  }});
+  assert.equal(attempts,2);
+  const failed=fixture(t);fs.writeFileSync(path.join(failed.imageRoot,'dependencies/package-lock.json'),'old image');let failures=0;
+  await assert.rejects(prepareActionsJob({...failed,phase:'build',runId:'atomgit-network-exhausted',dependencyMode:'lockfile',run:async()=>{failures++;return {code:1,output:'ECONNRESET'};}}),/Locked dependency installation failed/);
+  assert.equal(failures,2);
+  const invalid=fixture(t);fs.writeFileSync(path.join(invalid.imageRoot,'dependencies/package-lock.json'),'old image');let integrityAttempts=0;
+  await assert.rejects(prepareActionsJob({...invalid,phase:'build',runId:'atomgit-integrity-failed',dependencyMode:'lockfile',run:async()=>{integrityAttempts++;return {code:1,output:'EINTEGRITY'};}}),/Locked dependency installation failed/);
+  assert.equal(integrityAttempts,1);
+});
 
 test('Actions job starts from the exact clean commit and prepares only fixed image dependencies', async t => {
   const f = fixture(t), calls = [];
@@ -65,7 +141,7 @@ test('project lock drift installs the current lock without inherited secrets bef
   const f=fixture(t),calls=[],execute=preparedCommand(calls);
   fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'older image lock');
   let installed=false;
-  await prepareActionsJob({...f,phase:'build',runId:'atomgit-new-lock',run:async(bin,args,options)=>{
+  await prepareActionsJob({...f,phase:'build',runId:'atomgit-new-lock',dependencyMode:'project-lockfile',run:async(bin,args,options)=>{
     if(args[0]==='ci') {
       assert.deepEqual(args,['ci','--ignore-scripts','--include=dev','--no-audit','--no-fund']);
       assert.equal(fs.readFileSync(path.join(options.cwd,'package-lock.json'),'utf8'),'package-lock.json');
@@ -82,7 +158,7 @@ test('project lock drift installs the current lock without inherited secrets bef
 test('a failed current-lock install aborts without generating clients or publishing environment', async t => {
   const f=fixture(t);
   fs.writeFileSync(path.join(f.imageRoot,'dependencies/package-lock.json'),'older image lock');
-  await assert.rejects(prepareActionsJob({...f,phase:'build',runId:'atomgit-install-fail',run:async(bin,args)=>{
+  await assert.rejects(prepareActionsJob({...f,phase:'build',runId:'atomgit-install-fail',dependencyMode:'project-lockfile',run:async(bin,args)=>{
     assert.equal(bin,'npm');assert.equal(args[0],'ci');return {code:1};
   }}),/Installing the checked-out dependency lock failed/);
   assert.equal(fs.existsSync(f.envFile),false);

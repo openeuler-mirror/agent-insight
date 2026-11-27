@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -53,7 +54,7 @@ test('agent-debug inspect searches full externalized artifacts with bounded outp
     traceBundle: { indexRelPath: '.agent-insight/trace/trace-index.json' },
   }));
 
-  const output = execFileSync('python3', [
+  const output = execFileSync(pythonExecutable, [
     inspectScript,
     'search',
     '--input', inputPath,

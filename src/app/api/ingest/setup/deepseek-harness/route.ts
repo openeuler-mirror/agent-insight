@@ -53,7 +53,11 @@ export async function GET(request: Request) {
       .replaceAll('__DEEPSEEK_HARNESS_SOURCE_SHA256__', plugin.sourceDigest)
       .replaceAll('__DEEPSEEK_HARNESS_PACKAGE_JSON_SHA256__', digestByName.get('package.json') || '')
       .replaceAll('__DEEPSEEK_HARNESS_INDEX_JS_SHA256__', digestByName.get('index.js') || '')
-      .replaceAll('__DEEPSEEK_HARNESS_CORDIS_PATCH_SHA256__', digestByName.get('cordis.patch.yml') || '');
+      .replaceAll('__DEEPSEEK_HARNESS_CORDIS_PATCH_SHA256__', digestByName.get('cordis.patch.yml') || '')
+      .replaceAll('__DEEPSEEK_HARNESS_CONTEXT_SOURCE_SHA256__', digestByName.get('dsh-context-source.mjs') || '')
+      .replaceAll('__DEEPSEEK_HARNESS_CONTEXT_DETAILS_SHA256__', digestByName.get('dsh-context-details.mjs') || '')
+      .replaceAll('__DEEPSEEK_HARNESS_PROCESS_LOCK_SHA256__', digestByName.get('process-lock.mjs') || '')
+      .replaceAll('__DEEPSEEK_HARNESS_REPLAY_COMPAT_SHA256__', digestByName.get('replay-compat.mjs') || '');
     return new NextResponse(script, {
       headers: {
         'Content-Type': 'text/x-shellscript; charset=utf-8',

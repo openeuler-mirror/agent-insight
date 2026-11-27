@@ -263,6 +263,32 @@ test("concurrent recovery of an orphaned lock has one owner", async (t) => {
   assert.equal(await transport.releaseProcessLock(owners[0]), true)
 })
 
+test("orphan recovery retains ownership when a late contender claims recovery during handoff", async (t) => {
+  const dir = await tempDir(t)
+  const lockPath = path.join(dir, "uploader.lock")
+  const recoveryPath = lockPath + ".recovery"
+  await fsp.writeFile(lockPath, JSON.stringify({ version: 1, pid: 2_147_483_647,
+    host: os.hostname(), startedAt: new Date(0).toISOString(), token: "dead-owner" }))
+  const unlink = fsp.unlink.bind(fsp)
+  let lateClaim = false
+  t.mock.method(fsp, "unlink", async (file: string) => {
+    await unlink(file)
+    if (file === recoveryPath && !lateClaim) {
+      lateClaim = true
+      // A contender inspected the old orphan before recovery began, but its claim publishes late.
+      await fsp.writeFile(recoveryPath, JSON.stringify({ version: 1, pid: process.pid,
+        host: os.hostname(), token: "late-contender" }), { flag: "wx" })
+    }
+  })
+  const owner = await transport.acquireProcessLock(lockPath, { invalidLockGraceMs: 0 })
+  assert.ok(lateClaim)
+  assert.ok(owner, "the successful recovery must retain the replacement lock")
+  assert.equal(await transport.acquireProcessLock(lockPath), null)
+  await unlink(recoveryPath)
+  assert.equal((await transport.inspectProcessLock(lockPath)).state, "held-local")
+  assert.equal(await transport.releaseProcessLock(owner), true)
+})
+
 test("process lock fails closed for an owner on another host", async (t) => {
   const dir = await tempDir(t)
   const lockPath = path.join(dir, "uploader.lock")

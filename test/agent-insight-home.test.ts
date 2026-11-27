@@ -57,8 +57,8 @@ test('npm database selection respects process, file and default precedence', () 
   const file = { DATABASE_URL: 'file:/tmp/file-config.db' }
   assert.equal(resolveStartupDatabaseUrl(file, { DATABASE_URL: 'file:/tmp/process.db' }, root), 'file:/tmp/process.db')
   assert.equal(resolveStartupDatabaseUrl(file, {}, root), file.DATABASE_URL)
-  assert.equal(resolveStartupDatabaseUrl(file, { DATABASE_URL: '' }, root), `file:${root}/data/witty_insight.db`)
-  assert.equal(resolveStartupDatabaseUrl({}, {}, root), `file:${root}/data/witty_insight.db`)
+  assert.equal(resolveStartupDatabaseUrl(file, { DATABASE_URL: '' }, root), `file:${path.join(root, 'data', 'witty_insight.db')}`)
+  assert.equal(resolveStartupDatabaseUrl({}, {}, root), `file:${path.join(root, 'data', 'witty_insight.db')}`)
   assert.throws(() => resolveStartupDatabaseUrl({ AGENT_INSIGHT_DATA_DIR: '/old' }, {}, root), /no longer supported/)
 })
 
@@ -81,7 +81,7 @@ for (const [shell, script] of [
   ['bash', 'scripts/develop_start.sh'],
   ['sh', 'scripts/docker-entrypoint.sh'],
 ]) {
-  test(`${script} rejects legacy process and .env values before starting services`, () => {
+  test(`${script} rejects legacy process and .env values before starting services`, { skip: process.platform === 'win32' ? 'POSIX service entrypoint; validated under Linux/WSL' : false }, () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'insight-home-reject-'))
     const env: NodeJS.ProcessEnv = { ...process.env, AGENT_INSIGHT_HOME: root, AGENT_INSIGHT_SOURCE_DIR: '' }
     try {
@@ -103,7 +103,7 @@ for (const [shell, script] of [
   })
 }
 
-test('shell root expansion matches Node without running startup side effects', () => {
+test('shell root expansion matches Node without running startup side effects', { skip: process.platform === 'win32' ? 'POSIX service entrypoint; validated under Linux/WSL' : false }, () => {
   for (const script of ['scripts/start.sh', 'scripts/develop_start.sh', 'scripts/docker-entrypoint.sh']) {
     const source = fs.readFileSync(script, 'utf8')
     const prefix = source.slice(0, source.indexOf('RESOLVED_AGENT_INSIGHT_HOME='))

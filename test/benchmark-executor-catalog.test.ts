@@ -205,8 +205,15 @@ test('catalog rejects invalid policy paths, formats and incompatible capabilitie
   assert.throws(() => generate(f.root), /执行能力/)
   f.write('benchmark.yaml', f.manifest)
   const outside = path.join(f.root, 'outside.cjs')
-  fs.writeFileSync(outside, 'module.exports = {}')
-  fs.symlinkSync(outside, path.join(f.packageDir, 'executor', 'escape.cjs'))
+  if (process.platform === 'win32') {
+    // Directory junctions exercise the escape guard without requiring symlink privileges.
+    fs.mkdirSync(outside)
+    fs.writeFileSync(path.join(outside, 'escape.cjs'), 'module.exports = {}')
+    fs.symlinkSync(outside, path.join(f.packageDir, 'executor', 'escape'), 'junction')
+  } else {
+    fs.writeFileSync(outside, 'module.exports = {}')
+    fs.symlinkSync(outside, path.join(f.packageDir, 'executor', 'escape.cjs'))
+  }
   assert.throws(() => generate(f.root), /越出接入包/)
 })
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import fs from 'node:fs';
@@ -128,10 +129,10 @@ test('the Skill progress helper writes a current-run summary and fails nonfatall
   const observer = createDiagnosisObserver({ workspaceDir, progress, traceRefs: [] });
   const script = path.resolve('skills/agent-debug-diagnosis/scripts/agentdebug_progress.py');
   const args = [script, '--module', 'memory', '--title', '证据范围', '--summary', '当前未找到足够的记忆证据'];
-  assert.equal(spawnSync('python3', args, { cwd: workspaceDir }).status, 0);
+  assert.equal(spawnSync(pythonExecutable, args, { cwd: workspaceDir }).status, 0);
   observer.scan();
   assert.equal(progress.snapshot().events[0].module, 'memory');
-  assert.equal(spawnSync('python3', args, { cwd: root }).status, 0);
+  assert.equal(spawnSync(pythonExecutable, args, { cwd: root }).status, 0);
 });
 
 test('core conclusions complete only reviewed modules; records alone remain evidence', () => {
@@ -157,7 +158,7 @@ test('overall progress stays at task level and never starts System or other modu
   const progress = createDiagnosisProgress(identity('overall'));
   const observer = createDiagnosisObserver({ workspaceDir, progress, traceRefs: [] });
   const script = path.resolve('skills/agent-debug-diagnosis/scripts/agentdebug_progress.py');
-  const result = spawnSync('python3', [script, '--module', 'overall', '--state', 'started', '--title', '开始五模块诊断', '--summary', '已获取全局资料'], { cwd: workspaceDir });
+  const result = spawnSync(pythonExecutable, [script, '--module', 'overall', '--state', 'started', '--title', '开始五模块诊断', '--summary', '已获取全局资料'], { cwd: workspaceDir });
   assert.equal(result.status, 0);
   observer.scan();
   assert.equal(progress.snapshot().events[0].module, undefined);

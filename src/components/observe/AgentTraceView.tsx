@@ -21,6 +21,7 @@ import { resolveTraceStepSelection } from '@/lib/engine/experiment/conversation-
 import { selectedParentAgent, selectedChildAgents, type TraceRelations, type ChildAgentReference, type ParentAgentReference } from '@/lib/trace/parent-agent';
 import { ParentAgentCard } from './ParentAgentCard';
 import { TraceSpanViewport, type TraceSpanViewportHandle } from './TraceSpanViewport';
+import { HarnessContextTabs } from './HarnessContextTabs';
 import { InferenceAnalysisButton } from './InferenceAnalysisButton';
 import { inferenceAnalysisTarget, interactionUpstreamRequestIds } from '@/lib/trace/inference-analysis';
 import { AgentRelationCard } from './AgentRelationCard';
@@ -1162,6 +1163,18 @@ export default function AgentTraceView({
         }, 80);
     };
 
+    const harnessRequests = framework === 'deepseek-harness'
+        ? [...nodeMap.values()].flatMap(node => node.events.flatMap((event, index) =>
+            event.kind === 'llm' && !event.treeHidden
+                ? (event.interaction?.harnessRequests ?? []).map(request => ({
+                    request,
+                    usage: event.interaction?.usage,
+                    key: eventKey(node.id, index),
+                }))
+                : [],
+        ))
+        : [];
+
     useEffect(() => {
         if (!initialStep) { appliedInitialStep.current = ''; initialStepTarget.current = ''; return; }
         if (!tree) return;
@@ -1177,7 +1190,7 @@ export default function AgentTraceView({
         initialStepTarget.current = target.selectedKey;
         setSelectedKey(target.selectedKey);
         setExpandedKeys(current => new Set([...current, ...target.expandedKeys]));
-        setTreeKindFilter([]); setEventTypeFilter('all'); setSearchQuery('');
+        setTreeKindFilter([]); setSearchQuery('');
         setMinDurationMs(0); setMinTokenK(0);
         if (slowOnly) void setSlowOnlyParam(null);
     }, [initialStep, tree, sourceInteractions, interactions, displayInteractions, stableTraceIdentity, rootSessionId, slowOnly, setSlowOnlyParam]);
@@ -1439,6 +1452,7 @@ export default function AgentTraceView({
 
                 {/* ─── Right: Detail Panel ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex min-w-0 flex-col h-[min(70vh,700px)] min-h-[360px] overflow-hidden @min-[900px]/agent-trace:h-full @min-[900px]/agent-trace:min-h-0">
+                    <HarnessContextTabs entries={harnessRequests} selectedKey={selectedKey} onSelect={onJumpToKey} zh={locale === 'zh'} taskId={rootSessionId}>
                     {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
                         <div className="p-4 space-y-3">
                             <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
@@ -1486,6 +1500,7 @@ export default function AgentTraceView({
                             rootExecutionId={rootExecutionId}
                         />
                     ) : null}
+                    </HarnessContextTabs>
                 </div>
             </div>
             </div>
@@ -3288,7 +3303,10 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
-                    <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
+                    event.interaction.harnessRequests?.length ? <details className="rounded-md border border-border p-3">
+                        <summary className="cursor-pointer text-sm font-medium">{locale === 'zh' ? '查看输入与输出' : 'View input and output'}</summary>
+                        <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
+                    </details> : <LLMEventBody event={event} responseText={responseText} interactions={interactions} node={node} />
                 )}
 
                 {/* ── User message ── */}

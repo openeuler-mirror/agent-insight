@@ -1,9 +1,10 @@
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 test('diagnosis migration preserves historical data, repeats safely and rolls back incompatible schemas', () => {
-  const result = spawnSync('python3', ['-c', String.raw`
+  const result = spawnSync(pythonExecutable, ['-c', String.raw`
 import importlib.util, pathlib, sqlite3, tempfile
 spec = importlib.util.spec_from_file_location('migration', 'scripts/migrations/diagnosis-inputs.py')
 migration = importlib.util.module_from_spec(spec)

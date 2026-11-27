@@ -441,7 +441,9 @@ async function recoverProcessLock(lockPath, observed, owner) {
     await fsp.unlink(retired).catch((error) => {
       if (error?.code !== "ENOENT") throw error;
     });
-    return true;
+    // Publish the replacement before releasing the recovery claim. A late stale
+    // contender must not make a successful recovery abandon the lock.
+    return await publishProcessLock(lockPath, owner);
   } finally {
     await releaseOwnedProcessLock(recoveryPath, owner.token);
   }
@@ -457,20 +459,18 @@ async function acquireProcessLock(lockPath, options = {}) {
     token: crypto.randomBytes(16).toString("hex"),
   };
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const before = await inspectProcessLock(lockPath);
-    if (before.state === "recovery-blocked") return null;
-    if (await publishProcessLock(lockPath, owner)) return { lockPath, token: owner.token };
-    const observed = await inspectProcessLock(lockPath);
-    const graceMs = Number.isFinite(Number(options.invalidLockGraceMs))
-      ? Math.max(0, Number(options.invalidLockGraceMs))
-      : DEFAULT_PROCESS_LOCK_INVALID_GRACE_MS;
-    const recoverableInvalid = observed.state === "invalid"
-      && observed.recoverable
-      && Number(observed.ageMs) >= graceMs;
-    if (!(observed.state === "orphaned" && observed.recoverable) && !recoverableInvalid) return null;
-    if (!await recoverProcessLock(lockPath, observed, owner)) return null;
-  }
+  const before = await inspectProcessLock(lockPath);
+  if (before.state === "recovery-blocked") return null;
+  if (await publishProcessLock(lockPath, owner)) return { lockPath, token: owner.token };
+  const observed = await inspectProcessLock(lockPath);
+  const graceMs = Number.isFinite(Number(options.invalidLockGraceMs))
+    ? Math.max(0, Number(options.invalidLockGraceMs))
+    : DEFAULT_PROCESS_LOCK_INVALID_GRACE_MS;
+  const recoverableInvalid = observed.state === "invalid"
+    && observed.recoverable
+    && Number(observed.ageMs) >= graceMs;
+  if (!(observed.state === "orphaned" && observed.recoverable) && !recoverableInvalid) return null;
+  if (await recoverProcessLock(lockPath, observed, owner)) return { lockPath, token: owner.token };
   return null;
 }
 

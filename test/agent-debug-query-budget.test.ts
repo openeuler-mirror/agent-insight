@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { pythonExecutable } from './helpers/python';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -51,7 +52,7 @@ test('agent-debug inspect keeps large tail, range and contextual search outputs 
     ['search', '--input', inputPath, '--terms', 'needle', '--context', '1', '--limit', '20'],
   ];
   for (const args of commands) {
-    const output = execFileSync('python3', [inspectScript, ...args], { encoding: 'utf8' });
+    const output = execFileSync(pythonExecutable, [inspectScript, ...args], { encoding: 'utf8' });
     assert.ok(Buffer.byteLength(output, 'utf8') < 50_000, `${args[0]} output should stay below 50KB`);
   }
 });

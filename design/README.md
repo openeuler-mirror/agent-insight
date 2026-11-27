@@ -188,3 +188,5 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 4. **回到本清单追加一行**,填齐上表各列。
 
 | JiuwenSwarm 企业版 WebSocket 实验 | [设计](evaluation/jiuwen-enterprise-websocket/phase2-design.md) / [计划](evaluation/jiuwen-enterprise-websocket/phase3-plan.md) | 本地登录、授权 Agent 发现与选择，沿用 #588 WS 下发 | Feature | 2026-11-10 | 开发中 | — |
+
+| Issue 381 Harness 上下文已有数据 | [设计与来源](observability/issue-381-existing-source-v1.md)；[评审修复方案](observability/issue-381-review-system-plan.md) / [验收报告](observability/issue-381-pr-acceptance.md) | 复用原有遥测及 dsh-context 投影，不新增请求成员采样 | Feature | 2026-11-24 | 评审修复：摘要按需读取与超时恢复已接入；新任务在线复验待完成 | [#381](https://gitcode.com/openeuler/agent-insight/issues/381) |

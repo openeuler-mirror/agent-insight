@@ -6,6 +6,8 @@ export async function compileProduction(config,{project=process.cwd(),runId=proc
  const env=boundedAppEnv(root,{...inputEnv,E2E_SUITE_RUN_ID:runId,HOME:path.join(root,'host'),AGENT_INSIGHT_HOME:path.join(root,'app'),DATABASE_URL:'file:'+path.join(root,'app/data/witty_insight.db'),LOGIN_MODE:'standalone'},config.resources);
  let result;
  try {
+  const inventory=await run('node',['scripts/test-suites.mjs','--check'],{cwd:project,env,log,timeout:30000});
+  if(inventory.code!==0)throw Error('UT inventory preflight failed: '+String(inventory.output||'see production-build.log').slice(-1500));
   for(const [bin,args] of [['node',['-e',"const u=require('./scripts/utils.js');u.ensureEnvFile();u.ensureDataDirectory()"]],['node',['scripts/prepare-ras-sqlite-schema.js']],['sh',['scripts/db_push.sh','--skip-generate']],['node',['node_modules/prisma/build/index.js','generate']]]) {
    const execution=await run(bin,args,{cwd:project,env,log,timeout:120000});if(execution.code!==0)throw Error('Production build preparation failed: '+[bin,...args.slice(0,1)].join(' '));
   }

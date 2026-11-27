@@ -328,9 +328,9 @@ async function atomicWriteJson(filePath, value) {
   await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 })
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
   await fsp.writeFile(tempPath, JSON.stringify(value, null, 2), { mode: 0o600 })
-  const handle = await fsp.open(tempPath, 'r')
-  await handle.sync()
-  await handle.close()
+  // Windows requires a writable handle for FlushFileBuffers (fsync).
+  const handle = await fsp.open(tempPath, 'r+')
+  try { await handle.sync() } finally { await handle.close() }
   await fsp.rename(tempPath, filePath)
 }
 
