@@ -19,7 +19,6 @@
 const { createHash } = require('node:crypto')
 
 const KEY = /^[a-z][a-z0-9-]{0,63}$/
-const OCI_IMAGE = /^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/)?[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_.-]+|@sha256:[a-f0-9]{64})?$/
 const object = value => value && typeof value === 'object' && !Array.isArray(value)
 const canonical = value => JSON.stringify(sort(value))
 function sort(value) {
@@ -31,7 +30,6 @@ function fail(message) { throw Object.assign(new Error(message), { code: 'EXECUT
 function fields(value, allowed) {
   if (!object(value) || Object.keys(value).some(key => !allowed.includes(key))) fail('执行环境包含未知字段或不是对象')
 }
-function positive(value, maximum) { if (!Number.isSafeInteger(value) || value < 1 || value > maximum) fail('执行环境资源或期限超出范围') }
 function strings(value) { if (!Array.isArray(value) || !value.length || value.some(item => typeof item !== 'string' || !KEY.test(item))) fail('执行环境选择器不合法') }
 
 function describeProfile(key, config) {

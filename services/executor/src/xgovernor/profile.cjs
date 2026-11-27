@@ -17,7 +17,6 @@
 'use strict'
 
 const fs = require('node:fs')
-const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const { loadProjectConfig } = require('../project-config.cjs')
 const { artifactIdentity } = require('./artifact-identity.cjs')

@@ -262,17 +262,6 @@ interface TrajectoryResultRow {
     updatedAt?: Date;
 }
 
-interface TrajectoryApiResult {
-    id?: string;
-    evaluatorRunId?: string;
-    status?: string;
-    taskId?: string | null;
-    trajectoryScore?: number | null;
-    resultEvaluationScore?: number | null;
-    errorMessage?: string | null;
-    rawAnalysis?: unknown;
-    updatedAt?: string;
-}
 
 type TrajectoryResultStatus = 'pending' | 'running' | 'done' | 'failed' | string;
 
@@ -445,13 +434,6 @@ function readGrayscaleBindingFromRawAnalysisJson(rawAnalysisJson: string | null 
     return raw && typeof raw === 'object' ? normalizeGrayscaleBinding(raw.grayscaleBinding) : null;
 }
 
-function readGrayscaleBindingFromRaw(rawAnalysis: unknown): GrayscaleBinding | null {
-    return normalizeGrayscaleBinding(
-        rawAnalysis && typeof rawAnalysis === 'object' && !Array.isArray(rawAnalysis)
-            ? (rawAnalysis as Record<string, unknown>).grayscaleBinding
-            : null,
-    );
-}
 
 function matchesGrayscaleBinding(
     binding: GrayscaleBinding | null,
@@ -1840,7 +1822,6 @@ async function evaluateSingleRunTarget(args: {
 }) {
     const { target } = args;
     let evaluatorRunId: string | undefined;
-    let evaluationResultId: string | undefined;
     const effectiveEvaluatorIds = normalizeAbEvaluators(args.evaluatorIds || args.config.evaluators, args.evaluatorId || args.config.evaluatorId);
     const evaluationAttempt = (target.run.evaluationAttempts || 0) + (target.run.evaluationReserved ? 0 : 1);
     const evaluationClaimId = target.run.evaluationReserved && target.run.evaluationClaimId || buildEvaluationClaimId();

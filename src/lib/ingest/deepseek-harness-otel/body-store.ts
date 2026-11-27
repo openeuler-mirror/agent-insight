@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { getExistingInsightDir } from '@/lib/agent-insight-paths';
-import { validateDshContext, validateDshDetails } from './context-membership';
+import { validateDshContext } from './context-membership';
 import { redactAgentTrajectoryPromptValue } from '@/lib/engine/evaluation/agent-trajectory-facts';
 
 const UUID = /^[a-f0-9-]{36}$/i;
@@ -158,7 +158,7 @@ export function separateHarnessBodies(events: any[], directory = harnessBodyDire
       }
     }
     event.body = { ...event.body, contextMembership: { ...manifest, bodyRef, bodyStorageStatus,
-      items: manifest.items.map(({ text, ...item }: any) => ({ ...item,
+      items: manifest.items.map((item: any) => ({ ...item,
         bodyStatus: bodyRef ? item.bodyStatus : bodyStorageStatus, storedBytes: bodyRef ? item.storedBytes : 0 })) } };
   }
 }

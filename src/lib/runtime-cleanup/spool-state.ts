@@ -223,6 +223,7 @@ function effectiveState(state: SpoolState): SpoolState {
         ? file.birthtimeMs === state.purgeIntent.birthtimeMs
         : state.purgeIntent.ctimeMs === undefined || file.ctimeMs === state.purgeIntent.ctimeMs;
       if (file.isFile() && file.ino === state.purgeIntent.ino && file.dev === state.purgeIntent.dev && sameCreation) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { purgedAt: _pending, ...intact } = state;
         return intact;
       }

@@ -1966,6 +1966,7 @@ async function generateDynamicOnlyMatchResult(
 
 function generateActualTrajectoryMermaidCode(
   matches: DynamicOnlyMatchResult['matches'],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   extractedSteps: ExtractedStep[]
 ): string {
   const lines: string[] = ['flowchart LR'];

@@ -152,7 +152,7 @@ class SweBenchImageResolver {
     const daemonArch = await this.dockerArchitecture(signal)
     if (expectedArch && daemonArch !== (expectedArch === 'amd64' ? 'x86_64' : expectedArch)) throw this.errorFactory('SWE_IMAGE_ARCH_MISMATCH', '任务镜像架构与 Docker daemon 不一致', 422)
     const [plan] = this.describeImages({ instance: { image: jobImage, instance_id: instanceId } }, daemonArch)
-    const { daemonArch: ignored, imageMirrorRepositories: mirrorRepositories, imageProxyPrefix: proxyPrefix, ...selected } = plan.context
+    const { imageMirrorRepositories: mirrorRepositories, imageProxyPrefix: proxyPrefix, ...selected } = plan.context
     const proxyImage = proxyPrefix ? `${proxyPrefix}/${selected.image}` : null
     const mirrorImages = mirrorRepositories.map(repository => `${repository}:${instanceId}`)
     const inspectArgs = [

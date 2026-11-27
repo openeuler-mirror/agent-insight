@@ -22,6 +22,7 @@ const DISABLED_PROXY_RESPONSE = {
   otlpEndpoint: '/api/ingest/otel/v1/traces',
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function POST(_request: Request) {
   return NextResponse.json(DISABLED_PROXY_RESPONSE, { status: 410 });
 }

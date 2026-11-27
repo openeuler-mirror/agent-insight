@@ -20,7 +20,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 class GitSourcePolicy {
-  resolve(_spec) {
+  resolve() {
     throw new Error('GitSourcePolicy.resolve must be implemented')
   }
 }

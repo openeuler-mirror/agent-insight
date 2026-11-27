@@ -49,8 +49,6 @@ import {
     STATIC_EVAL_STANDARDS,
     computeStaticScore,
     type EvaluationDetail,
-    type FindingItem,
-    type FindingGroup,
 } from '@/components/evaluation';
 import { toast } from 'sonner';
 import { Term } from '@/components/text/Term';
@@ -557,13 +555,6 @@ interface SkippedExpectedStep {
     expectedStepName: string;
 }
 
-interface FlowStep {
-    id: string;
-    name: string;
-    description?: string;
-    type?: 'action' | 'decision' | 'output';
-}
-
 interface AlignmentActualStep {
     index: number;
     action: string;
@@ -695,7 +686,7 @@ function SkillAnalysisPage() {
     const [grayHistoryTrigger, setGrayHistoryTrigger] = useState(0);
     // batchNewTaskTrigger / batchHistoryTrigger 删——'batch' 视图已下线，
     // BatchEvaluation 作为 trace 模式 ① 配置块"从数据集"内核渲染时直接 props 0/0
-    const [resetToken, setResetToken] = useState(0);
+    const [resetToken] = useState(0);
     const [prefillTraceId, setPrefillTraceId] = useState(searchParams.get('taskId') || '');
     const [selectedTraceId, setSelectedTraceId] = useState(searchParams.get('taskId') || '');
     const [smartRunBusy, setSmartRunBusy] = useState(false);
@@ -707,7 +698,7 @@ function SkillAnalysisPage() {
     const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
     const [traceEvaluationBatchId, setTraceEvaluationBatchId] = useState(() => searchParams.get('caseRunId') || '');
     const [traceEvaluationBatchTitle, setTraceEvaluationBatchTitle] = useState('');
-    const [traceEvaluationBatchEvaluators, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
+    const [, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
     const pendingTraceEvalBatchIdRef = useRef<string>('');
     const traceEvaluationWaitAbortRef = useRef<AbortController | null>(null);
 
@@ -1476,15 +1467,6 @@ function SkillAnalysisPage() {
         };
     }, [reloadGraySummary, resetToken]);
 
-    const handleReset = () => {
-        setView('overview');
-        setPrefillTraceId('');
-        setResetToken(v => v + 1);
-        if (selectedSkill) {
-            setSelectedVersion(resolveSkillVersion(selectedSkill));
-        }
-    };
-
     const traceStats = summarizeTraceMatches(traces);
     const selectedTrace = traces.find(t => getTraceId(t) === selectedTraceId) || null;
     const selectedTraceStats = summarizeTraceMatches(selectedTrace ? [selectedTrace] : []);
@@ -1494,7 +1476,6 @@ function SkillAnalysisPage() {
     const grayScore = typeof graySummary?.scoring.totalScore === 'number'
         ? graySummary.scoring.totalScore
         : null;
-    const batchHasResult = false;
     // 用例分析维度只认当前关联评测任务，不再从全量 trace 上的历史 answer_score / trajectory_score 取旧分。
     const traceEvalMetasForHealth = effectiveTraceEvaluationBatchId ? Array.from(currentTraceEvalResultsMap.values()) : [];
     const traceEvalValidForHealth = traceEvalMetasForHealth.filter(m =>
@@ -1897,14 +1878,10 @@ function AnalysisOverview({
     traceEvaluationBatchTitle,
     health,
     traces,
-    traceAnalyzed,
-    traceCardUpdatedAt,
+        traceCardUpdatedAt,
     selectedTrace,
-    selectedTraceStats,
     staticSummary,
-    staticLoading,
-    tracesLoading,
-    hasAnyAnalysisResult,
+            hasAnyAnalysisResult,
     graySummary,
     grayTaskMeta,
     triggerSummary,
@@ -1976,9 +1953,6 @@ function AnalysisOverview({
     const staticHasResult = staticStats.avgPct != null;
     const [selectedTraceEvalUpdatedAt, setSelectedTraceEvalUpdatedAt] = useState<string | null>(null);
     const selectedTraceId = selectedTrace ? getTraceId(selectedTrace) : '';
-    const selectedTraceScoreLabel = selectedTraceStats.totalSteps > 0
-        ? `${selectedTraceStats.matchedSteps}/${selectedTraceStats.totalSteps}`
-        : '--';
     // 用例分析卡片口径：绑定当前关联的「评测任务」(traceEvaluationBatchId)，
     // 分数/用例数只统计该任务下的评测记录——与详情页 ③ 总评分同口径，
     // 而非该 skill 版本全部 trace 的平均。未关联任务时卡片提示先去关联。
@@ -2483,11 +2457,7 @@ function AnalysisOverview({
             if (successfulKeys.includes('trace')) {
                 latestTraces = await onReloadTraces({ retries: 1, retryDelayMs: 800 });
                 const traceRow = latestTraces.find(t => getTraceId(t) === selectedTraceId);
-                const resultScore = traceRow
-                    ? (typeof traceRow.answer_score === 'number' ? traceRow.answer_score : traceRow.answerScore)
-                    : null;
                 const traceTerminal = !!traceRow && !traceRow.is_evaluating && isTraceFlowAnalyzed(traceRow);
-                const traceReady = traceTerminal && resultScore != null && getTraceFlowScore(traceRow) != null;
                 traceBusy = !traceTerminal;
                 pending = pending || traceBusy;
             }
@@ -3157,7 +3127,6 @@ function TraceDeviationPanel({
     prefillTraceId,
     selectedTraceId,
     onSelectedTraceChange,
-    onBack,
     onReload,
     onOptimize,
     onBatchAnalyze,
@@ -3297,7 +3266,6 @@ function TraceDeviationPanel({
     const transientStateMatchesRun = transientEvalRunId === (traceEvaluationBatchId || '');
     // 用例来源模式：'trace' 用已有 Trace 评测 / 'dataset' 用数据集发起评测（v1 走跳转，phase 2 集成）
     const [caseSourceMode, setCaseSourceMode] = useState<'trace' | 'dataset'>('trace');
-    const [traceListCollapsed, setTraceListCollapsed] = useState(false);
 
     /* ─────────────────────────────────────────────────────
        Skill 归因状态
@@ -3370,7 +3338,6 @@ function TraceDeviationPanel({
         [selectedTraceId, traces],
     );
     const primarySkill = selectedTrace ? getTracePrimarySkill(selectedTrace) : null;
-    const actionUsesPrimarySkill = !!skill?.name && !!primarySkill?.name && primarySkill.name !== skill.name;
 
     /* ── 轨迹评估器：拉最新结果 ── */
     const fetchTrajectoryEval = useCallback(async () => {
@@ -3608,9 +3575,6 @@ function TraceDeviationPanel({
         }
     };
 
-    const primaryLabel = bothRunning ? '分析中…'
-        : checkedTraceIds.size > 0 ? `分析选中 ${checkedTraceIds.size} 条 Trace`
-        : '分析当前 Trace';
     const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name) || !traceEvaluationBatchId;
 
     // 「添加评测对象」入口 —— 评测对象始终是 Trace，这里选的是 Trace 的来路（添加方式），不是两种评测模式：
@@ -3937,44 +3901,6 @@ function TraceDeviationPanel({
     // 为 dual-tab 各自生成 FindingGroup（未通过 / 通过 / 待评测），每条 IssueCard 的 dimension
     // 字段用 traceId 编码——FindingsGrouped 当前没暴露 onClick，所以"点 case → 切换 selectedTrace"
     // 通过下方的「在下方查看完整分析 ↓」按钮（沿用 ev-issue-drill button）显式触发。
-    const buildFindingsForTab = (tab: 'result' | 'trajectory'): FindingGroup[] => {
-        const failedItems: FindingItem[] = [];
-        const passedItems: FindingItem[] = [];
-        const pendingItems: FindingItem[] = [];
-        for (const s of scoredTraces) {
-            const score = tab === 'result' ? s.resultScore : s.trajScore;
-            const shortQ = s.query.length > 80 ? s.query.slice(0, 80) + '…' : s.query;
-            const otherScore = tab === 'result' ? s.trajScore : s.resultScore;
-            const evidence = score != null
-                ? `${tab === 'result' ? '结果分' : '轨迹分'} ${score}（另一维 ${otherScore ?? '—'}）`
-                : '未评测';
-            if (score == null) {
-                pendingItems.push({
-                    id: s.id, summary: shortQ, severity: 'low', evidence: '待评测', reasoning: null, passed: false,
-                    dimension: `trace ${s.id.slice(0, 8)}`,
-                });
-            } else if (score >= 60) {
-                passedItems.push({
-                    id: s.id, summary: shortQ, severity: 'low', evidence, reasoning: null, passed: true,
-                    dimension: `trace ${s.id.slice(0, 8)}`,
-                });
-            } else {
-                failedItems.push({
-                    id: s.id, summary: shortQ,
-                    severity: score < 40 ? 'high' : 'medium',
-                    evidence, reasoning: null,
-                    suggestedFix: `点上方 Trace 列表选中此条 → 下方深度视图显示完整 ${tab === 'result' ? 'ResultAnalysisSection' : 'TraceAlignmentPanel + Skill 归因'}`,
-                    dimension: `trace ${s.id.slice(0, 8)}`,
-                });
-            }
-        }
-        return [
-            { key: 'failed', title: '未通过', desc: `${tab === 'result' ? '结果分' : '轨迹分'} < 60，点 case 在下方深度视图看完整分析`, status: failedItems.length === 0 ? 'passed' : 'failed', scoreLabel: `${failedItems.length} 个问题`, items: failedItems },
-            { key: 'passed', title: '通过', desc: `${tab === 'result' ? '结果分' : '轨迹分'} ≥ 60`, status: 'passed', scoreLabel: `${passedItems.length} 通过`, items: passedItems },
-            { key: 'pending', title: '待评测', desc: '还没评测或缺一边的 score', status: 'notEvaluated', scoreLabel: `${pendingItems.length} 待评`, items: pendingItems },
-        ];
-    };
-
     return (
         <section className="sa-detail">
             <DetailHeader
@@ -4476,7 +4402,6 @@ function StaticCompliancePanel({
     user,
     summary,
     loading,
-    onBack,
     onReload,
     onOptimize,
 }: {
@@ -4685,7 +4610,6 @@ function EmbeddedDebugPanel({
     primaryAction,
     secondaryAction,
     children,
-    onBack,
     onPrimary,
     onSecondary,
     onOptimize,
@@ -4732,7 +4656,6 @@ function DetailHeader({
     subtitle,
     badge,
     metaSlot,
-    onBack,
     onPrimary,
     primaryDisabled,
     primaryLabel,
@@ -4777,20 +4700,7 @@ function DetailHeader({
     );
 }
 
-function EvaluatorCard({
-    kind,
-    title,
-    subtitle,
-    status,
-    score,
-    scoreLabel,
-    summary,
-    detail,
-    scoreSlot,
-    stats,
-    footnote,
-    onClick,
-}: {
+: {
     kind: 'trace' | 'static' | 'gray';
     title: string;
     subtitle: string;
@@ -4852,11 +4762,7 @@ function EvaluatorCard({
     );
 }
 
-function TrajectoryMatchStandards({
-    matches,
-    skippedExpectedSteps,
-    problemByStepKey,
-}: {
+: {
     matches: StepMatch[];
     skippedExpectedSteps: SkippedExpectedStep[];
     problemByStepKey: Map<string, ProblemStep>;
@@ -4983,7 +4889,7 @@ function TrajectoryMatchGroup({
     );
 }
 
-function Donut({ value }: { value: number | null }) {
+: { value: number | null }) {
     const safe = value == null ? 0 : Math.max(0, Math.min(100, value));
     return (
         <div className={`sa-donut ${value == null ? 'pending' : ''}`} style={{ ['--value' as string]: `${safe}%` }}>
@@ -4995,7 +4901,7 @@ function Donut({ value }: { value: number | null }) {
     );
 }
 
-function LegendRow({ color, label, value }: { color: string; label: string; value: number }) {
+: { color: string; label: string; value: number }) {
     return (
         <div className="sa-legend-row">
             <span style={{ background: color }} />
@@ -5122,11 +5028,6 @@ function getTracePrimarySkill(trace: TraceRecord): InvokedSkillRef | null {
     return root?.name ? { name: root.name, version: root.version ?? null } : null;
 }
 
-function formatSkillRef(value: InvokedSkillRef | null) {
-    if (!value?.name) return '--';
-    return value.version != null ? `${value.name} · v${value.version}` : value.name;
-}
-
 function summarizeTraceMatches(traces: TraceRecord[]) {
     let analyzed = 0;
     let highDeviation = 0;
@@ -5201,13 +5102,6 @@ function formatShortDate(value?: string) {
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return '';
     return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function formatDateTime(value?: string) {
-    if (!value) return '';
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return value;
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function formatRelative(value?: string) {

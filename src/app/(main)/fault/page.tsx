@@ -600,7 +600,6 @@ function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: 
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
     const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems, traceNodes), [diagnosticItems, traceNodes]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
-    const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
 
     const { roots: treeRoots, nodeMap: treeNodeMap } = useMemo(() => flatToTree(traceNodes), [traceNodes]);
 
@@ -1457,7 +1456,7 @@ function SessionStat({ label, value, valueColor }: { label: React.ReactNode; val
 
 /* ── Clickable node reference chip (used in composer + messages) ── */
 function NodeRefChip({
-    nodeId, label, kind, onClick, onRemove,
+    label, kind, onClick, onRemove,
 }: { nodeId: string; label: string; kind?: string; onClick?: () => void; onRemove?: () => void }) {
     const badge = KIND_BADGE[kind || ''];
     return (
@@ -2041,8 +2040,6 @@ function Th({ children, width, align }: { children: React.ReactNode; width?: num
 function FaultRow({ execution: e, onClick, locale }: { execution: Execution; onClick: () => void; locale: string }) {
     const id = e.task_id || e.upload_id || '';
     const failureTypes = (e.failures || []).map(f => f.failure_type).filter(Boolean);
-    const skillCount = (e.invoked_skills?.length ?? 0) || (e.skills?.length ?? 0) || (e.skill ? 1 : 0);
-    const isMultiAgent = (e.invoked_skills?.length ?? 0) > 1 || (e.skills?.length ?? 0) > 1;
     const hasAnomaly = (e.failures && e.failures.length > 0) || (e.tool_call_error_count || 0) > 0;
 
     return (
