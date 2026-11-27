@@ -46,6 +46,27 @@
             ]
           },
           {
+            "tab": "实战教程",
+            "groups": [
+              {
+                "group": "阅读入口",
+                "pages": [
+                  "zh/hands-on/README"
+                ]
+              },
+              {
+                "group": "跟做旅程",
+                "pages": [
+                  "zh/hands-on/00-environment-setup",
+                  "zh/hands-on/01-trace-observability",
+                  "zh/hands-on/02-intelligent-diagnosis",
+                  "zh/hands-on/03-design-evaluation",
+                  "zh/hands-on/04-skill-optimization"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "操作指南",
             "groups": [
               {

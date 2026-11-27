@@ -10,6 +10,7 @@ changefreq: "monthly"
 中文为权威源。文档按用途分类，再按观测、评测、诊断、优化、可靠性和平台公共组织；源码模块位置以当前代码为准。
 
 - [入门教程](./tutorial/navigation.md)：跟着步骤完成任务。
+- [实战教程](./hands-on/README.md)：跟着真实样例完整复现。
 - [操作指南](./how-to/navigation.md)：安装、配置、使用与扩展。
 - [参考文档](./reference/navigation.md)：接口、协议、配置与数据字段。
 - [概念与原理](./explanation/navigation.md)：概念、架构与职责边界。
