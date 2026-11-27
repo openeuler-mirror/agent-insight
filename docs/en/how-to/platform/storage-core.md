@@ -7,7 +7,7 @@ description: "Explicit initialization, private identity mappings, original scree
 
 ## Single storage runtime
 
-The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 020 (77 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
+The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL, openGauss or MariaDB), with ClickHouse required for analytical facts. The current baseline is transaction migration 020 (77 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
 
 Web startup checks the Core origin, private controller file and readiness of both stores. Core startup and /v1/health verify transaction migrations and required ClickHouse tables, columns and SELECT access. This does not replace ingestion and business acceptance tests. Outbox work survives ClickHouse outages without falling back to a relational analytical store. The private Core configuration accepts max_pending_ingest_batches (per workspace, default 256, range 1–10000). New ingestion receives 429/QUEUE_LIMIT when full; retries of accepted receipts remain idempotent.
 
@@ -61,9 +61,13 @@ Background error clustering skips repeated full LLM input history, avoiding quad
 
 Reuse the same arguments and state file to resume; a new state file creates a new Trace. The state contains IDs, timestamps and progress, never credentials. Completion verifies span count and ownership and prints the original Trace page URL. Batch timing includes HTTP, transactions, indexing and polling, not just ClickHouse query latency. This prepares database test data and does not measure the Web collector compatibility layer. Test data remains available for inspection. The local 21,001-Span fixture was verified with the earlier batch size across 43 pages of at most 500 Spans with no duplicate IDs; original-layout scrolling was also checked. Endpoint success alone does not establish full product acceptance.
 
+## Use external MariaDB
+
+Provision a dedicated MariaDB 11.4+ database with `utf8mb4` and `utf8mb4_unicode_ci` for a fresh installation. Use `config/storage.mariadb.example.json` with the exact database name in the DSN and a reachable ClickHouse instance. Keep the connection file private and use verified TLS. The database administrator grants DML to the runtime account and table, index and trigger privileges to the migration account. Run `bash scripts/install.sh --check` and `bash scripts/install.sh --storage-only` before starting the application. Follow the [migration procedure](../../reference/platform/storage-core.md) for upgrades.
+
 ## Initialize and provision explicit targets
 
-Use Python3.11+, a running ClickHouse instance and dedicated absolute paths, database names and ports. These examples use SQLite; PostgreSQL/openGauss are alternative control backends. Existing Prisma databases cannot be initialized or upgraded as core databases.
+Use Python3.11+, a running ClickHouse instance and dedicated absolute paths, database names and ports. These examples use SQLite; PostgreSQL, openGauss and MariaDB are alternative control backends. Existing Prisma databases cannot be initialized or upgraded as core databases.
 
 ```bash
 mkdir -m 700 -p /absolute/path/to/isolated-core

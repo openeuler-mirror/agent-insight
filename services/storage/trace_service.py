@@ -927,6 +927,11 @@ def runtime_from_config(path):
         database=Path(config['control']['database'])
         if not database.is_absolute() or not database.is_file():raise ValueError('existing explicit absolute database required')
         control=SQLiteControlStore(database)
+    elif backend=='mariadb':
+        from .mariadb import MariaDBControlStore
+        settings=config['control']
+        if set(settings)-{'backend','dsn','artifacts'}:raise ValueError('MariaDB requires a database in its DSN')
+        control=MariaDBControlStore.from_dsn(settings['dsn'],artifact_directory=settings['artifacts'])
     elif backend in ('postgresql','opengauss'):
         from .relational import PostgreSQLControlStore,OpenGaussControlStore
         cls=PostgreSQLControlStore if backend=='postgresql' else OpenGaussControlStore

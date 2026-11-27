@@ -39,6 +39,11 @@ def transaction(config):
             raise ValueError('已有 SQLite 空文件未经本安装器初始化，请核实并选择新文件路径')
         if not os.access(database, os.W_OK) or not os.access(database.parent, os.W_OK):
             raise ValueError('SQLite 文件或父目录不可写')
+    elif backend == 'mariadb':
+        from services.storage.mariadb import MariaDBControlStore
+        store = MariaDBControlStore.from_dsn(c['dsn'], artifact_directory=c['artifacts'])
+        if store.inspect() == 'empty':
+            return store, 'empty'
     else:
         from services.storage.relational import PostgreSQLControlStore, OpenGaussControlStore
         cls = PostgreSQLControlStore if backend == 'postgresql' else OpenGaussControlStore
@@ -99,7 +104,7 @@ def initialize(config, *, apply=False):
     target = {'backend': control['backend'], 'database': control.get('database'), 'schema': control.get('schema')}
     if control.get('dsn'):
         url = urlsplit(control['dsn'])
-        target['address'] = [url.hostname, url.port or 5432, url.path]
+        target['address'] = [url.hostname, url.port or (3306 if control['backend'] == 'mariadb' else 5432), url.path]
     identity = hashlib.sha256(json.dumps({'control': target, 'clickhouse': {k: config['clickhouse'][k] for k in ('endpoint', 'database')}}, sort_keys=True).encode()).hexdigest()
     state = local.private_json(state_file) if state_file and state_file.exists() else None
     if state and state['identity'] != identity:

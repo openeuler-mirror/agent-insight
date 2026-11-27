@@ -93,9 +93,13 @@ class _Connection:
 class PostgreSQLControlStore(ControlOperations):
     backend = 'postgresql'
 
+    @staticmethod
+    def _valid_schema(schema):
+        return (isinstance(schema, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,62}', schema)
+                and schema not in {'public', 'information_schema'} and not schema.startswith('pg_'))
+
     def __init__(self, connection_factory, *, schema, artifact_directory, clock=None):
-        if (not isinstance(schema, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,62}', schema)
-                or schema == 'public' or schema.startswith('pg_') or schema == 'information_schema'):
+        if not self._valid_schema(schema):
             raise ValueError('an explicit non-system isolated schema is required')
         if not callable(connection_factory):
             raise ValueError('an explicit connection factory is required')
@@ -136,6 +140,18 @@ class PostgreSQLControlStore(ControlOperations):
         except BaseException:
             if callable(getattr(connection.raw,'discard',None)):connection.raw.discard()
 
+    def _begin_connection(self, raw):
+        raw.autocommit = False
+
+    @staticmethod
+    def _database_error(exc):
+        code = getattr(exc, 'pgcode', None) or getattr(exc, 'sqlstate', None)
+        if code and (code.startswith('23') or code == 'P0001'):
+            return Conflict('relational storage constraint violation')
+        if code or type(exc).__module__.split('.')[0] in {'psycopg', 'psycopg2', 'opengauss'}:
+            return StorageError('relational storage operation failed')
+        return None
+
     @contextmanager
     def _connect(self):
         connection = None
@@ -145,7 +161,7 @@ class PostgreSQLControlStore(ControlOperations):
                 raw = self.connection_factory()
             except Exception:
                 raise StorageError('relational database connection failed') from None
-            raw.autocommit = False
+            self._begin_connection(raw)
             connection = _Connection(raw)
             yield connection
         except StorageError:
@@ -153,14 +169,12 @@ class PostgreSQLControlStore(ControlOperations):
             raise
         except MigrationError:
             self._rollback(connection)
-            raise StorageError('relational migration violates the known atomic migration contract') from None
+            raise StorageError('relational migration violates the known migration contract') from None
         except Exception as exc:
             self._rollback(connection)
-            code = getattr(exc, 'pgcode', None) or getattr(exc, 'sqlstate', None)
-            if code and (code.startswith('23') or code == 'P0001'):
-                raise Conflict('relational storage constraint violation') from None
-            if code or type(exc).__module__.split('.')[0] in {'psycopg', 'psycopg2', 'opengauss'}:
-                raise StorageError('relational storage operation failed') from None
+            safe_error = self._database_error(exc)
+            if safe_error is not None:
+                raise safe_error from None
             raise
         finally:
             if connection is not None:
@@ -219,11 +233,21 @@ class PostgreSQLControlStore(ControlOperations):
         with self.read_transaction() as connection:
             return plan(connection, self.backend)
 
+    def _database_identity(self, connection):
+        return connection.execute('SELECT current_database() AS database_name,inet_server_addr() AS server_address,inet_server_port() AS server_port').fetchone()
+
+    @staticmethod
+    def _quote_identifier(name):
+        return '"' + name.replace('"', '""') + '"'
+
+    def _evidence_order(self, connection, table, columns):
+        return columns
+
     def _source_evidence(self, connection):
         from .legacy import _encode_value, _json_bytes
         _, applied = self._validate_schema(connection)
         history = [dict(row) for row in connection.execute('SELECT version,name,checksum,applied_at_ms FROM schema_meta ORDER BY version')]
-        identity = connection.execute('SELECT current_database() AS database_name,inet_server_addr() AS server_address,inet_server_port() AS server_port').fetchone()
+        identity = self._database_identity(connection)
         root = Path(__file__).parent / 'schema'
         catalogs = [json.loads((root / 'core-catalog.json').read_text())]
         if applied >= 2:
@@ -267,12 +291,13 @@ class PostgreSQLControlStore(ControlOperations):
             if not re.fullmatch(r'[a-z][a-z0-9_]*', name):
                 raise StorageError('invalid managed table identifier')
             columns = [dict(row) for row in connection.execute(
-                'SELECT column_name,data_type,is_nullable,column_default,ordinal_position FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position',
+                'SELECT column_name AS column_name,data_type AS data_type,is_nullable AS is_nullable,column_default AS column_default,ordinal_position AS ordinal_position FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position',
                 (self.schema, name))]
             if not columns:
                 raise StorageError('managed source table is missing')
-            quoted = [chr(34) + column['column_name'].replace(chr(34), chr(34)*2) + chr(34) for column in columns]
-            query = 'SELECT ' + ','.join(quoted) + ' FROM "' + name + '" ORDER BY ' + ','.join(quoted)
+            quoted = [self._quote_identifier(column['column_name']) for column in columns]
+            order = self._evidence_order(connection, name, quoted)
+            query = 'SELECT ' + ','.join(quoted) + ' FROM ' + self._quote_identifier(name) + ' ORDER BY ' + ','.join(order)
             digest = hashlib.sha256()
             count = 0
             for row in connection.execute(query):
@@ -288,7 +313,7 @@ class PostgreSQLControlStore(ControlOperations):
         with self.read_transaction() as connection:
             return self._source_evidence(connection)
 
-    def migrate(self, *, backup_manifest):
+    def _check_backup(self, backup_manifest):
         if not isinstance(backup_manifest, dict):
             raise StorageError('an externally verified backup manifest is required')
         if (backup_manifest.get('backend') != self.backend or backup_manifest.get('schema') != self.schema
@@ -309,6 +334,10 @@ class PostgreSQLControlStore(ControlOperations):
                 digest.update(block)
         if digest.hexdigest() != expected:
             raise StorageError('backup artifact checksum mismatch')
+        return path, expected
+
+    def migrate(self, *, backup_manifest):
+        path, expected = self._check_backup(backup_manifest)
         with self._connect() as connection:
             connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
             connection.execute('SET search_path TO "' + self.schema + '"')

@@ -109,7 +109,7 @@ class SemanticUsageStore:
             if version!=value['revision']:raise Conflict('Semantic projection changed')
             if clock and clock['legacy_username']!=username:raise Forbidden('Semantic owner label differs')
             if not clock:
-                con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0) ON CONFLICT DO NOTHING',(ws,owner,domain,username))
+                con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0)',(ws,owner,domain,username))
             changed=con.execute('UPDATE semantic_scopes SET revision=revision+1 WHERE workspace_id=? AND owner_principal_id=? AND domain=? AND revision=?',(ws,owner,domain,version))
             if changed.rowcount!=1:raise Conflict('Semantic projection changed')
             normalized=[];pending={}
@@ -164,6 +164,13 @@ class SemanticUsageStore:
                     con.execute('INSERT INTO semantic_unique_keys VALUES(?,?,?,?,?,?)',(ws,owner,kind,','.join(unique),_hash(keys),rid))
             next_version=version+1
             self._scope(con,token,ws,'write');return {'revision':next_version}
+    @staticmethod
+    def _ensure_scope(con, workspace, owner, domain, username):
+        exists = con.execute('SELECT 1 FROM semantic_scopes WHERE workspace_id=? AND owner_principal_id=? AND domain=?',
+                             (workspace, owner, domain)).fetchone()
+        if exists is None:
+            con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0)', (workspace, owner, domain, username))
+
     def usage_persist(self,token,ws,events):
         if not isinstance(events,list) or not 1<=len(events)<=1000:raise ValueError('Bounded usage batch required')
         normalized=[]
@@ -176,7 +183,7 @@ class SemanticUsageStore:
             scope,_=self._scope(con,token,ws,'write');owner=scope.principal_id;fresh=[];changed={}
             username=normalized[0]['user']
             if any(e['user']!=username for e in normalized):raise Forbidden('Same-owner usage batch required')
-            con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0) ON CONFLICT DO NOTHING',(ws,owner,'usage',username))
+            self._ensure_scope(con, ws, owner, 'usage', username)
             con.execute("UPDATE semantic_scopes SET revision=revision+1 WHERE workspace_id=? AND owner_principal_id=? AND domain='usage'",(ws,owner))
             label=con.execute("SELECT legacy_username FROM semantic_scopes WHERE workspace_id=? AND owner_principal_id=? AND domain='usage'",(ws,owner)).fetchone()[0]
             if label!=username:raise Forbidden('Usage owner label differs')
@@ -270,7 +277,7 @@ class SemanticUsageStore:
             for unique in definition['unique']:
                 values=[data[field] for field in unique]
                 if all(value is not None for value in values):con.execute('INSERT INTO semantic_unique_keys VALUES(?,?,?,?,?,?)',(workspace,owner,model,','.join(unique),_hash(values),rid))
-            con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0) ON CONFLICT DO NOTHING',(workspace,owner,definition['domain'],username))
+            self._ensure_scope(con, workspace, owner, definition['domain'], username)
             con.execute('UPDATE semantic_scopes SET revision=revision+1 WHERE workspace_id=? AND owner_principal_id=? AND domain=?',(workspace,owner,definition['domain']))
             return {'kind':model,'id':rid,'content_hash':digest,'duplicate':False}
         if table=='PlatformUsageEvent':
@@ -282,7 +289,7 @@ class SemanticUsageStore:
                 return {'kind':'usage','id':rid,'content_hash':digest,'duplicate':True}
             self.facts.write_semantic_fact('usage_event_facts',{'workspace_id':workspace,'owner_principal_id':owner,'kind':'usage','record_id':rid,'content_hash':digest,'body_json':_json(event),'retry_version':1})
             con.execute("INSERT INTO usage_event_receipts VALUES(?,?,?,?,?,?,'active')",(workspace,owner,rid,digest,event['dateKey'],self.control.clock()))
-            con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0) ON CONFLICT DO NOTHING',(workspace,owner,'usage',username))
+            self._ensure_scope(con, workspace, owner, 'usage', username)
             return {'kind':'usage','id':rid,'content_hash':digest,'duplicate':False}
         if table=='PlatformUsageDaily':
             key=[_day(row['dateKey']),_text(row['featureKey']),_text(row['eventKey'])];count=row['count']
@@ -295,6 +302,6 @@ class SemanticUsageStore:
                 return {'kind':'daily','id':rid,'content_hash':digest,'duplicate':True}
             self.facts.write_semantic_fact('usage_daily_facts',{'workspace_id':workspace,'owner_principal_id':owner,'kind':'daily','record_id':rid,'content_hash':digest,'body_json':_json(body),'retry_version':1})
             con.execute('INSERT INTO usage_daily_heads VALUES(?,?,?,?,?,?,?,?,?,?,?)',(workspace,owner,*key,username,count,first,last,1,digest))
-            con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0) ON CONFLICT DO NOTHING',(workspace,owner,'usage',username))
+            self._ensure_scope(con, workspace, owner, 'usage', username)
             return {'kind':'daily','id':rid,'content_hash':digest,'duplicate':False}
         raise ValueError('Known historical semantic table required')

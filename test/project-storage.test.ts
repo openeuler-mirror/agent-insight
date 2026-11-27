@@ -25,7 +25,7 @@ function fixture(t: test.TestContext, backend = 'sqlite') {
 
 test('valid examples are shipped but placeholders are rejected before any runtime writes', t => {
   const { file, dir } = fixture(t)
-  for (const backend of ['sqlite', 'postgresql']) {
+  for (const backend of ['sqlite', 'postgresql', 'mariadb']) {
     const sample = fs.readFileSync(`config/storage.${backend}.example.json`, 'utf8')
     assert.doesNotThrow(() => JSON.parse(sample))
     fs.writeFileSync(file, sample)
@@ -43,6 +43,18 @@ test('PostgreSQL config supports escaped credentials and bounded connection time
   const config = storage.readConfig(file)
   assert.match(config.control.dsn, /p%40ss/)
   assert.match(config.control.dsn, /connect_timeout=10/)
+})
+test('MariaDB keeps the DSN database name and forbids a second schema setting', t => {
+  const { file, config, save } = fixture(t, 'mariadb')
+  config.control.dsn = 'mariadb://business:p%40ss@db.example:3306/Insight_UAT'
+  delete config.control.schema
+  save()
+  const loaded = storage.readConfig(file)
+  assert.equal(new URL(loaded.control.dsn).pathname, '/Insight_UAT')
+  assert.equal('schema' in loaded.control, false)
+  config.control.schema = 'ignored_name'
+  save()
+  assert.throws(() => storage.readConfig(file), /库名/)
 })
 test('configuration must be private and cannot be a symlink', t => {
   const { file, dir } = fixture(t)
