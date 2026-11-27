@@ -78,6 +78,7 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 前后端分离与模块接口 | [重构方案](platform/frontend-backend-separation/Agent-Insight前后端重构方案.md) | 平台、设备客户端、核心业务与基础能力的调用边界及验收场景 | Refactor | 2026-11-27 | 目录与首批接口骨架 | — |
 | 多版本资产与多轮对话评测迁入主线 | [需求与设计](evaluation/versioned-assets-multiturn-integration/) | 复用主线的 Agent、评估器、数据集和实验流程，增加不可变版本及真实多轮执行/评测 | Feature / Integration | 2026-10-29 | 已实现并完成专项与真实流程验证 | — |
 
 | 执行 Profile 后端解耦 | [设计](evaluation/execution-profile-decoupling/phase2-requirements-design.md) | 分离公共配置、后端探测与实际执行，兼容 xGovernor 与原生本地执行 | Refactor | 2026-10-31 | 已实现；新增 8 项解耦回归通过，全仓无新增失败；未在浏览器或真实 Docker/模型环境验证 | — |

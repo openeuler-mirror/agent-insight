@@ -1,0 +1,5137 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Agent Insight 重构目标 API（评审稿）",
+    "version": "1.0.0-draft"
+  },
+  "paths": {
+    "/v1/projects/{projectId}/observation/traces": {
+      "get": {
+        "operationId": "TraceService_list",
+        "tags": [
+          "观测"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Traces"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "观测"
+        ],
+        "operationId": "IngestOtlpTraces",
+        "summary": "采集器向指定项目上报一批 Span",
+        "description": "按 OTLP ExportTraceServiceRequest 解码，按凭据校验项目写权限。响应使用平台接收结果。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "ingestKey": []
+          },
+          {
+            "sourceBasic": []
+          },
+          {
+            "sourcePublicKey": [],
+            "sourceSecretKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "OTLP JSON 编码的 ExportTraceServiceRequest",
+                "properties": {
+                  "resourceSpans": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "OTLP ResourceSpans"
+                    }
+                  }
+                }
+              }
+            },
+            "application/x-protobuf": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "接收结果。按来源返回附加统计。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "accepted"
+                      ]
+                    },
+                    "received": {
+                      "type": "integer"
+                    },
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "persisted": {
+                      "type": "integer"
+                    },
+                    "deduplicated": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "received",
+                    "sessions"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "上报内容无法解码"
+          },
+          "401": {
+            "description": "凭据无效"
+          },
+          "403": {
+            "description": "调用方无权向指定项目上报"
+          },
+          "413": {
+            "description": "超过接收限制。部分接收时返回 status=partial 和 rejected。"
+          },
+          "415": {
+            "description": "不支持请求的编码"
+          },
+          "500": {
+            "description": "平台处理失败"
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/observation/traces/{traceId}/snapshots": {
+      "post": {
+        "operationId": "TraceService_freeze",
+        "tags": [
+          "观测"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "traceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evidence"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Freeze"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/experiments": {
+      "post": {
+        "operationId": "ExperimentService_create",
+        "tags": [
+          "评测"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExperimentInput"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "ListExperiments",
+        "tags": [
+          "评测"
+        ],
+        "description": "项目授权后按当前调用者可见范围读取普通实验，排除已删除、草稿及工作台专属记录。保留旧列表的总数、分页和终态评分口径。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "skillName",
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "offset",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "in": "query",
+            "required": false
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExperimentListItem"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "total",
+                    "limit",
+                    "offset"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误，凭 error_id 定位",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/experiments"
+        ]
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/experiments/{experimentId}/runs": {
+      "post": {
+        "operationId": "ExperimentService_start",
+        "tags": [
+          "评测"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "experimentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/experiments/{experimentId}/report": {
+      "get": {
+        "operationId": "ExperimentService_report",
+        "tags": [
+          "评测"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "experimentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/diagnosis/runs": {
+      "post": {
+        "operationId": "DiagnosisService_analyze",
+        "tags": [
+          "诊断"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                },
+                "example": {
+                  "id": "diag-42"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagnosisInput"
+              },
+              "examples": {
+                "trace": {
+                  "value": {
+                    "evidence": [
+                      {
+                        "artifact": {
+                          "id": "evidence-1",
+                          "revision": "1",
+                          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        },
+                        "traceId": "trace-1"
+                      }
+                    ],
+                    "analyzer": {
+                      "key": "token-efficiency",
+                      "version": "1.0.0"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "执行诊断",
+        "description": "固定已授权证据，解析并记录分析器版本，持久受理后返回诊断编号。"
+      }
+    },
+    "/v1/projects/{projectId}/diagnosis/runs/{diagnosisId}": {
+      "get": {
+        "operationId": "DiagnosisService_get",
+        "tags": [
+          "诊断"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "diagnosisId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Diagnosis"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/optimization/candidates": {
+      "post": {
+        "operationId": "OptimizationService_propose",
+        "tags": [
+          "优化"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                },
+                "example": {
+                  "id": "candidate-42"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Proposal"
+              },
+              "examples": {
+                "from_diagnosis": {
+                  "value": {
+                    "diagnosisId": "diag-42",
+                    "skill": {
+                      "id": "skill-1",
+                      "revision": "v3",
+                      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "创建优化候选",
+        "description": "根据已完成诊断及固定的 Skill 修订生成并保存候选。成功返回候选编号。"
+      }
+    },
+    "/v1/projects/{projectId}/optimization/candidates/{candidateId}/retests": {
+      "post": {
+        "operationId": "OptimizationService_retest",
+        "tags": [
+          "优化"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Retest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/clients/{clientId}/commands": {
+      "post": {
+        "operationId": "DeviceCommandService_enqueue",
+        "tags": [
+          "基础设施"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Envelope"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "DeviceTransport_poll",
+        "tags": [
+          "客户端"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "waitSeconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30,
+              "default": 25
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Messages"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/reliability/client/v1/commands/next"
+        ],
+        "x-migration-review": "设备身份须绑定目标 clientId；控制服务回调按内部身份验证。验收旧命令 ID、状态、摘要、幂等与结果关联。"
+      }
+    },
+    "/v1/projects/{projectId}/clients/{clientId}/messages/{messageId}": {
+      "get": {
+        "operationId": "DeviceCommandService_getReceipt",
+        "tags": [
+          "基础设施"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delivery"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/clients/{clientId}/inbox": {
+      "post": {
+        "operationId": "DeviceTransport_upload",
+        "tags": [
+          "客户端"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ack"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Envelope"
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "POST /api/reliability/client/v1/commands/[commandId]/status",
+          "POST /api/reliability/client/v1/control-receipt"
+        ],
+        "x-migration-review": "设备身份须绑定目标 clientId；控制服务回调按内部身份验证。验收旧命令 ID、状态、摘要、幂等与结果关联。"
+      }
+    },
+    "/v1/projects/{projectId}/clients/{clientId}/commands/{messageId}/ack": {
+      "put": {
+        "operationId": "DeviceTransport_ack",
+        "tags": [
+          "客户端"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ack"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Ack"
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "POST /api/reliability/client/v1/commands/[commandId]/status",
+          "POST /api/reliability/client/v1/control-receipt"
+        ],
+        "x-migration-review": "设备身份须绑定目标 clientId；控制服务回调按内部身份验证。验收旧命令 ID、状态、摘要、幂等与结果关联。"
+      }
+    },
+    "/v1/projects/{projectId}/access/identity": {
+      "get": {
+        "operationId": "AccessService_identity",
+        "tags": [
+          "鉴权"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Scope"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/access/access-checks": {
+      "post": {
+        "operationId": "AccessService_authorize",
+        "tags": [
+          "鉴权"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessCheck"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/access/members": {
+      "get": {
+        "operationId": "AccessService_members",
+        "tags": [
+          "鉴权"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Members"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/jobs": {
+      "post": {
+        "operationId": "EvaluationScheduler_submit",
+        "tags": [
+          "调度"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                },
+                "example": {
+                  "id": "job-42"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobSpec"
+              },
+              "examples": {
+                "score_only": {
+                  "value": {
+                    "mode": "score_only",
+                    "dataset": {
+                      "id": "dataset-1",
+                      "revision": "2",
+                      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    },
+                    "evaluators": [
+                      {
+                        "key": "exact-match",
+                        "version": "1.0.0"
+                      }
+                    ],
+                    "evidence": [
+                      {
+                        "caseId": "case-1",
+                        "evidence": {
+                          "artifact": {
+                            "id": "evidence-1",
+                            "revision": "1",
+                            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                          },
+                          "traceId": "trace-1"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "execute_then_score": {
+                  "value": {
+                    "mode": "execute_then_score",
+                    "dataset": {
+                      "id": "dataset-1",
+                      "revision": "2",
+                      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    },
+                    "evaluators": [
+                      {
+                        "key": "exact-match",
+                        "version": "1.0.0"
+                      }
+                    ],
+                    "executionTarget": "device-7"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "提交评测任务",
+        "description": "按 mode 接收证据或执行目标。锁定评测集与评估器版本，持久受理后返回任务编号。"
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/jobs/{jobId}": {
+      "get": {
+        "operationId": "EvaluationScheduler_get",
+        "tags": [
+          "调度"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/jobs/{jobId}/results": {
+      "get": {
+        "operationId": "EvaluationScheduler_results",
+        "tags": [
+          "调度"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Results"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/jobs/{jobId}/cancellation": {
+      "put": {
+        "operationId": "EvaluationScheduler_cancel",
+        "tags": [
+          "调度"
+        ],
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Cancel"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "幂等或状态冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/experiments/{experimentId}/comments": {
+      "get": {
+        "operationId": "ListExperimentComments",
+        "tags": [
+          "评测"
+        ],
+        "description": "按创建时间升序，最多返回 500 条。scope=all 包含所有层级，否则按 resultId、caseId、实验级依次选择。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "experimentId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "scope",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all"
+              ]
+            },
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "caseId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "resultId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "query",
+            "required": false
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExperimentComment"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误，凭 error_id 定位",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/experiments/[id]/comments"
+        ]
+      },
+      "post": {
+        "operationId": "CreateExperimentComment",
+        "tags": [
+          "评测"
+        ],
+        "description": "从可信身份记录作者。去除首尾空白后校验正文长度；超长或空白返回 400。校验所给 Case、结果行属于此实验，同时给出时还须验证二者关联。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "experimentId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentComment"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误，凭 error_id 定位",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "POST /api/experiments/[id]/comments"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "body"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "caseId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "resultId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects/{projectId}/evaluation/experiments/{experimentId}/comments/{commentId}": {
+      "delete": {
+        "operationId": "DeleteExperimentComment",
+        "tags": [
+          "评测"
+        ],
+        "description": "仅可删除自己在有权访问的实验下发表的评论。不可见或不存在返回 404。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "experimentId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "commentId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "成功"
+          },
+          "500": {
+            "description": "内部错误，凭 error_id 定位",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "DELETE /api/experiments/[id]/comments"
+        ]
+      }
+    },
+    "/v1/projects/{projectId}/diagnosis/debug-tasks": {
+      "get": {
+        "operationId": "ListDebugTasks",
+        "tags": [
+          "诊断"
+        ],
+        "description": "必须指定 kind；在项目及本人可见范围内按创建时间倒序取最近 50 条，沿用关联实验及 Case 可见性过滤。按 kind 返回对应模型，保留灰度任务的活动运行摘要。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "kind",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "batch",
+                "grayscale"
+              ]
+            },
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "分类错误及唯一定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "字段或契约无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭据无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不可见或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "限流",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "暂不可受理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/components/schemas/BatchTaskListItem"
+                          },
+                          {
+                            "$ref": "#/components/schemas/GrayscaleTaskListItem"
+                          }
+                        ],
+                        "discriminator": {
+                          "propertyName": "kind",
+                          "mapping": {
+                            "batch": "#/components/schemas/BatchTaskListItem",
+                            "grayscale": "#/components/schemas/GrayscaleTaskListItem"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误，凭 error_id 定位",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/debug/batch-tasks",
+          "GET /api/debug/grayscale-tasks"
+        ]
+      }
+    },
+    "/v1/platform/installers/{installerKey}": {
+      "get": {
+        "tags": [
+          "安装交付"
+        ],
+        "operationId": "GetInstaller",
+        "description": "生成指定安装器；按注册项保留平台、框架组合和原配置，认证及缓存策略随变体。",
+        "parameters": [
+          {
+            "name": "installerKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/x-shellscript": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/x-powershell": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码及定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/ingest/setup",
+          "GET /api/ingest/setup/auto",
+          "GET /api/ingest/setup/codex",
+          "GET /api/ingest/setup/deepseek-harness",
+          "GET /api/ingest/setup/goal-plus",
+          "GET /api/ingest/setup/mcts-xgovernor",
+          "GET /api/ingest/setup/pi-agent",
+          "GET /api/ingest/setup/ras-client"
+        ],
+        "security": [
+          {},
+          {
+            "bearer": []
+          }
+        ],
+        "x-review": "按注册项核验访问策略与完整参数后实施；公开资源可匿名，受限变体须授权。",
+        "x-variants": {
+          "GET /api/ingest/setup": "installerKey=standard；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/auto": "installerKey=auto；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/codex": "installerKey=codex；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/deepseek-harness": "installerKey=deepseek-harness；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/goal-plus": "installerKey=goal-plus；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/mcts-xgovernor": "installerKey=mcts-xgovernor；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/pi-agent": "installerKey=pi-agent；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/ras-client": "installerKey=ras-client；原查询、平台选择、媒体类型按该变体转换"
+        }
+      }
+    },
+    "/v1/platform/install-assets/{assetKey}": {
+      "get": {
+        "tags": [
+          "安装交付"
+        ],
+        "operationId": "GetInstallAsset",
+        "description": "按登记键和允许的文件名取资源；保留下载名、编码、MIME、缓存策略及流式归档。",
+        "parameters": [
+          {
+            "name": "assetKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/x-python": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码及定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/ingest/setup/bundle",
+          "GET /api/ingest/setup/claude",
+          "GET /api/ingest/setup/claude-context-uploader",
+          "GET /api/ingest/setup/codex/assets/[asset]",
+          "GET /api/ingest/setup/deepseek-harness/assets/[asset]",
+          "GET /api/ingest/setup/example-messages",
+          "GET /api/ingest/setup/goal-plus/assets/[asset]",
+          "GET /api/ingest/setup/hermes-plugin",
+          "GET /api/ingest/setup/jiuwen-extension",
+          "GET /api/ingest/setup/llamaindex-collector",
+          "GET /api/ingest/setup/llamaindex-collector/[archive]",
+          "GET /api/ingest/setup/mcts-xgovernor/assets/[asset]",
+          "GET /api/ingest/setup/openclaw-watcher",
+          "GET /api/ingest/setup/opencode",
+          "GET /api/ingest/setup/opencode-commands/si-optimizer",
+          "GET /api/ingest/setup/opencode-offline-fix",
+          "GET /api/ingest/setup/opencode-tui",
+          "GET /api/ingest/setup/opencode-uploader",
+          "GET /api/ingest/setup/pi-agent/assets/[asset]",
+          "GET /api/ingest/setup/qoder-desktop-vsix",
+          "GET /api/ingest/setup/qoder-jetbrains-plugin",
+          "GET /api/ingest/setup/qwencode-collector/[file]",
+          "GET /api/ingest/setup/qwenpaw-collector",
+          "GET /api/ingest/setup/trae",
+          "GET /api/ingest/setup/workbuddy-collector/[file]"
+        ],
+        "security": [
+          {},
+          {
+            "bearer": []
+          }
+        ],
+        "x-review": "按注册项核验访问策略与完整参数后实施；公开资源可匿名，受限变体须授权。",
+        "x-variants": {
+          "GET /api/ingest/setup/bundle": "assetKey=bundle；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/claude": "assetKey=claude；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/claude-context-uploader": "assetKey=claude-context-uploader；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/codex/assets/[asset]": "assetKey=codex.assets; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/deepseek-harness/assets/[asset]": "assetKey=deepseek-harness.assets; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/example-messages": "assetKey=example-messages；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/goal-plus/assets/[asset]": "assetKey=goal-plus.assets; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/hermes-plugin": "assetKey=hermes-plugin；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/jiuwen-extension": "assetKey=jiuwen-extension；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/llamaindex-collector": "assetKey=llamaindex-collector；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/llamaindex-collector/[archive]": "assetKey=llamaindex-collector; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/mcts-xgovernor/assets/[asset]": "assetKey=mcts-xgovernor.assets; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/openclaw-watcher": "assetKey=openclaw-watcher；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/opencode": "assetKey=opencode；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/opencode-commands/si-optimizer": "assetKey=opencode-commands.si-optimizer；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/opencode-offline-fix": "assetKey=opencode-offline-fix；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/opencode-tui": "assetKey=opencode-tui；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/opencode-uploader": "assetKey=opencode-uploader；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/pi-agent/assets/[asset]": "assetKey=pi-agent.assets; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/qoder-desktop-vsix": "assetKey=qoder-desktop-vsix；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/qoder-jetbrains-plugin": "assetKey=qoder-jetbrains-plugin；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/qwencode-collector/[file]": "assetKey=qwencode-collector; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/qwenpaw-collector": "assetKey=qwenpaw-collector；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/trae": "assetKey=trae；原查询、平台选择、媒体类型按该变体转换",
+          "GET /api/ingest/setup/workbuddy-collector/[file]": "assetKey=workbuddy-collector; file 取原路径变量；原查询、平台选择、媒体类型按该变体转换"
+        }
+      }
+    },
+    "/v1/projects/{projectId}/optimization/skill-sessions": {
+      "get": {
+        "tags": [
+          "优化"
+        ],
+        "operationId": "ListSkillSessions",
+        "description": "按调用者与项目授权。generator 包含消息；opt 保留 skillName/baseVersion 筛选、消息与迭代；workbench 保留工作台投影。各 kind 元素字段待逐项冻结。",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "generator",
+                "opt",
+                "workbench"
+              ]
+            }
+          },
+          {
+            "name": "skillName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseVersion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "sessions"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "generator",
+                        "opt",
+                        "workbench"
+                      ]
+                    },
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码及定位编号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-source-operations": [
+          "GET /api/skill-generator/sessions",
+          "GET /api/skill-opt/sessions",
+          "GET /api/skill-workbench/sessions"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "ingestKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-witty-api-key"
+      },
+      "sourceBasic": {
+        "type": "http",
+        "scheme": "basic"
+      },
+      "sourcePublicKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-langfuse-public-key"
+      },
+      "sourceSecretKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-langfuse-secret-key"
+      }
+    },
+    "schemas": {
+      "Ref": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "Asset": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "digest": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "digest"
+        ]
+      },
+      "EvaluatorRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "config": {
+            "$ref": "#/components/schemas/Asset"
+          }
+        },
+        "required": [
+          "key",
+          "version"
+        ]
+      },
+      "Scope": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "principalId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "projectId",
+          "principalId"
+        ]
+      },
+      "AccessCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resourceId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "action",
+          "resourceId"
+        ]
+      },
+      "Grant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allowed"
+        ]
+      },
+      "Member": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "principalId",
+          "role"
+        ]
+      },
+      "Members": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Evidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "traceId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "artifact"
+        ]
+      },
+      "Trace": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "spanCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "spanCount"
+        ]
+      },
+      "Traces": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trace"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Freeze": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "revision"
+        ]
+      },
+      "ScoreSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "score_only"
+            ]
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseEvidence"
+            },
+            "minItems": 1
+          },
+          "evaluators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluatorRef"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "mode",
+          "dataset",
+          "evidence",
+          "evaluators"
+        ]
+      },
+      "ExecuteSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "execute_then_score"
+            ]
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "executionTarget": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evaluators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluatorRef"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "mode",
+          "dataset",
+          "executionTarget",
+          "evaluators"
+        ]
+      },
+      "ExperimentInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "plan": {
+            "$ref": "#/components/schemas/JobSpec"
+          }
+        },
+        "required": [
+          "name",
+          "plan"
+        ]
+      },
+      "DiagnosisInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            },
+            "minItems": 1
+          },
+          "analyzer": {
+            "$ref": "#/components/schemas/AnalyzerRef",
+            "description": "具体分析器及版本。提交时省略则按该用例的默认配置解析，新报告记录实际使用的版本。"
+          }
+        },
+        "required": [
+          "evidence"
+        ]
+      },
+      "Diagnosis": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ]
+          },
+          "report": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "analyzer": {
+            "$ref": "#/components/schemas/AnalyzerRef",
+            "description": "具体分析器及版本。提交时省略则按该用例的默认配置解析，新报告记录实际使用的版本。"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ]
+      },
+      "Proposal": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "diagnosisId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "skill": {
+            "$ref": "#/components/schemas/Asset"
+          }
+        },
+        "required": [
+          "diagnosisId",
+          "skill"
+        ]
+      },
+      "Retest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/JobSpec"
+          }
+        },
+        "required": [
+          "plan"
+        ]
+      },
+      "Status": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "cancel_requested",
+              "cancelled",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "completedCases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalCases": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "completedCases",
+          "totalCases"
+        ]
+      },
+      "Score": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evaluator": {
+            "$ref": "#/components/schemas/EvaluatorRef"
+          },
+          "score": {
+            "type": "number"
+          },
+          "minimum": {
+            "type": "number"
+          },
+          "maximum": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "caseId",
+          "evaluator",
+          "score",
+          "minimum",
+          "maximum"
+        ]
+      },
+      "FailedCase": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evaluator": {
+            "$ref": "#/components/schemas/EvaluatorRef"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ApiError"
+          }
+        },
+        "required": [
+          "caseId",
+          "evaluator",
+          "error"
+        ]
+      },
+      "Results": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseResult"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Report": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "experimentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "job": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "results": {
+            "$ref": "#/components/schemas/Asset"
+          }
+        },
+        "required": [
+          "experimentId",
+          "job"
+        ]
+      },
+      "Cancel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "cancel_requested",
+              "cancelled",
+              "already_terminal"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "Envelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "messageId",
+          "type",
+          "version",
+          "correlationId",
+          "payload"
+        ]
+      },
+      "Ack": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "receivedDigest": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "messageId",
+          "receivedDigest"
+        ]
+      },
+      "Messages": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Envelope"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Delivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "received",
+              "processed",
+              "failed"
+            ]
+          },
+          "error": {
+            "$ref": "#/components/schemas/ApiError"
+          }
+        },
+        "required": [
+          "messageId",
+          "state"
+        ]
+      },
+      "ApiError": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "error_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "error_id",
+          "request_id",
+          "message",
+          "retryable"
+        ]
+      },
+      "RunSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "input": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "deadline": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "jobId",
+          "attempt",
+          "input",
+          "deadline"
+        ]
+      },
+      "RunHandle": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "type": "string",
+            "minLength": 1
+          },
+          "externalId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attemptKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "backend",
+          "externalId",
+          "attemptKey"
+        ]
+      },
+      "RuntimeStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "Artifacts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Asset"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "HandlerResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "processed",
+              "failed"
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ApiError"
+          }
+        },
+        "required": [
+          "messageId",
+          "outcome"
+        ]
+      },
+      "JobSpec": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ScoreSpec"
+          },
+          {
+            "$ref": "#/components/schemas/ExecuteSpec"
+          }
+        ]
+      },
+      "CaseResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Score"
+          },
+          {
+            "$ref": "#/components/schemas/FailedCase"
+          }
+        ]
+      },
+      "CaseEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "evidence"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/Evidence"
+          }
+        }
+      },
+      "AnalyzerRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "version"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "ExperimentListItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "agentName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "watchMode": {
+            "type": "boolean"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "submissionSource": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "imported"
+            ]
+          },
+          "skillName": {
+            "type": "string"
+          },
+          "skillVersion": {
+            "type": "integer",
+            "nullable": true
+          },
+          "preset": {
+            "type": "string",
+            "nullable": true
+          },
+          "caseCount": {
+            "type": "integer"
+          },
+          "evaluatorCount": {
+            "type": "integer"
+          },
+          "overallScore": {
+            "type": "number",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "agentName",
+          "status",
+          "watchMode",
+          "scope",
+          "submissionSource",
+          "skillName",
+          "skillVersion",
+          "preset",
+          "caseCount",
+          "evaluatorCount",
+          "overallScore",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ExperimentComment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "experimentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "caseId": {
+            "type": "string",
+            "nullable": true
+          },
+          "resultId": {
+            "type": "string",
+            "nullable": true
+          },
+          "user": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "experimentId",
+          "caseId",
+          "resultId",
+          "user",
+          "body",
+          "createdAt"
+        ]
+      },
+      "BatchTaskListItem": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "batch"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "user": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskName": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "configJson": {
+            "type": "object"
+          },
+          "caseStatesJson": {
+            "type": "object"
+          },
+          "traceEvalStatesJson": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "user",
+          "taskName",
+          "createdAt",
+          "configJson",
+          "caseStatesJson",
+          "traceEvalStatesJson"
+        ]
+      },
+      "GrayscaleTaskListItem": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "grayscale"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "user": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskName": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "configJson": {
+            "type": "object"
+          },
+          "caseStatesJson": {
+            "type": "object"
+          },
+          "skillId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "skillName": {
+            "type": "string"
+          },
+          "skillVersion": {
+            "type": "integer"
+          },
+          "skillVersionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "activeRun": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "taskId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "user",
+          "taskName",
+          "createdAt",
+          "configJson",
+          "caseStatesJson",
+          "skillId",
+          "skillName",
+          "skillVersion",
+          "skillVersionId",
+          "activeRun"
+        ]
+      }
+    }
+  }
+}
