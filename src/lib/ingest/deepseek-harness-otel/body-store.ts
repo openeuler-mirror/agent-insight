@@ -158,7 +158,12 @@ export function separateHarnessBodies(events: any[], directory = harnessBodyDire
       }
     }
     event.body = { ...event.body, contextMembership: { ...manifest, bodyRef, bodyStorageStatus,
-      items: manifest.items.map((item: any) => ({ ...item,
-        bodyStatus: bodyRef ? item.bodyStatus : bodyStorageStatus, storedBytes: bodyRef ? item.storedBytes : 0 })) } };
+      items: manifest.items.map((item: any) => {
+        const metadata = { ...item };
+        delete metadata.text;
+        metadata.bodyStatus = bodyRef ? item.bodyStatus : bodyStorageStatus;
+        metadata.storedBytes = bodyRef ? item.storedBytes : 0;
+        return metadata;
+      }) } };
   }
 }
