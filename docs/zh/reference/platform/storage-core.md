@@ -533,7 +533,7 @@ Core 顶层 `trace_list_optimization.enabled` 默认 `true`，项目启动配置
 
 ## Core 请求容量与采集重试（021）
 
-`max_concurrent_requests` 是项目 `storage.local.json` 和生成的私有 Core JSON 的顶层字段，默认 `64`，只接受 `1–256` 的整数，重启 Core 生效。socket backlog 同步使用该值。它限制正在处理的连接/HTTP 请求，不是登录人数；事务库连接池与写锁策略不随其翻倍。满载返回 `503`、`code=CORE_BUSY`、`Retry-After: 1` 和 `X-Storage-Retry: core-busy`。主要 Core/兼容 Web 转发保留此标记，`apiFetch` 对带标记的 GET 最多再试 3 次，等待约 1/2/4 秒并添加少量随机延迟，重试预算 15 秒；取消或切换身份即停止，写请求不自动重放。64 槽不等于吞吐翻倍，也不是千用户容量承诺。
+`max_concurrent_requests` 是项目 `storage.local.json` 和生成的私有 Core JSON 的顶层字段，默认 `64`，只接受 `1–256` 的整数，重启 Core 生效。字段缺失时使用默认值，显式非法值会触发警告并回退到 64。Docker 首次生成的 `/core/trace-service.json` 显式包含该字段，已有配置继续沿用。socket backlog 同步使用该值。它限制正在处理的连接/HTTP 请求，不是登录人数；事务库连接池与写锁策略不随其翻倍。满载返回 `503`、`code=CORE_BUSY`、`Retry-After: 1` 和 `X-Storage-Retry: core-busy`。主要 Core/兼容 Web 转发保留此标记，`apiFetch` 对带标记的 GET 最多再试 3 次，等待约 1/2/4 秒并添加少量随机延迟，重试预算 15 秒；取消或切换身份即停止，写请求不自动重放。64 槽不等于吞吐翻倍，也不是千用户容量承诺。
 
 `GET /v1/health` 的 `http` 返回 `capacity`、`active`、`peak`、`rejected`、`completed`、`duration_ms_total`、`duration_ms_max`。计数按进程累计，重启归零；active 包含当前健康请求，过载时健康请求也可能被拒绝。耗时从占槽到释放，包含请求读取、处理和响应发送；不含 backlog 等待。
 

@@ -114,15 +114,24 @@ test('pool configuration does not silently enable unsupported backends', t => {
   assert.throws(() => storage.readConfig(file), /PostgreSQL/)
 })
 
-test('Core request capacity defaults to 64 and accepts only bounded integer overrides', t=>{
- const {file,config,save}=fixture(t);
- assert.equal(storage.configurationFile(storage.readConfig(file),config.runtime.home).cfg.max_concurrent_requests,64);
- for(const value of [1,32,64,256]){
-  Object.assign(config,{max_concurrent_requests:value});save();
-  assert.equal(storage.configurationFile(storage.readConfig(file),config.runtime.home).cfg.max_concurrent_requests,value);
- }
- for(const value of [0,257,true,'64',1.5,null]){
-  Object.assign(config,{max_concurrent_requests:value});save();
-  assert.throws(()=>storage.readConfig(file),/max_concurrent_requests/);
- }
+test('Core request capacity defaults to 64 and warns only on invalid overrides', t => {
+  const { file, config, save } = fixture(t);
+  const warn = t.mock.method(console, 'warn', () => {});
+  const effectiveCapacity = () => storage.configurationFile(storage.readConfig(file), config.runtime.home).cfg.max_concurrent_requests;
+  assert.equal(effectiveCapacity(), 64);
+  for (const value of [1, 96, 256]) {
+    Object.assign(config, { max_concurrent_requests: value });
+    save();
+    assert.equal(effectiveCapacity(), value);
+  }
+  assert.equal(warn.mock.callCount(), 0);
+  for (const value of [0, -1, 257, true, '96', 1.5, null, [], {}]) {
+    Object.assign(config, { max_concurrent_requests: value });
+    save();
+    warn.mock.resetCalls();
+    assert.equal(effectiveCapacity(), 64);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(String(warn.mock.calls[0].arguments[0]), /max_concurrent_requests.*64/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).max_concurrent_requests, value);
+  }
 });

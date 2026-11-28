@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 from pathlib import Path
 
 from .contracts import canonical_json, content_hash, identifier
@@ -309,10 +310,16 @@ class RateLimited(StorageError):
     pass
 
 
-def request_capacity(value):
-    if type(value) is not int or not 1<=value<=256:
-        raise ValueError('max_concurrent_requests must be between 1 and 256')
-    return value
+DEFAULT_REQUEST_CAPACITY = 64
+
+
+def request_capacity(value, *, warn=True):
+    if type(value) in (int, float) and 1 <= value <= 256 and value == int(value):
+        return int(value)
+    if warn:
+        logging.getLogger(__name__).warning(
+            'max_concurrent_requests 需要 1–256 的整数，本次已使用默认值 %d。', DEFAULT_REQUEST_CAPACITY)
+    return DEFAULT_REQUEST_CAPACITY
 
 
 def create_server(runtime, *, host='127.0.0.1', port=0):
@@ -328,7 +335,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
 
     if host!='127.0.0.1':raise ValueError('Trace service must bind to IPv4 loopback')
 
-    capacity=request_capacity(getattr(runtime,'max_concurrent_requests',64))
+    capacity=request_capacity(getattr(runtime,'max_concurrent_requests',DEFAULT_REQUEST_CAPACITY))
 
     class Server(socketserver.ThreadingMixIn,http.server.HTTPServer):
         daemon_threads=True
@@ -949,14 +956,14 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
     return Server((host,port),Handler)
 
 
-def runtime_from_config(path):
+def runtime_from_config(path, *, warn_invalid_capacity=True):
     from .control import SQLiteControlStore
     from .clickhouse import ClickHouseStore
     from .migrations import load_migrations
     target=Path(path)
     if target.is_symlink() or not target.is_file() or target.stat().st_mode & 0o077:raise ValueError('config must be a private regular file')
     config=json.loads(target.read_text())
-    capacity=request_capacity(config.get('max_concurrent_requests',64))
+    capacity=request_capacity(config.get('max_concurrent_requests', DEFAULT_REQUEST_CAPACITY), warn=warn_invalid_capacity)
     backend=config['control']['backend']
     if backend=='sqlite':
         database=Path(config['control']['database'])

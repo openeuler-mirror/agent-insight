@@ -83,7 +83,25 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(server.http_metrics()['active'],0)
         self.assertEqual(self.request(server)[0],200)
 
+    def test_health_reports_effective_capacity(self):
+        for value, expected in [(96, 96), ('96', 64)]:
+            runtime = SimpleNamespace(readiness=lambda: (200, {}), max_concurrent_requests=value)
+            with self.subTest(value=value):
+                if value == expected:
+                    server = self.server(runtime)
+                else:
+                    with self.assertLogs('services.storage.trace_service', 'WARNING'):
+                        server = self.server(runtime)
+                status, _, body = self.request(server)
+                self.assertEqual(status, 200)
+                self.assertEqual(body['http']['capacity'], expected)
+
     def test_capacity_is_bounded_integer(self):
-        for value in (0,257,True,'64',64.5,None):
-            with self.assertRaises(ValueError):request_capacity(value)
-        for value in (1,32,64,256):self.assertEqual(request_capacity(value),value)
+        for value in (0, -1, 257, True, '96', 64.5, None, [], {}):
+            with self.subTest(value=value), self.assertLogs('services.storage.trace_service', 'WARNING') as log:
+                self.assertEqual(request_capacity(value), 64)
+                self.assertEqual(len(log.output), 1)
+                self.assertRegex(log.output[0], 'max_concurrent_requests.*64')
+        with self.assertNoLogs('services.storage.trace_service', 'WARNING'):
+            for value in (1, 32, 64, 96, 96.0, 256):
+                self.assertEqual(request_capacity(value), value)

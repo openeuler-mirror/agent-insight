@@ -22,6 +22,7 @@ test('new managed configuration is private and reused without rotating credentia
   const before = fs.readFileSync(file, 'utf8')
   const config = r.readPrivate(file)
   assert.equal(config.control.backend, 'sqlite')
+  assert.equal(config.max_concurrent_requests, 64)
   assert.equal(fs.statSync(config.controller_key_file).mode & 0o777, 0o600)
   assert.equal(fs.statSync(file).mode & 0o777, 0o600)
   assert.equal(r.newConfiguration(home, {}), file)

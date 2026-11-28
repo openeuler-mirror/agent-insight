@@ -23,7 +23,11 @@ function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
   keys(config, ['control', 'clickhouse', 'runtime', 'trace_list_optimization', 'max_concurrent_requests'], '配置');
   const c = config.control;
   keys(c, ['backend', 'database', 'dsn', 'schema', 'artifacts', 'connection_pool'], 'control');
-  if (config.max_concurrent_requests !== undefined && (!Number.isInteger(config.max_concurrent_requests) || config.max_concurrent_requests < 1 || config.max_concurrent_requests > 256)) fail('max_concurrent_requests 必须为 1–256 的整数');
+  const capacity = config.max_concurrent_requests;
+  if (capacity !== undefined && (!Number.isInteger(capacity) || capacity < 1 || capacity > 256)) {
+    console.warn('[警告] max_concurrent_requests 需要 1–256 的整数，本次已使用默认值 64。');
+    config.max_concurrent_requests = 64;
+  }
   if (config.trace_list_optimization !== undefined) {
     keys(config.trace_list_optimization, ['enabled'], 'trace_list_optimization');
     if (typeof config.trace_list_optimization.enabled !== 'boolean') fail('trace_list_optimization.enabled 必须为布尔值');

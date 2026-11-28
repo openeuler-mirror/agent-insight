@@ -156,7 +156,7 @@ function newConfiguration(home, env) {
     control: { backend: 'sqlite', database },
     clickhouse: { endpoint: `http://127.0.0.1:${chPort}`, database: 'agent_insight_core', user: 'default', password },
     cursor_secret_hex: crypto.randomBytes(32).toString('hex'), controller_key_file: controller,
-    default_workspace: 'default', port: corePort, worker_enabled: true,
+    default_workspace: 'default', port: corePort, worker_enabled: true, max_concurrent_requests: 64,
   };
   const memory = Number(env.AGENT_INSIGHT_CLICKHOUSE_MEMORY_MB || 2048);
   if (!Number.isInteger(memory) || memory < 512 || memory > 65536) fail('ClickHouse 内存上限必须为 512–65536 MiB');
