@@ -461,7 +461,7 @@ export function aggregateDeepSeekHarnessOtelEvents(
     }
   }
   const cleanInteractions = interactions.map((interaction) => {
-    const { _orderMs, _sourceSessionId, _turn, _step, ...clean } = interaction;
+    const clean = interaction;
     return clean;
   });
   const rootInteractions = interactions.filter((interaction) => interaction._sourceSessionId === rootSourceSessionId);

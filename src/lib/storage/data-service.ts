@@ -704,7 +704,7 @@ function getStoredRoutingSignature(config: ConfigItem): RoutingSemanticSignature
 export async function findBestRoutingConfig(
     configs: ConfigItem[],
     userQuery: string | null | undefined,
-    _user?: string | null
+    _user?: string | null  // eslint-disable-line @typescript-eslint/no-unused-vars
 ): Promise<ConfigItem | undefined> {
     const normalizedQuery = normalizeConfigQuery(userQuery);
     if (!normalizedQuery) return undefined;

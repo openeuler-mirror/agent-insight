@@ -636,7 +636,7 @@ function preferRolloutUsage(events: OtelTraceEvent[]): OtelTraceEvent[] {
     // 保留会虚增 LLM 节点数并在 UI 显示「未采集到模型输出」，直接丢弃。
     const hasBody = Boolean(eventOutput(event) || eventInput(event));
     if (hasBody) {
-      const { usage: _drop, ...rest } = event as AnyObj;
+      const rest = event as AnyObj;
       return [rest as OtelTraceEvent];
     }
     return [];

@@ -229,6 +229,7 @@ export async function POST(req: Request) {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function OPTIONS(_req: Request) {
   return new NextResponse(null, {
     status: 204,

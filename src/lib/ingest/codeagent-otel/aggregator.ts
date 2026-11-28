@@ -444,7 +444,7 @@ export function aggregateCodeAgentOtelEvents(
   }
 
   interactions.sort((left, right) => (left._orderMs || 0) - (right._orderMs || 0));
-  const cleanInteractions = interactions.map(({ _orderMs, _runId, ...interaction }) => interaction);
+  const cleanInteractions = interactions.map((interaction) => interaction);
   const rootMessages = cleanInteractions.filter((interaction) => interaction.role !== 'subagent');
   const requestQuery = events
     .filter((event) => event.eventName === 'api_request' && eventRunId(event, sessionId) === sessionId)

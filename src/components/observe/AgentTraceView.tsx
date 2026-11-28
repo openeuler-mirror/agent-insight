@@ -3511,7 +3511,7 @@ function EmptyDetail() {
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
     node, activeTab, onTabChange,
-    totalDurationMs, onSelectChild, traceSkills, currentUser, rootExecutionId, parentAgent, childAgents, relationsUnavailable
+    onSelectChild, traceSkills, currentUser, rootExecutionId, parentAgent, childAgents, relationsUnavailable
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;

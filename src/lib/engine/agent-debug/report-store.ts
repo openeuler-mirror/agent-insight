@@ -324,6 +324,7 @@ export function parseSkillsAnalysisPayload(row: AgentDebugSkillsAnalysisRow | nu
 }
 
 function stripEmbeddedSkillsAnalysis(report: AgentDebugReportPayload): AgentDebugReportPayload {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { skillsAnalysis: _skillsAnalysis, ...rest } = report;
   return rest as AgentDebugReportPayload;
 }

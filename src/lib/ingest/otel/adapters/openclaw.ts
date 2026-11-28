@@ -293,7 +293,7 @@ export function aggregateOpenClawOtelTraceEvents(sessionId: string, inputEvents:
   }
 
   interactions.sort((left, right) => left._orderMs - right._orderMs);
-  const cleanInteractions = interactions.map(({ _orderMs, _ownerSpanId, ...interaction }) => interaction);
+  const cleanInteractions = interactions.map((interaction) => interaction);
   const rootInteractions = cleanInteractions.filter((interaction) => interaction.role !== 'subagent');
   const firstPrompt = rootInteractions.find((interaction) => interaction.requestMessages?.[0]?.content)
     || cleanInteractions.find((interaction) => interaction.requestMessages?.[0]?.content);

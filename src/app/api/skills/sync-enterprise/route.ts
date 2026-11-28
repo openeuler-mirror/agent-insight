@@ -24,6 +24,7 @@ const syncStatus = {
   startTime: null as string | null
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function GET(request: NextRequest) {
   console.log('[Enterprise-Sync-API] GET请求 - 获取同步状态');
   return NextResponse.json(syncStatus);

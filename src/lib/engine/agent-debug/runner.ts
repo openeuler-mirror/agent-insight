@@ -370,7 +370,7 @@ function normalizeStepRecords(value: unknown, turns: DebugTurn[]): AgentDebugSte
     }));
   }
   return value
-    .map((item, _index) => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .map((item) => item && typeof item === 'object' ? item as Record<string, unknown> : null)
     .filter((item): item is Record<string, unknown> => Boolean(item))
     .map((item, index) => {
       const step = Math.max(1, Math.round(numberField(item, 'step', index + 1)));

@@ -22,7 +22,6 @@ import { CallbackHandler } from "@langfuse/langchain";
 import { saveExecutionRecord, ExecutionRecord } from "../../storage/data-service";
 import { createLogger } from "@/lib/logger";
 import { config } from "./config";
-import { langfuseSpanProcessor } from "./instrumentation";
 
 const logger = createLogger("skill-generation:callback");
 

@@ -345,7 +345,7 @@ export async function createSkillDeployment(input: {
   const artifactRef = newId('skillart')
   const currentVersion = Number.isInteger(current.skillVersion) ? current.skillVersion : null
   const currentHash = typeof current.contentHash === 'string' ? current.contentHash : null
-  const created = await prismaRaw.skillDeployment.create({
+  await prismaRaw.skillDeployment.create({
     data: {
       deploymentId,
       user: input.user,

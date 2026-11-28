@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function DELETE(req: NextRequest) {
     // Note: Next.js 13+ dynamic routes handle params differently. 
     // But since this is a simple implementation, I'll extract it from the URL if needed 
