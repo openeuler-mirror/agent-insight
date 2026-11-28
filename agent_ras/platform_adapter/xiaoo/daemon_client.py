@@ -210,8 +210,7 @@ class XiaooDaemonClient:
                 if isinstance(event, dict):
                     yield event
 
-    @staticmethod
-    def http_json(method: str, url: str, body: dict[str, Any]) -> dict[str, Any]:
+    def http_json(self, method: str, url: str, body: dict[str, Any]) -> dict[str, Any]:
         data = json.dumps(body).encode("utf-8")
         request = Request(
             url,
@@ -223,7 +222,7 @@ class XiaooDaemonClient:
             },
         )
         try:
-            with urlopen_noproxy(request, timeout=60) as response:
+            with urlopen_noproxy(request, timeout=self.timeout_seconds) as response:
                 payload = response.read().decode("utf-8")
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
