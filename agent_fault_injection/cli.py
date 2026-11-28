@@ -352,6 +352,8 @@ def build_request(namespace: argparse.Namespace) -> RunRequest:
     )
     model = _value(namespace.model, platform_options, "model")
     auto = _value(namespace.auto, platform_options, "auto")
+    if isinstance(auto, str):
+        auto = auto.strip().lower() not in {"", "0", "false", "no", "off"}
     plugin_startup_timeout = _value(
         getattr(namespace, "plugin_startup_timeout", None),
         platform_options,
