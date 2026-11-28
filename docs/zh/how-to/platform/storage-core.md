@@ -11,7 +11,7 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 ## 唯一存储运行方式
 
-应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss、MariaDB 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
 
 Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
 
@@ -28,14 +28,15 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 
 ## 配置数据库并一键安装
 
-源码部署时，数据库由用户预先部署并维护。源码安装器只管理 Storage Core 与 Web，不下载、不安装、不启停 PostgreSQL/openGauss/ClickHouse。选择 SQLite 网络服务时填写 endpoint、token 和制品目录；已有文件模式填写 database 路径。运行架构始终为一种事务库＋ClickHouse，禁止回退旧单库。
+源码部署时，数据库由用户预先部署并维护。源码安装器只管理 Storage Core 与 Web，不下载、不安装、不启停 PostgreSQL/openGauss/MariaDB/ClickHouse。选择 SQLite 网络服务时填写 endpoint、token 和制品目录；已有文件模式填写 database 路径。运行架构始终为一种事务库＋ClickHouse，禁止回退旧单库。
 
-准备 Node.js 22+、npm、Python（SQLite 使用 3.11+；固定 PostgreSQL 驱动使用 3.11–3.13）。先准备一种事务库和 ClickHouse 的独立数据库及凭据，然后在项目根目录选择样例：
+准备 Node.js 22+、npm、Python（SQLite 使用 3.11+；固定关系库驱动使用 3.11–3.13）。先准备一种事务库和 ClickHouse 的独立数据库及凭据，然后在项目根目录选择样例：
 
 ```bash
 cp config/storage.postgresql.example.json config/storage.local.json
 # 文件 SQLite 使用 config/storage.sqlite.example.json
 # 网络 SQLite 或 openGauss 使用 deploy/docker/ 下对应 JSON，改为宿主机可达的地址和路径
+# MariaDB 使用 config/storage.mariadb.example.json
 chmod 600 config/storage.local.json
 # 编辑 storage.local.json，替换全部 YOUR_* 占位符
 bash scripts/install.sh --check
@@ -46,12 +47,12 @@ bash scripts/install.sh
 
 | 字段 | 填写方法 |
 |---|---|
-| `control.backend` | 必填：`sqlite`、`postgresql` 或 `opengauss` |
+| `control.backend` | 必填：`sqlite`、`postgresql`、`opengauss` 或 `mariadb` |
 | `control.database` | SQLite 文件模式必填；文件绝对路径或 `~/` 路径，相对路径以项目根目录解析；不得填写历史单库文件。制品位于文件旁的 `.artifacts` 目录 |
-| `control.dsn` | PG/openGauss 必填；`postgresql://用户名:密码@主机:端口/数据库`。密码中的 `@:/#` 等须 URL 编码；示例 `p@ss` 写为 `p%40ss` |
+| `control.dsn` | 关系库必填。PG/openGauss 使用 `postgresql://用户名:密码@主机:端口/数据库`，MariaDB 使用 `mariadb://用户名:密码@主机:3306/数据库`。密码中的 `@:/#` 等须 URL 编码；示例 `p@ss` 写为 `p%40ss` |
 | `control.schema` | PG/openGauss 必填，独立应用 schema，如 `agent_insight`；不能使用 public 或系统 schema |
 | `control.endpoint/token` | 网络 SQLite 的 HTTP(S) 地址与服务令牌；与文件路径互斥 |
-| `control.artifacts` | 网络 SQLite、PG、openGauss 必填，Core 账号可写的持久制品目录 |
+| `control.artifacts` | 网络 SQLite、PG、openGauss、MariaDB 必填，Core 账号可写的持久制品目录 |
 | `clickhouse.endpoint` | 必填，HTTP(S) origin；通常 HTTP 8123、HTTPS 8443；不能填原生 TCP 9000，也不能在 URL 中放密码 |
 | `clickhouse.database` | 必填，管理员预建的独立数据库，不能使用 system/default |
 | `clickhouse.user/password` | 均须显式填写；只有数据库确实采用空密码时才填写空字符串，不能省略 password |
@@ -64,6 +65,29 @@ bash scripts/install.sh
 PG 样例默认 TLS `sslmode=verify-full`，将 `sslrootcert` 换成 CA 绝对路径。仅在隔离本机测试明确改为 `sslmode=disable`。ClickHouse HTTPS 使用系统信任链，私有 CA 可通过 Python 的 `SSL_CERT_FILE` 指定；不关闭证书验证。PG `connect_timeout` 默认 10 秒，允许 1–60。诊断不会输出密码或完整 DSN。
 
 初始化账号需要 PG 数据库 CONNECT、创建应用 schema 的 CREATE 权限（或预建 schema 的 USAGE/CREATE），以及应用表读写权限；ClickHouse 需要目标库 CREATE TABLE、SELECT、INSERT，运行时至少 SELECT/INSERT。初始化完成后可收回 DDL 权限，变更账号后重启应用。当前版本门槛为 PostgreSQL 16、ClickHouse 26.8，安装仍会验证实际表结构；高版本并不等于所有功能已验收。openGauss 部署专项使用 7.0.0-RC3 ARM64 镜像。
+
+## 使用外部 MariaDB
+
+由数据库管理员准备 MariaDB 11.4 或更高版本的独立事务库。示例库名为 `agent_insight`。Core 直接使用 DSN 路径中的库名。新库默认使用 `utf8mb4` 和 `utf8mb4_unicode_ci`。
+
+```sql
+CREATE DATABASE IF NOT EXISTS `agent_insight`
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+管理员单独创建和授权业务账号。Core 运行账号需要目标库的 `SELECT, INSERT, UPDATE, DELETE`。首次建表和升级由迁移账号执行，还需目标库的 `CREATE, ALTER, INDEX, TRIGGER, REFERENCES`。触发器定义者需要保留执行触发器所需的权限。应用与迁移均使用预建数据库。
+
+启用 binlog 时，迁移和运行连接使用 DBA 批准的 `ROW` 或 `MIXED` 格式。预检会拒绝与 `READ COMMITTED` 不兼容的 `STATEMENT`。当 `log_bin_trust_function_creators=OFF` 时，由具备 `SUPER` 的 DBA 账号执行包含触发器的首装或升级。业务账号仍只需上述读写权限。安装器在写入迁移标记前检查这些条件，保留实例的 binlog 和 SQL 模式设置。
+
+1. 复制 `config/storage.mariadb.example.json`，填写 MariaDB DSN、ClickHouse 和持久制品目录。配置文件权限设为 `0600`。生产 DSN 使用 `sslmode=verify-full`，私有 CA 用 `sslrootcert` 指定。
+2. 使用迁移账号执行 `bash scripts/install.sh --check` 和 `bash scripts/install.sh --storage-only`。之后用业务账号配置启动 Core 和 Web。在 OpenShift 中，把 DSN 放入 Core 侧的私有配置，按独立作业执行初始化。Web 通过 `AGENT_INSIGHT_STORAGE_CORE_URL` 访问 Core。
+3. 验收时分别用迁移连接和业务连接执行 `SELECT @@GLOBAL.sql_mode, @@SESSION.sql_mode`。按集合核对以下模式，并执行登录、写入和查询 Trace。
+
+```text
+PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ORACLE,NO_KEY_OPTIONS,NO_TABLE_OPTIONS,NO_FIELD_OPTIONS,STRICT_TRANS_TABLES,NO_AUTO_CREATE_USER,SIMULTANEOUS_ASSIGNMENT
+```
+
+版本升级先停止写入，在维护窗口完成备份并演练恢复。用 `migration-plan` 查看待执行版本，用 `source-evidence` 记录源库，再通过 `migrate-relational` 提交备份清单。详见[迁移命令与恢复要求](../../reference/platform/storage-core.md#显式初始化与版本迁移)。
 
 ## 没有数据库服务时：独立 Docker 启动
 

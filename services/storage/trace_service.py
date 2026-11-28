@@ -972,6 +972,11 @@ def runtime_from_config(path, *, warn_invalid_capacity=True):
         database=Path(config['control']['database'])
         if not database.is_absolute() or not database.is_file():raise ValueError('existing explicit absolute database required')
         control=SQLiteControlStore(database)
+    elif backend=='mariadb':
+        from .mariadb import MariaDBControlStore
+        settings=config['control']
+        if set(settings)-{'backend','dsn','artifacts'}:raise ValueError('MariaDB requires a database in its DSN')
+        control=MariaDBControlStore.from_dsn(settings['dsn'],artifact_directory=settings['artifacts'])
     elif backend in ('postgresql','opengauss'):
         from .relational import PostgreSQLControlStore,OpenGaussControlStore
         cls=PostgreSQLControlStore if backend=='postgresql' else OpenGaussControlStore
@@ -982,6 +987,7 @@ def runtime_from_config(path, *, warn_invalid_capacity=True):
         pending_limit=config.get('max_pending_ingest_batches',256)
         if type(pending_limit) is not int or not 1<=pending_limit<=10000:raise ValueError('max_pending_ingest_batches must be between 1 and 10000')
         control.max_pending_ingest_batches=pending_limit
+        if backend=='mariadb' and control.inspect()=='empty':raise ValueError('explicit schema initialization is required before service startup')
         plan=control.migration_plan()
         if plan['current_version']!=len(load_migrations(backend)) or plan['pending']:raise ValueError('explicit schema upgrade is required before service startup')
         facts=ClickHouseStore(**config['clickhouse'])

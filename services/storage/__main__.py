@@ -12,7 +12,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Core storage: explicit isolated targets and read-only legacy migration inputs')
     commands=parser.add_subparsers(dest='command',required=True)
     schema=commands.add_parser('schema',help='print reviewed DDL; does not connect to a database')
-    schema.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss','clickhouse'])
+    schema.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss','mariadb','clickhouse'])
     schema.add_argument('--version',type=int,default=1)
     initialize=commands.add_parser('init-sqlite',help='initialize an explicit NEW core SQLite database')
     initialize.add_argument('--database',required=True)
@@ -46,7 +46,7 @@ def main(argv=None):
         semantic.add_argument('--model',action='append',dest='selected_models')
         semantic.add_argument('--node-binary',default='node')
     migration_plan=commands.add_parser('migration-plan',help='read-only known-prefix migration plan for explicit target')
-    migration_plan.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss'])
+    migration_plan.add_argument('--backend',required=True,choices=['sqlite','postgresql','opengauss','mariadb'])
     migration_plan.add_argument('--database')
     migration_plan.add_argument('--dsn-file')
     migration_plan.add_argument('--schema')
@@ -56,9 +56,9 @@ def main(argv=None):
     migrate.add_argument('--backup',required=True)
     for command in ('init-relational','migrate-relational','source-evidence'):
         relational=commands.add_parser(command,help='explicit isolated-schema relational operation')
-        relational.add_argument('--backend',required=True,choices=['postgresql','opengauss'])
+        relational.add_argument('--backend',required=True,choices=['postgresql','opengauss','mariadb'])
         relational.add_argument('--dsn-file',required=True)
-        relational.add_argument('--schema',required=True)
+        relational.add_argument('--schema')
         relational.add_argument('--artifacts',required=True)
         if command=='migrate-relational': relational.add_argument('--backup-manifest',required=True)
     recover=commands.add_parser('recover-ingest',help='explicit authorized recovery of one failed ingest batch')
@@ -82,14 +82,21 @@ def main(argv=None):
                 if not args.database: raise ValueError('SQLite requires an explicit database')
                 store=SQLiteControlStore(args.database)
             else:
-                if not args.dsn_file or not args.schema or not args.artifacts:
-                    raise ValueError('relational operations require DSN file, schema and artifact directory')
-                from .relational import PostgreSQLControlStore, OpenGaussControlStore
+                if not args.dsn_file or not args.artifacts:
+                    raise ValueError('relational operations require a DSN file and artifact directory')
                 dsn_file=Path(args.dsn_file)
                 if not dsn_file.is_file() or dsn_file.is_symlink() or dsn_file.stat().st_mode & 0o077:
                     raise ValueError('DSN file must be private and not a symlink')
-                cls=PostgreSQLControlStore if args.backend=='postgresql' else OpenGaussControlStore
-                store=cls.from_dsn(dsn_file.read_text().strip(),schema=args.schema,artifact_directory=args.artifacts)
+                dsn=dsn_file.read_text().strip()
+                if args.backend=='mariadb':
+                    from .mariadb import MariaDBControlStore
+                    if args.schema or getattr(args,'database',None):raise ValueError('specify the MariaDB database in the DSN')
+                    store=MariaDBControlStore.from_dsn(dsn,artifact_directory=args.artifacts)
+                else:
+                    from .relational import PostgreSQLControlStore, OpenGaussControlStore
+                    if not args.schema:raise ValueError('PostgreSQL and openGauss require an isolated schema')
+                    cls=PostgreSQLControlStore if args.backend=='postgresql' else OpenGaussControlStore
+                    store=cls.from_dsn(dsn,schema=args.schema,artifact_directory=args.artifacts)
             if args.command=='init-relational':
                 store.initialize();result={'status':'initialized'} | store.migration_plan()
             elif args.command=='source-evidence':

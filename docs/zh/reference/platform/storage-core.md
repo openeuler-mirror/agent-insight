@@ -1,6 +1,6 @@
 ---
 title: "新存储核心、IAM 与安全迁移"
-description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧库迁移输入。"
+description: "SQLite、PG、openGauss、MariaDB 控制面、ClickHouse 授权访问和旧库迁移输入。"
 ---
 
 # 新存储核心、IAM 与安全迁移
@@ -9,7 +9,7 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 ## 唯一存储运行方式
 
-应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
+应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss、MariaDB 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
 
 Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的就绪状态。Core 启动及 /v1/health 校验事务版本和 ClickHouse 必需表/字段与读取权限。健康检查不能代替真实采集、索引和业务验收。ClickHouse 中断时不回落旧库；已接收的 Outbox 保留并重试。私有 Core 配置可设置 max_pending_ingest_batches（每 workspace，默认 256，范围 1–10000）；队列满时新采集返回 429/QUEUE_LIMIT，已接收请求的幂等重试仍返回原回执。
 
@@ -91,6 +91,14 @@ python3 -m services.storage migrate-sqlite --database /absolute/path/to/core.db 
 SQLite 迁移先生成同目录的新私有备份并检查完整性/FK/hash，再持写锁重核源与备份内容，防止备份后的并发写入被遗漏；变化时拒绝并保留备份。待执行迁移及版本登记同事务成功或回滚，不覆盖旧备份、不删除原数据。新目标启用 WAL/FULL，不能将 SQLite 文件放在 NFS 跨主机共享写入。
 
 关系库入口为 `init-relational`、`migration-plan`、`source-evidence`、`migrate-relational`，需要 `--backend postgresql|opengauss --dsn-file /private/connection.txt --schema isolated_schema --artifacts /private/artifacts`。DSN 文件必须为私有普通文件，凭据不得写命令行。迁移另需 `--backup-manifest`：先在维护窗口停止写入，完成外部 dump 与恢复核验，再提供备份字节 hash、源身份/历史/内容证据和操作声明。工具不能自动证明外部 dump 可恢复；源证据与当前锁内状态不符会拒绝。具体证据接口见 `PostgreSQLControlStore.source_evidence()`，不能用一个空文件或 `restore_verified=true` 代替真实备份。
+
+MariaDB 四个入口使用 `--backend mariadb --dsn-file /private/mariadb.dsn --artifacts /private/artifacts`。DSN 路径直接指定已存在的库名。首次安装执行 `init-relational`。升级前使用 `source-evidence` 输出备份所对应的源库证据，并写入清单的 `source_evidence`。清单的 `backend` 为 `mariadb`，`schema` 写实际库名。清单还需 `path`、`sha256`、`restore_verified`、`writers_stopped`、`operator` 和 `created_at_ms`。命令返回成功后，检查 `migration-plan` 的 pending 为零再恢复写入。
+
+MariaDB DDL 会隐式提交。工具在运行 DDL 前提交迁移状态标记，完成迁移并校验版本历史后清除标记。升级中断时 Core 拒绝启动。先从已验证的备份恢复，再执行迁移。初次安装中断时可另行准备一个空库重新初始化。
+
+MariaDB 的版本化 SQL 位于 `services/storage/schema/mariadb`，文件内部使用单独一行 `-- next statement` 划分顶层语句，保留触发器内部的分号。MariaDB 表使用 InnoDB。业务文本键使用区分大小写和尾随空格的列排序规则。长复合键采用长度编码后计算的 32 字节摘要，作为物理索引与外键，原始文本继续用于业务查找。数据库默认排序规则跟随管理员为新库配置的 `utf8mb4_unicode_ci`。
+
+MariaDB 首装和升级的触发器授权及 binlog 格式要求见 [MariaDB 部署指南](../../how-to/platform/storage-core.md#使用外部-mariadb)。迁移 021 回填历史采集批次的投递记录及 Trace 关联，并保留原有批次和出站事件。
 
 ## Trace 接收、物化与查询契约
 

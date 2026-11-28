@@ -1,0 +1,19 @@
+{
+  "control": {
+    "backend": "mariadb",
+    "dsn": "mariadb://YOUR_MARIADB_USER:YOUR_MARIADB_PASSWORD@YOUR_MARIADB_HOST:3306/agent_insight?connect_timeout=10&sslmode=verify-full&sslrootcert=YOUR_MARIADB_CA_FILE",
+    "artifacts": "~/.agent-insight/storage/artifacts"
+  },
+  "clickhouse": {
+    "endpoint": "https://YOUR_CLICKHOUSE_HOST:8443",
+    "database": "YOUR_CLICKHOUSE_DATABASE",
+    "user": "YOUR_CLICKHOUSE_USER",
+    "password": "YOUR_CLICKHOUSE_PASSWORD",
+    "timeout": 15
+  },
+  "runtime": {
+    "home": "~/.agent-insight",
+    "corePort": 4319,
+    "webPort": 3000
+  }
+}

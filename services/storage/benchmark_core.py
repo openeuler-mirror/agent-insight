@@ -441,7 +441,8 @@ class BenchmarkStore:
         if row['kind']=='execute':
             concurrency=binding['run_config'].get('executionConcurrency',1)
             if type(concurrency) is not int or not 1<=concurrency<=1000:raise ValueError('Frozen execution concurrency must be 1..1000')
-            unknown="j.protocol_state='cancelled' AND j.callback_token_hash IS NOT NULL AND j.completion_hash IS NULL AND NOT EXISTS(SELECT 1 FROM benchmark_operation_receipts r WHERE r.workspace_id=j.workspace_id AND r.job_id=j.job_id AND r.operation_kind='cleanup-confirmed' AND r.operation_key='target:'||j.job_id||':'||j.request_hash)"
+            operation_key = "CONCAT('target:',j.job_id,':',j.request_hash)" if getattr(self.control, 'backend', None) == 'mariadb' else "'target:'||j.job_id||':'||j.request_hash"
+            unknown=f"j.protocol_state='cancelled' AND j.callback_token_hash IS NOT NULL AND j.completion_hash IS NULL AND NOT EXISTS(SELECT 1 FROM benchmark_operation_receipts r WHERE r.workspace_id=j.workspace_id AND r.job_id=j.job_id AND r.operation_kind='cleanup-confirmed' AND r.operation_key={operation_key})"
             active=con.execute("SELECT COUNT(*) FROM benchmark_jobs j WHERE j.workspace_id=? AND j.experiment_id=? AND j.kind='execute' AND (j.protocol_state IN ('preparing','dispatching','dispatch_unknown','running_agent','collecting','uploading','cleaning') OR ("+unknown+'))',(ws,row['experiment_id'])).fetchone()[0]
             _,plan=self.experiments._plan(con,ws,row['experiment_id'],row['run_id']);limits=plan['config']['scheduler_limits']
             count_sql="SELECT COUNT(*) FROM benchmark_jobs j WHERE j.workspace_id=? AND ((j.kind='execute' AND j.protocol_state IN ('preparing','dispatching','dispatch_unknown','running_agent','collecting','uploading','cleaning','submitted')) OR ("+unknown+'))'

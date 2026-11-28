@@ -1,6 +1,6 @@
 ---
 title: "Storage core, IAM and safe migrations"
-description: "SQLite, PostgreSQL and openGauss control storage, authorized ClickHouse access and legacy exports."
+description: "SQLite, PostgreSQL, openGauss and MariaDB control storage, authorized ClickHouse access and legacy exports."
 ---
 
 # Storage core, IAM and safe migrations
@@ -9,7 +9,7 @@ Run `bash scripts/deploy-docker.sh up` for a three-container PostgreSQL and Clic
 
 ## Single storage runtime
 
-The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
+The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL, openGauss or MariaDB), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
 
 Web startup checks the Core origin, private controller file and readiness of both stores. Core startup and /v1/health verify transaction migrations and required ClickHouse tables, columns and SELECT access. This does not replace ingestion and business acceptance tests. Outbox work survives ClickHouse outages without falling back to a relational analytical store. The private Core configuration accepts max_pending_ingest_batches (per workspace, default 256, range 1–10000). New ingestion receives 429/QUEUE_LIMIT when full; retries of accepted receipts remain idempotent.
 
@@ -88,6 +88,10 @@ SQLite migration creates a new private sibling backup, verifies integrity/FKs/ha
 
 Relational commands are `init-relational`, `migration-plan`, `source-evidence` and `migrate-relational`. They require `--backend postgresql|opengauss --dsn-file /private/connection.txt --schema isolated_schema --artifacts /private/artifacts`. DSN files must be private regular files; keep secrets out of command arguments. Migrations additionally require `--backup-manifest` containing the dump hash, source identity/history/content evidence and operator/write-barrier attestations after a real external backup and restore exercise. `source_evidence()` produces the consistent source evidence; migration compares it under the write barrier. The tool does not automatically prove an external dump is restorable: an empty file or a boolean flag is not a substitute for a backup.
 
+For MariaDB, use `--backend mariadb --dsn-file /private/mariadb.dsn --artifacts /private/artifacts`. The DSN path specifies the existing dedicated database. Use its database name in the backup manifest's `schema` field. MariaDB DDL commits implicitly, so a persisted migration marker fences application traffic until every migration completes. If an upgrade fails, restore the verified backup before retrying. The application inherits the server's SQL mode. Verify the full configured mode in the migration and runtime sessions and run a business write/read check on the target release.
+
+See the [MariaDB installation guide](../../how-to/platform/storage-core.md#use-external-mariadb) for trigger privileges and binary logging requirements. Migration 021 backfills delivery records and Trace associations for existing ingestion batches and retains the batches and their outbox events.
+
 ## Trace ingestion and bounded HTTP contracts
 
 `ObservationIngest(control,facts)` exposes durable `accept`, fenced `work_once` and current-authorized `batch_status`. A complete packet is validated before locator writes; its private artifact is fsynced before one transaction registers routes, private ACLs, batch and Outbox. Receipt keys are workspace/principal scoped; reused keys with changed packets conflict. Accepted is distinct from indexed; write-only collectors may inspect their own receipts.
@@ -106,7 +110,7 @@ Relational commands are `init-relational`, `migration-plan`, `source-evidence` a
 
 Trusted CH kernel reads still allow1000 structure rows or32 chunks; HTTP/UI impose the smaller limits above. Missing sections return available=false. Trace lists scan at most2000 authorized candidates, bind signed cursors to scope/filters and do not invent a global total.
 
-`python3 -m services.storage.trace_service --config /private/trace-service.json` requires a private regular mode0600 JSON file. Control fields are sqlite(database), or postgresql/opengauss(dsn/schema/artifacts). ClickHouse fields are endpoint/database/user/password, plus cursor_secret_hex, controller_key_file, default_workspace, port and worker_enabled. Initialize/migrate control and CH explicitly beforehand: startup does not create tables or upgrade schemas. The service binds127.0.0.1 with32 concurrent request slots and503 overload rejection.
+`python3 -m services.storage.trace_service --config /private/trace-service.json` requires a private regular mode0600 JSON file. Control fields are sqlite(database), or postgresql/opengauss(dsn/schema/artifacts), or mariadb(dsn/artifacts). ClickHouse fields are endpoint/database/user/password, plus cursor_secret_hex, controller_key_file, default_workspace, port and worker_enabled. Initialize/migrate control and CH explicitly beforehand: startup does not create tables or upgrade schemas. The service binds127.0.0.1 with32 concurrent request slots and503 overload rejection.
 
 Set server-only `AGENT_INSIGHT_TRACE_STORAGE=core`, `AGENT_INSIGHT_STORAGE_CORE_URL` and `AGENT_INSIGHT_STORAGE_CORE_IDENTITY_FILE`; restart Next after changes. The old public flag is a deprecated server alias only. DATABASE_URL is not used for Web runtime storage; configure the transactional backend in the private Core configuration. Original frontend login/key behavior is unchanged. The0600 mapping binds a verified legacy key hash/name to a current IAM principal, workspace and read/write/execute/delete delegated credential. Errors do not fall back to legacy Trace reads; the runtime does not retain a legacy single-database path.
 

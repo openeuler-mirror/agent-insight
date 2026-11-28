@@ -18,7 +18,7 @@ function string(value, label, empty = false) {
   return value;
 }
 function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
-  if (!fs.existsSync(file)) fail(`缺少 ${file}；请按事务库类型复制连接配置样例，填写 control 与 clickhouse 后 chmod 600`);
+  if (!fs.existsSync(file)) fail(`缺少 ${file}；请按事务库类型选用连接配置样例（MariaDB 使用 config/storage.mariadb.example.json），填写 control 与 clickhouse 后 chmod 600`);
   let config;
   if (path.extname(file).toLowerCase() === '.ini') {
     const result = spawnSync('python3', [path.join(__dirname, 'deployment_ini.py'), file], { encoding: 'utf8' });
@@ -44,7 +44,7 @@ function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
     keys(c.connection_pool, ['enabled', 'min_idle', 'max_size', 'acquire_timeout_seconds', 'connect_timeout_seconds', 'idle_timeout_seconds', 'max_lifetime_seconds', 'health_check_idle_seconds'], 'control.connection_pool');
     if (c.backend !== 'postgresql') fail('connection_pool 仅适用于 PostgreSQL');
   }
-  if (!['sqlite', 'postgresql', 'opengauss'].includes(c.backend)) fail('control.backend 必须是 sqlite、postgresql 或 opengauss');
+  if (!['sqlite', 'postgresql', 'opengauss', 'mariadb'].includes(c.backend)) fail('control.backend 必须是 sqlite、postgresql、opengauss 或 mariadb');
   if (c.backend === 'sqlite' && c.endpoint !== undefined) {
     if ('dsn' in c || 'database' in c || 'schema' in c) fail('SQLite 服务地址不能与文件路径或 DSN 并用');
     let url;
@@ -60,15 +60,18 @@ function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
     c.database = resolvePath(string(c.database, 'control.database'));
     if (fs.existsSync(c.database) && fs.lstatSync(c.database).isSymbolicLink()) fail('SQLite 文件不能为符号链接');
   } else {
-    if (c.database) fail('PostgreSQL/openGauss 使用 dsn，不接受 database');
+    const maria = c.backend === 'mariadb';
+    if (c.database || (maria && c.database !== undefined)) fail('关系库使用 control.dsn 指定数据库');
+    if (maria && c.schema !== undefined) fail('MariaDB 库名由 control.dsn 指定');
     let url;
     string(c.dsn, 'control.dsn');
-    try { url = new URL(c.dsn); } catch { fail('control.dsn 必须填写完整 PostgreSQL URI（密码特殊字符需 URL 编码）'); }
-    if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.username || !url.password || url.pathname.length < 2 || url.hash) fail('control.dsn 缺少主机、数据库、用户名或密码');
+    try { url = new URL(c.dsn); } catch { fail('control.dsn 必须填写完整数据库 URI（密码特殊字符需 URL 编码）'); }
+    const protocols = maria ? ['mariadb:'] : ['postgres:', 'postgresql:'];
+    if (!protocols.includes(url.protocol) || !url.hostname || !url.username || !url.password || url.pathname.length < 2 || url.hash) fail('control.dsn 缺少主机、数据库、用户名或密码');
     if (!url.searchParams.has('connect_timeout')) url.searchParams.set('connect_timeout', '10');
     if (!/^\d+$/.test(url.searchParams.get('connect_timeout')) || Number(url.searchParams.get('connect_timeout')) < 1 || Number(url.searchParams.get('connect_timeout')) > 60) fail('connect_timeout 必须为 1–60 秒');
     c.dsn = url.toString();
-    if (!/^[a-z][a-z0-9_]{0,62}$/.test(string(c.schema, 'control.schema')) || ['public', 'information_schema'].includes(c.schema) || c.schema.startsWith('pg_')) fail('control.schema 必须为独立的非系统 schema');
+    if (!maria && (!/^[a-z][a-z0-9_]{0,62}$/.test(string(c.schema, 'control.schema')) || ['public', 'information_schema'].includes(c.schema) || c.schema.startsWith('pg_'))) fail('control.schema 必须为独立的非系统 schema');
     c.artifacts = resolvePath(string(c.artifacts, 'control.artifacts'));
   }
   const ch = config.clickhouse;
@@ -95,14 +98,15 @@ function python(config, env, apply) {
   const executable = env.AGENT_INSIGHT_STORAGE_PYTHON || path.join(config.runtime.home, 'runtime/python/bin/python');
   if (apply && config.control.backend !== 'sqlite' && !env.AGENT_INSIGHT_STORAGE_PYTHON && !fs.existsSync(executable)) {
     const candidate = ['python3.13', 'python3.12', 'python3.11'].find(command => spawnSync(command, ['-c', 'import sys; assert (3,11) <= sys.version_info < (3,14)'], { stdio: 'ignore' }).status === 0);
-    if (!candidate) fail('PostgreSQL/openGauss 驱动需要 Python 3.11–3.13；请安装兼容 Python 或配置 AGENT_INSIGHT_STORAGE_PYTHON');
+    if (!candidate) fail('关系库驱动需要 Python 3.11–3.13；请安装兼容 Python 或配置 AGENT_INSIGHT_STORAGE_PYTHON');
     installer.command(candidate, ['-m', 'venv', path.dirname(path.dirname(executable))]);
   }
   const selected = apply ? installer.python(config.runtime.home, env) : fs.existsSync(executable) ? executable : 'python3';
   if (config.control.backend !== 'sqlite') {
-    if (spawnSync(selected, ['-c', 'import psycopg2'], { stdio: 'ignore' }).status !== 0) {
-      if (!apply) fail('预检查需要 psycopg2；请在 Python 环境安装 services/storage/requirements-relational.txt，或执行安装入口准备依赖');
-      if (spawnSync(selected, ['-c', 'import sys; assert (3,11) <= sys.version_info < (3,14)'], { stdio: 'ignore' }).status !== 0) fail('当前 Python 不兼容固定 PostgreSQL 驱动，请通过 AGENT_INSIGHT_STORAGE_PYTHON 指定 Python 3.11–3.13 环境');
+    const driver = config.control.backend === 'mariadb' ? 'pymysql' : 'psycopg2';
+    if (spawnSync(selected, ['-c', `import ${driver}`], { stdio: 'ignore' }).status !== 0) {
+      if (!apply) fail(`预检查需要 ${driver}；请在 Python 环境安装 services/storage/requirements-relational.txt，或执行安装入口准备依赖`);
+      if (spawnSync(selected, ['-c', 'import sys; assert (3,11) <= sys.version_info < (3,14)'], { stdio: 'ignore' }).status !== 0) fail('当前 Python 不兼容固定关系库驱动，请通过 AGENT_INSIGHT_STORAGE_PYTHON 指定 Python 3.11–3.13 环境');
       installer.command(selected, ['-m', 'pip', 'install', '--only-binary=:all:', '-r', path.join(ROOT, 'services/storage/requirements-relational.txt')]);
     }
   }

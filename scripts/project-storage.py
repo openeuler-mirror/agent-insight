@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from services.storage.clickhouse import ClickHouseStore
 from services.storage.control import SQLiteControlStore
+from services.storage.mariadb import MariaDBControlStore, MariaDBPreflightError
 from services.storage.migrations import load_migrations
 spec = importlib.util.spec_from_file_location('local_storage', Path(__file__).with_name('local-storage.py'))
 local = importlib.util.module_from_spec(spec)
@@ -44,6 +45,10 @@ def transaction(config):
             raise ValueError('已有 SQLite 空文件未经本安装器初始化，请核实并选择新文件路径')
         if not os.access(database, os.W_OK) or not os.access(database.parent, os.W_OK):
             raise ValueError('SQLite 文件或父目录不可写')
+    elif backend == 'mariadb':
+        store = MariaDBControlStore.from_dsn(c['dsn'], artifact_directory=c['artifacts'])
+        if store.inspect() == 'empty':
+            return store, 'empty'
     else:
         from services.storage.relational import PostgreSQLControlStore, OpenGaussControlStore
         cls = PostgreSQLControlStore if backend == 'postgresql' else OpenGaussControlStore
@@ -124,6 +129,8 @@ def inspect(config):
         raise ValueError(diagnostic('ClickHouse', 'clickhouse.endpoint、账号与权限', exc)) from None
     try:
         store, state = transaction(config)
+    except MariaDBPreflightError:
+        raise
     except Exception as exc:
         raise ValueError(diagnostic(config['control']['backend'], 'control 连接配置与权限', exc)) from None
     return store, facts, {'transaction': state, 'clickhouse': status, 'clickhouseVersion': version}
@@ -138,7 +145,7 @@ def initialize(config, *, apply=False):
         target['endpoint'] = control['endpoint']
     if control.get('dsn'):
         url = urlsplit(control['dsn'])
-        target['address'] = [url.hostname, url.port or 5432, url.path]
+        target['address'] = [url.hostname, url.port or (3306 if control['backend'] == 'mariadb' else 5432), url.path]
     identity = hashlib.sha256(json.dumps({'control': target, 'clickhouse': {k: config['clickhouse'][k] for k in ('endpoint', 'database')}}, sort_keys=True).encode()).hexdigest()
     state = local.private_json(state_file) if state_file and state_file.exists() else None
     if state and state['identity'] != identity:
@@ -191,6 +198,6 @@ if __name__ == '__main__':
         config = json.load(sys.stdin)
         print(json.dumps(initialize(config, apply=sys.argv[1] == 'initialize')))
     except Exception as exc:
-        safe = isinstance(exc, ValueError) and any('\u4e00' <= c <= '\u9fff' for c in str(exc))
+        safe = isinstance(exc, MariaDBPreflightError) or (isinstance(exc, ValueError) and any('\u4e00' <= c <= '\u9fff' for c in str(exc)))
         print(str(exc) if safe else f'数据库检查失败 ({type(exc).__name__})：检查数据库是否已创建、地址、凭据、TLS、权限和 schema 版本；不会回退旧存储', file=sys.stderr)
         sys.exit(1)
