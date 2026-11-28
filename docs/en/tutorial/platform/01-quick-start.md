@@ -9,6 +9,8 @@ This tutorial completes the first Agent Insight workflow: configure a model, con
 
 You will finish with a registered Agent, a usable model configuration, and a real uploaded Trace. UI labels are shown with their Chinese names where useful.
 
+Run `bash scripts/deploy-docker.sh up` for a three-container PostgreSQL and ClickHouse installation. External database settings and network SQLite examples are in the [deployment guide](../../how-to/platform/deploy-docker.md).
+
 ## Prerequisites
 
 - Access to the deployed dashboard, for example `http://localhost:3000` or your self-hosted address.

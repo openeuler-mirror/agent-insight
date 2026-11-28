@@ -126,15 +126,55 @@ test('pool configuration does not silently enable unsupported backends', t => {
   assert.throws(() => storage.readConfig(file), /PostgreSQL/)
 })
 
-test('Core request capacity defaults to 64 and accepts only bounded integer overrides', t=>{
- const {file,config,save}=fixture(t);
- assert.equal(storage.configurationFile(storage.readConfig(file),config.runtime.home).cfg.max_concurrent_requests,64);
- for(const value of [1,32,64,256]){
-  Object.assign(config,{max_concurrent_requests:value});save();
-  assert.equal(storage.configurationFile(storage.readConfig(file),config.runtime.home).cfg.max_concurrent_requests,value);
- }
- for(const value of [0,257,true,'64',1.5,null]){
-  Object.assign(config,{max_concurrent_requests:value});save();
-  assert.throws(()=>storage.readConfig(file),/max_concurrent_requests/);
- }
+test('Core request capacity defaults to 64 and warns only on invalid overrides', t => {
+  const { file, config, save } = fixture(t);
+  const warn = t.mock.method(console, 'warn', () => {});
+  const effectiveCapacity = () => storage.configurationFile(storage.readConfig(file), config.runtime.home).cfg.max_concurrent_requests;
+  assert.equal(effectiveCapacity(), 64);
+  for (const value of [1, 96, 256]) {
+    Object.assign(config, { max_concurrent_requests: value });
+    save();
+    assert.equal(effectiveCapacity(), value);
+  }
+  assert.equal(warn.mock.callCount(), 0);
+  for (const value of [0, -1, 257, true, '96', 1.5, null, [], {}]) {
+    Object.assign(config, { max_concurrent_requests: value });
+    save();
+    warn.mock.resetCalls();
+    assert.equal(effectiveCapacity(), 64);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(String(warn.mock.calls[0].arguments[0]), /max_concurrent_requests.*64/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).max_concurrent_requests, value);
+  }
 });
+
+test('network SQLite requires an exclusive endpoint, private credentials and an artifact directory', t => {
+  const { dir, file, config } = fixture(t)
+  const control = { backend: 'sqlite', endpoint: 'http://sqlite:8080', artifacts: path.join(dir, 'artifacts'), token: 'a'.repeat(32) }
+  const save = (overrides: Record<string, unknown>) => fs.writeFileSync(file, JSON.stringify({ ...config, control: { ...control, ...overrides } }))
+  save({})
+  assert.deepEqual(storage.readConfig(file).control, control)
+  for (const invalid of [{ database: 'data.db' }, { endpoint: 'http://user:secret@sqlite:8080' }, { token: '' }, { artifacts: '' }]) {
+    save(invalid)
+    assert.throws(() => storage.readConfig(file), error => !String(error).includes('secret'))
+  }
+})
+
+test('source INI reads current settings, encodes literal passwords and never reuses a managed credential', t => {
+  const { dir } = fixture(t)
+  const file = path.join(dir, 'storage.ini')
+  const defaults = fs.readFileSync('config/deployment/storage.ini', 'utf8')
+  fs.writeFileSync(file, defaults)
+  assert.throws(() => storage.readConfig(file), /\[transaction\].backend/)
+  const custom = defaults.replace('backend = @instance', 'backend = postgresql')
+    .replace('host = postgres', 'host = 127.0.0.1')
+  fs.writeFileSync(file, custom)
+  assert.throws(() => storage.readConfig(file), /\[postgresql\].password/)
+  const password = 'test@%#=pass'
+  fs.writeFileSync(file, custom.replaceAll('password = @instance', 'password = ' + password))
+  const result = storage.readConfig(file)
+  assert.equal(decodeURIComponent(new URL(result.control.dsn).password), password)
+  assert.equal(result.clickhouse.password, password)
+  fs.writeFileSync(file, '[transaction]\n' + password)
+  assert.throws(() => storage.readConfig(file), error => !String(error).includes(password))
+})

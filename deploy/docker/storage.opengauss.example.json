@@ -1,0 +1,20 @@
+{
+  "control": {
+    "backend": "opengauss",
+    "dsn": "postgresql://agent_insight:YOUR_OG_PASSWORD@opengauss:5432/agent_insight?sslmode=disable&connect_timeout=10",
+    "schema": "agent_insight",
+    "artifacts": "/data/agent-insight/artifacts"
+  },
+  "clickhouse": {
+    "endpoint": "http://clickhouse:8123",
+    "database": "agent_insight",
+    "user": "agent_insight",
+    "password": "YOUR_CLICKHOUSE_PASSWORD",
+    "timeout": 15
+  },
+  "runtime": {
+    "home": "/data/agent-insight",
+    "webPort": 3000,
+    "corePort": 4319
+  }
+}

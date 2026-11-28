@@ -4,7 +4,64 @@ description: "Published images, offline imports, mounted source, and persistent 
 
 ---
 
-If you do not have a dashboard deployment yet, you can pull a published Docker image. `karaggagent/agent-insight` provides multi-architecture images: `x86_64` servers select `linux/amd64`, and `aarch64` servers select `linux/arm64` automatically.
+## Three-container deployment
+
+From the repository root, run `bash scripts/deploy-docker.sh up` with Python 3, Docker Engine and Compose v2 supporting `--wait`. The first run builds the application image and starts PostgreSQL 16, ClickHouse 26.8 and one application container running Core and Web. Each database owns a separate volume. Access Web at `http://127.0.0.1:3000`. Select `--transaction sqlite` or `--transaction opengauss` on first install to use another backend.
+
+Keep the private deployment directory (default `~/.agent-insight-docker`) with the data volumes. Reuse `--instance-dir` on subsequent commands. On first install, set `WEB_HOST_PORT`, `CH_HOST_PORT` and the selected backend's `PG_HOST_PORT`, `OG_HOST_PORT` or `SQLITE_HOST_PORT` when running multiple instances. To serve other hosts, set `DB_BIND_ADDRESS` to the database host’s private interface on first install, then configure the application with that address and the published ports. Set `WEB_BIND_ADDRESS` to select the Web interface. Defaults bind to loopback. Use `up --build` to rebuild local images. Use `status` and `stop` for the instance.
+
+<a id="manual-compose"></a>
+
+## Start one service at a time
+
+From the parent directory run `cd agent-insight`. If already in the repository root, start with step 1. You need Docker Engine, Compose v2 with `up --wait`, and Python 3.
+
+The step-by-step deployment uses a separate instance and Web port **13000** by default. It can run alongside the default one-click instance on port 3000. Settings are at the top of [deploy-step.sh](../../../../scripts/deploy-step.sh). Before the first run, adjust occupied ports or change the default transactional backend from `postgresql` to `opengauss` or `sqlite`. The first run saves ports and credentials. Each command works in a new terminal.
+
+| Step | Run from the repository root | Expected result |
+|---|---|---|
+| 1. Start ClickHouse | `bash scripts/deploy-step.sh clickhouse` | ClickHouse is healthy. The database stores its instance credentials independently of the application INI |
+| 2. Start the transactional database | `bash scripts/deploy-step.sh transaction` | Both databases are healthy |
+| Optional: edit App settings | `vi config/deployment/storage.ini` | Edit this file directly or keep its shipped defaults |
+| 3. Start the application | `bash scripts/deploy-step.sh app` | Web loads the saved settings, connects to both stores and prints its URL |
+| 4. Check the result | `bash scripts/deploy-step.sh status` | Three healthy containers. Open the [login page](http://127.0.0.1:13000/login) |
+
+The application reads the current [storage.ini](../../../../config/deployment/storage.ini) at launch. The default `@instance` selects the managed transactional backend and resolves credentials for matching local services. After editing the INI, run `bash scripts/deploy-step.sh app` again. Changed effective settings recreate the application container. A password change in this file updates the client's login credentials. Keep real passwords on the deployment machine and back up the file with the instance records and volumes.
+
+Stop this instance with `bash scripts/deploy-step.sh stop`. Repeat steps 1–3 to restart it with its existing data. Earlier manual Compose deployments retain their original project names and volumes. The standalone files and templates are in the [deployment directory](../../../../deploy/docker/).
+
+<a id="split"></a>
+
+## Reuse the original one-click instance
+
+For an instance originally created by `deploy-docker.sh up`, use the original launcher. From a stopped state, these commands start both databases, then the application. Running `db` while Web is already running leaves it online.
+
+```bash
+bash scripts/deploy-docker.sh db
+bash scripts/deploy-docker.sh app
+bash scripts/deploy-docker.sh status
+```
+
+<a id="existing-databases"></a>
+
+## Connect the application to existing databases
+
+Edit [config/deployment/storage.ini](../../../../config/deployment/storage.ini). Set `[transaction].backend` to `postgresql`, `opengauss` or `sqlite`. In the matching section enter the reachable database host, port, database name, user, password and schema, or the SQLite endpoint and token. In `[clickhouse]` supply the HTTP(S) endpoint, database, username and password. External credentials must replace the `@instance` reference. Enter passwords literally. Use the intended TLS settings and mount any required CA certificates.
+
+Run `bash scripts/deploy-step.sh app` and check `bash scripts/deploy-step.sh status`. If an existing instance needs a different data target, migrate it or use a separate instance directory. The explicit private JSON option `bash scripts/deploy-docker.sh app --config FILE` remains supported.
+
+For source deployments enter addresses and published ports reachable from the application host and explicit credentials. With the [required runtime and drivers](storage-core.md), run:
+
+```bash
+bash scripts/install.sh --check --config config/deployment/storage.ini
+bash scripts/install.sh --config config/deployment/storage.ini
+bash scripts/status.sh --config config/deployment/storage.ini
+```
+
+Source INI deployments use `~/.agent-insight` and Web/Core ports 3000/4319. Continue using private JSON for custom runtime paths, ports or advanced settings.
+
+<details>
+<summary>Historical single-container images and source mounts (use the instructions for the corresponding release)</summary>
 
 ## Option 1: Pull from Docker Hub
 
@@ -219,6 +276,8 @@ Features such as `opencode-live` trigger analysis and trajectory evaluation laun
 After deployment, continue with [your first Trace](../../tutorial/platform/01-quick-start.md). Before an upgrade, read [upgrade and rollback](./upgrade-and-rollback.md).
 
 [中文权威版本](../../../zh/how-to/platform/deploy-docker.md)
+
+</details>
 
 ## UBI9/OpenShift image
 

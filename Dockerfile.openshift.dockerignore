@@ -41,3 +41,4 @@ npm-cache
 # Private database connection configuration
 config/storage.local.json
 **/config/storage.local.json
+**/config/deployment/storage.ini

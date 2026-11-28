@@ -1,0 +1,20 @@
+{
+  "control": {
+    "backend": "sqlite",
+    "endpoint": "http://sqlite:8080",
+    "token": "YOUR_SQLITE_TOKEN",
+    "artifacts": "/data/agent-insight/artifacts"
+  },
+  "clickhouse": {
+    "endpoint": "http://clickhouse:8123",
+    "database": "agent_insight",
+    "user": "agent_insight",
+    "password": "YOUR_CLICKHOUSE_PASSWORD",
+    "timeout": 15
+  },
+  "runtime": {
+    "home": "/data/agent-insight",
+    "webPort": 3000,
+    "corePort": 4319
+  }
+}

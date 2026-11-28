@@ -308,7 +308,7 @@ stage_done
 if [ "$BUILD_STATUS" -eq 1 ]; then
   stage_begin "Next.js build (cache retained)"
   node scripts/start-build-state.cjs prepare || exit 1
-  NODE_OPTIONS="--max-old-space-size=2048" npm run build -- --webpack || exit 1
+  NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}" npm run build -- --webpack || exit 1
   stage_done
 else
   echo "Build unchanged and complete; skipping Next.js build."

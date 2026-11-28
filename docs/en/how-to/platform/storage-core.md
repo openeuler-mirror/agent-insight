@@ -5,6 +5,10 @@ description: "Explicit initialization, private identity mappings, original scree
 
 # Enable an isolated Storage Core Trace workflow
 
+For network SQLite, independent database containers and source installations, see the [deployment guide](deploy-docker.md).
+
+The [application database INI](../../../../config/deployment/storage.ini) can be edited after both services start. Docker reads it when starting the application. Source installations can select it with `--config config/deployment/storage.ini`. Existing private JSON is supported.
+
 ## Single storage runtime
 
 The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL, openGauss or MariaDB), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
@@ -17,7 +21,7 @@ Control mutations return committed values, including `updatedAt`, so conditional
 
 Dashboard and quality-analysis registration reads share the verified Core control scope. Report Traces, trajectory scores and diagnoses come exclusively from Core analytics snapshots; a missing snapshot fails explicitly. Request callbacks retain their identity scope until returned lazy queries finish. Successful Agent deletion retains the existing usage event; rejected or failed deletion is not counted.
 
-This implementation run validates startup with SQLite + ClickHouse and PostgreSQL + ClickHouse. openGauss remains supported but is not exercised against a real server in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 50 are supported.
+Deployment checks cover PostgreSQL, openGauss 7.0.0-RC3 and network SQLite, each paired with ClickHouse. The original UI, server-side Trace pagination and scrolling Span batches of at most 50 are supported.
 
 
 The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 021 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.

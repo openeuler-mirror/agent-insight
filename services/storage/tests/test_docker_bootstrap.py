@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -86,6 +87,29 @@ class DockerBootstrapTest(unittest.TestCase):
         bootstrap.main()
         self.assertEqual(bootstrap.CONFIG.read_bytes(), config)
         self.assertEqual(bootstrap.CONTROLLER.read_bytes(), controller)
+
+    def test_capacity_in_private_config_and_health(self):
+        from services.storage.trace_service import create_server, runtime_from_config
+        bootstrap.main()
+        cfg = json.loads(bootstrap.CONFIG.read_text())
+        self.assertEqual(cfg['max_concurrent_requests'], 64)
+        for value, expected in [(96, 96), ('96', 64)]:
+            with self.subTest(value=value):
+                cfg['max_concurrent_requests'] = value
+                bootstrap.CONFIG.write_text(json.dumps(cfg))
+                original = bootstrap.CONFIG.read_bytes()
+                with self.assertNoLogs('services.storage.trace_service', 'WARNING'):
+                    bootstrap.main()
+                logs = (self.assertLogs('services.storage.trace_service', 'WARNING') if value != expected
+                        else self.assertNoLogs('services.storage.trace_service', 'WARNING'))
+                with logs:
+                    runtime, _ = runtime_from_config(bootstrap.CONFIG)
+                try:
+                    with create_server(runtime) as server:
+                        self.assertEqual(server.http_metrics()['capacity'], expected)
+                finally:
+                    runtime.close()
+                self.assertEqual(bootstrap.CONFIG.read_bytes(), original)
 
     def test_partial_clickhouse_schema_is_rejected(self):
         FakeClickHouse.exists = True

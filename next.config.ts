@@ -47,6 +47,7 @@ const nextConfig: NextConfig = {
       'config/**/*.local.yaml',
       '**/config/storage.local.json',
       'config/storage.local.json',
+      '**/config/deployment/storage.ini',
       '.git/**',
       'tmp/**',
       '*.tar',

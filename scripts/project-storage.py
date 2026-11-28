@@ -22,7 +22,12 @@ spec.loader.exec_module(local)
 def transaction(config):
     c = config['control']
     backend = c['backend']
-    if backend == 'sqlite':
+    if backend == 'sqlite' and 'endpoint' in c:
+        from services.storage.sqlite_network import NetworkSQLiteStore
+        store = NetworkSQLiteStore(c)
+        if store.migration_plan().get('state') == 'empty':
+            return store, 'empty'
+    elif backend == 'sqlite':
         database = Path(c['database'])
         if database.is_symlink():
             raise ValueError('SQLite 路径不能为符号链接')
@@ -77,7 +82,7 @@ def transaction(config):
     return store, 'ready'
 
 
-def inspect(config):
+def inspect_clickhouse(config):
     facts = ClickHouseStore(**config['clickhouse'])
     version = facts._request('SELECT version() FORMAT TabSeparated').decode().strip()
     if tuple(int(p) for p in version.split('.')[:2]) < (26, 8):
@@ -93,7 +98,41 @@ def inspect(config):
     else:
         if facts._request(f'CHECK GRANT CREATE TABLE ON {facts.database}.*').strip() != b'1':
             raise ValueError('ClickHouse 缺少首次建表 CREATE TABLE 权限')
-    store, state = transaction(config)
+    return facts, status, version
+
+
+def diagnostic(label, field, exc):
+    if isinstance(exc, ValueError) and any('\u4e00' <= c <= '\u9fff' for c in str(exc)):
+        return str(exc)
+    messages = []
+    while exc is not None:
+        messages.append(str(exc).lower())
+        exc = exc.__cause__ or exc.__context__
+    reason = '数据库权限或表结构不符合要求'
+    text = ' '.join(messages)
+    for category, clues in [
+        ('TLS 证书校验失败', ('certificate', 'ssl error', 'root certificate')),
+        ('认证失败', ('password', 'authentication', 'http 401', 'http error 401', 'http error 403')),
+        ('域名解析失败', ('translate host name', 'name resolution', 'name or service not known', 'nodename nor servname')),
+        ('地址或端口不可达', ('refused', 'timeout', 'timed out', 'no route', 'unreachable')),
+    ]:
+        if any(clue in text for clue in clues):
+            reason = category
+            break
+    return f'{label}：{reason}，请核对 {field}'
+
+
+def inspect(config):
+    try:
+        facts, status, version = inspect_clickhouse(config)
+    except Exception as exc:
+        raise ValueError(diagnostic('ClickHouse', 'clickhouse.endpoint、账号与权限', exc)) from None
+    try:
+        store, state = transaction(config)
+    except MariaDBPreflightError:
+        raise
+    except Exception as exc:
+        raise ValueError(diagnostic(config['control']['backend'], 'control 连接配置与权限', exc)) from None
     return store, facts, {'transaction': state, 'clickhouse': status, 'clickhouseVersion': version}
 
 
@@ -102,6 +141,8 @@ def initialize(config, *, apply=False):
     state_file = Path(config['stateFile']) if config.get('stateFile') else None
     control = config['control']
     target = {'backend': control['backend'], 'database': control.get('database'), 'schema': control.get('schema')}
+    if control.get('endpoint'):
+        target['endpoint'] = control['endpoint']
     if control.get('dsn'):
         url = urlsplit(control['dsn'])
         target['address'] = [url.hostname, url.port or (3306 if control['backend'] == 'mariadb' else 5432), url.path]
@@ -123,7 +164,7 @@ def initialize(config, *, apply=False):
         state_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_state(state_file, {'identity': identity, 'complete': False}, exclusive=True)
     if report['transaction'] == 'empty':
-        if config['control']['backend'] == 'sqlite':
+        if config['control']['backend'] == 'sqlite' and 'database' in config['control']:
             database = Path(config['control']['database'])
             database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             local.initialize_sqlite(database)

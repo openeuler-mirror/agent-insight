@@ -90,3 +90,4 @@ agent_ras/.pytest_cache/
 # Private project storage configuration
 config/storage.local.json
 **/config/storage.local.json
+**/config/deployment/storage.ini

@@ -21,6 +21,8 @@ changefreq: monthly
 > 本页更贴近当前项目的真实使用流程，默认你已经部署好了 Agent Insight 服务端，
 > 并可以访问看板地址，例如 `http://localhost:3000` 或你的自托管域名。
 
+单机三容器部署默认使用 PostgreSQL + ClickHouse。`bash scripts/deploy-docker.sh up` 可启动项目；外部数据库配置及网络 SQLite 示例见[部署指南](../../how-to/platform/deploy-docker.md)。
+
 ## 前置条件
 
 - 你可以访问 Agent Insight 看板

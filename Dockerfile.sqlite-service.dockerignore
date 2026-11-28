@@ -1,0 +1,6 @@
+**
+!services/
+!services/storage/
+!services/storage/*.py
+!services/storage/schema/
+!services/storage/schema/**

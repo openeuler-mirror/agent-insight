@@ -74,4 +74,4 @@ SWE-bench 和 ZSoft 的自动导入可分别通过对应 `dataset.autoImport` �
 
 数据库连接的唯一用户配置为项目内 `config/storage.local.json`。样例、逐字段说明、TLS、权限和一键安装见 [Storage Core 配置指南](../../how-to/platform/storage-core.md#配置数据库并一键安装)。`runtime.home` 决定运行目录；数据库连接不从旧 `.env` 推断。
 
-项目存储配置顶层 `max_concurrent_requests` 默认 64，范围 1–256，重启 Core 生效；不改变数据库连接池。详见 [Core 请求容量](./storage-core.md#core-请求容量与采集重试021)。
+在 `config/storage.local.json` 顶层设置 `"max_concurrent_requests": 96` 可启用 96 个 Core HTTP 请求槽，取值为 1–256 的整数。省略时使用 64；显式填写非法值时记录警告，本次运行使用 64，保留原配置。停止并重新启动 Core/Web 后，访问 Core 的 `GET /v1/health`，核对 `http.capacity`。数据库连接池单独配置。详见 [Core 请求容量](./storage-core.md#core-请求容量与采集重试021)。

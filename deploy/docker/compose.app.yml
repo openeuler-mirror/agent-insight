@@ -1,0 +1,36 @@
+services:
+  app:
+    image: ${APP_IMAGE:-agent-insight-project:local}
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: Dockerfile.local
+      args:
+        BASE_NODE_IMAGE: node:22-bookworm-slim
+    labels:
+      org.agent-insight.config-revision: "${APP_CONFIG_REVISION:-manual}"
+    init: true
+    tmpfs:
+      - /tmp:mode=1777
+    user: "0:0"
+    entrypoint: ["python3", "/app/node_modules/agent-insight/scripts/container-config-mount.py"]
+    healthcheck:
+      test: ["CMD", "python3", "/app/node_modules/agent-insight/scripts/container-project-health.py"]
+      interval: 10s
+      timeout: 6s
+      start_period: 90s
+      retries: 3
+    environment:
+      AGENT_INSIGHT_STORAGE_CONFIG: /run/agent-insight/storage.json
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_HOST_PORT:-3000}:3000"
+    volumes:
+      - app-data:/data/agent-insight
+      - type: bind
+        source: ${STORAGE_CONFIG:?Set absolute path to the private storage JSON}
+        target: /run/agent-insight/storage.json
+        read_only: true
+        bind:
+          create_host_path: false
+volumes:
+  app-data:

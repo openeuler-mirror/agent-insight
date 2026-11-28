@@ -191,9 +191,11 @@ test('start.sh refuses implicit provisioning when an obsolete Web database targe
     delete env.DATABASE_URL
     delete env.AGENT_INSIGHT_STORAGE_CORE_URL
     delete env.AGENT_INSIGHT_STORAGE_CORE_CONTROLLER_FILE
-    const result = spawnSync('bash', [startScript, '--port', '31999'], { encoding: 'utf8', env })
+    const config = path.join(managedHome, 'missing-storage.json')
+    const result = spawnSync('bash', [startScript, '--port', '31999', '--config', config], { encoding: 'utf8', env })
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /缺少 config\/storage.local.json/)
+    assert.ok(result.stderr.includes(`缺少 ${config}`), result.stderr)
+    assert.match(result.stderr, /control 与 clickhouse/)
     assert.equal(fs.existsSync(missingDir), false)
     assert.doesNotMatch(result.stdout, /Clearing Next\.js build cache/)
     assert.doesNotMatch(result.stdout, /Syncing database schema/)

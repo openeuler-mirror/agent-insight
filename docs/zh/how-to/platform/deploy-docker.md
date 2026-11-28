@@ -1,11 +1,94 @@
 ---
 title: "用 Docker 部署服务端"
-description: "在线镜像、离线导入、源码挂载与持久化运行目录。"
+description: "一键部署、按文件分步启动 ClickHouse 与事务库、配置和启动项目、复用已有数据库。"
 keywords: ["Agent Insight", "Docker", "服务部署", "容器配置"]
 changefreq: "monthly"
 ---
 
-如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+从这里选择操作步骤：[脚本分两步启动](#split) · [用分步脚本逐个启动服务](#manual-compose) · [已有两库，只安装项目](#existing-databases)。
+
+## 三容器部署
+
+在仓库根目录执行。部署机需要 Python 3、Docker Engine 和 Compose v2（支持 `up --wait`）。首次从源码构建项目镜像，需能下载基础镜像及构建依赖。默认启动 PostgreSQL 16、ClickHouse 26.8 和项目三个容器，项目内运行 Web 和 Storage Core。数据库各自独占命名卷，Core 通过网络端口访问它们。
+
+```bash
+bash scripts/deploy-docker.sh up
+# 新实例选择其他事务库时，任选其一
+bash scripts/deploy-docker.sh up --transaction opengauss --instance-dir ~/insight-og
+bash scripts/deploy-docker.sh up --transaction sqlite --instance-dir ~/insight-sqlite
+```
+
+默认 Web 地址为 `http://127.0.0.1:3000`。默认实例目录为 `~/.agent-insight-docker`，保存私有实例凭据；App 从项目的 [storage.ini](../../../../config/deployment/storage.ini) 读取连接配置。重复启动使用同一目录，升级本地构建的镜像使用 `up --build`。同机部署多个实例时，首次启动前通过 `WEB_HOST_PORT`、`CH_HOST_PORT` 和所选库的 `PG_HOST_PORT`、`OG_HOST_PORT` 或 `SQLITE_HOST_PORT` 指定空闲端口。端口和镜像选择随实例记录保存。跨主机连接时，可在首次启动前将 `DB_BIND_ADDRESS` 设为数据库主机的内网地址，项目配置填写该地址和发布端口。Web 默认只允许本机访问，通过 `WEB_BIND_ADDRESS` 可绑定到指定网卡。
+
+<a id="manual-compose"></a>
+
+## 分步安装：一次启动一个服务
+
+在项目父目录执行 `cd agent-insight`。如果终端已经在仓库根目录，直接从第 1 步开始。需要 Docker Engine、支持 `up --wait` 的 Compose v2 和 Python 3。
+
+分步脚本使用单独的实例，默认 Web 端口为 **13000**，可与默认端口 3000 的一键实例同时运行。常用参数集中在 [deploy-step.sh](../../../../scripts/deploy-step.sh) 开头。默认事务库是 PostgreSQL；如需 openGauss 或 SQLite，在**首次运行前**将脚本中 `transaction` 的默认值改为 `opengauss` 或 `sqlite`。端口已被占用时也在这里调整。脚本会保存首次使用的端口和凭据，重新打开终端也可以接着执行下一步。
+
+| 步骤 | 在项目根目录执行 | 完成后 |
+|---|---|---|
+| 1. 启动 ClickHouse | `bash scripts/deploy-step.sh clickhouse` | 数据库健康检查通过，保存实例凭据；此步骤不读取 App 配置 |
+| 2. 启动事务库 | `bash scripts/deploy-step.sh transaction` | 所选事务库健康检查通过，此时两个数据库可用 |
+| 可选：调整 App 连接 | `vi config/deployment/storage.ini` | 直接编辑文件，按每项下面的中文注释填写；默认部署可跳过 |
+| 3. 启动项目 | `bash scripts/deploy-step.sh app` | Web 读取当前 INI，连接两库，输出访问地址 |
+| 4. 查看结果 | `bash scripts/deploy-step.sh status` | 三个容器均显示 `healthy`，可访问 [登录页](http://127.0.0.1:13000/login) |
+
+[storage.ini](../../../../config/deployment/storage.ini) 随项目提供。默认的 `@instance` 表示使用本实例选定的事务库和已保存的凭据。以 PostgreSQL 为例，App 用 `postgres:5432` 和 `http://clickhouse:8123` 访问两库。若在两库启动后修改 INI，再执行 `bash scripts/deploy-step.sh app` 即可重新加载。配置生效值有变化时会重新创建项目容器，请为正在服务的实例安排重启时间。修改 App 的密码字段只影响登录所使用的凭据。填写实际密码后的文件只保留在部署机，备份时与私有实例记录和卷一并保存。
+
+只停止这套分步实例，执行：
+
+```bash
+bash scripts/deploy-step.sh stop
+```
+
+再次使用时，按顺序重复前 3 条命令即可复用数据。如果此前用手工 Compose 命令建立了实例，继续用原项目名管理原数据卷；本脚本创建独立实例。四份独立数据库 Compose 文件和连接模板均可在[部署目录](../../../../deploy/docker/)查看。
+
+<a id="split"></a>
+
+## 复用原来的一键实例
+
+若要对原先用 `deploy-docker.sh up` 创建的实例分阶段启动，使用原启动器。对已经停止的实例，第一条启动两个数据库，第二条启动项目。原实例正在运行时执行 `db` 会保留运行中的 Web。
+
+```bash
+bash scripts/deploy-docker.sh db
+bash scripts/deploy-docker.sh app
+bash scripts/deploy-docker.sh status
+```
+
+<a id="existing-databases"></a>
+
+## 已有两套数据库服务：只安装项目
+
+直接编辑 [config/deployment/storage.ini](../../../../config/deployment/storage.ini)。独立部署的数据库由管理员提供账号、实际地址、端口和库名。以下操作从仓库根目录执行。
+
+1. 打开 `vi config/deployment/storage.ini`，把 `[transaction]` 的 `backend` 改为 `postgresql`、`opengauss` 或 `sqlite`。
+2. 在所选后端的同名段中填写主机、端口、库名、用户、实际密码和 schema。SQLite 服务填写 `endpoint` 和 `token`。在 `[clickhouse]` 段填写 HTTP(S) 地址、库名、用户和密码。密码原样填写，包括 `@`、`#` 或 `%`。外部账号请用实际凭据替换 `@instance`。
+3. 运行 `bash scripts/deploy-step.sh app`，再用 `bash scripts/deploy-step.sh status` 查看项目状态。全新的 App 独立实例只启动项目容器。已有数据的实例若需换库，按[升级与回滚](upgrade-and-rollback.md)迁移，或为独立数据源使用新的实例目录。
+
+跨容器网络或跨主机填写 App 可达的 DNS/IP 和发布端口；容器里的 localhost 指容器自身。远程数据库使用对应的 TLS 选项，私有 CA 需挂载到 App 可读的路径。保留旧 JSON 工作流的部署可继续使用 `bash scripts/deploy-docker.sh app --config 私有配置路径`。
+
+**源码部署**使用宿主机可达的地址及真实凭据（例如脚本默认分步数据库在同机的 PostgreSQL 和 ClickHouse 端口为 25432 和 28123）。准备 [Storage Core 所需的运行环境与驱动](storage-core.md) 后，可用同一份 INI 执行：
+
+```bash
+bash scripts/install.sh --check --config config/deployment/storage.ini
+bash scripts/install.sh --config config/deployment/storage.ini
+bash scripts/status.sh --config config/deployment/storage.ini
+```
+
+源码 INI 使用默认运行目录 `~/.agent-insight` 和 Web/Core 端口 3000/4319。已有自定义运行目录、端口或高级选项的 JSON 配置可沿用原命令。
+
+## 后端设置与维护
+
+- **PostgreSQL / openGauss** 使用 `control.dsn`、独立 `schema` 和持久 `artifacts` 目录。示例账号供独立实例初始化使用；对接生产环境时提供专用业务账号。openGauss 可通过 `OPENGAUSS_IMAGE` 指定镜像。一键入口优先复用本地的 `opengauss:7.0.0-RC3`。首次缺少镜像时，按 Docker 服务端架构下载官方 7.0.0-RC3 归档并导入，需要可用的临时磁盘空间。直接使用独立 Compose 文件时可设置 `OPENGAUSS_IMAGE=opengauss:7.0.0-RC3` 复用同一镜像。[社区容器镜像指南](https://docs.opengauss.org/zh/docs/7.0.0-RC3/installation_guide/installing_the_container_image.html)
+- **SQLite 服务** 使用 `control.endpoint`、`token` 和 `artifacts`，外接时客户端与服务使用同一高熵令牌（至少 24 个可打印 ASCII 字符）。单独启动服务设置 `SQLITE_TOKEN`。事务绑定同一 HTTP 连接，断连回滚。跨机时使用 TLS，可将服务端证书与密钥只读挂载至容器并设置 `SQLITE_TLS_CERT`、`SQLITE_TLS_KEY`；客户端用 `https://` 和受信 CA。使用 Compose 覆盖文件将证书环境变量传给服务，并设置容器内的 `SQLITE_HEALTH_ENDPOINT` 为与证书匹配的 HTTPS 地址；私有 CA 使用 `SSL_CERT_FILE`。备份时可在 SQLite 容器内执行 `python3 -m services.storage.sqlite_server --backup /var/lib/insight-sqlite/backup.db`，目标必须是新文件。现有 `control.database` 本地文件配置依然适用。
+- **ClickHouse** 始终配置 `clickhouse.endpoint/database/user/password`，服务端口使用 HTTP(S)。项目容器默认 `runtime.home=/data/agent-insight`、`runtime.webPort=3000`，通过宿主端口映射调整外部访问端口。
+- **运行与恢复**。整体实例用 `status` 检查状态、`stop` 停止服务；只停项目使用该实例的 Compose 项目名和 `stop app`。升级前成套备份数据库卷、应用制品卷及私有配置目录。恢复前先对齐数据库与制品版本。登录后向 Web 上报一条测试 Trace 并查回，用于业务验收。
+
+<details>
+<summary>历史单容器镜像与源码挂载（仅适用于对应历史版本）</summary>
 
 ### 用法一：在线拉取 Docker Hub 镜像
 
@@ -208,6 +291,8 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 位于同一运行环境。
 
 如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
+
+</details>
 
 ## UBI9/OpenShift 镜像
 

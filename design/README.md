@@ -78,6 +78,8 @@ PM 对新建或待整理的 issue 按以下顺序完成一次审查；字段不�
 
 | 需求名称 | 设计入口 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
 |-|-|-|-|-|-|-|
+| 数据库与项目分离部署 | [设计](platform/database-deployment/phase2-requirements-design.md) / [部署案例](platform/database-deployment/guide.md) / [验收矩阵](platform/database-deployment/phase3-development-plan.md) | ClickHouse 必选、三种事务库可选，Docker 整体或独立启动，源码按连接配置接入 | E4 / Deployment | 2026-11-28 | 已实现；三种事务库均已通过三容器部署、项目重建及数据读回专项验证 | — |
+| 项目内常驻数据库连接配置 | [增量设计](platform/database-deployment/project-connection-config.md) | 两库独立启动；App 仅读取项目自带、可直接修改的中文注释连接配置（默认入口） | E4 / Deployment | 2026-11-28 | 已实现 | — |
 | Core 并发与采集重试隔离 | [设计与计划](observability/ingest-retry-isolation/) | HTTP 默认 64 槽；批次 5 次执行上限、独立 Trace 绕行及授权恢复 | Performance / Observability | 2026-11-26 | 已实现；定向自动化验收，不含浏览器及真实 PG/openGauss/CH 容量验收 | — |
 | Trace 加载与数据库连接复用 | [需求分析](observability/trace-loading-optimization/phase1-requirements-analysis.md) / [需求设计](observability/trace-loading-optimization/phase2-requirements-design.md) / [开发计划](observability/trace-loading-optimization/phase3-development-plan.md) | 公共连接池、当前页摘要批量查询、统计与筛选选项数据库下推，保留权限和兼容口径 | Fix / Perf | 2026-11-25 | 已实现；相关单测与1,000条真实数据对照、十轮读取、五并发通过；未运行全量测试，未在浏览器验证 | — |
 | 分析与事务存储完整重构 | [总体需求](platform/analytical-transactional-storage/phase1-requirements-analysis.md) / [IAM与三库计划](platform/analytical-transactional-storage/phase5-iam-adapters-plan.md) | ClickHouse 事实分析、IAM、三事务后端、不可变版本及迁移一致性 | Refactor / Architecture | 2026-11-11 | 🟡 Trace/Dataset/实验评测/诊断及主要消费者已接；[剩余入口与96模型迁移计划](platform/analytical-transactional-storage/phase7-consumers-and-legacy-migration.md)分层实施，完整切库待完成 | 待补 |

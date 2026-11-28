@@ -1,0 +1,18 @@
+# 拟议合并运行 Core 与 Web 的项目镜像，健康检查由镜像提供。
+services:
+  app:
+    image: ${APP_IMAGE:?Set the integrated Core and Web image}
+    environment:
+      AGENT_INSIGHT_STORAGE_CONFIG: /run/agent-insight/storage.json
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
+    volumes:
+      - app-data:/data/agent-insight
+      - type: bind
+        source: ${STORAGE_CONFIG:?Set absolute path to the private storage JSON}
+        target: /run/agent-insight/storage.json
+        read_only: true
+        bind:
+          create_host_path: false
+volumes:
+  app-data:

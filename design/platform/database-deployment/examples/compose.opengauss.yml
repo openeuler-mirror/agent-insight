@@ -1,0 +1,15 @@
+services:
+  opengauss:
+    # 设计样例。选用支持以下启动契约且经过目标架构验证的镜像。
+    image: ${OPENGAUSS_IMAGE:?Set a verified openGauss image reference}
+    environment:
+      PGDATA: /var/lib/opengauss/data
+      GS_DB: agent_insight
+      GS_USERNAME: agent_insight
+      GS_PASSWORD: ${OG_PASSWORD:?Set OG_PASSWORD}
+    ports:
+      - "127.0.0.1:${OG_HOST_PORT:-15433}:5432"
+    volumes:
+      - og-data:/var/lib/opengauss/data
+volumes:
+  og-data:

@@ -85,6 +85,7 @@ const STANDALONE_JUNK_DIRS = [
 ]
 const STANDALONE_JUNK_FILES = [
   path.join('config', 'storage.local.json'),
+  path.join('config', 'deployment', 'storage.ini'),
   '.env',
   '.env.local',
   'server.log',

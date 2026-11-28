@@ -8,6 +8,7 @@ import time
 from services.storage.clickhouse import ClickHouseStore
 from services.storage.control import SQLiteControlStore
 from services.storage.migrations import load_migrations
+from services.storage.trace_service import DEFAULT_REQUEST_CAPACITY
 
 
 ROOT = Path('/core')
@@ -63,7 +64,7 @@ def main():
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
     if CONFIG.exists():
         from services.storage.trace_service import runtime_from_config
-        runtime, _ = runtime_from_config(CONFIG)
+        runtime, _ = runtime_from_config(CONFIG, warn_invalid_capacity=False)
         runtime.close()
         print('Existing Core configuration verified; no database initialization performed', flush=True)
         return
@@ -97,6 +98,7 @@ def main():
         'default_workspace': 'default',
         'port': 4319,
         'worker_enabled': True,
+        'max_concurrent_requests': DEFAULT_REQUEST_CAPACITY,
     }
     if CONFIG.exists():
         if CONFIG.is_symlink() or not CONFIG.is_file() or CONFIG.stat().st_mode & 0o077:

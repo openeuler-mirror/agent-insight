@@ -18,12 +18,24 @@ function string(value, label, empty = false) {
   return value;
 }
 function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
-  if (!fs.existsSync(file)) fail('缺少 config/storage.local.json；请复制 storage.sqlite.example.json、storage.postgresql.example.json 或 storage.mariadb.example.json，填写后 chmod 600');
-  const config = runtime.readPrivate(file);
+  if (!fs.existsSync(file)) fail(`缺少 ${file}；请按事务库类型选用连接配置样例（MariaDB 使用 config/storage.mariadb.example.json），填写 control 与 clickhouse 后 chmod 600`);
+  let config;
+  if (path.extname(file).toLowerCase() === '.ini') {
+    const result = spawnSync('python3', [path.join(__dirname, 'deployment_ini.py'), file], { encoding: 'utf8' });
+    if (result.status !== 0) fail(result.stderr?.trim() || '读取 INI 配置需要 Python 3');
+    config = JSON.parse(result.stdout);
+  } else {
+    config = runtime.readPrivate(file);
+  }
   keys(config, ['control', 'clickhouse', 'runtime', 'trace_list_optimization', 'max_concurrent_requests'], '配置');
   const c = config.control;
-  keys(c, ['backend', 'database', 'dsn', 'schema', 'artifacts', 'connection_pool'], 'control');
-  if (config.max_concurrent_requests !== undefined && (!Number.isInteger(config.max_concurrent_requests) || config.max_concurrent_requests < 1 || config.max_concurrent_requests > 256)) fail('max_concurrent_requests 必须为 1–256 的整数');
+  if (!c) fail('缺少 control，请选择一种事务库并填写对应的连接配置');
+  keys(c, ['backend', 'database', 'dsn', 'schema', 'artifacts', 'connection_pool', 'endpoint', 'token'], 'control');
+  const capacity = config.max_concurrent_requests;
+  if (capacity !== undefined && (!Number.isInteger(capacity) || capacity < 1 || capacity > 256)) {
+    console.warn('[警告] max_concurrent_requests 需要 1–256 的整数，本次已使用默认值 64。');
+    config.max_concurrent_requests = 64;
+  }
   if (config.trace_list_optimization !== undefined) {
     keys(config.trace_list_optimization, ['enabled'], 'trace_list_optimization');
     if (typeof config.trace_list_optimization.enabled !== 'boolean') fail('trace_list_optimization.enabled 必须为布尔值');
@@ -33,7 +45,17 @@ function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
     if (c.backend !== 'postgresql') fail('connection_pool 仅适用于 PostgreSQL');
   }
   if (!['sqlite', 'postgresql', 'opengauss', 'mariadb'].includes(c.backend)) fail('control.backend 必须是 sqlite、postgresql、opengauss 或 mariadb');
-  if (c.backend === 'sqlite') {
+  if (c.backend === 'sqlite' && c.endpoint !== undefined) {
+    if ('dsn' in c || 'database' in c || 'schema' in c) fail('SQLite 服务地址不能与文件路径或 DSN 并用');
+    let url;
+    try { url = new URL(string(c.endpoint, 'control.endpoint')); } catch { fail('control.endpoint 必须是 SQLite 服务地址'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) fail('control.endpoint 必须是无凭据的 HTTP(S) origin');
+    c.endpoint = url.origin;
+    if (string(c.token, 'control.token').length < 24 || !/^[!-~]+$/.test(c.token)) fail('control.token 需要至少 24 个可打印 ASCII 字符');
+    c.artifacts = resolvePath(string(c.artifacts, 'control.artifacts'));
+  } else if ('endpoint' in c || 'token' in c) {
+    fail('control.endpoint 和 control.token 仅用于 SQLite 服务且须同时填写');
+  } else if (c.backend === 'sqlite') {
     if (c.dsn || c.schema || c.artifacts) fail('SQLite 仅接受 database；制品目录为 database.artifacts');
     c.database = resolvePath(string(c.database, 'control.database'));
     if (fs.existsSync(c.database) && fs.lstatSync(c.database).isSymbolicLink()) fail('SQLite 文件不能为符号链接');
@@ -53,6 +75,7 @@ function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
     c.artifacts = resolvePath(string(c.artifacts, 'control.artifacts'));
   }
   const ch = config.clickhouse;
+  if (!ch) fail('缺少 clickhouse，请填写 endpoint、database、user 和 password');
   keys(ch, ['endpoint', 'database', 'user', 'password', 'timeout'], 'clickhouse');
   let url;
   string(ch.endpoint, 'clickhouse.endpoint');
@@ -130,7 +153,7 @@ function legacyGuard(config, env) {
   if (fs.existsSync(previous)) {
     const before = runtime.readPrivate(previous);
     const a = before.control, b = config.control;
-    if (a.backend !== b.backend || (a.backend === 'sqlite' ? a.database !== b.database : a.dsn !== b.dsn || a.schema !== b.schema) || before.clickhouse.endpoint.replace(/\/$/, '') !== config.clickhouse.endpoint || before.clickhouse.database !== config.clickhouse.database) fail('检测到已有 Core，项目配置指向不同数据库；请迁移数据或为独立环境指定新的 runtime.home');
+    if (a.backend !== b.backend || (a.backend === 'sqlite' ? a.database !== b.database || a.endpoint !== b.endpoint : a.dsn !== b.dsn || a.schema !== b.schema) || before.clickhouse.endpoint.replace(/\/$/, '') !== config.clickhouse.endpoint || before.clickhouse.database !== config.clickhouse.database) fail('检测到已有 Core，项目配置指向不同数据库；请迁移数据或为独立环境指定新的 runtime.home');
   }
 }
 async function main(args = process.argv.slice(2)) {

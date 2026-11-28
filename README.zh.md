@@ -56,7 +56,7 @@
 
 - **Agent 接入**：通过原生插件、Hook、文件采集器或 OTLP 接收 Agent 执行数据，不同平台采用各自支持的接入方式。
 - **应用服务**：使用 Next.js、React 和 TypeScript 提供 Web 看板与 API，组织链路查询、评测、诊断、Skill 生成和优化流程。
-- **数据存储**：通过 Prisma 和数据库适配层管理运行记录与任务数据，默认使用本地 SQLite；其他数据库配置见开发者指南。
+- **数据存储**：通过 Storage Core 管理运行记录与任务数据，使用 PostgreSQL、openGauss、SQLite 中的一种事务库及 ClickHouse。
 
 需要模型推理的步骤调用用户配置的模型服务，平台不内置 AI 模型。架构与模块说明见[开发者指南](docs/zh/explanation/platform/developer-index.md)。
 
@@ -104,9 +104,11 @@ Agent Insight 已接入以下 Agent 平台，更多平台持续接入中：
 
 ### 1. 安装服务端
 
+首次部署可执行 `bash scripts/deploy-docker.sh up`，默认运行 PostgreSQL、ClickHouse 与项目三个容器；外部数据库和源码安装步骤见[部署指南](docs/zh/how-to/platform/deploy-docker.md)。
+
 **环境要求**
 
-- Node.js >= 20.9.0
+- 源码安装使用 Node.js 22+
 - 3000 端口未被占用
 
 提供以下三种安装方式，可根据实际应用场景任选其一：
@@ -148,76 +150,13 @@ cd agent-insight
 npm install
 # 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）
 (cd scripts/trae-collector && npm install && npm run build)
+# 按 Storage Core 指南准备包含事务库和 ClickHouse 的私有配置
+bash scripts/install.sh --config /绝对路径/storage.json
 ```
 
-#### 方式三：使用 Docker 镜像部署
+#### 方式三：使用 Docker 部署
 
-适用于服务器部署或希望应用容器与数据目录分离的场景。镜像已发布为多架构，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
-
-**用法一：在线拉取 Docker Hub 镜像**
-
-```bash
-docker pull karaggagent/agent-insight:latest
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-生产环境如需锁定版本号，可以把 `latest` 换成固定版本，例如 `karaggagent/agent-insight:0.5.0`。
-
-**用法二：离线导入 `.tar` 镜像**
-
-如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
-
-```bash
-docker load -i agent-insight-0.5.0-image.tar
-docker images | grep agent-insight
-
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:0.5.0
-```
-
-**用法三：挂载源码运行，代码更新后重启即可生效**
-
-适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
-
-```bash
-git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -e AGENT_INSIGHT_SOURCE_DIR=/src \
-  -v /srv/agent-insight:/src:ro \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-之后更新代码只需要 `git pull` 加一次重启，容器会按最新源码重新构建再启动：
-
-```bash
-cd /srv/agent-insight && git pull
-docker restart agent-insight
-```
-
-不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/zh/tutorial/platform/01-quick-start.md)。
-
-容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
+从仓库根目录执行 `bash scripts/deploy-docker.sh up`。默认启动 PostgreSQL、ClickHouse 和项目三个容器。升级或备份时一并保存两个数据库卷、项目卷和私有实例目录。需要分步安装时，可直接按 [用脚本逐个启动 ClickHouse、事务库和 Web](docs/zh/how-to/platform/deploy-docker.md#manual-compose) 执行。
 
 Docker 容器只运行 Agent Insight 服务端，不会修改宿主机的 OpenCode 配置。选择
 OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行看板“安装指导”生成的
@@ -234,7 +173,7 @@ OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行�
 
 ```bash
 # 启动服务端，默认端口是3000
-bash scripts/start.sh
+bash scripts/start.sh --config /绝对路径/storage.json
 ```
 
 默认使用 `~/.agent-insight/data/witty_insight.db`；如需自定义数据库路径，可在 `~/.agent-insight/.env` 中设置 `DATABASE_URL="file:/absolute/path/to/witty_insight.db"`。

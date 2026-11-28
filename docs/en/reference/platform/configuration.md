@@ -65,4 +65,4 @@ Execution Profiles use `execution.profiles.<key>.backend/options` with explicit 
 
 The user-facing source is project config/storage.local.json. See the [field and installation guide](../../how-to/platform/storage-core.md#configure-external-databases-and-install). runtime.home selects application state; database connections are never inferred from legacy .env settings.
 
-Top-level project storage setting `max_concurrent_requests` defaults to 64 (integer 1–256); restart Core to apply. Database pool sizes are unchanged. See [Core request capacity](./storage-core.md#core-request-capacity-and-ingest-retries-021).
+Set `"max_concurrent_requests": 96` at the top level of `config/storage.local.json` for 96 Core HTTP slots. Valid settings are integers from 1 to 256. Omitting the field selects 64. An invalid value produces a warning and selects 64 for this run, preserving the original file. Stop and restart Core/Web, then check `http.capacity` in the Core `GET /v1/health` response. Database pools are configured separately. See [Core request capacity](./storage-core.md#core-request-capacity-and-ingest-retries-021).

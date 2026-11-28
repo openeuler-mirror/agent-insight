@@ -5,6 +5,8 @@ description: "SQLite, PostgreSQL, openGauss and MariaDB control storage, authori
 
 # Storage core, IAM and safe migrations
 
+Run `bash scripts/deploy-docker.sh up` for a three-container PostgreSQL and ClickHouse installation. External database settings and network SQLite examples are in the [deployment guide](../../how-to/platform/deploy-docker.md).
+
 ## Single storage runtime
 
 The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL, openGauss or MariaDB), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
@@ -518,7 +520,7 @@ The in-process `connection_pool.snapshot()` exposes total/active/idle/creating a
 
 ## Core request capacity and ingest retries (021)
 
-The top-level `max_concurrent_requests` field in project storage configuration and generated private Core JSON defaults to `64`, accepts integers from `1` to `256`, and takes effect after restarting Core. The socket backlog uses the same value. This caps active connections/requests, not logged-in users, and does not resize database pools or alter write locking. Overload returns `503`, `code=CORE_BUSY`, `Retry-After: 1` and `X-Storage-Retry: core-busy`. Core and primary compatibility Web forwarding preserve the marker. `apiFetch` retries marked GETs at most three times with approximately 1/2/4 second waits plus jitter, within a 15-second retry budget. Cancellation or identity changes stop retries; mutations are not replayed. This is not a claim of doubled throughput or thousand-user capacity.
+The top-level `max_concurrent_requests` field in project storage configuration and generated private Core JSON defaults to `64`, accepts integers from `1` to `256`, and takes effect after restarting Core. An omitted field silently defaults to 64. An invalid value logs a warning and falls back to 64. Docker includes the setting when first generating `/core/trace-service.json` and reuses existing configurations on restart. The socket backlog uses the same value. This caps active connections/requests, not logged-in users, and does not resize database pools or alter write locking. Overload returns `503`, `code=CORE_BUSY`, `Retry-After: 1` and `X-Storage-Retry: core-busy`. Core and primary compatibility Web forwarding preserve the marker. `apiFetch` retries marked GETs at most three times with approximately 1/2/4 second waits plus jitter, within a 15-second retry budget. Cancellation or identity changes stop retries; mutations are not replayed. This is not a claim of doubled throughput or thousand-user capacity.
 
 `GET /v1/health` includes `http.capacity`, `active`, `peak`, `rejected`, `completed`, `duration_ms_total` and `duration_ms_max`. These process counters reset on restart. Active includes the health request itself; health can also be rejected under overload. Duration covers slot acquisition through request reading, processing and response delivery, excluding backlog waiting.
 

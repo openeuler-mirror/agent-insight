@@ -47,7 +47,7 @@ The platform has three main parts:
 
 - **Agent integrations** collect execution data through native plugins, hooks, file collectors, or OTLP. Collection paths differ between platforms.
 - **Application services** use Next.js, React, and TypeScript to provide the Web dashboard and APIs for tracing, evaluation, diagnosis, Skill generation, and optimization.
-- **Data storage** uses Prisma and database adapters to manage execution records and task data. Local SQLite is the default; see the developer guide for other database configurations.
+- **Data storage** uses Storage Core with one transactional database (PostgreSQL, openGauss or SQLite) and ClickHouse.
 
 Model-dependent steps call user-configured external services. No AI model is embedded in the platform. See the [developer guide](docs/zh/explanation/platform/developer-index.md) for module and API details.
 
@@ -89,9 +89,11 @@ Agent Insight provides observability, evaluation, diagnosis, and optimization in
 
 ## Quick Start
 
+Use `bash scripts/deploy-docker.sh up` to run PostgreSQL, ClickHouse and the application. See the [deployment guide](docs/en/how-to/platform/deploy-docker.md) for independently hosted databases and source installations.
+
 ### 1. Install and start the server
 
-For a local Node.js deployment, use Node.js 20.9 or later and an available port, normally `3000`. Check any additional runtime requirements reported by the dependencies for optional features.
+For a local Node.js deployment, use Node.js 22 or later and an available port, normally `3000`. Check any additional runtime requirements reported by the dependencies for optional features.
 
 **npm installation**
 
@@ -118,28 +120,16 @@ npm install
 # Optional: build the Trae IDE collector extension.
 (cd scripts/trae-collector && npm install && npm run build)
 
-# Start the service from the repository root.
-bash scripts/start.sh
+# Prepare a private configuration for the transactional store and ClickHouse.
+# See docs/en/how-to/platform/storage-core.md for examples.
+bash scripts/install.sh --config /absolute/path/storage.json
 ```
 
 For development, use `bash scripts/develop_start.sh`. Stop a source installation with `bash scripts/stop.sh`.
 
 **Docker deployment**
 
-```bash
-docker pull karaggagent/agent-insight:latest
-mkdir -p ~/.agent-insight/data
-chmod -R 777 ~/.agent-insight
-
-docker run -d \
-  --name agent-insight \
-  --restart unless-stopped \
-  -p 3000:3000 \
-  -v ~/.agent-insight:/data/agent-insight \
-  karaggagent/agent-insight:latest
-```
-
-Use a fixed published image tag when you need a repeatable deployment. Keep the mounted data directory when upgrading. See the [deployment guide](docs/zh/tutorial/platform/01-quick-start.md) for offline images, mounting source code, and troubleshooting.
+From the repository root, run `bash scripts/deploy-docker.sh up`. The default instance has PostgreSQL, ClickHouse and the application. Keep both database volumes, the application volume and the private instance directory together when backing up or upgrading. See the [Docker deployment guide](docs/en/how-to/platform/deploy-docker.md) for separate services and connection examples.
 
 ### 2. Open the dashboard and connect an Agent
 
@@ -151,7 +141,7 @@ For OpenCode, the integration also installs the Agent RAS in-process plugin. You
 
 ### 3. Run a task and inspect its execution
 
-Run a small task in the connected Agent, then open the execution list in Agent Insight and inspect the trace. The default source/npm data directory is `~/.agent-insight/data`, including `witty_insight.db`; the Docker mount above preserves the equivalent data outside the container.
+Run a small task in the connected Agent, then open the execution list in Agent Insight and inspect the trace.
 
 ## Guided Workflow: Generate, Evaluate, and Optimize
 
