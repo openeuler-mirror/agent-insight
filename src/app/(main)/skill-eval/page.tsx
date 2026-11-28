@@ -3127,6 +3127,7 @@ function TraceDeviationPanel({
     prefillTraceId,
     selectedTraceId,
     onSelectedTraceChange,
+    onBack,
     onReload,
     onOptimize,
     onBatchAnalyze,
@@ -4402,6 +4403,7 @@ function StaticCompliancePanel({
     user,
     summary,
     loading,
+    onBack,
     onReload,
     onOptimize,
 }: {
@@ -4610,6 +4612,7 @@ function EmbeddedDebugPanel({
     primaryAction,
     secondaryAction,
     children,
+    onBack,
     onPrimary,
     onSecondary,
     onOptimize,
@@ -4700,217 +4703,6 @@ function DetailHeader({
     );
 }
 
-: {
-    kind: 'trace' | 'static' | 'gray';
-    title: string;
-    subtitle: string;
-    status: string;
-    /** 主数字（建议是 N/M 格式，4 张卡含义不同需要 scoreLabel 解释） */
-    score?: string;
-    /** 数字含义的 micro 标签，比如"合规标准 / 已评估"。让用户一眼看懂"3/6 是啥"。 */
-    scoreLabel?: string;
-    /** 一句话总结当前评估状态（如 "5 天前最近一次扫描"） */
-    summary?: string;
-    /** 详细说明（如 "进入详情可手动重新扫描"） */
-    detail: string;
-    /** 自定义 score 区（比如灰度的 A vs B 对照），传了就替代 score/scoreLabel/summary */
-    scoreSlot?: React.ReactNode;
-    stats: Array<{ label: string; value: string }>;
-    footnote: string;
-    onClick: () => void;
-}) {
-    const statusTone = status === '正常' || status === '有提升'
-        ? 'ok'
-        : status === '需关注' || status === '有回退'
-            ? 'warn'
-            : 'neutral';
-    const isEmpty = !scoreSlot && (!score || score.includes('--'));
-
-    return (
-        <button className={`sa-card k-${kind}${isEmpty ? ' empty' : ''}`} onClick={onClick}>
-            <span className="sa-card-head">
-                <span className={`sa-card-icon ${kind}`}>{iconFor(kind)}</span>
-                <span className="sa-card-title">
-                    <span className="t-row">
-                        <span>{title}</span>
-                    </span>
-                    <small>{subtitle}</small>
-                </span>
-                <span className={`sa-card-status ${statusTone}`}>{status}</span>
-            </span>
-            {scoreSlot ? scoreSlot : (
-                <span className="sa-card-score">
-                    <span className={score?.includes('--') ? 'sa-card-score-empty' : 'sa-card-score-num'}>{score}</span>
-                    {scoreLabel && <span className="sa-card-score-unit">{scoreLabel}</span>}
-                </span>
-            )}
-            {summary && <span className="sa-card-summary">{summary}</span>}
-            <span className="sa-card-detail">{detail}</span>
-            <span className="sa-card-stats">
-                {stats.map(item => (
-                    <span className="sa-card-stat" key={`${item.label}-${item.value}`}>
-                        <span className="sa-card-stat-label">{item.label}</span>
-                        <span className={`sa-card-stat-val${item.value === '未接入' ? ' muted' : ''}`}>{item.value}</span>
-                    </span>
-                ))}
-            </span>
-            <span className="sa-card-foot">
-                <span className="sa-card-foot-meta">{footnote}</span>
-                <span className="sa-card-foot-link">查看详情 →</span>
-            </span>
-        </button>
-    );
-}
-
-: {
-    matches: StepMatch[];
-    skippedExpectedSteps: SkippedExpectedStep[];
-    problemByStepKey: Map<string, ProblemStep>;
-}) {
-    const matched = matches.filter(m => m.matchStatus === 'matched');
-    const partial = matches.filter(m => m.matchStatus === 'partial');
-    const unexpected = matches.filter(m => m.matchStatus === 'unexpected');
-
-    const partialItems = partial.map(match => {
-        const problem = problemByStepKey.get(`actual:${match.actualStepIndex}`)
-            || problemByStepKey.get(`name:${match.expectedStepName || ''}`);
-        return {
-            key: `partial-${match.actualStepIndex}-${match.actualAction}`,
-            title: match.expectedStepName || `实际步骤 #${match.actualStepIndex}`,
-            desc: problem?.problem || match.matchReason || '该步骤只完成了部分预期要求。',
-            meta: problem?.suggestion || match.actualAction,
-        };
-    });
-
-    const unexpectedItems = unexpected.map(match => {
-        const problem = problemByStepKey.get(`actual:${match.actualStepIndex}`)
-            || problemByStepKey.get(`name:${match.actualAction}`);
-        return {
-            key: `unexpected-${match.actualStepIndex}-${match.actualAction}`,
-            title: match.actualAction || `实际步骤 #${match.actualStepIndex}`,
-            desc: problem?.problem || match.matchReason || '实际执行中出现了 Skill 流程之外的调用或步骤。',
-            meta: problem?.suggestion || (match.expectedStepName ? `预期：${match.expectedStepName}` : undefined),
-        };
-    });
-
-    const skippedItems = skippedExpectedSteps.map(step => ({
-        key: `skipped-${step.expectedStepId}`,
-        title: step.expectedStepName,
-        desc: 'Skill 中规定了该步骤，但实际执行流程没有覆盖。',
-        meta: step.expectedStepId,
-    }));
-
-    const matchedItems = matched.map(match => ({
-        key: `matched-${match.actualStepIndex}-${match.actualAction}`,
-        title: match.expectedStepName || match.actualAction || `实际步骤 #${match.actualStepIndex}`,
-        desc: match.matchReason || '实际执行符合 Skill 中对应步骤的预期。',
-        meta: match.actualAction && match.expectedStepName !== match.actualAction ? match.actualAction : undefined,
-    }));
-
-    return (
-        <div className="sa-match-standards">
-            <TrajectoryMatchGroup
-                tone="matched"
-                icon="✅"
-                title="符合预期"
-                desc="实际执行步骤与 Skill 预期步骤匹配良好"
-                count={matched.length}
-                items={matchedItems}
-            />
-            <TrajectoryMatchGroup
-                tone="partial"
-                icon="⚠️"
-                title="部分偏离"
-                desc="意图接近，但执行方式或覆盖程度不足"
-                count={partial.length}
-                items={partialItems}
-            />
-            <TrajectoryMatchGroup
-                tone="unexpected"
-                icon="❌"
-                title="非预期调用"
-                desc="实际执行了 Skill 标准流程之外的步骤"
-                count={unexpected.length}
-                items={unexpectedItems}
-            />
-            <TrajectoryMatchGroup
-                tone="skipped"
-                icon="⭕"
-                title="跳过"
-                desc="Skill 中要求的步骤没有在实际流程中出现"
-                count={skippedExpectedSteps.length}
-                items={skippedItems}
-            />
-        </div>
-    );
-}
-
-function TrajectoryMatchGroup({
-    tone,
-    icon,
-    title,
-    desc,
-    count,
-    items,
-}: {
-    tone: 'matched' | 'partial' | 'unexpected' | 'skipped';
-    icon: string;
-    title: string;
-    desc: string;
-    count: number;
-    items: Array<{ key: string; title: string; desc: string; meta?: string }>;
-}) {
-    const [open, setOpen] = useState(tone !== 'matched' && count > 0);
-    return (
-        <article className={`sa-match-group ${tone} ${open ? 'open' : ''}`}>
-            <button className="sa-match-group-head" onClick={() => setOpen(v => !v)}>
-                <span className="sa-match-icon">{icon}</span>
-                <span>
-                    <b>{title}</b>
-                    <small>{desc}</small>
-                </span>
-                <code>{count} 个步骤</code>
-                <span className="sa-chevron">›</span>
-            </button>
-            {open && (
-                <div className="sa-match-group-body">
-                    {items.length === 0 ? (
-                        <div className="sa-match-empty">暂无该类步骤</div>
-                    ) : items.map(item => (
-                        <div key={item.key} className="sa-match-step">
-                            <b>{item.title}</b>
-                            <p>{item.desc}</p>
-                            {item.meta && <small>{item.meta}</small>}
-                        </div>
-                    ))}
-                </div>
-            )}
-        </article>
-    );
-}
-
-: { value: number | null }) {
-    const safe = value == null ? 0 : Math.max(0, Math.min(100, value));
-    return (
-        <div className={`sa-donut ${value == null ? 'pending' : ''}`} style={{ ['--value' as string]: `${safe}%` }}>
-            <div>
-                <b>{value == null ? '--' : safe}<small>{value == null ? '' : '%'}</small></b>
-                <span>{value == null ? '待分析' : '符合率'}</span>
-            </div>
-        </div>
-    );
-}
-
-: { color: string; label: string; value: number }) {
-    return (
-        <div className="sa-legend-row">
-            <span style={{ background: color }} />
-            <em>{label}</em>
-            <b>{value}</b>
-        </div>
-    );
-}
-
 function EmptyState({ title, text, actionLabel, onAction, compact }: { title: string; text: string; actionLabel?: string; onAction?: () => void; compact?: boolean }) {
     return (
         <div className={`sa-empty ${compact ? 'compact' : ''}`}>
@@ -4920,16 +4712,6 @@ function EmptyState({ title, text, actionLabel, onAction, compact }: { title: st
             {actionLabel && <button className="sa-btn sa-btn-primary" onClick={onAction}>{actionLabel}</button>}
         </div>
     );
-}
-
-function iconFor(kind: 'trace' | 'static' | 'gray' | 'batch') {
-    const icons = {
-        trace: '⌁',
-        static: '▤',
-        gray: '⇄',
-        batch: '☷',
-    };
-    return icons[kind];
 }
 
 function viewTitle(view: AnalysisView) {
