@@ -5,7 +5,56 @@ keywords: ["Agent Insight", "Docker", "服务部署", "容器配置"]
 changefreq: "monthly"
 ---
 
-如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+## 三容器部署
+
+在仓库根目录执行。部署机需要 Python 3、Docker Engine 和 Compose v2（支持 `up --wait`）。首次从源码构建项目镜像，需能下载基础镜像及构建依赖。默认启动 PostgreSQL 16、ClickHouse 26.8 和项目三个容器，项目内运行 Web 和 Storage Core。数据库各自独占命名卷，Core 通过网络端口访问它们。
+
+```bash
+bash scripts/deploy-docker.sh up
+# 新实例选择其他事务库时，任选其一
+bash scripts/deploy-docker.sh up --transaction opengauss --instance-dir ~/insight-og
+bash scripts/deploy-docker.sh up --transaction sqlite --instance-dir ~/insight-sqlite
+```
+
+默认 Web 地址为 `http://127.0.0.1:3000`。默认实例目录为 `~/.agent-insight-docker`，包含私有凭据和 `storage.json`。重复启动使用同一目录，升级本地构建的镜像使用 `up --build`。同机部署多个实例时，首次启动前通过 `WEB_HOST_PORT`、`CH_HOST_PORT` 和所选库的 `PG_HOST_PORT`、`OG_HOST_PORT` 或 `SQLITE_HOST_PORT` 指定空闲端口。端口和镜像选择随实例记录保存。跨主机连接时，可在首次启动前将 `DB_BIND_ADDRESS` 设为数据库主机的内网地址，项目配置填写该地址和发布端口。Web 默认只允许本机访问，通过 `WEB_BIND_ADDRESS` 可绑定到指定网卡。
+
+### 数据库与项目分开启动
+
+下面三种入口均以项目实际可达的地址连接数据库。
+
+- **先部署数据库再启动项目**。在同一个实例目录上依次执行 `bash scripts/deploy-docker.sh db --transaction postgresql` 和 `bash scripts/deploy-docker.sh app`。数据库阶段生成凭据及连接配置，项目阶段只启动 Web/Core 容器。
+- **逐个使用 Compose 文件**。从[部署文件目录](../../../../deploy/docker/)选择 ClickHouse、一种事务库和项目文件。下例先在环境中设置并保存 `PG_PASSWORD` 和 `CLICKHOUSE_PASSWORD`，单独执行下列命令。项目专用 JSON 复制自同目录对应后端的样例，替换全部占位符并设为 0600。已有数据库时直接从项目步骤开始。
+- **源码连接已部署的数据库**。按 [Storage Core 指南](storage-core.md) 填写 JSON，在宿主机运行 `bash scripts/install.sh --check --config /绝对路径/storage.json`，然后用同一配置运行 `bash scripts/install.sh --config /绝对路径/storage.json`。无需探测数据库宿主机的运行方式。
+
+```bash
+docker compose -p insight-demo -f deploy/docker/compose.clickhouse.yml up -d --wait
+docker compose -p insight-demo -f deploy/docker/compose.postgresql.yml up -d --wait
+# 编辑并保存权限为 0600 的私有配置后
+export STORAGE_CONFIG=/绝对路径/storage.json
+docker compose -p insight-demo -f deploy/docker/compose.app.yml up -d --build --wait
+docker compose -p insight-demo -f deploy/docker/compose.app.yml stop app
+```
+
+单独部署数据库时，先设置对应的环境变量，再从下表选择文件。命令形式为 `docker compose -p insight-demo -f deploy/docker/<文件名> up -d --wait`。同一实例运行 ClickHouse 和表中的一种事务库。
+
+| 服务 | 独立文件 | 首次启动需设置 | 默认宿主端口 |
+|---|---|---|---|
+| ClickHouse | `compose.clickhouse.yml` | `CLICKHOUSE_PASSWORD` | 18123 |
+| PostgreSQL | `compose.postgresql.yml` | `PG_PASSWORD` | 15432 |
+| openGauss | `compose.opengauss.yml` | `OG_PASSWORD`，8–32 位且含大小写、数字和允许的特殊字符 | 15433 |
+| SQLite 服务 | `compose.sqlite.yml` | `SQLITE_TOKEN` | 18080 |
+
+同一 Compose 项目内，事务库地址分别为 `postgres:5432`、`opengauss:5432`、`sqlite:8080`，ClickHouse 为 `http://clickhouse:8123`。源码访问这些本机容器时使用映射端口 15432、15433、18080 和 18123。外部服务填写可达的 DNS 名、端口和证书配置。容器内绝对路径要按挂载位置填写。如需修改由 `db` 生成的连接配置，请将 `storage.json` 复制到实例目录外的私有文件，保留权限 0600 后编辑。已有外部配置也可用 `bash scripts/deploy-docker.sh app --config /绝对路径/storage.json` 启动项目。app 操作的网络属于对应实例，若数据库由原始 Compose 管理，使用相同的 `-p` 或提供可路由的地址。
+
+### 后端设置与维护
+
+- **PostgreSQL / openGauss** 使用 `control.dsn`、独立 `schema` 和持久 `artifacts` 目录。示例账号供独立实例初始化使用；对接生产环境时提供专用业务账号。openGauss 可通过 `OPENGAUSS_IMAGE` 指定镜像。一键入口优先复用本地的 `opengauss:7.0.0-RC3`。首次缺少镜像时，按 Docker 服务端架构下载官方 7.0.0-RC3 归档并导入，需要可用的临时磁盘空间。直接使用独立 Compose 文件时可设置 `OPENGAUSS_IMAGE=opengauss:7.0.0-RC3` 复用同一镜像。[社区容器镜像指南](https://docs.opengauss.org/zh/docs/7.0.0-RC3/installation_guide/installing_the_container_image.html)
+- **SQLite 服务** 使用 `control.endpoint`、`token` 和 `artifacts`，外接时客户端与服务使用同一高熵令牌（至少 24 个可打印 ASCII 字符）。单独启动服务设置 `SQLITE_TOKEN`。事务绑定同一 HTTP 连接，断连回滚。跨机时使用 TLS，可将服务端证书与密钥只读挂载至容器并设置 `SQLITE_TLS_CERT`、`SQLITE_TLS_KEY`；客户端用 `https://` 和受信 CA。使用 Compose 覆盖文件将证书环境变量传给服务，并设置容器内的 `SQLITE_HEALTH_ENDPOINT` 为与证书匹配的 HTTPS 地址；私有 CA 使用 `SSL_CERT_FILE`。备份时可在 SQLite 容器内执行 `python3 -m services.storage.sqlite_server --backup /var/lib/insight-sqlite/backup.db`，目标必须是新文件。现有 `control.database` 本地文件配置依然适用。
+- **ClickHouse** 始终配置 `clickhouse.endpoint/database/user/password`，服务端口使用 HTTP(S)。项目容器默认 `runtime.home=/data/agent-insight`、`runtime.webPort=3000`，通过宿主端口映射调整外部访问端口。
+- **运行与恢复**。整体实例用 `status` 检查状态、`stop` 停止服务；只停项目使用该实例的 Compose 项目名和 `stop app`。升级前成套备份数据库卷、应用制品卷及私有配置目录。恢复前先对齐数据库与制品版本。登录后向 Web 上报一条测试 Trace 并查回，用于业务验收。
+
+<details>
+<summary>历史单容器镜像与源码挂载（仅适用于对应历史版本）</summary>
 
 ### 用法一：在线拉取 Docker Hub 镜像
 
@@ -208,6 +257,8 @@ API Key。预检失败会明确告警，但不会阻断普通链路插件和看�
 位于同一运行环境。
 
 如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
+
+</details>
 
 ## UBI9/OpenShift 镜像
 

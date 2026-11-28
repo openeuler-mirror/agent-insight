@@ -5,6 +5,8 @@ description: "SQLite, PostgreSQL and openGauss control storage, authorized Click
 
 # Storage core, IAM and safe migrations
 
+Run `bash scripts/deploy-docker.sh up` for a three-container PostgreSQL and ClickHouse installation. External database settings and network SQLite examples are in the [deployment guide](../../how-to/platform/deploy-docker.md).
+
 ## Single storage runtime
 
 The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.

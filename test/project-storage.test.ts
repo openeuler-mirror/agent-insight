@@ -135,3 +135,15 @@ test('Core request capacity defaults to 64 and warns only on invalid overrides',
     assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).max_concurrent_requests, value);
   }
 });
+
+test('network SQLite requires an exclusive endpoint, private credentials and an artifact directory', t => {
+  const { dir, file, config } = fixture(t)
+  const control = { backend: 'sqlite', endpoint: 'http://sqlite:8080', artifacts: path.join(dir, 'artifacts'), token: 'a'.repeat(32) }
+  const save = (overrides: Record<string, unknown>) => fs.writeFileSync(file, JSON.stringify({ ...config, control: { ...control, ...overrides } }))
+  save({})
+  assert.deepEqual(storage.readConfig(file).control, control)
+  for (const invalid of [{ database: 'data.db' }, { endpoint: 'http://user:secret@sqlite:8080' }, { token: '' }, { artifacts: '' }]) {
+    save(invalid)
+    assert.throws(() => storage.readConfig(file), error => !String(error).includes('secret'))
+  }
+})

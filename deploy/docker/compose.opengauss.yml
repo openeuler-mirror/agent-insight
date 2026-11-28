@@ -1,0 +1,22 @@
+services:
+  opengauss:
+    image: ${OPENGAUSS_IMAGE:-opengauss/opengauss-server:latest}
+    shm_size: 1gb
+    healthcheck:
+      test: ["CMD-SHELL", "export LD_LIBRARY_PATH=/usr/local/opengauss/lib; /usr/local/opengauss/bin/gsql -h 127.0.0.1 -p 5432 -U agent_insight -d agent_insight -W \"$$GS_PASSWORD\" -c 'select 1' >/dev/null"]
+      interval: 5s
+      timeout: 4s
+      start_period: 60s
+      retries: 12
+    environment:
+      GS_PORT: "5432"
+      PGDATA: /var/lib/opengauss/data
+      GS_DB: agent_insight
+      GS_USERNAME: agent_insight
+      GS_PASSWORD: ${OG_PASSWORD:?Set OG_PASSWORD}
+    ports:
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${OG_HOST_PORT:-15433}:5432"
+    volumes:
+      - og-data:/var/lib/opengauss/data
+volumes:
+  og-data:

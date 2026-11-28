@@ -67,6 +67,7 @@ RUN apt-get update \
         curl \
         openssl \
         python3 \
+        python3-psycopg2 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm init -y

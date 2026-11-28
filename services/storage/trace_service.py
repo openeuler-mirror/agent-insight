@@ -965,7 +965,10 @@ def runtime_from_config(path, *, warn_invalid_capacity=True):
     config=json.loads(target.read_text())
     capacity=request_capacity(config.get('max_concurrent_requests', DEFAULT_REQUEST_CAPACITY), warn=warn_invalid_capacity)
     backend=config['control']['backend']
-    if backend=='sqlite':
+    if backend=='sqlite' and 'endpoint' in config['control']:
+        from .sqlite_network import NetworkSQLiteStore
+        control = NetworkSQLiteStore(config['control'])
+    elif backend=='sqlite':
         database=Path(config['control']['database'])
         if not database.is_absolute() or not database.is_file():raise ValueError('existing explicit absolute database required')
         control=SQLiteControlStore(database)

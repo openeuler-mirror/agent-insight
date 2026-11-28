@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+WORKDIR /src
+COPY services/storage /src/services/storage
+RUN mkdir -p /var/lib/insight-sqlite && chown 1000:1000 /var/lib/insight-sqlite
+USER 1000:1000
+EXPOSE 8080
+CMD ["python3", "-m", "services.storage.sqlite_server"]

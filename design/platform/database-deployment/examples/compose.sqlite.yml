@@ -1,0 +1,14 @@
+services:
+  sqlite:
+    # 拟议服务镜像契约，等待事务协议与镜像交付。
+    image: ${SQLITE_SERVICE_IMAGE:?Set the network SQLite service image}
+    environment:
+      SQLITE_LISTEN: "0.0.0.0:8080"
+      SQLITE_DATABASE: /var/lib/insight-sqlite/core.db
+      SQLITE_TOKEN: ${SQLITE_TOKEN:?Set SQLITE_TOKEN}
+    ports:
+      - "127.0.0.1:${SQLITE_HOST_PORT:-18080}:8080"
+    volumes:
+      - sqlite-data:/var/lib/insight-sqlite
+volumes:
+  sqlite-data:

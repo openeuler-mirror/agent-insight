@@ -5,6 +5,8 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 # 启用隔离的 Storage Core Trace 链路
 
+三种事务后端的独立容器、网络 SQLite 配置与源码接入示例见[分离部署操作指南](deploy-docker.md)。
+
 ## 唯一存储运行方式
 
 应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。
@@ -17,20 +19,21 @@ Web 启动前验证 Core 地址、私有控制器文件以及两个数据库的�
 
 仪表盘和质量分析读取注册信息时使用同一已验证的 Core 事务上下文，报告的 Trace、轨迹评分和诊断数据只来自 Core 分析快照；缺少快照明确失败，不读取旧表。请求回调直接返回延迟查询时，身份范围持续到查询完成。Agent 删除成功后沿用原用量事件，拒绝或失败不计数。
 
-本轮验证 SQLite + ClickHouse 与 PostgreSQL + ClickHouse；openGauss 保留实现，暂不实测。原页面布局、Trace 服务端分页、Span 每批最多 50 条滚动追加及“加载中…”提示保持。
+部署专项已在三种事务库分别搭配 ClickHouse 的环境验证。原页面布局、Trace 服务端分页、Span 每批最多 50 条滚动追加及“加载中…”提示保持。
 
 
 下文保留各迁移阶段的领域协议和历史验收说明。历史章节中的版本号表示该功能引入时的版本；当前部署统一要求事务 021、ClickHouse 004，不可按较早章节重新启用旧库或可选存储开关。全量业务回归仍在进行，专项通过不等于完成整项目验收。
 
 ## 配置数据库并一键安装
 
-数据库由用户预先部署并维护。项目只管理 Storage Core 与 Web，不下载、不安装、不启停 PostgreSQL/openGauss/ClickHouse。SQLite 没有独立服务，首次安装可创建指定的新文件。运行架构始终为一种事务库＋ClickHouse，禁止回退旧单库。
+源码部署时，数据库由用户预先部署并维护。源码安装器只管理 Storage Core 与 Web，不下载、不安装、不启停 PostgreSQL/openGauss/ClickHouse。选择 SQLite 网络服务时填写 endpoint、token 和制品目录；已有文件模式填写 database 路径。运行架构始终为一种事务库＋ClickHouse，禁止回退旧单库。
 
-准备 Node.js 22+、npm、Python（SQLite 使用 3.11+；固定 PostgreSQL 驱动使用 3.11–3.13）。先由数据库管理员创建 PostgreSQL 数据库、ClickHouse 独立数据库及账号，然后在项目根目录选择样例：
+准备 Node.js 22+、npm、Python（SQLite 使用 3.11+；固定 PostgreSQL 驱动使用 3.11–3.13）。先准备一种事务库和 ClickHouse 的独立数据库及凭据，然后在项目根目录选择样例：
 
 ```bash
 cp config/storage.postgresql.example.json config/storage.local.json
-# SQLite 用户改为复制 config/storage.sqlite.example.json
+# 文件 SQLite 使用 config/storage.sqlite.example.json
+# 网络 SQLite 或 openGauss 使用 deploy/docker/ 下对应 JSON，改为宿主机可达的地址和路径
 chmod 600 config/storage.local.json
 # 编辑 storage.local.json，替换全部 YOUR_* 占位符
 bash scripts/install.sh --check
@@ -42,10 +45,11 @@ bash scripts/install.sh
 | 字段 | 填写方法 |
 |---|---|
 | `control.backend` | 必填：`sqlite`、`postgresql` 或 `opengauss` |
-| `control.database` | SQLite 必填；文件绝对路径或 `~/` 路径，相对路径以项目根目录解析；不得填写历史单库文件。制品位于文件旁的 `.artifacts` 目录 |
+| `control.database` | SQLite 文件模式必填；文件绝对路径或 `~/` 路径，相对路径以项目根目录解析；不得填写历史单库文件。制品位于文件旁的 `.artifacts` 目录 |
 | `control.dsn` | PG/openGauss 必填；`postgresql://用户名:密码@主机:端口/数据库`。密码中的 `@:/#` 等须 URL 编码；示例 `p@ss` 写为 `p%40ss` |
 | `control.schema` | PG/openGauss 必填，独立应用 schema，如 `agent_insight`；不能使用 public 或系统 schema |
-| `control.artifacts` | PG/openGauss 必填，Core 账号可写的持久制品目录 |
+| `control.endpoint/token` | 网络 SQLite 的 HTTP(S) 地址与服务令牌；与文件路径互斥 |
+| `control.artifacts` | 网络 SQLite、PG、openGauss 必填，Core 账号可写的持久制品目录 |
 | `clickhouse.endpoint` | 必填，HTTP(S) origin；通常 HTTP 8123、HTTPS 8443；不能填原生 TCP 9000，也不能在 URL 中放密码 |
 | `clickhouse.database` | 必填，管理员预建的独立数据库，不能使用 system/default |
 | `clickhouse.user/password` | 均须显式填写；只有数据库确实采用空密码时才填写空字符串，不能省略 password |
@@ -57,7 +61,7 @@ bash scripts/install.sh
 
 PG 样例默认 TLS `sslmode=verify-full`，将 `sslrootcert` 换成 CA 绝对路径。仅在隔离本机测试明确改为 `sslmode=disable`。ClickHouse HTTPS 使用系统信任链，私有 CA 可通过 Python 的 `SSL_CERT_FILE` 指定；不关闭证书验证。PG `connect_timeout` 默认 10 秒，允许 1–60。诊断不会输出密码或完整 DSN。
 
-初始化账号需要 PG 数据库 CONNECT、创建应用 schema 的 CREATE 权限（或预建 schema 的 USAGE/CREATE），以及应用表读写权限；ClickHouse 需要目标库 CREATE TABLE、SELECT、INSERT，运行时至少 SELECT/INSERT。初始化完成后可收回 DDL 权限，变更账号后重启应用。当前版本门槛为 PostgreSQL 16、ClickHouse 26.8，安装仍会验证实际表结构；高版本并不等于所有功能已验收。openGauss 保留适配，本轮不做真机验收。
+初始化账号需要 PG 数据库 CONNECT、创建应用 schema 的 CREATE 权限（或预建 schema 的 USAGE/CREATE），以及应用表读写权限；ClickHouse 需要目标库 CREATE TABLE、SELECT、INSERT，运行时至少 SELECT/INSERT。初始化完成后可收回 DDL 权限，变更账号后重启应用。当前版本门槛为 PostgreSQL 16、ClickHouse 26.8，安装仍会验证实际表结构；高版本并不等于所有功能已验收。openGauss 部署专项使用 7.0.0-RC3 ARM64 镜像。
 
 ## 没有数据库服务时：独立 Docker 启动
 

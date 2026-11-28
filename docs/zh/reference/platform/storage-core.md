@@ -5,6 +5,8 @@ description: "SQLite、PG、openGauss 控制面、ClickHouse 授权访问和旧�
 
 # 新存储核心、IAM 与安全迁移
 
+单机三容器部署默认使用 PostgreSQL + ClickHouse。`bash scripts/deploy-docker.sh up` 可启动项目；外部数据库配置及网络 SQLite 示例见[部署指南](../../how-to/platform/deploy-docker.md)。
+
 ## 唯一存储运行方式
 
 应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。

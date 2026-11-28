@@ -4,7 +4,39 @@ description: "Published images, offline imports, mounted source, and persistent 
 
 ---
 
-If you do not have a dashboard deployment yet, you can pull a published Docker image. `karaggagent/agent-insight` provides multi-architecture images: `x86_64` servers select `linux/amd64`, and `aarch64` servers select `linux/arm64` automatically.
+## Three-container deployment
+
+From the repository root, run `bash scripts/deploy-docker.sh up` with Python 3, Docker Engine and Compose v2 supporting `--wait`. The first run builds the application image and starts PostgreSQL 16, ClickHouse 26.8 and one application container running Core and Web. Each database owns a separate volume. Access Web at `http://127.0.0.1:3000`. Select `--transaction sqlite` or `--transaction opengauss` on first install to use another backend.
+
+Keep the private deployment directory (default `~/.agent-insight-docker`) with the data volumes. Reuse `--instance-dir` on subsequent commands. On first install, set `WEB_HOST_PORT`, `CH_HOST_PORT` and the selected backend's `PG_HOST_PORT`, `OG_HOST_PORT` or `SQLITE_HOST_PORT` when running multiple instances. To serve other hosts, set `DB_BIND_ADDRESS` to the database host’s private interface on first install, then configure the application with that address and the published ports. Set `WEB_BIND_ADDRESS` to select the Web interface. Defaults bind to loopback. Use `up --build` to rebuild local images. Use `status` and `stop` for the instance.
+
+### Independent services
+
+Run `bash scripts/deploy-docker.sh db --transaction postgresql` then `bash scripts/deploy-docker.sh app` with the same instance directory. For individually managed services use the four [database Compose files, application file and JSON examples](../../../../deploy/docker/). Supply private database passwords via the environment. Use a common Compose project name for service discovery.
+
+```bash
+docker compose -p insight-demo -f deploy/docker/compose.clickhouse.yml up -d --wait
+docker compose -p insight-demo -f deploy/docker/compose.postgresql.yml up -d --wait
+# Set STORAGE_CONFIG to an absolute private (0600) JSON file with real credentials.
+docker compose -p insight-demo -f deploy/docker/compose.app.yml up -d --build --wait
+docker compose -p insight-demo -f deploy/docker/compose.app.yml stop app
+```
+
+For an independently managed database, set its credential and run `docker compose -p insight-demo -f deploy/docker/<filename> up -d --wait`. Run ClickHouse plus one transactional backend.
+
+| Service | Filename | Credential | Default host port |
+|---|---|---|---|
+| ClickHouse | `compose.clickhouse.yml` | `CLICKHOUSE_PASSWORD` | 18123 |
+| PostgreSQL | `compose.postgresql.yml` | `PG_PASSWORD` | 15432 |
+| openGauss | `compose.opengauss.yml` | `OG_PASSWORD` (8–32 characters including upper case, lower case, a digit and a supported special character) | 15433 |
+| SQLite service | `compose.sqlite.yml` | `SQLITE_TOKEN` | 18080 |
+
+To customize a generated configuration, edit a private copy of `storage.json` outside the deployment directory. For existing stores, run `bash scripts/deploy-docker.sh app --config /absolute/storage.json`. The JSON supplies one transactional backend and ClickHouse. Within the same network use `postgres:5432`, `opengauss:5432` or `sqlite:8080` with `http://clickhouse:8123`. On the database host use its published ports (15432, 15433, 18080 and 18123 by default). For remote databases provide routable addresses, credentials and CA certificates. Populate `control.dsn/schema/artifacts` for PostgreSQL or openGauss. The launcher imports the official 7.0.0-RC3 archive for the Docker server architecture on first use, or reuses the local image. Allow temporary disk space for the archive. Set `OPENGAUSS_IMAGE` to select an existing image, including when using standalone Compose. [Official openGauss container installation](https://docs.opengauss.org/zh/docs/7.0.0-RC3/installation_guide/installing_the_container_image.html) For SQLite service mode supply `control.endpoint/token/artifacts`; set a matching high-entropy `SQLITE_TOKEN`. Remote SQLite supports TLS via mounted `SQLITE_TLS_CERT` and `SQLITE_TLS_KEY`. Set these variables in a Compose override with `SQLITE_HEALTH_ENDPOINT` pointing to an HTTPS origin matching the certificate and `SSL_CERT_FILE` for a private CA. The file-based SQLite configuration continues to work for local use. Set the ClickHouse endpoint, database, username and password for every backend.
+
+For a source installation use Node 22+, npm and Python (3.11–3.13 for the relational driver). Update paths and addresses for the application host, run `bash scripts/install.sh --check --config /absolute/storage.json` then `bash scripts/install.sh --config /absolute/storage.json`. The precheck needs a Python environment with the selected driver. The application only needs database connectivity. Verify a real Trace round trip and back up both stores, private deployment records and artifacts together before upgrades.
+
+<details>
+<summary>Historical single-container images and source mounts (use the instructions for the corresponding release)</summary>
 
 ## Option 1: Pull from Docker Hub
 
@@ -219,6 +251,8 @@ Features such as `opencode-live` trigger analysis and trajectory evaluation laun
 After deployment, continue with [your first Trace](../../tutorial/platform/01-quick-start.md). Before an upgrade, read [upgrade and rollback](./upgrade-and-rollback.md).
 
 [中文权威版本](../../../zh/how-to/platform/deploy-docker.md)
+
+</details>
 
 ## UBI9/OpenShift image
 

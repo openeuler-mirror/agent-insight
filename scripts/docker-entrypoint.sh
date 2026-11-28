@@ -186,6 +186,9 @@ if [ -n "$AGENT_INSIGHT_SOURCE_DIR" ]; then
 fi
 
 cd "$PACKAGE_ROOT"
+if [ -n "${AGENT_INSIGHT_STORAGE_CONFIG:-}" ]; then
+  exec python3 scripts/container-project.py "$AGENT_INSIGHT_STORAGE_CONFIG"
+fi
 node scripts/storage-core-preflight.cjs
 
 npx prisma generate

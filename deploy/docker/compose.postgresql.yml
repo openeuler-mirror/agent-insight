@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent_insight
+      POSTGRES_USER: agent_insight
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD}
+    ports:
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${PG_HOST_PORT:-15432}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD="$$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -c 'SELECT 1' >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 30
+volumes:
+  pg-data:

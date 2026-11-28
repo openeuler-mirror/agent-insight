@@ -1,0 +1,22 @@
+services:
+  sqlite:
+    image: ${SQLITE_SERVICE_IMAGE:-agent-insight-sqlite:local}
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: Dockerfile.sqlite-service
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os; from services.storage.sqlite_network import Connection; Connection(os.getenv('SQLITE_HEALTH_ENDPOINT','http://127.0.0.1:8080'),os.environ['SQLITE_TOKEN']).request('plan')"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+    environment:
+      SQLITE_LISTEN: "0.0.0.0:8080"
+      SQLITE_DATABASE: /var/lib/insight-sqlite/core.db
+      SQLITE_TOKEN: ${SQLITE_TOKEN:?Set SQLITE_TOKEN}
+    ports:
+      - "${DB_BIND_ADDRESS:-127.0.0.1}:${SQLITE_HOST_PORT:-18080}:8080"
+    volumes:
+      - sqlite-data:/var/lib/insight-sqlite
+volumes:
+  sqlite-data:

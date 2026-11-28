@@ -51,3 +51,10 @@ scripts/otel_data
 # Private database connection configuration
 config/storage.local.json
 **/config/storage.local.json
+
+**/storage.json
+**/instance.json
+.env
+.env.*
+!.env.example
+**/__pycache__/
