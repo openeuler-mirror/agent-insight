@@ -17,7 +17,7 @@ function testFiles(directory = 'test') {
 
 export function validateSuites(suites, files) {
   if (!suites || typeof suites !== 'object' || Object.keys(suites).length !== modules.length
-    || modules.some(module => !Array.isArray(suites[m]))) throw new Error('Invalid module inventory');
+    || modules.some(moduleName => !Array.isArray(suites[moduleName]))) throw new Error('Invalid module inventory');
   const actual = new Set(files), seen = new Set();
   for (const m of modules) for (const file of suites[m]) {
     if (!actual.has(file)) throw new Error(`Stale test path: ${file}`);
@@ -49,9 +49,9 @@ export function main(args) {
   if (!check && !selected.size) throw new Error('Select --module <name> or use --check');
   const suites = JSON.parse(fs.readFileSync(path.join(root, 'test/suites.json'), 'utf8'));
   validateSuites(suites, testFiles());
-  const files = [...selected].flatMap(module => suites[m]).sort();
+  const files = [...selected].flatMap(moduleName => suites[moduleName]).sort();
   if (list) { console.log(files.join('\n'));return 0; }
-  if (check) { console.log(modules.map(module => `${module}: ${suites[m].length}`).join('\n'));return 0; }
+  if (check) { console.log(modules.map(moduleName => `${moduleName}: ${suites[moduleName].length}`).join('\n'));return 0; }
   const commands = [
     ['scripts/benchmark/generate-catalog.cjs'],
     ['node_modules/typescript/bin/tsc', '--noEmit', '-p', 'scripts/trae-collector/tsconfig.json'],
