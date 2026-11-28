@@ -600,6 +600,7 @@ function FaultDetailView({ execution, locale, user, onBack, diagnosisContent }: 
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
     const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems, traceNodes), [diagnosticItems, traceNodes]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
+    const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
 
     const { roots: treeRoots, nodeMap: treeNodeMap } = useMemo(() => flatToTree(traceNodes), [traceNodes]);
 

@@ -461,7 +461,8 @@ export function aggregateDeepSeekHarnessOtelEvents(
     }
   }
   const cleanInteractions = interactions.map((interaction) => {
-    const clean = interaction;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Internal ordering and grouping fields must stay out of the serialized trace.
+    const { _orderMs, _sourceSessionId, _turn, _step, ...clean } = interaction;
     return clean;
   });
   const rootInteractions = interactions.filter((interaction) => interaction._sourceSessionId === rootSourceSessionId);
