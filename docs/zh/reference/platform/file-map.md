@@ -61,20 +61,20 @@ changefreq: monthly
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
 | `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,llamaindex,langfuse-langgraph,qoder,trae,actrail}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
-| `ingest/claude-otel/` / `ingest/codeagent-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
+| `ingest/claude-otel/` / `ingest/codeagent-otel/` / `ingest/otel-consumer/` / `ingest/openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
-| `ingest/ras/{normalize,store,delivery-link,trace-markers,sort-traces,catalog-engine,fault-mode-catalog,fault-mode-label-store,capability-config,capability-config-store}.ts` | ingest / observe | RAS 环内事件归一化与落库；delivery 关联、详情 marker、列表排序；**catalog-engine** 拉 Python 能力目录；`fault-mode-catalog` 仅 fixture；能力配置校验与用户级持久化 |
+| `ingest/ras/{normalize,store,delivery-link,trace-markers,catalog-engine,capability-config,capability-config-store,platform-label,recovery-tree,trace-summary}.ts` | ingest / observe | RAS 环内事件归一化与落库（`normalize`/`upsertRasIngestRecords`）；delivery 关联与步骤交错、详情 marker（`buildRasTraceMarkers`）；**catalog-engine** 拉 Python 能力目录；能力配置校验与用户级持久化；平台标签解析（`resolveTracePlatform`）、恢复事件注入交互树（`injectRasRecoveryEvents`）、可靠性 Trace 摘要（`pickReliabilityTraceSummary`） |
 | `ingest/setup-package.ts` | ingest setup | 生成 bash 内嵌 `install_agent_insight_ras`：本地 checkout → `GET /api/ingest/setup/bundle?name=ras` → `npm pack` 三级回退；`AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` 可覆盖 npm 兜底 |
 | `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
 | `ingest/otel/{llamaindex,adapters/llamaindex}.ts` / `scripts/llamaindex_extension/` / `docs/zh/how-to/observability/llamaindex-trace-collector.md` | ingest | LlamaIndex OTLP 识别与 Agent/Tool/LLM/RAG/Workflow 聚合；复用官方 `llama-index-observability-otel` Handler 基类、隔离 TracerProvider、持久 spool 与异步上传；用户指南是安装 ZIP 中 `README.md` 的唯一内容源 |
 | `ingest/otel/adapters/qoder.ts` / `scripts/qoder_{trace_collector,uploader_client,setup,work_setup,token_usage_env}.mjs` | ingest | Qoder CN 家族 hooks、产品/账号隔离 spool、Token usage 环境变量生命周期、异步上传及 Qoder OTLP snapshot 转换 |
-| `integrations/qoder-desktop/` / `integrations/qoder-jetbrains/` / `api/ingest/setup/qoder-*` | integration | Qoder Desktop VSIX 与 JetBrains 插件的状态栏、设置、owner 安装、卸载清理及服务端安装包下载 |
+| `integrations/qoder-desktop/` / `integrations/qoder-jetbrains/` / `src/app/api/ingest/setup/qoder-*` | integration | Qoder Desktop VSIX 与 JetBrains 插件的状态栏、设置、owner 安装、卸载清理及服务端安装包下载 |
 | `ingest/otel/actrail.ts` / `ingest/otel/adapters/actrail.ts` | ingest | AcTrail semantic actions 归一、Span 修订合并与 Trace 投影 |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |
 | `client/api.ts` | client | `apiFetch`（标准的客户端 fetch 封装） |
-| `client/{auth,locale,theme,sidebar}-context.tsx` | client | React context provider/hook |
+| `client/{locale,theme,sidebar}-context.tsx`、`auth/auth-context.tsx` | client / auth | React context provider/hook（auth-context 位于 `src/lib/auth/`） |
 | `agent-adapter.ts` | lib | 用于 playground 的 assistant-ui `ChatModelAdapter` |
 | `llm-providers.ts` | lib | `LlmProvider` 注册表 |
 | `system-agents.ts` / `system-agent-names.ts` | lib | `SystemAgentDefinition`，内部 agent 身份标识 |
@@ -101,12 +101,14 @@ changefreq: monthly
 ## components (selected) (`src/components/`)
 | File | Role |
 |---|---|
-| `eval/Dashboard.tsx` | 评测仪表盘（最大的 UI 流程） |
-| `eval/TrajectoryEvalCenter.tsx`、`eval/TrajectoryDetailView.tsx` | 轨迹评测 UI |
-| `eval/SkillEvaluation.tsx`、`eval/EvaluationRunDetailView.tsx` | skill 评测视图 |
+| `eval/ExperimentWizard.tsx`、`eval/ExperimentDetail.tsx`、`eval/ExperimentCaseDetail.tsx` | 实验创建向导、实验详情与 Case 执行明细 |
+| `eval/EvaluatorDetailModal.tsx`、`eval/EvaluatorVersionDetails.tsx`、`eval/EvaluatorExecutionSettings.tsx` | 评测器详情、版本明细与执行配置 |
+| `eval/ComparisonDetail.tsx`、`eval/MetricsPageClient.tsx`、`eval/SingleExecutionMetrics.tsx` | 对比明细与指标展示 |
+| `eval/AssetVersionPicker.tsx`、`eval/ExperimentAssetVersions.tsx`、`eval/AgentEvaluationVersions.tsx` | 评测资产版本选择与版本分析 |
+| `eval/ConversationEditor.tsx`、`eval/ToolCatalogEditor.tsx`、`eval/JsonParameterEditor.tsx` | 多轮对话编辑、工具目录编辑与 JSON 参数编辑 |
 | `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx` | trace 可视化 + 调试；Langfuse observation 经专用投影进入原 Agent Trace 界面，其余框架继续使用 interactions 树 |
 | `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx` | 数据集与评测器管理 |
-| `config/ModelConfigManager.tsx`、`config/WebSearchConfig.tsx` | 模型/搜索配置 |; Trace tag management page: `app/(main)/version-management/page.tsx` |
+| `config/{ModelConfigManager,ModelPricingManager,WebSearchConfig,AgentRuntimeSettings}.tsx` | 模型/定价/搜索配置与 Agent 运行时设置 |
 | `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader}.tsx` | 应用外壳 |
 | `ui/*` | 可复用基础组件（button、card、dialog、select 等）—— 复用它们，不要自行实现 |
 | `feedback/{EmptyState,ErrorState,StatusBadge}.tsx` | 标准状态组件 |
@@ -115,7 +117,7 @@ changefreq: monthly
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
 |---|---|---|
-| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/ras-config`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/bundle` 白名单 tar 下发 ras/client 制品、共享的 `setup/codeagent-setup.ts`、`setup/hermes-plugin` 与 `setup/llamaindex-collector`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路与能力配置拉取）；下发客户端安装脚本、RAS/常驻客户端源码 bundle、跨平台 CodeAgent PATH 包装器、Hermes 插件源码与 LlamaIndex 直接部署归档 |
+| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/ras-config`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `ingest/setup/bundle` 白名单 tar 下发 ras/client 制品、共享的 `ingest/setup/codeagent-setup.ts`、`ingest/setup/hermes-plugin` 与 `ingest/setup/llamaindex-collector`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路与能力配置拉取）；下发客户端安装脚本、RAS/常驻客户端源码 bundle、跨平台 CodeAgent PATH 包装器、Hermes 插件源码与 LlamaIndex 直接部署归档 |
 | agent | `agent/{run,respond,stream}` | 驱动内部的通用 agent |
 | skills | `skills`、`skills/[id]/*`、`skills/by-name/*`、`skills/{publish,upload,automation/*,sync-enterprise,logs}` | skill 增删改查、版本、发布、企业同步 |
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |
