@@ -37,3 +37,5 @@ Benchmark 执行 Profile 支持显式 `backend/options`：按后端配置和探�
 
 
 数据库请先独立部署，然后按[项目配置样例与安装指南](platform/storage-core.md)填写项目内配置并一键安装 Core/Web。支持 SQLite＋ClickHouse 和 PostgreSQL＋ClickHouse。
+
+采集批次失败时，先查看回执及有限重试状态，再按[失败批次恢复](./platform/storage-core.md#recover-ingest)处理；Core 并发请求槽默认 64。

@@ -9,6 +9,8 @@ An upgrade changes application version, database schema, and runtime state toget
 
 ## Before upgrading
 
+When switching from the `schema_meta` global row lock to resource locks, stop accepting writes and drain transactions from all old Core, ingestion, evaluation and projection workers before starting new writers. On rollback, drain new writers first and verify that the older release supports the current schema version. Mixing the two write protocols can cause inconsistent updates.
+
 1. Record the current package version, source commit or image digest, runtime root, database, external configuration directories, and client versions.
 2. Choose an explicit target release and read its changes and configuration-migration requirements. Retain the current package, runnable source build, or image.
 3. Pause new work and writes, stop the platform and related writers, and [back up](./backup-and-restore.md) before installing. Include the transactional database, ClickHouse, artifacts, and identity mappings.

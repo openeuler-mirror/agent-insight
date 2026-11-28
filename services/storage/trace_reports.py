@@ -209,7 +209,10 @@ class TraceReports:
         if kind == 'skills-analysis' and isinstance(payload, dict): payload = {**payload, 'runId': candidate_id}
         payload_hash, payload_ref = self._persist(payload, MAX_REPORT_BYTES) if payload is not None else (None, None)
         lease = lease_token or secrets.token_urlsafe(32); now = self.control.clock()
-        with self.control.transaction() as con:
+        trace = value['manifest']['trace_id']
+        receipts = [('report-request', ws, prepared_scope.principal_id, kind, request_key)] if request_key else []
+        with self.control.transaction(('diagnosis', ws, trace, kind), *receipts, shared=(('trace', ws, trace),)) as con:
+            now = self.control.clock()
             scope, route = self._boundary(con, token, ws, ref, value); trace = route['trace_id']; current = self._row(con, ws, trace, kind)
             historical = current is not None and is_historical_control(con, ws, 'diagnosticReport', current['report_id'])
             if scope.fingerprint != prepared_scope.fingerprint: raise Forbidden('Report authorization changed while reserving')
@@ -270,7 +273,9 @@ class TraceReports:
             progress_values = self._persist(progress_value, MAX_PROGRESS_BYTES, operation)
         else: progress_values = self._persist(progress, MAX_PROGRESS_BYTES) if progress is not None else None
         now = self.control.clock()
-        with self.control.transaction() as con:
+        trace = previous['trace_id']
+        with self.control.transaction(('diagnosis', ws, trace, previous['kind']), shared=(('trace', ws, trace),)) as con:
+            now = self.control.clock()
             row = self._publication(con, token, ws, report_id, expected_revision, lease_token, replay=operation is not None)
             if row['revision'] != expected_revision:
                 selected = row
@@ -298,8 +303,11 @@ class TraceReports:
         return result
 
     def delete(self, token, ws, ref):
-        with self.control.transaction() as con:
+        with self.control.read_transaction() as con:
+            _, before = self._trace(con, token, ws, ref, 'delete')
+        with self.control.transaction(('diagnosis', ws, before['trace_id']), shared=(('trace', ws, before['trace_id']),)) as con:
             scope, route = self._trace(con, token, ws, ref, 'delete')
+            if route['trace_id'] != before['trace_id']: raise Conflict('Report Trace identity changed')
             grant = self.iam._workspace(scope, ws, 'delete')
             owner = con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?", (ws,route['trace_id'])).fetchone()[0]
             if owner != scope.principal_id and grant.role not in ('owner','admin','personal'): raise Forbidden('Trace owner required')

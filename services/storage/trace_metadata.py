@@ -32,7 +32,7 @@ class TraceMetadata:
     def register_aliases_for_provisioning(self,ws,trace_id,*,task_id=None,execution_id=None):
         identifier(ws);identifier(trace_id)
         aliases=[(kind,self._alias(value)) for kind,value in [('task',task_id),('execution',execution_id)] if value is not None]
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', ws)) as con:
             if con.execute('SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone() is None:raise Conflict('Trace route does not exist')
             for kind,alias in aliases:
                 old=con.execute('SELECT trace_id FROM trace_legacy_ids WHERE workspace_id=? AND alias_kind=? AND alias_id=?',(ws,kind,alias)).fetchone()
@@ -105,11 +105,11 @@ class TraceMetadata:
         return self._properties(con.execute('SELECT * FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,trace_id)).fetchone(),ws,trace_id)
 
     def patch(self,token,ws,trace_id,changes,expected_revision=None):
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', ws, trace_id)) as con:
             return self._patch(con,token,ws,trace_id,changes,expected_revision)
 
     def delete(self,token,ws,trace_id):
-        with self.control.transaction() as con:return self._delete(con,token,ws,trace_id)
+        with self.control.transaction(('trace', ws, trace_id), ('collector', ws, trace_id)) as con:return self._delete(con,token,ws,trace_id)
 
     def _delete(self,con,token,ws,trace_id):
         scope,locator=self._trace(con,token,ws,trace_id,'delete',allow_retired=True)
@@ -193,7 +193,7 @@ class TraceMetadata:
 
     def create_tag(self,token,ws,payload):
         fields=self._tag_fields(payload)
-        with self.control.transaction() as con:
+        with self.control.transaction(('tag', ws)) as con:
             scope,grant=self._scope(con,token,ws,'write');now=self.control.clock();tag_id=str(uuid.uuid4())
             con.execute('INSERT INTO trace_tags VALUES(?,?,?,?,?,?,?,1,?,?)',(ws,tag_id,scope.principal_id,fields['kind'],fields['name'],fields['description'],fields['color'],now,now))
             row=self._tag(con,scope,grant,ws,tag_id)
@@ -201,7 +201,7 @@ class TraceMetadata:
 
     def update_tag(self,token,ws,tag_id,payload,expected_revision=None):
         if expected_revision is not None:revision(expected_revision)
-        with self.control.transaction() as con:
+        with self.control.transaction(('tag', ws, tag_id)) as con:
             scope,grant=self._scope(con,token,ws,'write');row=self._tag(con,scope,grant,ws,tag_id)
             if expected_revision is not None and row['revision']!=expected_revision:raise Conflict('tag revision changed')
             fields=self._tag_fields(payload,row)
@@ -214,7 +214,7 @@ class TraceMetadata:
 
     def delete_tag(self,token,ws,tag_id):
         identifier(tag_id)
-        with self.control.transaction() as con:
+        with self.control.transaction(('tag', ws, tag_id), ('trace', ws)) as con:
             scope,grant=self._scope(con,token,ws,'delete')
             exists=con.execute('SELECT 1 FROM trace_tags WHERE workspace_id=? AND tag_id=?',(ws,tag_id)).fetchone()
             if not exists:return False
@@ -239,7 +239,7 @@ class TraceMetadata:
 
     def _links(self,token,ws,trace_id,tag_ids,mode):
         tag_ids=self._tag_ids(tag_ids)
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', ws, trace_id), *[('tag', ws, tag) for tag in tag_ids]) as con:
             scope,_=self._trace(con,token,ws,trace_id,'write');grant=self.iam._workspace(scope,ws,'write')
             if mode!='remove':
                 for tag in tag_ids:self._tag(con,scope,grant,ws,tag)

@@ -156,7 +156,7 @@ def _control(store,con,scope,ws,head,current,body):
 
 def dispatch(store,action,token,ws,body):
     store._trusted(token,ws,body)
-    with store.control.transaction() as con:
+    with store.control.transaction(('benchmark', ws), ('evaluation', ws), ('platform', ws), ('trace', ws)) as con:
         scope=store.iam._scope(con,token)
         if action=='cancel_load' and body.get('pending') is True:return _pending(store,con,scope,ws,body)
         if action=='cancel_request':head=_head(store,con,scope,ws,identifier(body.get('experiment_id')),'write' if body.get('mode')=='cancel' else 'delete');current=None

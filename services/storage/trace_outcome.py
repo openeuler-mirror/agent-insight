@@ -126,7 +126,7 @@ def dispatch_outcome(store,action,token,ws,body):
         reader=copy.copy(store.evidence)
         if action=='outcome_query' or body.get('config',{}).get('core_outcome',{}).get('mode')=='edited-final-result':reader.allow_missing_session=True
         evidence=reader.read(token,ws,trace_ref=body['trace_ref'])
-    with store.control.transaction() as con:
+    with store.control.transaction(('evaluation', ws), ('trace', ws), ('diagnosis', ws)) as con:
         scope,current,owner,identity=_source(store,con,token,ws,body['trace_ref'],True)
         _,_,receipt=store._receipt(con,scope,ws,action,body)
         if receipt:return store._load(receipt['response_hash'],receipt['response_ref'],MAX_BYTES)

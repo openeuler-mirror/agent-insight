@@ -16,7 +16,7 @@ def cleanup(repository, token, workspace):
     datasets = DatasetStore(control)
     traces = TraceMetadata(control)
     result = dict(executions=0, sessions=0, agents=0, datasets=0, skills=0)
-    with control.transaction() as con:
+    with control.transaction(('platform', workspace), ('dataset', workspace), ('trace', workspace), ('collector', workspace)) as con:
         scope, _ = repository._scope(con, token, workspace, 'delete')
         repository.iam._workspace(scope, workspace, 'write')
         rows = con.execute("SELECT * FROM platform_control_records WHERE workspace_id=? AND owner_principal_id=? AND state='active' AND kind IN ('registeredAgent','skill')", (workspace, scope.principal_id)).fetchall()

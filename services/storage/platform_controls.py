@@ -11,6 +11,7 @@ import secrets
 from pathlib import Path
 import uuid
 from dataclasses import replace
+from contextlib import nullcontext
 
 from .control import Conflict, StorageError
 from .contracts import identifier
@@ -210,6 +211,7 @@ class PlatformControls:
         if kind=='skill':
             asset=oldrow.get('asset_id') if oldrow else None
             asset=asset or str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,scope.principal_id,'control-skill',data['id']])))
+            self.control.lock_keys(con, ('asset', workspace, asset), ('access', workspace, 'asset', asset))
             name='control:'+scope.principal_id+':'+data['name'];now=self.control.clock()
             if oldrow:
                 con.execute('UPDATE asset_identities SET name=?,visibility=?,description=?,etag=etag+1,updated_at_ms=? WHERE workspace_id=? AND asset_id=?',(name,'public' if data.get('visibility')=='public' else 'workspace' if data.get('visibility')=='team' else 'private',data.get('description') or '',now,workspace,asset))
@@ -225,7 +227,9 @@ class PlatformControls:
         if kind=='skillVersion':
             parent=self._row(con,workspace,'skill',data['skillId'])
             if not parent or parent['owner_principal_id']!=scope.principal_id:raise Forbidden('Skill version owner differs')
-            asset=parent['asset_id'];alias='version:'+str(data['version']);current=con.execute('SELECT etag FROM asset_aliases WHERE workspace_id=? AND asset_id=? AND alias=?',(workspace,asset,alias)).fetchone();generation=int(current[0])+1 if current else 1
+            asset=parent['asset_id']
+            self.control.lock_keys(con, ('asset', workspace, asset))
+            alias='version:'+str(data['version']);current=con.execute('SELECT etag FROM asset_aliases WHERE workspace_id=? AND asset_id=? AND alias=?',(workspace,asset,alias)).fetchone();generation=int(current[0])+1 if current else 1
             digest,ref=self.control.persist_artifact({'text':_json({'format':'platform-skill-files/v1','data':data,'files':file_bundle or []})})
             release=str(uuid.uuid5(uuid.NAMESPACE_URL,_json([workspace,asset,alias,generation,digest])));now=self.control.clock()
             con.execute('INSERT INTO asset_releases(workspace_id,release_id,asset_id,version_label,content_hash,manifest_ref,schema_version,publisher_id,created_at_ms) VALUES(?,?,?,?,?,?,1,?,?)',(workspace,release,asset,'control:'+str(data['version'])+':'+str(generation),digest,ref,scope.principal_id,now))
@@ -350,7 +354,7 @@ class PlatformControls:
         if len(_json(result).encode())>MAX_BYTES:raise StorageError('Control response exceeds byte budget')
         return {'rows':result,'scope_revision':str(self._scope_revision(con,workspace,scope.principal_id,kind))}
 
-    def dispatch(self,token,workspace,action,body,*,trusted=False,preparation=False,write_prior=False):
+    def dispatch(self,token,workspace,action,body,*,trusted=False,preparation=False,write_prior=False,_write_connection=None):
         if not isinstance(body,dict):raise ValueError('Control object required')
         body=copy.deepcopy(body);required=body.pop('required_capabilities',[])
         if not isinstance(required,list) or any(cap not in ('read','write','execute','publish','delete') for cap in required):raise ValueError('Fixed control capabilities required')
@@ -383,7 +387,7 @@ class PlatformControls:
             if not trusted or preparation or write_prior or self.capability:raise Forbidden('Verified Agent deletion producer required')
             if set(body)!={'agent_id','trace_ids'} or not isinstance(body['trace_ids'],list) or len(body['trace_ids'])>MAX_RECORDS:raise ValueError('Bounded Agent deletion required')
             from .trace_metadata import TraceMetadata
-            with self.control.transaction() as con:
+            with self.control.transaction(('platform', workspace), ('trace', workspace), ('collector', workspace), ('diagnosis', workspace), ('evaluation', workspace)) as con:
                 scope,grant=self._scope(con,token,workspace,'delete');self.iam._workspace(scope,workspace,'write')
                 agent=self._row(con,workspace,'registeredAgent',identifier(body['agent_id']))
                 if not agent:return {'deletedTraces':0}
@@ -407,8 +411,14 @@ class PlatformControls:
         username=identifier(body.get('legacy_username'));key=identifier(body.get('operation_key'));operations=body.get('operations')
         if not isinstance(operations,list) or len(operations)>2000:raise ValueError('Bounded control mutations required')
         digest=_hash(body);receipt_id=_hash(['platform-controls',key]);now=self.control.clock()
-        with self.control.transaction() as con:
+        transaction = nullcontext(_write_connection) if _write_connection is not None else self.control.transaction(shared=(('platform', workspace),))
+        with transaction as con:
             scope,grant=self._scope(con,token,workspace,'write');source='platform-controls:'+scope.principal_id
+            owners = [('platform', workspace, scope.principal_id)]
+            peer = self.capability.get('peer') if self.capability else None
+            if peer:
+                owners.append(('platform', peer['workspace'], peer['owner']))
+            self.control.lock_keys(con, *owners)
             prior=con.execute('SELECT content_hash FROM inbox_receipts WHERE workspace_id=? AND source_id=? AND event_id=?',(workspace,source,receipt_id)).fetchone()
             if prior:
                 if prior[0]!=digest:raise Conflict('Control operation key differs')
@@ -487,7 +497,7 @@ class PlatformControls:
         username=identifier(body.get('username'));now=self.control.clock()
         try:login=_login_name(username)
         except ValueError:login='legacy_'+hashlib.sha256(username.encode()).hexdigest()
-        with self.control.transaction() as con:
+        with self.control.transaction(('bootstrap-login', login), ('platform',)) as con:
             aliases=con.execute("SELECT * FROM platform_control_records WHERE kind='user' AND unique_key=? AND state='active'",(_hash([username]),)).fetchall()
             if len(aliases)>1:raise Conflict('Ambiguous legacy login')
             if aliases:
@@ -552,6 +562,8 @@ class PlatformControls:
                 _,peer=self._capability_scope(con);cap['peer']={'client_id':self.capability['client_id'],'client_record_id':self.capability['client_record_id'],'owner':peer['owner_principal_id'],'workspace':peer['workspace_id']}
             except Forbidden:cap.pop('peer',None)
             finally:self.capability=previous
+        owner = row['owner_principal_id']
+        self.control.lock_keys(con, shared=(('membership', owner), ('principal', owner)))
         principal=con.execute("SELECT * FROM iam_principals WHERE principal_id=? AND status='active'",(row['owner_principal_id'],)).fetchone()
         if not principal:raise Forbidden('Capability owner unavailable')
         scope=self.iam._scope_authenticated(con,{'principal_id':row['owner_principal_id'],'workspace_id':row['workspace_id'],'capabilities_json':_json(['read','write']),'current_auth_version':principal['auth_version'],'credential_id':value},True)
@@ -563,8 +575,19 @@ class PlatformControls:
         value=copy.deepcopy(body);cap=value.pop('capability',None)
         if not isinstance(cap,dict) or set(cap)-{'type','credential_hash','client_id','token_hash','previous_credential_hash'}:raise ValueError('Fixed device capability required')
         self.capability=cap
-        with self.control.transaction() as con:
+        def owners(row):
+            keys = {('platform', row['workspace_id'], row['owner_principal_id'])}
+            if cap.get('peer'):
+                keys.add(('platform', cap['peer']['workspace'], cap['peer']['owner']))
+            return keys
+
+        with self.control.read_transaction() as con:
+            _, before = self._capability_scope(con)
+            targets = owners(before)
+        with self.control.transaction(*targets) as con:
             scope,row=self._capability_scope(con);workspace=row['workspace_id'];username=row['legacy_username'];client=cap.get('client_id')
+            if owners(row) != targets:
+                raise Conflict('Device ownership changed during authorization')
             if value.get('action')=='identity':
                 if cap['type']=='device':
                     self._put(con,scope,self.iam._workspace(scope,workspace,'write'),workspace,username,{'kind':'reliabilityClientCredential','method':'update','record_id':row['record_id'],'data':{'lastUsedAt':_iso(self.control.clock())}})
@@ -614,6 +637,8 @@ class PlatformControls:
                         if operation.get('method')!='update' or changed-allowed or kind=='reliabilityClient' and (not data.get('unboundAt') or data.get('status')!='offline') or kind=='reliabilityClientCredential' and not data.get('revokedAt'):raise Forbidden('Old device proof permits only atomic handoff revocation')
                     elif kind=='reliabilityInstallToken' and (not current or current['record_id']!=row['record_id'] or any(data.get(field,prior.get(field))!=prior.get(field) for field in ('id','user','tokenHash','expiresAt'))):raise Forbidden('Installation token identity differs')
             else:raise ValueError('Fixed capability action required')
+            if action == 'records_batch':
+                return self.dispatch('internal-capability',workspace,action,value,trusted=True,_write_connection=con)
         return self.dispatch('internal-capability',workspace,action,value,trusted=True,write_prior=action=='records_read')
 
     def _peer_record(self,row):

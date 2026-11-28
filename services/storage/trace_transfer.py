@@ -232,7 +232,7 @@ class LegacyTraceTransfer:
     def import_bundle(self,token,ws,bundle,receipt_key=None):
         original=_validate(bundle);bundle_hash=_hash(original)
         if receipt_key is not None and (not isinstance(receipt_key,str) or not 1<=len(receipt_key)<=512):raise TraceBundleValidationError('Invalid import receipt key')
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', ws), ('collector', ws), ('diagnosis', ws)) as con:
             scope=self.metadata.iam._scope(con,token);self.metadata.iam._workspace(scope,ws,'write')
             pending=None
             if receipt_key is None:
@@ -285,7 +285,7 @@ class LegacyTraceTransfer:
                 if ack['state'] not in ('accepted','prepared','indexed'):raise StorageError('Import batch failed')
                 batches.append({'workspace_id':ws,'batch_id':ack['batch_id'],'trace_ids':ack['trace_ids']})
             except Exception as exc:raise TraceTransferPending(batches) from exc
-            with self.control.transaction() as con:
+            with self.control.transaction(('trace', ws, root_trace)) as con:
                 self.metadata._trace(con,token,ws,root_trace,'write')
                 row=con.execute('SELECT extra_json FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,root_trace)).fetchone()
                 extra=json.loads(row[0]);extra['transfer_v1']['batch_refs']=batches
@@ -294,7 +294,7 @@ class LegacyTraceTransfer:
 
     def mark_completed(self,token,ws,result):
         identity=self.metadata.resolve(token,ws,result['rootExecutionId'],'execution')
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', ws, identity['trace_id'])) as con:
             self.metadata._trace(con,token,ws,identity['trace_id'],'write')
             row=con.execute('SELECT extra_json,updated_at_ms FROM trace_annotations WHERE workspace_id=? AND trace_id=?',(ws,identity['trace_id'])).fetchone()
             extra=json.loads(row[0]);state=extra.get('transfer_v1',{})

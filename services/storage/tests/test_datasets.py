@@ -382,12 +382,14 @@ class DatasetTests(unittest.TestCase):
             service.save(self.token,'w',value,operation_key='stale-source')
         self.assertEqual(service.list(self.token,'w'),[])
 
-    @unittest.skipUnless(os.environ.get('AGENT_INSIGHT_DATASETS_CH_URL'),'optional isolated real ClickHouse contract')
+    @unittest.skipUnless(os.environ.get('AGENT_INSIGHT_DATASETS_CH_URL') or os.environ.get('STORAGE_TEST_CLICKHOUSE_URL'),'optional isolated real ClickHouse contract')
     def test_real_clickhouse_projection_replays_partial_commit_with_fixed_members(self):
         import uuid
         from services.storage.clickhouse import ClickHouseStore
         database='dataset_contract_'+uuid.uuid4().hex
-        facts=ClickHouseStore(os.environ['AGENT_INSIGHT_DATASETS_CH_URL'],database=database)
+        url = os.environ.get('AGENT_INSIGHT_DATASETS_CH_URL') or os.environ['STORAGE_TEST_CLICKHOUSE_URL']
+        facts=ClickHouseStore(url,database=database,user=os.environ.get('STORAGE_TEST_CLICKHOUSE_USER','default'),
+                              password=os.environ.get('STORAGE_TEST_CLICKHOUSE_PASSWORD',''))
         facts.initialize_new_database(); self.addCleanup(lambda:facts._request('DROP DATABASE '+database,database='default'))
         service=self.service(); value=record(); value['cases'].append({**copy.deepcopy(value['cases'][0]),'id':'case2'})
         saved=self.save(value); original=facts._insert; lost=False

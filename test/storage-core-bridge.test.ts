@@ -119,3 +119,14 @@ test('upstream JSON rejects invalid UTF-8 without replacing signed evidence text
  assert.equal(response.status,502);
  assert.doesNotMatch(await response.text(),/\uFFFD/);
 });
+
+test('Core busy is preserved through the Web bridge without retrying writes',async()=>{
+ const m=await api();
+ for(const typed of [true,false]){
+  const response=await m.handleCoreList(request('/api/observe/data',{headers:{authorization:'Bearer '+token}}),async()=>Response.json({code:typed?'CORE_BUSY':'OTHER',error:'private details'},{status:503,headers:{'x-storage-retry':'core-busy'}}));
+  assert.equal(response.status,503);
+  assert.equal(response.headers.get('x-storage-retry'),typed?'core-busy':null);
+  assert.equal(response.headers.get('retry-after'),typed?'1':null);
+  const body=await response.json();assert.equal(body.code,typed?'CORE_BUSY':undefined);assert.ok(!JSON.stringify(body).includes('private details'));
+ }
+});

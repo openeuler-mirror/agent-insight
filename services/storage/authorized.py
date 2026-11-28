@@ -33,7 +33,7 @@ class AuthorizedStorage:
         datetime.date.fromisoformat(bucket)
         for value in (workspace_id,trace_id,source_namespace,native_trace_id): identifier(value)
         now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('trace', workspace_id)) as con:
             scope=self.iam._scope(con,credential)
             self.iam._workspace(scope,workspace_id,'write')
             con.execute('INSERT INTO trace_locators(workspace_id,trace_id,source_namespace,native_trace_id,trace_bucket,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)',

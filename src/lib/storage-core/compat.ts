@@ -14,6 +14,7 @@ const IAM_TOKEN=/^(session|api)_[A-Za-z0-9_-]{43}$/;
 const DATA_FIELDS=['query','taskId','taskIds','executionId','parentExecutionId','framework','sourceKind','skill','skillVersion','agentName','ownership','status','anomaly','sort','dir','time','timeFrom','timeTo','summary','paginated','databasePagination','listPart','fields','lightweight','page','pageSize','includeEvaluations','skipAutoEvalReady','includeSubagents','onlySubagents','collapseGoalPlusWorkers','includeTags','tagIds','bizTag','userTagIds','userTagId','businessTagIds','filters','facet','column','kind','traceUser'];
 function json(value:unknown,status=200) { return Response.json(value,{status,headers:{'cache-control':'no-store'}}); }
 function failure(error:unknown) {
+ if(error instanceof Error&&'status' in error&&error.status===503&&'code' in error&&error.code==='CORE_BUSY')return Response.json({error:'Storage core busy; retry shortly',code:'CORE_BUSY'},{status:503,headers:{'cache-control':'no-store','retry-after':'1','x-storage-retry':'core-busy'}});
  const status=error instanceof Error && 'status' in error && typeof error.status==='number' ? error.status : 502;
  return json({error:status===401?'Authentication required':status===403?'Forbidden':status===503?'Storage compatibility configuration unavailable':'Storage request failed'},status);
 }

@@ -90,7 +90,7 @@ class IAMStore:
     def create_principal(self, principal_id, login_name, display_name):
         principal_id = identifier(principal_id)
         now = self.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('principal', principal_id), ('login', _login_name(login_name))) as con:
             con.execute('INSERT INTO iam_principals(principal_id,normalized_login_name,display_name,status,auth_version,created_at_ms,updated_at_ms) VALUES(?,?,?,\'active\',1,?,?)',
                         (principal_id, _login_name(login_name), identifier(display_name), now, now))
 
@@ -99,7 +99,7 @@ class IAMStore:
         digest = hashlib.pbkdf2_hmac('sha256', _password(password), salt, PASSWORD_ITERATIONS).hex()
         parameters = canonical_json({'iterations': PASSWORD_ITERATIONS, 'salt': salt.hex()})
         now = self.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('principal', principal_id)) as con:
             principal = con.execute('SELECT auth_version FROM iam_principals WHERE principal_id=?', (principal_id,)).fetchone()
             if principal is None:
                 raise Conflict('principal does not exist')
@@ -114,7 +114,7 @@ class IAMStore:
     def set_principal_status(self, principal_id, status):
         if status not in {'active','disabled'}:
             raise ValueError('invalid principal status')
-        with self.control.transaction() as con:
+        with self.control.transaction(('active-group-owners',), ('principal', principal_id)) as con:
             row=con.execute('SELECT auth_version FROM iam_principals WHERE principal_id=?',(principal_id,)).fetchone()
             if not row:
                 raise Conflict('principal does not exist')
@@ -124,7 +124,7 @@ class IAMStore:
     def create_group(self, group_id, group_key, name, owner_principal_id):
         now=self.clock()
         for value in (group_id,group_key,name,owner_principal_id): identifier(value)
-        with self.control.transaction() as con:
+        with self.control.transaction(('active-group-owners',), ('group', group_id), ('membership', owner_principal_id), shared=(('principal', owner_principal_id),)) as con:
             owner=con.execute("SELECT 1 FROM iam_principals WHERE principal_id=? AND status='active'",(owner_principal_id,)).fetchone()
             if not owner:
                 raise Conflict('group owner must be an active principal')
@@ -149,11 +149,11 @@ class IAMStore:
         return etag
 
     def set_membership_for_provisioning(self, group_id, principal_id, role, *, status='active', expected_etag=0):
-        with self.control.transaction() as con:
+        with self.control.transaction(('active-group-owners',), ('group', group_id), ('membership', principal_id)) as con:
             return self._membership(con,group_id,principal_id,role,status,expected_etag)
 
     def set_membership(self, credential, group_id, principal_id, role, *, status='active', expected_etag):
-        with self.control.transaction() as con:
+        with self.control.transaction(('active-group-owners',), ('group', group_id), ('membership', principal_id)) as con:
             scope=self._scope(con,credential)
             if 'members' not in scope.capabilities:
                 raise Forbidden('credential cannot manage memberships')
@@ -172,7 +172,7 @@ class IAMStore:
         if (group_id is None)==(principal_id is None):
             raise ValueError('choose exactly one group or personal owner')
         now=self.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('binding', workspace_id)) as con:
             con.execute('INSERT INTO iam_workspace_bindings VALUES(?,?,?,?,1,?,?)',
                         (workspace_id,'group' if group_id else 'personal',group_id,principal_id,now,now))
 
@@ -189,7 +189,7 @@ class IAMStore:
         return token
 
     def issue_session_for_provisioning(self, principal_id, *, ttl_ms=3_600_000):
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('principal', principal_id),)) as con:
             return self._issue_session(con,principal_id,ttl_ms)
 
     def login(self, login_name, password, *, ttl_ms=3_600_000):
@@ -219,7 +219,7 @@ class IAMStore:
         actual=hashlib.pbkdf2_hmac('sha256',password.encode('utf-8'),bytes.fromhex(parameters['salt']),parameters['iterations']).hex()
         if not row or not supported or not hmac.compare_digest(actual,expected) or row['status']!='active':
             raise Unauthorized('invalid credentials')
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('principal', row['principal_id']),)) as con:
             current=con.execute('SELECT p.status,p.auth_version,c.password_hash FROM iam_principals p JOIN iam_password_credentials c ON c.principal_id=p.principal_id WHERE p.principal_id=?',(row['principal_id'],)).fetchone()
             if not current or current['status']!='active' or current['auth_version']!=row['auth_version'] or not hmac.compare_digest(current['password_hash'],expected):
                 raise Unauthorized('credentials changed during authentication')
@@ -232,8 +232,19 @@ class IAMStore:
         is_api=credential.startswith('api_')
         table='iam_api_credentials' if is_api else 'iam_sessions'
         token_column='token_hash' if is_api else 'session_token_hash'
-        row=con.execute(f'SELECT c.*,p.status AS principal_status,p.auth_version AS current_auth_version FROM {table} c JOIN iam_principals p ON p.principal_id=c.principal_id WHERE c.{token_column}=?',(token_hash,)).fetchone()
-        return self._validate_authenticated_row(row),is_api
+        row = self._credential_row(con, table, token_column, token_hash, is_api)
+        return self._validate_authenticated_row(row), is_api
+
+    def _credential_row(self, con, table, column, value, is_api):
+        sql = (f'SELECT c.*,p.status AS principal_status,p.auth_version AS current_auth_version FROM {table} c '
+               f'JOIN iam_principals p ON p.principal_id=c.principal_id WHERE c.{column}=?')
+        row = con.execute(sql, (value,)).fetchone()
+        if row is not None and getattr(con, 'business_write', False):
+            token_hash = row['token_hash' if is_api else 'session_token_hash']
+            keys = (('credential', token_hash), ('membership', row['principal_id']), ('principal', row['principal_id']))
+            self.control.lock_keys(con, shared=keys)
+            row = con.execute(sql, (value,)).fetchone()
+        return row
 
     def _validate_authenticated_row(self,row):
         now=self.clock()
@@ -244,7 +255,7 @@ class IAMStore:
     def _scope_registered_credential(self,con,credential_id,kind):
         if kind not in {'api','session'}:raise Unauthorized('invalid registered credential kind')
         identifier(credential_id);is_api=kind=='api';table='iam_api_credentials' if is_api else 'iam_sessions';key='credential_id' if is_api else 'session_id'
-        row=con.execute(f'SELECT c.*,p.status AS principal_status,p.auth_version AS current_auth_version FROM {table} c JOIN iam_principals p ON p.principal_id=c.principal_id WHERE c.{key}=?',(credential_id,)).fetchone()
+        row = self._credential_row(con, table, key, credential_id, is_api)
         return self._scope_authenticated(con,self._validate_authenticated_row(row),is_api)
 
     def _scope(self, con, credential):
@@ -295,6 +306,12 @@ class IAMStore:
         if resource_kind not in RESOURCE_KINDS:
             raise ValueError('unknown authorization root')
         grant=self._workspace(scope,workspace_id,capability)
+        evidence = [('access', workspace_id, resource_kind, resource_id)]
+        if resource_kind == 'trace':
+            evidence.append(('trace', workspace_id, resource_id))
+        if resource_kind == 'asset':
+            evidence.append(('asset', workspace_id, resource_id))
+        self.control.lock_keys(con, shared=evidence)
         resource=con.execute('SELECT * FROM iam_resource_access WHERE workspace_id=? AND resource_kind=? AND resource_id=?',(workspace_id,resource_kind,resource_id)).fetchone()
         if resource is None:
             raise Forbidden('resource is not mapped to an authorization root')
@@ -331,11 +348,12 @@ class IAMStore:
             self._touch_policy(con,workspace_id)
 
     def record_resource_for_provisioning(self, workspace_id, resource_kind, resource_id, owner_principal_id, *, visibility='private'):
-        with self.control.transaction() as con:
+        with self.control.transaction(('access', workspace_id, resource_kind, resource_id)) as con:
             self._record_resource(con,workspace_id,resource_kind,resource_id,owner_principal_id,visibility)
 
     def share_resource(self, credential, workspace_id, resource_kind, resource_id, grantee_principal_id):
-        with self.control.transaction() as con:
+        with self.control.transaction(('access', workspace_id, resource_kind, resource_id),
+                                      shared=(('principal', grantee_principal_id), ('membership', grantee_principal_id))) as con:
             scope=self._authorize(con,credential,workspace_id,'write',resource_kind,resource_id)
             row=con.execute('SELECT b.owner_type,b.owner_principal_id,m.status,p.status AS principal_status FROM iam_workspace_bindings b JOIN iam_principals p ON p.principal_id=? LEFT JOIN iam_group_memberships m ON m.group_id=b.owner_group_id AND m.principal_id=p.principal_id WHERE b.workspace_id=?',(grantee_principal_id,workspace_id)).fetchone()
             if not row or row['principal_status']!='active' or (row['owner_type']=='group' and row['status']!='active') or (row['owner_type']=='personal' and row['owner_principal_id']!=grantee_principal_id):
@@ -347,7 +365,7 @@ class IAMStore:
             return scope.principal_id
 
     def unshare_resource(self, credential, workspace_id, resource_kind, resource_id, grantee_principal_id):
-        with self.control.transaction() as con:
+        with self.control.transaction(('access', workspace_id, resource_kind, resource_id)) as con:
             self._authorize(con,credential,workspace_id,'write',resource_kind,resource_id)
             result=con.execute('DELETE FROM iam_resource_grants WHERE workspace_id=? AND resource_kind=? AND resource_id=? AND grantee_principal_id=?',(workspace_id,resource_kind,resource_id,grantee_principal_id))
             if result.rowcount:
@@ -359,7 +377,7 @@ class IAMStore:
             raise ValueError('API credential TTL must be 1ms..365d')
         if 'members' in capabilities:
             raise Forbidden('API credentials cannot manage group membership')
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('issue-credential', workspace_id),)) as con:
             scope=self._scope(con,credential)
             if credential.startswith('api_'):
                 raise Forbidden('only a login session may issue API credentials')
@@ -373,7 +391,7 @@ class IAMStore:
             return token
 
     def revoke_credential(self, credential):
-        with self.control.transaction() as con:
+        with self.control.transaction(('credential', hashlib.sha256(credential.encode()).hexdigest()) if isinstance(credential, str) else ('invalid-credential',)) as con:
             self._authenticate(con,credential)
             is_api=credential.startswith('api_')
             table='iam_api_credentials' if is_api else 'iam_sessions'

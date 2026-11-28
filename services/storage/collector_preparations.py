@@ -79,7 +79,7 @@ class CollectorPreparations:
         if not isinstance(raw,dict):raise ValueError('Collector request object required')
         body=copy.deepcopy(value['reservation']);body['operation_request']=raw
         if body.get('operation')=='thread_only':return self._begin_thread(token,workspace,body,value['operation_request_json'])
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             self._require_schema(con)
             reservation=self.sources._reserve(con,token,workspace,body);trace=reservation['trace_id'];_,scope,state=self.sources._owned(con,token,workspace,trace);op=state['operations'][_hash(reservation['operation_key'])]
             previous_request=self.sources._load(op['request_ref'])
@@ -101,7 +101,7 @@ class CollectorPreparations:
     def _begin_thread(self,token,workspace,body,text):
         if set(body)!={'operation','operation_key','source_thread_id','framework','legacy_username','operation_request'}:raise ValueError('Thread-only preparation identity required')
         operation=identifier(body['operation_key']);native=identifier(body['source_thread_id']);username=identifier(body['legacy_username']);framework=identifier(body['framework'])
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             self._require_schema(con)
             scope=self.sources._scope(con,token,workspace);key=_hash([scope.principal_id,framework,native]);digest=_hash(body)
             identity={'scope_kind':'thread','scope_key':key,'operation_key':operation}
@@ -143,7 +143,7 @@ class CollectorPreparations:
         allowed={'scope_kind','scope_key','operation_key',expected,slot+'_json'}
         if not isinstance(value,dict) or set(value)!=allowed:raise ValueError('Collector preparation seal required')
         parsed,digest=_text(value[slot+'_json'],MAX_PLAN_BYTES if slot=='plan' else MAX_INPUT_BYTES)
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             row=self._row(con,token,workspace,value)
             if value[expected]!=row[expected]:raise Conflict('Collector preparation prerequisite differs')
             if row[slot+'_ref'] is not None:return self._view(con,token,workspace,row)
@@ -212,7 +212,7 @@ class CollectorPreparations:
 
     def commit_prepared(self,token,workspace,value):
         if not isinstance(value,dict) or set(value)-{'scope_kind','scope_key','operation_key','plan_hash','job_handle'} or not {'scope_kind','scope_key','operation_key','plan_hash'}<=set(value):raise ValueError('Sealed collector plan required')
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             row=self._row(con,token,workspace,value)
             if row['plan_hash'] is None or row['plan_hash']!=value['plan_hash']:raise Conflict('Collector sealed plan differs')
             plan=json.loads(self._load_text(row['plan_ref'],row['plan_hash']))

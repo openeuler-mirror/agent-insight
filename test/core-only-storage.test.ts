@@ -23,10 +23,11 @@ test('Web readiness requires both databases and refuses a Core service that only
   try {
     await assert.rejects(preflight({NODE_ENV: 'test'}, async () => { throw Error('must not request'); }), /CORE_URL/);
     await assert.rejects(preflight(env, async () => new Response(null, { status: 503 })), /not ready/);
-    await assert.rejects(preflight(env, async () => Response.json({ status: 'ready', schema_version: 20 })), /ClickHouse/);
-    await assert.rejects(preflight(env, async () => Response.json({ status: 'ready', schema_version: 20, clickhouse: { schema_version: 4, tables: 18 } })), /ClickHouse/);
-    const health = { status: 'ready', schema_version: 20, clickhouse: { schema_version: 4, tables: 19 } };
+    await assert.rejects(preflight(env, async () => Response.json({ status: 'ready', schema_version: 21 })), /ClickHouse/);
+    await assert.rejects(preflight(env, async () => Response.json({ status: 'ready', schema_version: 21, clickhouse: { schema_version: 4, tables: 18 } })), /ClickHouse/);
+    const health = { status: 'ready', schema_version: 21, clickhouse: { schema_version: 4, tables: 19 } };
     assert.deepEqual(await preflight(env, async () => Response.json(health)), health);
+    await assert.rejects(preflight(env, async () => Response.json({...health,schema_version:20})), /schema 021/);
     assert.equal(existsSync(path.join(dir, 'witty_insight.db')), false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

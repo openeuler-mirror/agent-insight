@@ -121,8 +121,8 @@ class FaultInjection:
         if not isinstance(payload,dict):raise ValueError('FI object required')
         if action not in READS|DEVICE_ACTIONS|{'create','progress','stop','delete','cancel'}:raise ValueError('Unknown FI action')
         identifier(workspace)
-        transaction=self.control.read_transaction if action in READS or action=='identity' else self.control.transaction
-        with transaction() as con:
+        transaction=self.control.read_transaction() if action in READS or action=='identity' else self.control.transaction(('platform', workspace))
+        with transaction as con:
             scope,grant,username=self._scope(con,token,workspace,action,username,capability);touched=set()
             self.records.live_only=action not in READS
             result=self._dispatch(con,scope,grant,workspace,username,action,payload,capability,touched)
