@@ -21,7 +21,7 @@ class Migration:
 
 
 def load_migrations(backend):
-    if backend not in {'sqlite', 'postgresql', 'opengauss'}:
+    if backend not in {'sqlite', 'postgresql', 'opengauss', 'mariadb'}:
         raise MigrationError('unsupported transaction backend')
     migrations = []
     for path in sorted((SCHEMA_ROOT / backend).glob('*.sql')):
@@ -141,6 +141,8 @@ def guard_server_transaction(sql):
 
 
 def apply(connection, backend, *, clock, applied=0):
+    if backend == 'mariadb':
+        raise MigrationError('MariaDB migrations require a committed DDL fence')
     known = load_migrations(backend)
     for migration in known[applied:]:
         if backend == 'sqlite':
