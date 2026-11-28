@@ -61,12 +61,12 @@ function fixture(options: { score?: number; mutateSource?: boolean; mutateDatase
     './contracts': contracts,
   };
   const compiled = ts.transpileModule(fs.readFileSync('src/lib/diagnosis/retest.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const module = { exports: {} as any };
-  vm.runInNewContext(compiled, { exports: module.exports, module, AbortController, require: (name: string) => {
+  const fakeModule = { exports: {} as any };
+  vm.runInNewContext(compiled, { exports: fakeModule.exports, module, AbortController, require: (name: string) => {
     if (!(name in dependencies)) throw new Error('Unexpected dependency: ' + name);
     return dependencies[name];
   } });
-  return { run: () => module.exports.retestDiagnosisCase(record, source, { 'SKILL.md': 'candidate' }), state, calls, original, dataset };
+  return { run: () => fakeModule.exports.retestDiagnosisCase(record, source, { 'SKILL.md': 'candidate' }), state, calls, original, dataset };
 }
 
 test('legacy flattened answers can be retested without rewriting the baseline', async () => {

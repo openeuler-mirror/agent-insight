@@ -17,9 +17,9 @@ function testFiles(directory = 'test') {
 
 export function validateSuites(suites, files) {
   if (!suites || typeof suites !== 'object' || Object.keys(suites).length !== modules.length
-    || modules.some(module => !Array.isArray(suites[module]))) throw new Error('Invalid module inventory');
+    || modules.some(module => !Array.isArray(suites[m]))) throw new Error('Invalid module inventory');
   const actual = new Set(files), seen = new Set();
-  for (const module of modules) for (const file of suites[module]) {
+  for (const m of modules) for (const file of suites[m]) {
     if (!actual.has(file)) throw new Error(`Stale test path: ${file}`);
     if (seen.has(file)) throw new Error(`Duplicate test path: ${file}`);
     seen.add(file);
@@ -34,9 +34,9 @@ export function main(args) {
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === '--module') {
-      const module = args[++index];
-      if (!modules.includes(module)) throw new Error(`Unknown module: ${module}. Choose ${modules.join(', ')}`);
-      selected.add(module);
+      const target = args[++index];
+      if (!modules.includes(target)) throw new Error(`Unknown module: ${target}. Choose ${modules.join(', ')}`);
+      selected.add(target);
     } else if (arg === '--list') list = true;
     else if (arg === '--check') check = true;
     else if (arg === '--concurrency') {
@@ -49,9 +49,9 @@ export function main(args) {
   if (!check && !selected.size) throw new Error('Select --module <name> or use --check');
   const suites = JSON.parse(fs.readFileSync(path.join(root, 'test/suites.json'), 'utf8'));
   validateSuites(suites, testFiles());
-  const files = [...selected].flatMap(module => suites[module]).sort();
+  const files = [...selected].flatMap(module => suites[m]).sort();
   if (list) { console.log(files.join('\n'));return 0; }
-  if (check) { console.log(modules.map(module => `${module}: ${suites[module].length}`).join('\n'));return 0; }
+  if (check) { console.log(modules.map(module => `${module}: ${suites[m].length}`).join('\n'));return 0; }
   const commands = [
     ['scripts/benchmark/generate-catalog.cjs'],
     ['node_modules/typescript/bin/tsc', '--noEmit', '-p', 'scripts/trae-collector/tsconfig.json'],

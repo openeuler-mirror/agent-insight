@@ -344,8 +344,8 @@ test('confirmed cancellation cleans temporary results without converting the opt
 
 test('optimizer output limit retains full evidence on disk and does not truncate normal output', async () => {
   const { OPTIMIZATION_OUTPUT_PLUGIN } = await import('@/lib/engine/skill-opt/optimization-context');
-  const module = await import('data:text/javascript;base64,' + Buffer.from(OPTIMIZATION_OUTPUT_PLUGIN).toString('base64'));
-  const hook = (await module.OptimizationOutput({ directory }))['tool.execute.after'];
+  const pluginMod = await import('data:text/javascript;base64,' + Buffer.from(OPTIMIZATION_OUTPUT_PLUGIN).toString('base64'));
+  const hook = (await pluginMod.OptimizationOutput({ directory }))['tool.execute.after'];
   const original = 'start' + 'x'.repeat(20000) + 'end';
   const output = { output: original };
   await hook({ tool: 'bash' }, output);

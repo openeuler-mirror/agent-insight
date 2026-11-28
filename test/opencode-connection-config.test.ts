@@ -460,8 +460,8 @@ test('真实 OpenCode 公共预检使用本地目录，合法与非法模型均�
     npm: '@ai-sdk/openai-compatible', options: { baseURL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1` },
     models: { model: { name: 'Local model', limit: { context: 16384, output: 128 } } },
   } } });
-  const module = path.resolve('scripts/opencode-connection-config.cjs');
-  const script = `const assert=require('node:assert/strict'); const {checkOpenCodeModelConfig:check}=require(${JSON.stringify(module)});
+  const entryScript = path.resolve('scripts/opencode-connection-config.cjs');
+  const script = `const assert=require('node:assert/strict'); const {checkOpenCodeModelConfig:check}=require(${JSON.stringify(entryScript)});
 const options=${JSON.stringify({ home: f.home, cwd: f.cwd })};
 assert.deepEqual(check(process.env.OPENCODE_MODEL_CHECK_CLI,{agent:'build',model:'test/model'},options),{model:'test/model'});
 assert.throws(()=>check(process.env.OPENCODE_MODEL_CHECK_CLI,{agent:'build',model:'test/missing'},options),e=>e.code==='MODEL_UNAVAILABLE');

@@ -22,7 +22,7 @@ test('first captured request keeps explicit missing reason instead of zero',()=>
  assert.match(html,/不代表真实会话的首请求/);assert.doesNotMatch(html,/新增成员/);
 });
 test('original detail and independent right scrolling survive missing projection',()=>{
- const html=renderToStaticMarkup(React.createElement(HarnessContextTabs,{entries,selectedKey:'r2',onSelect(){},zh:true,children:React.createElement('p',null,'Existing detail')}));
+ const html=renderToStaticMarkup(React.createElement(HarnessContextTabs,{entries,selectedKey:'r2',onSelect(){},zh:true,}, React.createElement('p',null,'Existing detail')));
  assert.doesNotMatch(html,/模型请求 #2 · 2\/1/);assert.match(html,/Existing detail/);assert.match(html,/min-h-0 flex-1 flex-col overflow-hidden/);assert.doesNotMatch(html,/harness-tab-events/);assert.equal((html.match(/role="tab"/g)??[]).length,3);
  assert.doesNotMatch(html,/上下文变化|查看事件详情|未采集到相关事件|不代表会话总次数/);
 });
