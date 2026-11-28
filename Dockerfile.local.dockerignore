@@ -58,3 +58,4 @@ config/storage.local.json
 .env.*
 !.env.example
 **/__pycache__/
+**/config/deployment/storage.ini

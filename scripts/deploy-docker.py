@@ -11,13 +11,11 @@ import stat
 import subprocess
 import sys
 import tempfile
-from urllib.parse import quote
+from deployment_ini import DEFAULT_INI, PASSWORD, SERVICE, read_app_config
 from urllib.request import urlopen
 
 TEMPLATES = Path(__file__).resolve().parents[1] / 'deploy/docker'
 BACKENDS = ('postgresql', 'opengauss', 'sqlite')
-PASSWORD = {'postgresql': 'PG_PASSWORD', 'opengauss': 'OG_PASSWORD', 'sqlite': 'SQLITE_TOKEN'}
-SERVICE = {'postgresql': 'postgres', 'opengauss': 'opengauss', 'sqlite': 'sqlite'}
 OPTIONS = ('WEB_HOST_PORT', 'PG_HOST_PORT', 'OG_HOST_PORT', 'SQLITE_HOST_PORT', 'CH_HOST_PORT',
            'WEB_BIND_ADDRESS', 'DB_BIND_ADDRESS', 'APP_IMAGE', 'OPENGAUSS_IMAGE', 'SQLITE_SERVICE_IMAGE')
 
@@ -88,37 +86,28 @@ def settings(directory, project, selected):
             'CLICKHOUSE_PASSWORD': secrets.token_hex(32),
             **{key: os.environ[key] for key in OPTIONS if key in os.environ}}}
         publish(record, data)
-    backend, env = data['backend'], data['environment']
-    expected = json.loads((TEMPLATES / f'storage.{backend}.example.json').read_text())
-    control = expected['control']
-    if backend == 'sqlite':
-        control['token'] = env[PASSWORD[backend]]
-    else:
-        control['dsn'] = control['dsn'].replace('YOUR_' + PASSWORD[backend], quote(env[PASSWORD[backend]], safe=''))
-    expected['clickhouse']['password'] = env['CLICKHOUSE_PASSWORD']
-    if config.exists():
-        if private_json(config) != expected:
-            raise ValueError('托管配置与部署记录不一致，请恢复原配置；自定义外部数据库请使用 app --config')
-    else:
-        publish(config, expected)
-    return backend, {**env, 'STORAGE_CONFIG': str(config)}
+    return data
 
 
 def main():
     parser = argparse.ArgumentParser(description='Docker 数据库与项目分离部署')
     parser.add_argument('action', choices=['up', 'db', 'app', 'status', 'stop'])
     parser.add_argument('--transaction', choices=BACKENDS)
+    parser.add_argument('--service', choices=['clickhouse', 'transaction'], help='db 阶段只启动选定的数据库服务')
     parser.add_argument('--instance-dir', type=Path, default=Path.home() / '.agent-insight-docker')
-    parser.add_argument('--config', type=Path, help='单独启动项目时的私有数据库连接配置')
+    parser.add_argument('--config', type=Path, help='单独启动项目时指定 INI 或旧版私有 JSON')
     parser.add_argument('--build', action='store_true', help='重新构建本地应用或 SQLite 镜像')
     args = parser.parse_args()
+    if args.service and args.action != 'db':
+        parser.error('--service 仅用于 db')
     if args.config and args.action != 'app' or args.action == 'app' and args.transaction:
         parser.error('--config 仅用于 app；app 从 JSON 读取事务库类型')
     if args.action == 'app' and args.config:
         config = args.config.expanduser().absolute()
         if not config.exists():
             parser.error(f'缺少 {config}，请填写事务库和 ClickHouse 配置')
-        private_json(config)
+        if config.suffix.lower() != '.ini':
+            private_json(config)
     home = args.instance_dir.expanduser().resolve()
     project = 'insight-' + hashlib.sha256(str(home).encode()).hexdigest()[:12]
     os.umask(0o077)
@@ -141,42 +130,54 @@ def main():
         receipt = home / 'volumes.json'
         if receipt.exists() and not set(private_json(receipt)).issubset(project_volumes(project)):
             raise ValueError('已有数据卷缺失，请先恢复原实例备份')
-        if args.action == 'app' and args.config:
-            record = home / 'instance.json'
-            if record.exists():
-                saved = private_json(record)['environment']
-                for key in ('APP_IMAGE', 'WEB_HOST_PORT', 'WEB_BIND_ADDRESS'):
-                    if key in saved:
-                        env.setdefault(key, saved[key])
-            env['STORAGE_CONFIG'] = str(config)
-            services = []
-        else:
-            if args.action == 'app' and not (home / 'instance.json').exists():
-                parser.error('请用 --config 指定包含事务库和 ClickHouse 的 JSON')
-            backend, managed = settings(home, project, args.transaction)
-            for key in OPTIONS:
-                env.pop(key, None)
-            env.update(managed)
-            services = [] if args.action == 'app' else [backend, 'clickhouse']
-            if 'opengauss' in services and not env.get('OPENGAUSS_IMAGE'):
-                env['OPENGAUSS_IMAGE'] = official_opengauss()
-        for service in [*services, *(['app'] if args.action != 'db' else [])]:
-            compose.extend(['-f', str(TEMPLATES / f'compose.{service}.yml')])
+        record = home / 'instance.json'
         options = ['-d', '--wait', '--wait-timeout', '300']
         if args.build:
             options.append('--build')
-        if services:
-            run('up', *options, SERVICE[backend], 'clickhouse')
+        if args.action in ('db', 'up'):
+            data = settings(home, project, args.transaction)
+            backend = data['backend']
+            for key in OPTIONS:
+                env.pop(key, None)
+            env.update(data['environment'])
+            services = [backend, 'clickhouse']
+            if args.service:
+                services = [backend if args.service == 'transaction' else 'clickhouse']
+            if 'opengauss' in services and not env.get('OPENGAUSS_IMAGE'):
+                env['OPENGAUSS_IMAGE'] = official_opengauss()
+            for service in services:
+                compose.extend(['-f', str(TEMPLATES / f'compose.{service}.yml')])
+            run('up', *options, *(SERVICE.get(service, service) for service in services))
             remember_volumes(home, project)
-        if args.action != 'db':
-            try:
-                run('up', *options, 'app')
-            except subprocess.CalledProcessError:
-                run('logs', '--tail=25', 'app')
-                raise
-            remember_volumes(home, project)
-            print(f"Web 就绪 http://{env.get('WEB_BIND_ADDRESS', '127.0.0.1')}:{env.get('WEB_HOST_PORT', '3000')}")
-        print(f'实例 {project}，配置 {env["STORAGE_CONFIG"]}')
+            if args.action == 'db':
+                print(f'数据库已就绪，实例 {project}')
+                return
+        else:
+            data = private_json(record) if record.exists() else None
+        if data:
+            for key in ('APP_IMAGE', 'WEB_HOST_PORT', 'WEB_BIND_ADDRESS'):
+                if key in data['environment']:
+                    env.setdefault(key, data['environment'][key])
+        source = config if args.config else DEFAULT_INI
+        if source.suffix.lower() == '.ini':
+            effective = read_app_config(source, data)
+            config = home / 'app-storage.json'
+            if not config.exists() or private_json(config) != effective:
+                publish(config, effective, replace=True)
+        env['STORAGE_CONFIG'] = str(config)
+        info = config.stat()
+        env['APP_CONFIG_REVISION'] = f'{info.st_ino}-{info.st_mtime_ns}'
+        compose.extend(['-f', str(TEMPLATES / 'compose.app.yml')])
+        try:
+            run('up', *options, 'app')
+        except subprocess.CalledProcessError:
+            print(f'检查 {source} 的事务库 host/port/user/password（SQLite 为 endpoint/token）'
+                  '和 [clickhouse] endpoint/user/password', file=sys.stderr)
+            run('logs', '--tail=25', 'app')
+            raise
+        remember_volumes(home, project)
+        print(f"Web 就绪 http://{env.get('WEB_BIND_ADDRESS', '127.0.0.1')}:{env.get('WEB_HOST_PORT', '3000')}")
+        print(f'实例 {project}，配置 {source}')
 
 
 if __name__ == '__main__':

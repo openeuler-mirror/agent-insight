@@ -147,3 +147,22 @@ test('network SQLite requires an exclusive endpoint, private credentials and an 
     assert.throws(() => storage.readConfig(file), error => !String(error).includes('secret'))
   }
 })
+
+test('source INI reads current settings, encodes literal passwords and never reuses a managed credential', t => {
+  const { dir } = fixture(t)
+  const file = path.join(dir, 'storage.ini')
+  const defaults = fs.readFileSync('config/deployment/storage.ini', 'utf8')
+  fs.writeFileSync(file, defaults)
+  assert.throws(() => storage.readConfig(file), /\[transaction\].backend/)
+  const custom = defaults.replace('backend = @instance', 'backend = postgresql')
+    .replace('host = postgres', 'host = 127.0.0.1')
+  fs.writeFileSync(file, custom)
+  assert.throws(() => storage.readConfig(file), /\[postgresql\].password/)
+  const password = 'test@%#=pass'
+  fs.writeFileSync(file, custom.replaceAll('password = @instance', 'password = ' + password))
+  const result = storage.readConfig(file)
+  assert.equal(decodeURIComponent(new URL(result.control.dsn).password), password)
+  assert.equal(result.clickhouse.password, password)
+  fs.writeFileSync(file, '[transaction]\n' + password)
+  assert.throws(() => storage.readConfig(file), error => !String(error).includes(password))
+})

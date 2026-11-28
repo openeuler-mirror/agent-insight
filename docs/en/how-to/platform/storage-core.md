@@ -7,6 +7,8 @@ description: "Explicit initialization, private identity mappings, original scree
 
 For network SQLite, independent database containers and source installations, see the [deployment guide](deploy-docker.md).
 
+The [application database INI](../../../../config/deployment/storage.ini) can be edited after both services start. Docker reads it when starting the application. Source installations can select it with `--config config/deployment/storage.ini`. Existing private JSON is supported.
+
 ## Single storage runtime
 
 The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL or openGauss), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.

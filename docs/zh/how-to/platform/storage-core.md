@@ -7,6 +7,8 @@ description: "显式初始化、旧身份映射、原界面兼容与隔离 Trace
 
 三种事务后端的独立容器、网络 SQLite 配置与源码接入示例见[分离部署操作指南](deploy-docker.md)。
 
+项目自带的 [App 数据库连接配置](../../../../config/deployment/storage.ini) 可在两库启动后直接编辑。Docker 在 App 阶段读取它，源码安装可显式传入 `--config config/deployment/storage.ini`。原有私有 JSON 同样受支持。
+
 ## 唯一存储运行方式
 
 应用现在固定通过 Storage Core 访问数据：SQLite、PostgreSQL、openGauss 选一种事务后端，ClickHouse 为必需的分析后端。当前结构基线是事务迁移 021（80 表）与 ClickHouse 004（19 表）。不设置旧模式变量也使用 Core；显式设置非 core 模式会拒绝启动。DATABASE_URL、DB_HOST 不再选择 Web 的业务存储，Web 不创建或访问旧 Session/Execution 库。

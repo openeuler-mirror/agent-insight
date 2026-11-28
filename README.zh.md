@@ -156,7 +156,7 @@ bash scripts/install.sh --config /绝对路径/storage.json
 
 #### 方式三：使用 Docker 部署
 
-从仓库根目录执行 `bash scripts/deploy-docker.sh up`。默认启动 PostgreSQL、ClickHouse 和项目三个容器。升级或备份时一并保存两个数据库卷、项目卷和私有实例目录。分开启动数据库、单独配置项目及端口示例见 [Docker 部署指南](docs/zh/how-to/platform/deploy-docker.md)。
+从仓库根目录执行 `bash scripts/deploy-docker.sh up`。默认启动 PostgreSQL、ClickHouse 和项目三个容器。升级或备份时一并保存两个数据库卷、项目卷和私有实例目录。需要分步安装时，可直接按 [用脚本逐个启动 ClickHouse、事务库和 Web](docs/zh/how-to/platform/deploy-docker.md#manual-compose) 执行。
 
 Docker 容器只运行 Agent Insight 服务端，不会修改宿主机的 OpenCode 配置。选择
 OpenCode 接入时，请在 OpenCode 实际运行的宿主机或容器中执行看板“安装指导”生成的

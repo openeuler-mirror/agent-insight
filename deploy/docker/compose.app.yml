@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile.local
       args:
         BASE_NODE_IMAGE: node:22-bookworm-slim
+    labels:
+      org.agent-insight.config-revision: "${APP_CONFIG_REVISION:-manual}"
     init: true
     tmpfs:
       - /tmp:mode=1777

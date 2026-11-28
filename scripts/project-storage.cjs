@@ -19,7 +19,14 @@ function string(value, label, empty = false) {
 }
 function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
   if (!fs.existsSync(file)) fail(`缺少 ${file}；请按事务库类型复制连接配置样例，填写 control 与 clickhouse 后 chmod 600`);
-  const config = runtime.readPrivate(file);
+  let config;
+  if (path.extname(file).toLowerCase() === '.ini') {
+    const result = spawnSync('python3', [path.join(__dirname, 'deployment_ini.py'), file], { encoding: 'utf8' });
+    if (result.status !== 0) fail(result.stderr?.trim() || '读取 INI 配置需要 Python 3');
+    config = JSON.parse(result.stdout);
+  } else {
+    config = runtime.readPrivate(file);
+  }
   keys(config, ['control', 'clickhouse', 'runtime', 'trace_list_optimization', 'max_concurrent_requests'], '配置');
   const c = config.control;
   if (!c) fail('缺少 control，请选择一种事务库并填写对应的连接配置');

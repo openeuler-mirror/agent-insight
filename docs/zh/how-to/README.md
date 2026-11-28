@@ -36,6 +36,6 @@ Benchmark 执行 Profile 支持显式 `backend/options`：按后端配置和探�
 [启用隔离的 Storage Core Trace 链路](./platform/storage-core.md)：独立初始化、私有配置、密码登录及分页Trace。
 
 
-数据库请先独立部署，然后按[项目配置样例与安装指南](platform/storage-core.md)填写项目内配置并一键安装 Core/Web。支持 SQLite＋ClickHouse 和 PostgreSQL＋ClickHouse。
+分步安装时按[逐个启动数据库和 Web 的命令](platform/deploy-docker.md#manual-compose)部署 ClickHouse 和一种事务库（PostgreSQL、openGauss、SQLite 服务）。两库已就绪时，直接看[只安装项目](platform/deploy-docker.md#existing-databases)。
 
 采集批次失败时，先查看回执及有限重试状态，再按[失败批次恢复](./platform/storage-core.md#recover-ingest)处理；Core 并发请求槽默认 64。

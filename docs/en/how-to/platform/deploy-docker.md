@@ -10,30 +10,55 @@ From the repository root, run `bash scripts/deploy-docker.sh up` with Python 3, 
 
 Keep the private deployment directory (default `~/.agent-insight-docker`) with the data volumes. Reuse `--instance-dir` on subsequent commands. On first install, set `WEB_HOST_PORT`, `CH_HOST_PORT` and the selected backend's `PG_HOST_PORT`, `OG_HOST_PORT` or `SQLITE_HOST_PORT` when running multiple instances. To serve other hosts, set `DB_BIND_ADDRESS` to the database host’s private interface on first install, then configure the application with that address and the published ports. Set `WEB_BIND_ADDRESS` to select the Web interface. Defaults bind to loopback. Use `up --build` to rebuild local images. Use `status` and `stop` for the instance.
 
-### Independent services
+<a id="manual-compose"></a>
 
-Run `bash scripts/deploy-docker.sh db --transaction postgresql` then `bash scripts/deploy-docker.sh app` with the same instance directory. For individually managed services use the four [database Compose files, application file and JSON examples](../../../../deploy/docker/). Supply private database passwords via the environment. Use a common Compose project name for service discovery.
+## Start one service at a time
+
+From the parent directory run `cd agent-insight`. If already in the repository root, start with step 1. You need Docker Engine, Compose v2 with `up --wait`, and Python 3.
+
+The step-by-step deployment uses a separate instance and Web port **13000** by default. It can run alongside the default one-click instance on port 3000. Settings are at the top of [deploy-step.sh](../../../../scripts/deploy-step.sh). Before the first run, adjust occupied ports or change the default transactional backend from `postgresql` to `opengauss` or `sqlite`. The first run saves ports and credentials. Each command works in a new terminal.
+
+| Step | Run from the repository root | Expected result |
+|---|---|---|
+| 1. Start ClickHouse | `bash scripts/deploy-step.sh clickhouse` | ClickHouse is healthy. The database stores its instance credentials independently of the application INI |
+| 2. Start the transactional database | `bash scripts/deploy-step.sh transaction` | Both databases are healthy |
+| Optional: edit App settings | `vi config/deployment/storage.ini` | Edit this file directly or keep its shipped defaults |
+| 3. Start the application | `bash scripts/deploy-step.sh app` | Web loads the saved settings, connects to both stores and prints its URL |
+| 4. Check the result | `bash scripts/deploy-step.sh status` | Three healthy containers. Open the [login page](http://127.0.0.1:13000/login) |
+
+The application reads the current [storage.ini](../../../../config/deployment/storage.ini) at launch. The default `@instance` selects the managed transactional backend and resolves credentials for matching local services. After editing the INI, run `bash scripts/deploy-step.sh app` again. Changed effective settings recreate the application container. A password change in this file updates the client's login credentials. Keep real passwords on the deployment machine and back up the file with the instance records and volumes.
+
+Stop this instance with `bash scripts/deploy-step.sh stop`. Repeat steps 1–3 to restart it with its existing data. Earlier manual Compose deployments retain their original project names and volumes. The standalone files and templates are in the [deployment directory](../../../../deploy/docker/).
+
+<a id="split"></a>
+
+## Reuse the original one-click instance
+
+For an instance originally created by `deploy-docker.sh up`, use the original launcher. From a stopped state, these commands start both databases, then the application. Running `db` while Web is already running leaves it online.
 
 ```bash
-docker compose -p insight-demo -f deploy/docker/compose.clickhouse.yml up -d --wait
-docker compose -p insight-demo -f deploy/docker/compose.postgresql.yml up -d --wait
-# Set STORAGE_CONFIG to an absolute private (0600) JSON file with real credentials.
-docker compose -p insight-demo -f deploy/docker/compose.app.yml up -d --build --wait
-docker compose -p insight-demo -f deploy/docker/compose.app.yml stop app
+bash scripts/deploy-docker.sh db
+bash scripts/deploy-docker.sh app
+bash scripts/deploy-docker.sh status
 ```
 
-For an independently managed database, set its credential and run `docker compose -p insight-demo -f deploy/docker/<filename> up -d --wait`. Run ClickHouse plus one transactional backend.
+<a id="existing-databases"></a>
 
-| Service | Filename | Credential | Default host port |
-|---|---|---|---|
-| ClickHouse | `compose.clickhouse.yml` | `CLICKHOUSE_PASSWORD` | 18123 |
-| PostgreSQL | `compose.postgresql.yml` | `PG_PASSWORD` | 15432 |
-| openGauss | `compose.opengauss.yml` | `OG_PASSWORD` (8–32 characters including upper case, lower case, a digit and a supported special character) | 15433 |
-| SQLite service | `compose.sqlite.yml` | `SQLITE_TOKEN` | 18080 |
+## Connect the application to existing databases
 
-To customize a generated configuration, edit a private copy of `storage.json` outside the deployment directory. For existing stores, run `bash scripts/deploy-docker.sh app --config /absolute/storage.json`. The JSON supplies one transactional backend and ClickHouse. Within the same network use `postgres:5432`, `opengauss:5432` or `sqlite:8080` with `http://clickhouse:8123`. On the database host use its published ports (15432, 15433, 18080 and 18123 by default). For remote databases provide routable addresses, credentials and CA certificates. Populate `control.dsn/schema/artifacts` for PostgreSQL or openGauss. The launcher imports the official 7.0.0-RC3 archive for the Docker server architecture on first use, or reuses the local image. Allow temporary disk space for the archive. Set `OPENGAUSS_IMAGE` to select an existing image, including when using standalone Compose. [Official openGauss container installation](https://docs.opengauss.org/zh/docs/7.0.0-RC3/installation_guide/installing_the_container_image.html) For SQLite service mode supply `control.endpoint/token/artifacts`; set a matching high-entropy `SQLITE_TOKEN`. Remote SQLite supports TLS via mounted `SQLITE_TLS_CERT` and `SQLITE_TLS_KEY`. Set these variables in a Compose override with `SQLITE_HEALTH_ENDPOINT` pointing to an HTTPS origin matching the certificate and `SSL_CERT_FILE` for a private CA. The file-based SQLite configuration continues to work for local use. Set the ClickHouse endpoint, database, username and password for every backend.
+Edit [config/deployment/storage.ini](../../../../config/deployment/storage.ini). Set `[transaction].backend` to `postgresql`, `opengauss` or `sqlite`. In the matching section enter the reachable database host, port, database name, user, password and schema, or the SQLite endpoint and token. In `[clickhouse]` supply the HTTP(S) endpoint, database, username and password. External credentials must replace the `@instance` reference. Enter passwords literally. Use the intended TLS settings and mount any required CA certificates.
 
-For a source installation use Node 22+, npm and Python (3.11–3.13 for the relational driver). Update paths and addresses for the application host, run `bash scripts/install.sh --check --config /absolute/storage.json` then `bash scripts/install.sh --config /absolute/storage.json`. The precheck needs a Python environment with the selected driver. The application only needs database connectivity. Verify a real Trace round trip and back up both stores, private deployment records and artifacts together before upgrades.
+Run `bash scripts/deploy-step.sh app` and check `bash scripts/deploy-step.sh status`. If an existing instance needs a different data target, migrate it or use a separate instance directory. The explicit private JSON option `bash scripts/deploy-docker.sh app --config FILE` remains supported.
+
+For source deployments enter addresses and published ports reachable from the application host and explicit credentials. With the [required runtime and drivers](storage-core.md), run:
+
+```bash
+bash scripts/install.sh --check --config config/deployment/storage.ini
+bash scripts/install.sh --config config/deployment/storage.ini
+bash scripts/status.sh --config config/deployment/storage.ini
+```
+
+Source INI deployments use `~/.agent-insight` and Web/Core ports 3000/4319. Continue using private JSON for custom runtime paths, ports or advanced settings.
 
 <details>
 <summary>Historical single-container images and source mounts (use the instructions for the corresponding release)</summary>
