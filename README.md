@@ -175,6 +175,14 @@ Start at the [documentation index](docs/README.md). Existing documentation is pr
 | [Agent RAS](docs/zh/explanation/reliability/agent-ras/README.md) / [Fault injection](docs/zh/explanation/reliability/agent-fault-injection/README.md) | Reliability documentation |
 | [Internal designs](design/README.md) | Requirements, proposals, plans, and historical material |
 
+## Project Lifecycle
+
+Agent Insight is **actively developed and maintained**. The `master` branch is the main development branch for new features, bug fixes, and security fixes.
+
+- **Version support.** By default, the project maintains only the latest official release. Bug fixes and security fixes are delivered in new official releases. Any extended support for older versions will be announced by the project.
+- **End of support and upgrades.** When support for a version ends, the maintainers will list the affected versions, the end-of-support date, and the recommended upgrade target in the release notes or a repository announcement. See the [Upgrade and Rollback Guide](docs/en/how-to/platform/upgrade-and-rollback.md) before upgrading.
+- **Reporting issues.** Use the project's issue tracker to report bugs, suggest features, and submit security fixes.
+
 ## Contributing
 
 Contributions through bug reports, documentation, tests, and code are welcome.
