@@ -20,7 +20,10 @@ class CollectorLogs:
         return row,data
 
     def dispatch(self,token,workspace,action,value):
-        with self.control.transaction() as con:
+        resources = [('collector-logs', workspace)]
+        if action == 'retire_orphans':
+            resources.extend([('collector', workspace), ('trace', workspace)])
+        with self.control.transaction(*resources) as con:
             scope=self.sources._scope(con,token,workspace);now=self.control.clock()
             if action=='accept':
                 raw=value.get('raw_json');groups=value.get('groups');key=value.get('operation_key')

@@ -2,16 +2,20 @@ import concurrent.futures
 import hashlib
 import os
 from pathlib import Path
+import runpy
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
+from urllib.parse import urlsplit
 
 from services.storage.control import Conflict, StorageError
 from services.storage.iam import IAMStore
-from services.storage.mariadb import MariaDBControlStore, mariadb_options
+from services.storage.mariadb import MariaDBControlStore, MariaDBPreflightError, mariadb_options
 from services.storage.migrations import load_migrations
-from services.storage.tests import test_authorized, test_iam
+from services.storage.tests import test_authorized, test_iam, test_ingest_delivery
 from services.storage.tests.test_storage_e2e import EndToEndFixture
 
 
@@ -21,9 +25,23 @@ REQUIRED_MODES = set(
 )
 SOCKET = os.environ.get('STORAGE_MARIADB_TEST_SOCKET')
 REASON = 'provide the admin socket of a dedicated MariaDB test instance running the required sql_mode'
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class MariaDBConfigurationTests(unittest.TestCase):
+    def test_invalid_dsn_cli_does_not_echo_password(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / 'connection.txt'
+            file.touch(mode=0o600)
+            password = 'synthetic-mariadb-password'
+            file.write_text(f'mariadb://business:{password}@localhost：3306/insight')
+            result = subprocess.run([sys.executable, '-B', '-m', 'services.storage', 'migration-plan',
+                                     '--backend', 'mariadb', '--dsn-file', str(file), '--artifacts', directory],
+                                    cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('invalid MariaDB URI', result.stderr)
+        self.assertNotIn(password, result.stderr)
+
     def test_dsn_preserves_explicit_database_and_uses_verified_tls_by_default(self):
         options = mariadb_options('mariadb://business:p%40ss@db.example/Insight_UAT')
         self.assertEqual(options['database'], 'Insight_UAT')
@@ -82,7 +100,7 @@ class MariaDBMigrationTests(MariaDBFixture, unittest.TestCase):
         self.store.initialize()
         self.store.initialize()
         self.assertEqual(self.store.inspect(), 'ready')
-        self.assertEqual(self.store.migration_plan()['current_version'], 20)
+        self.assertEqual(self.store.migration_plan()['current_version'], 21)
         with self.store.read_transaction() as con:
             row = con.execute('SELECT DATABASE(), @@GLOBAL.sql_mode, @@SESSION.sql_mode').fetchone()
             self.assertEqual(row[0], self.mariadb_name)
@@ -96,8 +114,15 @@ class MariaDBMigrationTests(MariaDBFixture, unittest.TestCase):
         self.addCleanup(cleanup_runtime)
         with self.mariadb_admin() as connection, connection.cursor() as cursor:
             cursor.execute("CREATE USER %s@'127.0.0.1' IDENTIFIED BY %s", (runtime_user, runtime_password))
-            cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {self.mariadb_name}.* TO %s@'127.0.0.1'", (runtime_user,))
+            cursor.execute(f"GRANT SELECT ON {self.mariadb_name}.* TO %s@'127.0.0.1'", (runtime_user,))
         runtime_dsn = f'mariadb://{runtime_user}:{runtime_password}@127.0.0.1:{self.mariadb_port}/{self.mariadb_name}?sslmode=disable'
+        preflight = runpy.run_path(str(ROOT / 'scripts/project-storage.py'))['transaction']
+        config = {'control': {'backend': 'mariadb', 'dsn': runtime_dsn, 'artifacts': self.store.artifact_directory}}
+        with self.assertRaisesRegex(MariaDBPreflightError, 'runtime account is missing privileges: DELETE, INSERT, UPDATE'):
+            preflight(config)
+        with self.mariadb_admin() as connection, connection.cursor() as cursor:
+            cursor.execute(f"GRANT INSERT, UPDATE, DELETE ON {self.mariadb_name}.* TO %s@'127.0.0.1'", (runtime_user,))
+        self.assertEqual(preflight(config)[1], 'ready')
         runtime = MariaDBControlStore.from_dsn(runtime_dsn, artifact_directory=self.store.artifact_directory)
         self.assertEqual(runtime.inspect(), 'ready')
         prefix = '😀' * 511
@@ -118,12 +143,17 @@ class MariaDBMigrationTests(MariaDBFixture, unittest.TestCase):
 
     def test_upgrade_preserves_old_rows_and_checks_backup_evidence(self):
         known = load_migrations('mariadb')
-        with patch('services.storage.mariadb.load_migrations', return_value=known[:12]):
+        with patch('services.storage.mariadb.load_migrations', return_value=known[:20]):
             self.store.initialize()
         self.store.create_workspace('history', '历史记录🙂')
         self.store.create_identity('history', 'agent-1', 'agent', 'Saved Agent')
         self.store.publish_release('history', 'agent-1', 'release-1', 'v1', {'enabled': True})
-        self.assertEqual(self.store.migration_plan()['current_version'], 12)
+        self.assertEqual(self.store.migration_plan()['current_version'], 20)
+        IAMStore(self.store).create_principal('p', 'p', 'Principal')
+        with self.store.transaction() as con:
+            con.execute("INSERT INTO trace_locators(workspace_id,trace_id,source_namespace,native_trace_id,trace_bucket,created_at_ms,updated_at_ms) VALUES('history','trace-1','fixture','trace-1','2026-11-28',1,1)")
+            con.execute("INSERT INTO ingest_batches(workspace_id,batch_id,principal_id,receipt_key,packet_hash,packet_ref,trace_ids_json,accepted_at_ms) VALUES('history','batch-1','p','receipt',?, 'payload', ?, 1)", ('a'*64, '["trace-1"]'))
+            con.execute("INSERT INTO outbox_events(workspace_id,event_id,aggregate_id,aggregate_revision,event_type,payload_json,created_at_ms,updated_at_ms) VALUES('history','event-1','batch-1',1,'observability.otlp.accepted.v1','{}',1,1)")
         path = Path(self.temp.name) / 'verified-test-dump.sql'
         path.touch(mode=0o600)
         with self.store.read_transaction() as con:
@@ -137,10 +167,21 @@ class MariaDBMigrationTests(MariaDBFixture, unittest.TestCase):
         with self.assertRaisesRegex(StorageError, 'locked source'):
             self.store.migrate(backup_manifest=manifest)
         manifest['source_evidence'] = self.store.source_evidence()
-        self.assertEqual(self.store.migrate(backup_manifest=manifest)['current_version'], 20)
+        self.assertEqual(self.store.migrate(backup_manifest=manifest)['current_version'], 21)
         with self.store.read_transaction() as con:
             self.assertEqual(tuple(con.execute('SELECT * FROM workspaces WHERE workspace_id=?', ('history',)).fetchone()), tuple(row))
             self.assertEqual(con.execute('SELECT release_id FROM asset_releases').fetchone()[0], 'release-1')
+            self.assertEqual(tuple(con.execute('SELECT batch_id,event_id FROM ingest_deliveries').fetchone()), ('batch-1', 'event-1'))
+            self.assertEqual(tuple(con.execute('SELECT batch_id,trace_id FROM ingest_batch_traces').fetchone()), ('batch-1', 'trace-1'))
+
+    def test_empty_database_requires_migration_grants_before_fencing(self):
+        account = urlsplit(self.mariadb_dsn).username
+        with self.mariadb_admin() as connection, connection.cursor() as cursor:
+            cursor.execute(f"REVOKE CREATE ON {self.mariadb_name}.* FROM %s@'127.0.0.1'", (account,))
+        with self.assertRaisesRegex(MariaDBPreflightError, 'migration account is missing privileges: CREATE'):
+            self.store.initialize()
+        with self.store._connect() as connection:
+            self.assertFalse(self.store._objects(connection))
 
     def test_failed_ddl_fences_a_partial_schema(self):
         def fail(migration):
@@ -171,6 +212,45 @@ class MariaDBMigrationTests(MariaDBFixture, unittest.TestCase):
 
 
 @unittest.skipUnless(SOCKET, REASON)
+class MariaDBBinlogTests(MariaDBFixture, unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = self.make_store()
+        with self.mariadb_admin() as connection, connection.cursor() as cursor:
+            cursor.execute('SELECT @@GLOBAL.log_bin, @@GLOBAL.binlog_format, @@GLOBAL.log_bin_trust_function_creators')
+            self.logging, self.format, self.trust = cursor.fetchone()
+
+    def test_requires_dba_for_triggers_without_writing_migration_marker(self):
+        if not self.logging or self.trust or self.format == 'STATEMENT':
+            self.skipTest('requires log_bin ON, trust OFF and ROW or MIXED')
+        for operation in (self.store.inspect, self.store.initialize):
+            with self.assertRaisesRegex(MariaDBPreflightError, 'requires DBA privileges \\(SUPER\\)'):
+                operation()
+        with self.store._connect() as connection:
+            self.assertFalse(self.store._objects(connection))
+        account = urlsplit(self.mariadb_dsn).username
+        with self.mariadb_admin() as connection, connection.cursor() as cursor:
+            cursor.execute("GRANT SUPER ON *.* TO %s@'127.0.0.1'", (account,))
+        self.store.initialize()
+        with self.mariadb_admin() as connection, connection.cursor() as cursor:
+            cursor.execute("REVOKE SUPER ON *.* FROM %s@'127.0.0.1'", (account,))
+        self.assertEqual(self.store.inspect(), 'ready')
+        self.store.create_workspace('workspace', 'Workspace')
+        IAMStore(self.store).create_principal('principal', 'principal', 'Principal')
+        self.assertEqual(self.store.migration_plan()['current_version'], 21)
+
+    def test_statement_binlog_is_rejected_before_ddl(self):
+        if not self.logging or self.format != 'STATEMENT':
+            self.skipTest('requires log_bin ON and STATEMENT')
+        for operation in (self.store.inspect, self.store.initialize):
+            with self.assertRaisesRegex(MariaDBPreflightError, 'binlog_format=STATEMENT'):
+                operation()
+        with self.store._connect() as connection:
+            self.assertFalse(self.store._objects(connection))
+
+
+@unittest.skipUnless(SOCKET, REASON)
 class MariaDBIAMTests(MariaDBFixture, test_iam.IAMTests):
     pass
 
@@ -178,6 +258,13 @@ class MariaDBIAMTests(MariaDBFixture, test_iam.IAMTests):
 @unittest.skipUnless(SOCKET, REASON)
 class MariaDBAuthorizedTests(MariaDBFixture, test_authorized.AuthorizedTests):
     pass
+
+
+@unittest.skipUnless(SOCKET, REASON)
+class MariaDBIngestDeliveryTests(MariaDBFixture, test_ingest_delivery.DeliveryTests):
+    def make_control(self):
+        self.temp = self.tmp
+        return self.make_store()
 
 
 @unittest.skipUnless(SOCKET and os.environ.get('STORAGE_TEST_CLICKHOUSE_URL'), REASON + ' and a test ClickHouse origin')

@@ -70,6 +70,7 @@ class ExperimentStore:
         except (OSError,KeyError,ValueError) as exc:raise ExperimentArtifactError('Experiment artifact unavailable') from exc
 
     def _head(self,con,token,ws,identity,capability='read',deleted=False):
+        self.control.lock_keys(con, ('evaluation', ws, identity))
         self.iam._workspace(self.iam._scope(con,token),ws,capability)
         if capability=='execute':
             from .legacy_history import assert_control_live
@@ -97,6 +98,7 @@ class ExperimentStore:
 
     def _receipt(self,con,scope,ws,action,body):
         key=identifier(body.get('operation_key',''))
+        self.control.lock_keys(con, ('experiment-receipt', ws, scope.principal_id, action, key))
         request=body.get('operation_request',{k:v for k,v in body.items() if k not in {'operation_key','expected_revision'}})
         digest=_hash(request)
         row=con.execute('SELECT * FROM experiment_operation_receipts WHERE workspace_id=? AND actor_principal_id=? AND operation_kind=? AND operation_key=?',(ws,scope.principal_id,action,key)).fetchone()
@@ -935,6 +937,14 @@ class ExperimentStore:
         if action in {'start','execute_start','retry'}:raise ExperimentUnavailable('Benchmark plans require their typed domain entry point')
         raise ExperimentUnavailable('Typed Benchmark process cancellation is required before deleting or cancelling its work')
 
+    @staticmethod
+    def _write_resources(ws, action, body):
+        exp = body.get('experiment_id')
+        resources = [('evaluation', ws, exp)] if exp else [('evaluation', ws)]
+        if action in {'ensure', 'create', 'remove'}:
+            resources = [('evaluation', ws)]
+        return resources
+
     def dispatch(self,action,token,workspace_id,body=None):
         ws=identifier(workspace_id);body=copy.deepcopy(body or {})
         if not isinstance(body,dict):raise ValueError('Experiment RPC body must be an object')
@@ -1080,7 +1090,8 @@ class ExperimentStore:
                     self._head(con,token,ws,receipt['experiment_id'],'read',deleted=action in {'remove','case_remove','cancellation_update'});return self._response(token,ws,action,receipt['experiment_id'],self._load(receipt['response_hash'],receipt['response_ref'],MAX_BYTES))
             self._benchmark_dispatch_guard(con,ws,action,body,scope)
         prepared=self._prepare_start(token,ws,body) if action in {'start','execute_start'} else self._prepare_execution(token,ws,body) if action=='execute_complete' else self._prepare_late_execution(token,ws,body) if action=='execute_reconcile' else None
-        with self.control.transaction() as con:
+        with self.control.transaction(*self._write_resources(ws, action, body),
+                shared=(('dataset', ws), ('platform', ws), ('evaluator', ws), ('trace', ws))) as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,capability);self.iam._workspace(scope,ws,'read')
             if action not in {'create','ensure'}:self._head(con,token,ws,body['experiment_id'],capability,deleted=action in {'remove','case_remove','cancellation_update'})
             if action not in ephemeral:
@@ -1246,15 +1257,20 @@ class ExperimentStore:
 
     def project_once(self,facts,worker_id,lease_ms=30000):
         identifier(worker_id);self._lease({'lease_ms':lease_ms});now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('evaluation-projection',)) as con:
+            now=self.control.clock()
             row=con.execute("SELECT * FROM outbox_events WHERE event_type='evaluation.result.accepted.v1' AND (EXISTS(SELECT 1 FROM experiment_attempt_checkpoints c WHERE c.workspace_id=outbox_events.workspace_id AND c.attempt_id=outbox_events.aggregate_id) OR EXISTS(SELECT 1 FROM experiment_annotations a WHERE a.workspace_id=outbox_events.workspace_id AND a.annotation_id=outbox_events.aggregate_id AND a.kind='review')) AND ((state='pending' AND next_attempt_at_ms<=?) OR (state='dispatching' AND lease_until_ms<=?)) ORDER BY created_at_ms,event_id LIMIT 1",(now,now)).fetchone()
             if row is None:return False
             event=dict(row);payload=json.loads(event['payload_json'])
             if 'experiment_id' not in payload:raise ExperimentUnavailable('Legacy result event requires an explicit materializer')
             event['attempts']+=1;con.execute("UPDATE outbox_events SET state='dispatching',attempts=?,lease_owner=?,lease_until_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?",(event['attempts'],worker_id,now+lease_ms,now,event['workspace_id'],event['event_id']))
         ws=event['workspace_id']
+        def projection_transaction():
+            return self.control.transaction(('evaluation-projection', ws, event['event_id']),
+                                            ('evaluation', ws, payload['experiment_id']), shared=(('trace', ws),))
+
         try:
-            with self.control.transaction() as con:
+            with projection_transaction() as con:
                 receipt=self._project_gate(con,event,worker_id,payload,lease_ms);run,plan=self._plan(con,ws,payload['experiment_id'],payload['run_id'])
             packet=self._load(receipt['content_hash'],receipt['artifact_ref']);result=packet['result'];evaluator=payload['evaluator_slot'];evidence=plan['frozen_trace_evidence'].get(payload['case_key']);case=next(v for v in plan['cases'] if v['id']==payload['case_key'])
             frozen_release=plan['releases'].get('evaluator:'+evaluator,'plan-local:'+run['plan_hash']+':'+evaluator)
@@ -1279,7 +1295,7 @@ class ExperimentStore:
             def insert(table,batch):
                 for offset in range(0,len(batch),128):
                     page=batch[offset:offset+128]
-                    with self.control.transaction() as con:self._project_gate(con,event,worker_id,payload,lease_ms)
+                    with projection_transaction() as con:self._project_gate(con,event,worker_id,payload,lease_ms)
                     facts._insert(table,page)
                     if offset+128>=len(batch) and hasattr(facts,'_request') and table in {'eval_result_facts','eval_metric_facts'}:
                         # Verify the immutable result body, rather than treating an HTTP response as a row-count receipt.
@@ -1290,10 +1306,10 @@ class ExperimentStore:
                             actual=[json.loads(line) for line in facts._request('SELECT metric_key,dimension_key,content_hash FROM eval_metric_facts FINAL WHERE workspace_id={w:String} AND result_bucket={b:Date} AND result_id={r:String} FORMAT JSONEachRow',parameters={'w':ws,'b':payload['result_bucket'],'r':payload['result_id']}).splitlines() if line]
                             expected={(v['metric_key'],v['dimension_key'],v['content_hash']) for v in metrics}
                             if not expected<={(v['metric_key'],v['dimension_key'],v['content_hash']) for v in actual}:raise StorageError('Metric fact readback differs')
-                    with self.control.transaction() as con:self._project_gate(con,event,worker_id,payload,lease_ms)
+                    with projection_transaction() as con:self._project_gate(con,event,worker_id,payload,lease_ms)
             if payload.get('_projection_indexed')==self._projection_checkpoint(ws,event['event_id'],payload) or receipt['state'] in {'indexed','published'} and not payload.get('review_id'):rows={}
             for table,batch in rows.items():insert(table,batch)
-            with self.control.transaction() as con:
+            with projection_transaction() as con:
                 self._project_gate(con,event,worker_id,payload,lease_ms)
                 con.execute("UPDATE result_receipts SET state='indexed' WHERE workspace_id=? AND result_id=? AND state='accepted'",(ws,payload['result_id']))
                 payload['_projection_indexed']=self._projection_checkpoint(ws,event['event_id'],payload)
@@ -1321,7 +1337,7 @@ class ExperimentStore:
                 publication=_hash({'run_id':payload['run_id'],'members':[(v['case_key'],v['evaluator_slot'],v['result_id'],v['review_decision_id']) for v in members]})
                 for member in members:member['publication_id']=publication
                 insert('eval_publication_members',members)
-            with self.control.transaction() as con:
+            with projection_transaction() as con:
                 self._project_gate(con,event,worker_id,payload,lease_ms)
                 if complete:
                     for member in members:con.execute("UPDATE result_receipts SET state='published' WHERE workspace_id=? AND result_id=? AND state='indexed'",(ws,member['result_id']))
@@ -1330,7 +1346,7 @@ class ExperimentStore:
                 else:
                     now=self.control.clock();con.execute("UPDATE outbox_events SET state='pending',next_attempt_at_ms=?,lease_owner=NULL,lease_until_ms=NULL,updated_at_ms=? WHERE workspace_id=? AND event_id=?",(now+min(60000,1000*2**min(event['attempts'],6)),now,ws,event['event_id']))
         except Exception as exc:
-            with self.control.transaction() as con:
+            with projection_transaction() as con:
                 current=con.execute('SELECT * FROM outbox_events WHERE workspace_id=? AND event_id=?',(ws,event['event_id'])).fetchone()
                 if current and current['state']=='dispatching' and current['attempts']==event['attempts'] and current['lease_owner']==worker_id:
                     permanent=isinstance(exc,(ExperimentNotFound,ValueError,ExperimentTooLarge,ExperimentArtifactError))
@@ -1576,8 +1592,8 @@ class ExperimentStore:
             con.execute("INSERT INTO outbox_events(workspace_id,event_id,aggregate_id,aggregate_revision,event_type,payload_json,created_at_ms,updated_at_ms) VALUES(?,?,?,1,'experiment.cancel.requested.v1',?,?,?)",(ws,_id(),identity,payload,now,now))
         return value
 
-    @staticmethod
-    def _queued_at(con,now):
+    def _queued_at(self,con,now):
+        self.control.lock_keys(con, ('outbox-order', 'evaluation'))
         latest=con.execute('SELECT COALESCE(MAX(created_at_ms),0) FROM outbox_events').fetchone()[0]
         return max(now,latest+1)
 
@@ -2136,7 +2152,7 @@ class ExperimentStore:
         if not isinstance(ids,list) or not 1<=len(ids)<=MAX_ITEMS or any(not isinstance(value,str) for value in ids) or len(set(ids))!=len(ids):raise ValueError('Bounded unique derived Issue identities required')
         ids=sorted(identifier(value) for value in ids)
         if not callable(self.frozen_assets_verifier) or self.frozen_assets_verifier(token,ws,copy.deepcopy(body)) is not True:raise Forbidden('Trusted Issue resolution verification required')
-        with self.control.transaction() as con:
+        with self.control.transaction(('evaluation', ws), ('platform', ws), ('trace', ws)) as con:
             scope=self.iam._scope(con,token);self.iam._workspace(scope,ws,'write');self.iam._workspace(scope,ws,'read')
             key,digest,old=self._receipt(con,scope,ws,'derived_issue_resolve',body)
             reference=run if run is not None else 'resolution-operation:'+_hash([ws,scope.principal_id,key])

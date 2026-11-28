@@ -61,6 +61,9 @@ def main(argv=None):
         relational.add_argument('--schema')
         relational.add_argument('--artifacts',required=True)
         if command=='migrate-relational': relational.add_argument('--backup-manifest',required=True)
+    recover=commands.add_parser('recover-ingest',help='explicit authorized recovery of one failed ingest batch')
+    for name in ('config','credential-file','workspace','batch','request-key'):
+        recover.add_argument('--'+name,required=True)
     args=parser.parse_args(argv)
     try:
         if args.command=='schema':
@@ -101,6 +104,17 @@ def main(argv=None):
             elif args.command=='migrate-relational':
                 result=store.migrate(backup_manifest=json.loads(Path(args.backup_manifest).read_text()))
             else: result=store.migration_plan()
+        elif args.command=='recover-ingest':
+            from .trace_service import runtime_from_config
+            credential=Path(args.credential_file)
+            if credential.is_symlink() or not credential.is_file() or credential.stat().st_mode & 0o077 or credential.stat().st_size>1024:
+                raise ValueError('Credential file must be private, bounded and not a symlink')
+            token=credential.read_text().strip()
+            runtime,_=runtime_from_config(args.config)
+            try:
+                result=runtime.ingest.delivery.recover(token,args.workspace,args.batch,args.request_key)
+            finally:
+                runtime.close()
         elif args.command=='inspect-legacy':
             result=inventory_database(args.database)
         elif args.command=='plan-legacy':

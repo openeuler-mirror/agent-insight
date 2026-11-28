@@ -142,7 +142,7 @@ class DatasetGeneration:
                 'datasetKind':'ideal_output','fields':[{'id':'input','key':'input','label':'input','type':'text','system':True},{'id':'reference_output','key':'reference_output','label':'reference_output','type':'text','system':True}],
                 'cases':[],'generationSource':'trace','generationStatus':'generating','createdAt':stamp,'updatedAt':stamp}
         prepared=self.datasets._prepare_record(record)
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, dataset), ('generation', ws, dataset), ('generation-create-capacity',), ('generation-request', ws, scope.principal_id, config['requestId']), shared=(('trace', ws),)) as con:
             scope=self._auth(con,token,ws)
             previous=con.execute('SELECT * FROM dataset_generation_jobs WHERE workspace_id=? AND actor_principal_id=? AND request_id=?',(ws,scope.principal_id,config['requestId'])).fetchone()
             if previous:return self._replay(previous,digest)
@@ -184,7 +184,8 @@ class DatasetGeneration:
 
     def claim(self,token,ws,dataset,lease_owner):
         identifier(lease_owner);now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, dataset), ('generation', ws, dataset)) as con:
+            now=self.control.clock()
             scope=self._auth(con,token,ws)
             if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone() and GenerationHistoryStore(self.control).has_dataset(con,ws,scope.principal_id,dataset):return None
             row=self._job(con,token,ws,dataset=dataset)
@@ -211,12 +212,13 @@ class DatasetGeneration:
         return row
 
     def checkpoint(self,token,ws,job,epoch,lease_owner,**values):
-        with self.control.read_transaction() as con:self._lease(con,token,ws,job,epoch,lease_owner)
+        with self.control.read_transaction() as con:row=self._lease(con,token,ws,job,epoch,lease_owner)
         summary=values.get('summary');summary_pair=self._persist(summary,MAX_CONFIG_BYTES) if summary is not None else None
         stage=values.get('stage');index=values.get('stageIndex')
         if stage is not None and (stage not in STAGES or index!=STAGES.index(stage)):raise ValueError('Invalid generation stage')
         now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, row['dataset_id']), ('generation', ws, row['dataset_id'])) as con:
+            now=self.control.clock()
             row=self._lease(con,token,ws,job,epoch,lease_owner)
             if index is not None and index<row['stage_index']:raise Conflict('Generation stage moved backwards')
             con.execute('UPDATE dataset_generation_jobs SET stage=?,stage_index=?,summary_hash=?,summary_ref=?,lease_until_ms=?,revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND job_id=?',
@@ -253,7 +255,7 @@ class DatasetGeneration:
         else:
             result=self.sources.read_source(token,ws,trace_id,expected_fingerprint)
             digest,ref=self._persist(result,16*1024*1024)
-            with self.control.transaction() as con:
+            with self.control.transaction(('dataset', ws, row['dataset_id']), ('generation', ws, row['dataset_id']), shared=(('trace', ws),)) as con:
                 row=self._lease(con,token,ws,job,epoch,lease_owner);self._source_access(con,token,ws,[member])
                 captured=self._load(row['capture_hash'],row['capture_ref'],MAX_MEMBERS_BYTES) if row['capture_ref'] else {}
                 if trace_id not in captured:
@@ -281,7 +283,7 @@ class DatasetGeneration:
         record=dict(record,cases=cases if error is None else [],generationSource='trace',generationStatus='published' if error is None else 'failed',updatedAt=datetime.datetime.now(datetime.timezone.utc).isoformat())
         if error is None and (not isinstance(cases,list) or not cases):raise ValueError('NO_VALID_SAMPLES')
         prepared=self.datasets.prepare_for_save(token,ws,record);summary_pair=self._persist(summary,MAX_CONFIG_BYTES) if summary is not None else None
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, row['dataset_id']), ('generation', ws, row['dataset_id']), shared=(('trace', ws),)) as con:
             current=self._job(con,token,ws,job=job)
             if current['status'] in ('succeeded','failed'):
                 if current['result_hash']!=result_hash:raise Conflict('Generation completion content differs')
@@ -302,7 +304,7 @@ class DatasetGeneration:
         return self._finish(token,ws,job,epoch,lease_owner,error={'code':code,'message':message})
 
     def release(self,token,ws,dataset):
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, dataset), ('generation', ws, dataset)) as con:
             scope=self._auth(con,token,ws)
             if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone() and GenerationHistoryStore(self.control).has_dataset(con,ws,scope.principal_id,dataset):
                 self.datasets._get_tx(con,token,ws,dataset,write=True);return None
@@ -310,7 +312,7 @@ class DatasetGeneration:
             con.execute('UPDATE dataset_generation_jobs SET summary_hash=NULL,summary_ref=NULL,revision=revision+1,updated_at_ms=? WHERE workspace_id=? AND job_id=?',(max(self.control.clock(),row['updated_at_ms']),ws,row['job_id']))
 
     def remove(self,token,ws,dataset,cancel_only=False,expected_revision=None):
-        with self.control.transaction() as con:
+        with self.control.transaction(('dataset', ws, dataset), ('generation', ws, dataset)) as con:
             scope=self._auth(con,token,ws);history=GenerationHistoryStore(self.control)
             if not con.execute('SELECT 1 FROM dataset_generation_jobs WHERE workspace_id=? AND dataset_id=?',(ws,dataset)).fetchone() and history.has_dataset(con,ws,scope.principal_id,dataset):
                 head=self.datasets._get_tx(con,token,ws,dataset,write=True,include_deleted=True)

@@ -12,7 +12,18 @@ from .relational import PostgreSQLControlStore
 
 SYSTEM_DATABASES = {'mysql', 'information_schema', 'performance_schema', 'sys', 'test'}
 STATEMENT_SEPARATOR = '\n-- next statement\n'
-DDL_PREFIXES = ('CREATE TABLE ', 'CREATE INDEX ', 'CREATE UNIQUE INDEX ', 'CREATE TRIGGER ', 'ALTER TABLE ')
+DDL_PREFIXES = ('CREATE TABLE ', 'CREATE INDEX ', 'CREATE UNIQUE INDEX ', 'CREATE TRIGGER ',
+                'CREATE OR REPLACE TRIGGER ', 'ALTER TABLE ')
+RUNTIME_GRANTS = {'SELECT', 'INSERT', 'UPDATE', 'DELETE'}
+MIGRATION_GRANTS = RUNTIME_GRANTS | {'CREATE', 'ALTER', 'INDEX', 'TRIGGER', 'REFERENCES'}
+GRANT_TARGET = r'(\*|`(?:``|[^`])+`|"(?:""|[^"])+"|[a-zA-Z0-9_$-]+)'
+GRANT_LINE = re.compile(r'^GRANT ([A-Z_, ]+) ON ' + GRANT_TARGET + r'\.' + GRANT_TARGET + r' TO ')
+TABLE_NAME = re.compile(r'^CREATE TABLE `([a-z_0-9]+)`', re.M)
+TRIGGER_CREATION = re.compile(r'^CREATE (?:OR REPLACE )?TRIGGER ', re.M)
+
+
+class MariaDBPreflightError(StorageError):
+    """A sanitized diagnostic for database readiness checks."""
 
 
 def _valid_database(database):
@@ -23,7 +34,10 @@ def _valid_database(database):
 def mariadb_options(dsn):
     if not isinstance(dsn, str) or not dsn.strip():
         raise ValueError('an explicit MariaDB URI is required')
-    url = urlsplit(dsn)
+    try:
+        url = urlsplit(dsn)
+    except ValueError:
+        raise ValueError('invalid MariaDB URI') from None
     database = unquote(url.path[1:])
     if (url.scheme != 'mariadb' or not url.hostname or not url.username or not url.password
             or url.fragment or not _valid_database(database)):
@@ -56,13 +70,14 @@ def mariadb_options(dsn):
 def migration_statements(migration):
     for raw in migration.sql.split(STATEMENT_SEPARATOR):
         statement = raw.strip()
-        if not statement.endswith(';') or not statement.startswith((*DDL_PREFIXES, 'INSERT INTO ')):
+        if not statement.endswith(';') or not statement.startswith((*DDL_PREFIXES, 'INSERT INTO ', 'UPDATE ')):
             raise StorageError('unsupported MariaDB migration statement')
         yield statement[:-1]
 
 
 class MariaDBControlStore(PostgreSQLControlStore):
     backend = 'mariadb'
+    insert_if_absent_clause = ' ON DUPLICATE KEY UPDATE workspace_id=workspace_id'
 
     _valid_schema = staticmethod(_valid_database)
 
@@ -93,6 +108,8 @@ class MariaDBControlStore(PostgreSQLControlStore):
         if type(exc).__module__.split('.')[0] != 'pymysql':
             return None
         code = exc.args[0] if exc.args else None
+        if code in {1205, 1213}:
+            return StorageError('concurrent transaction rolled back; retry with the same operation key')
         if code in {1022, 1048, 1062, 1169, 1216, 1217, 1264, 1406, 1451, 1452, 1644, 4025}:
             return Conflict('relational storage constraint violation')
         return StorageError('MariaDB storage operation failed')
@@ -126,19 +143,97 @@ class MariaDBControlStore(PostgreSQLControlStore):
         with self._connect() as connection:
             connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
             self._validate_schema(connection)
-            yield connection
-            connection.raw.commit()
+            active = self._in_validated_transaction.set(True)
+            try:
+                yield connection
+                connection.raw.commit()
+            finally:
+                self._in_validated_transaction.reset(active)
+
+    @contextmanager
+    def transaction(self, *resources, shared=()):
+        with self._connect() as connection:
+            self._set_schema(connection)
+            # The schema row serializes all writers, including the migration writer.
+            connection.execute('SELECT version FROM schema_meta WHERE version=1 FOR UPDATE').fetchone()
+            self._validate_schema(connection)
+            active = self._in_validated_transaction.set(True)
+            try:
+                yield connection
+                connection.raw.commit()
+            finally:
+                self._in_validated_transaction.reset(active)
+
+    @staticmethod
+    def _binlog_needs_super(connection):
+        log_bin, session_logging, format_, trust = connection.execute(
+            'SELECT @@GLOBAL.log_bin, @@SESSION.sql_log_bin, @@SESSION.binlog_format, '
+            '@@GLOBAL.log_bin_trust_function_creators'
+        ).fetchone()
+        logging = log_bin and session_logging
+        if logging and format_ == 'STATEMENT':
+            raise MariaDBPreflightError('MariaDB binlog_format=STATEMENT is incompatible with READ COMMITTED; use a DBA-approved ROW or MIXED configuration')
+        return logging and not trust
+
+    @staticmethod
+    def _grant_name(name):
+        quote = name[0]
+        return name[1:-1].replace(quote * 2, quote) if quote in '`"' else name
+
+    def _check_grants(self, connection, migrations, *, migration=False, trigger_super=False):
+        global_grants, database_grants, table_grants = set(), set(), {}
+        database, case_insensitive = connection.execute('SELECT DATABASE(), @@lower_case_table_names').fetchone()
+        for statement in ('SHOW GRANTS', 'SHOW GRANTS FOR PUBLIC'):
+            # SHOW GRANTS includes the current session's active role and inherited grants.
+            for row in connection.execute(statement):
+                grant = GRANT_LINE.match(row[0])
+                if not grant:
+                    continue
+                privileges, schema, table = grant.groups()
+                permissions = set(privileges.split(', '))
+                if schema == '*' and table == '*':
+                    global_grants.update(permissions)
+                    continue
+                schema = self._grant_name(schema).replace(r'\_', '_')
+                if (schema.lower() != database.lower() if case_insensitive else schema != database):
+                    continue
+                if table == '*':
+                    database_grants.update(permissions)
+                else:
+                    table_grants.setdefault(self._grant_name(table), set()).update(permissions)
+        required = MIGRATION_GRANTS if migration else RUNTIME_GRANTS
+        effective = global_grants | database_grants
+        missing = required - effective if 'ALL PRIVILEGES' not in effective else set()
+        if not migration and missing:
+            all_missing = set()
+            tables = ['mariadb_schema_pending', *(table for item in migrations for table in TABLE_NAME.findall(item.sql))]
+            for table in tables:
+                permissions = table_grants.get(table, set())
+                if 'ALL PRIVILEGES' not in permissions:
+                    needed = {'SELECT'} & missing if table in {'schema_meta', 'mariadb_schema_pending'} else missing
+                    all_missing.update(needed - permissions)
+            missing = all_missing
+        if missing:
+            phase = 'migration' if migration else 'runtime'
+            raise MariaDBPreflightError(f'MariaDB {phase} account is missing privileges: {", ".join(sorted(missing))}')
+        if trigger_super and not {'SUPER', 'ALL PRIVILEGES'} & global_grants:
+            raise MariaDBPreflightError('MariaDB binlog requires DBA privileges (SUPER) to create triggers while log_bin_trust_function_creators=OFF')
+
+    def _inspect(self, connection):
+        require_super = self._binlog_needs_super(connection)
+        if self._objects(connection):
+            self._check_grants(connection, load_migrations(self.backend))
+            self._validate_schema(connection)
+            return 'ready'
+        if self._empty_database_defaults(connection) != ('utf8mb4', 'utf8mb4_unicode_ci'):
+            raise StorageError('new MariaDB database requires utf8mb4 and utf8mb4_unicode_ci')
+        self._check_grants(connection, (), migration=True, trigger_super=require_super)
+        return 'empty'
 
     def inspect(self):
         with self._connect() as connection:
             connection.execute('SET TRANSACTION READ ONLY')
-            objects = self._objects(connection)
-            if not objects:
-                if self._empty_database_defaults(connection) != ('utf8mb4', 'utf8mb4_unicode_ci'):
-                    raise StorageError('new MariaDB database requires utf8mb4 and utf8mb4_unicode_ci')
-                return 'empty'
-            self._validate_schema(connection)
-            return 'ready'
+            return self._inspect(connection)
 
     @staticmethod
     def _empty_database_defaults(connection):
@@ -176,11 +271,9 @@ class MariaDBControlStore(PostgreSQLControlStore):
             raise StorageError('another MariaDB schema operation is active')
 
     def initialize(self):
-        self.inspect()
         with self._connect() as connection:
             self._acquire_migration_lock(connection)
-            if self._objects(connection):
-                self._validate_schema(connection)
+            if self._inspect(connection) == 'ready':
                 return
             connection.execute('CREATE TABLE mariadb_schema_pending (version BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB')
             self._apply(connection, load_migrations(self.backend), 0)
@@ -188,6 +281,7 @@ class MariaDBControlStore(PostgreSQLControlStore):
     def migrate(self, *, backup_manifest):
         path, expected = self._check_backup(backup_manifest)
         with self._connect() as connection:
+            require_super = self._binlog_needs_super(connection)
             self._set_schema(connection)
             self._acquire_migration_lock(connection)
             # Drain business writers already holding the schema row before setting the fence.
@@ -196,5 +290,9 @@ class MariaDBControlStore(PostgreSQLControlStore):
             if backup_manifest['source_evidence'] != current:
                 raise StorageError('backup source identity, history or content differs from the current locked source')
             known, applied = self._validate_schema(connection)
+            if applied < len(known):
+                self._check_grants(connection, (), migration=True, trigger_super=(
+                    require_super and any(TRIGGER_CREATION.search(item.sql) for item in known[applied:])
+                ))
             self._apply(connection, known, applied)
         return self.migration_plan() | {'backup_sha256': expected, 'backup_path': str(path.absolute())}

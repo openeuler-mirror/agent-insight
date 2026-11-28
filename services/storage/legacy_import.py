@@ -402,7 +402,10 @@ class LegacyImport:
         result = {'format': VERSION, 'imported': 0, 'replayed': 0, 'pending': 0, 'blocked': 0, 'production_cutover_ready': False}
         for row in self._ordered():
             owner = self._owner(row)
-            with self.control.transaction() as con:
+            workspace = self.bindings[owner]['workspace_id']
+            domains = ('asset', 'asset-draft', 'benchmark', 'collector', 'dataset', 'diagnosis', 'evaluation',
+                       'dataset-projection', 'evaluation-projection', 'evaluator', 'generation', 'infra', 'ingest', 'platform', 'ras', 'semantic', 'tag', 'trace', 'usage')
+            with self.control.transaction(('import', migration_id), *((domain, workspace) for domain in domains)) as con:
                 scope, grant, workspace = self._actor(con, owner)
                 old = con.execute('SELECT source_fingerprint,target_watermark FROM migration_checkpoints WHERE migration_id=?', (migration_id,)).fetchall()
                 if any(item[0] != self.manifest['source_content_sha256'] or json.loads(item[1]).get('import_manifest_hash') != self.import_manifest_hash for item in old):

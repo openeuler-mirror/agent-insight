@@ -1,4 +1,9 @@
+from contextlib import contextmanager
 import concurrent.futures
+import threading
+import time
+from unittest.mock import patch
+from services.storage.tests.test_datasets import record
 import importlib.util
 import os
 from pathlib import Path
@@ -152,7 +157,7 @@ class _RelationalControlContracts:
         manifest=self._external_manifest()
         writer_ready=threading.Event();release_writer=threading.Event()
         def writer():
-            with self.store.transaction() as con:
+            with self.store.transaction(('workspace', 'intervening')) as con:
                 con.execute('INSERT INTO workspaces(workspace_id,name,created_at_ms,updated_at_ms) VALUES(?,?,?,?)',('intervening','Intervening',1,1))
                 writer_ready.set()
                 if not release_writer.wait(10): raise RuntimeError('test coordination timed out')
@@ -175,6 +180,308 @@ class _RelationalControlContracts:
                 release_writer.set();observer.close()
             writing.result(timeout=5)
             with self.assertRaises(StorageError): migrating.result(timeout=5)
+
+    def _datasets(self):
+        from services.storage.iam import IAMStore
+        from services.storage.datasets import DatasetStore
+        iam = IAMStore(self.store)
+        iam.create_principal('author', 'author', 'Author')
+        iam.bind_workspace('w', principal_id='author')
+        return DatasetStore(self.store), iam.issue_session_for_provisioning('author')
+
+    @contextmanager
+    def _paused_writer(self, operation):
+        original = self.store.transaction
+        local = threading.local()
+        ready, release = threading.Event(), threading.Event()
+        held = []
+
+        @contextmanager
+        def transaction(*args, **kwargs):
+            with original(*args, **kwargs) as con:
+                yield con
+                if getattr(local, 'pause', False):
+                    held.append(con.execute('SELECT pg_backend_pid()').fetchone()[0])
+                    ready.set()
+                    if not release.wait(30):
+                        raise RuntimeError('test writer was not released')
+
+        def writer():
+            local.pause = True
+            return operation()
+
+        with patch.object(self.store, 'transaction', transaction), concurrent.futures.ThreadPoolExecutor(2) as pool:
+            first = pool.submit(writer)
+            try:
+                if not ready.wait(10):
+                    first.result(timeout=0)
+                    self.fail('writer did not reach its pre-commit pause')
+                yield pool, first, held[0]
+            finally:
+                release.set()
+
+    def _wait_for_contender(self, holder):
+        # Match the held advisory, relation or transaction-ID lock of this writer.
+        observer = self.factory()
+        try:
+            with observer.cursor() as cursor:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    cursor.execute("""SELECT 1 FROM pg_locks a JOIN pg_locks b ON
+                        a.locktype=b.locktype AND a.database IS NOT DISTINCT FROM b.database
+                        AND a.transactionid IS NOT DISTINCT FROM b.transactionid
+                        AND a.page IS NOT DISTINCT FROM b.page AND a.tuple IS NOT DISTINCT FROM b.tuple
+                        AND a.relation IS NOT DISTINCT FROM b.relation
+                        AND a.classid IS NOT DISTINCT FROM b.classid
+                        AND a.objid IS NOT DISTINCT FROM b.objid
+                        AND a.objsubid IS NOT DISTINCT FROM b.objsubid
+                        WHERE a.pid=%s AND a.granted AND NOT b.granted""", (holder,))
+                    if cursor.fetchone():
+                        return
+                    time.sleep(0.01)
+                self.fail('contending writer did not wait on the held lock')
+        finally:
+            observer.close()
+
+    def test_independent_dataset_saves_commit_before_first_writer_released(self):
+        datasets, token = self._datasets()
+        for key in ('one', 'two'):
+            datasets.save(token, 'w', record(key), operation_key='init-'+key)
+        def save(key):
+            return datasets.save(token, 'w', record(key, 'updated '+key), operation_key='edit-'+key, expected_revision=1)
+        with self._paused_writer(lambda: save('one')) as (pool, first, _):
+            self.assertEqual(pool.submit(save, 'two').result(timeout=5)['revision'], '2')
+            self.assertFalse(first.done())
+        self.assertEqual(first.result()['revision'], '2')
+        for key in ('one', 'two'):
+            self.assertEqual(datasets.get(token, 'w', key)['revision'], '2')
+
+    def test_concurrent_stale_dataset_save_cannot_fork_release_or_projection(self):
+        from services.storage.control import Conflict
+        datasets, token = self._datasets()
+        datasets.save(token, 'w', record(), operation_key='init')
+        def save(key):
+            return datasets.save(token, 'w', record(name=key), operation_key=key, expected_revision=1)
+        with self._paused_writer(lambda: save('winner')) as (pool, first, holder):
+            second = pool.submit(save, 'loser')
+            self._wait_for_contender(holder)
+        with self.assertRaises(Conflict):
+            second.result()
+        with self.store.read_transaction() as con:
+            release = first.result()['release_id']
+            self.assertEqual(tuple(con.execute('SELECT revision,release_id FROM dataset_compat_heads').fetchone()), (2,release))
+            self.assertEqual(con.execute("SELECT release_id FROM asset_aliases WHERE alias='latest'").fetchone()[0],release)
+            self.assertEqual(con.execute('SELECT count(*) FROM asset_release_seals').fetchone()[0],2)
+            self.assertEqual(con.execute('SELECT count(*) FROM dataset_operation_receipts').fetchone()[0],2)
+            self.assertEqual(con.execute('SELECT count(*) FROM outbox_events').fetchone()[0],2)
+
+    def test_concurrent_initial_save_replays_and_shared_content_is_unique(self):
+        from services.storage.control import Conflict
+        datasets, token = self._datasets()
+        def save(identity, key, name='Dataset'):
+            data = record(identity, name)
+            if name == 'shared':
+                data['cases'][0]['expectedOutput'] = 'a new shared answer'
+            return datasets.save(token, 'w', data, operation_key=key)
+        with self._paused_writer(lambda: save('one','same')) as (pool, first, holder):
+            second = pool.submit(save,'one','same')
+            self._wait_for_contender(holder)
+        self.assertEqual(first.result()['release_id'],second.result()['release_id'])
+        with self.assertRaises(Conflict):
+            save('two','same','other')
+        with self._paused_writer(lambda: save('two','second','shared')) as (pool, first, holder):
+            third = pool.submit(save,'three','third','shared')
+            self._wait_for_contender(holder)
+        self.assertEqual(third.result()['revision'], '1')
+        with self.store.read_transaction() as con:
+            for table in ('dataset_compat_heads','dataset_operation_receipts','asset_release_seals'):
+                self.assertEqual(con.execute('SELECT count(*) FROM '+table).fetchone()[0],3)
+            self.assertEqual(con.execute("SELECT count(*) FROM artifact_metadata WHERE namespace='dataset.gold'").fetchone()[0],2)
+
+    def test_revoked_credential_cannot_commit_an_already_started_save(self):
+        from services.storage.iam import IAMStore, Unauthorized
+        datasets, token = self._datasets()
+        with self._paused_writer(lambda: IAMStore(self.store).revoke_credential(token)) as (pool, first, holder):
+            saving = pool.submit(datasets.save,token,'w',record(),operation_key='stale')
+            self._wait_for_contender(holder)
+        first.result()
+        with self.assertRaises(Unauthorized):
+            saving.result()
+        with self.store.read_transaction() as con:
+            self.assertEqual(con.execute('SELECT count(*) FROM asset_releases').fetchone()[0],0)
+
+    def test_dataset_failure_after_receipt_rolls_back_all_control_rows(self):
+        datasets, token = self._datasets()
+        with patch.object(datasets, '_queue_projection_tx', side_effect=RuntimeError('injected')):
+            with self.assertRaisesRegex(RuntimeError, 'injected'):
+                datasets.save(token,'w',record(),operation_key='retry')
+        with self.store.read_transaction() as con:
+            for table in ('asset_identities','dataset_compat_heads','asset_release_seals',
+                          'asset_aliases','dataset_operation_receipts','artifact_metadata','outbox_events'):
+                self.assertEqual(con.execute('SELECT count(*) FROM '+table).fetchone()[0],0,table)
+        self.assertEqual(datasets.save(token,'w',record(),operation_key='retry')['revision'],'1')
+
+    def test_business_writer_waits_for_migration_before_writing(self):
+        held = self.factory()
+        try:
+            with held.cursor() as cursor:
+                cursor.execute('LOCK TABLE "'+self.schema+'".schema_meta IN EXCLUSIVE MODE')
+                cursor.execute('SELECT pg_backend_pid()')
+                holder = cursor.fetchone()[0]
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                writing = pool.submit(self.store.create_workspace,'new','New')
+                try:
+                    self._wait_for_contender(holder)
+                finally:
+                    held.rollback()
+                writing.result(timeout=5)
+        finally:
+            held.close()
+
+    def test_benchmark_two_experiments_contend_for_last_workspace_slot(self):
+        from services.storage.benchmark_core import BenchmarkStore
+        from services.storage.tests.test_benchmark_core import BenchmarkCoreTests
+        _, token = self._datasets()
+        benchmark = BenchmarkStore(self.store, definitions_verifier=lambda *_: True)
+        def invoke(action, **body):
+            return benchmark.dispatch(action, token, 'w', body)
+        invoke('dataset_import', **BenchmarkCoreTests.dataset(self), operation_key='import')
+        jobs = []
+        for exp in ('alpha','beta'):
+            invoke('create', dataset_id='bench', experiment={'id':exp,'name':exp,'scope':'benchmark','evaluatorIdsJson':'["benchmark:fixture"]','cases':[]},
+                   selection={'mode':'all'}, run_config={'platform':'opencode','agent':'build','clientId':'client','legacyOwner':'author','timeoutSeconds':30},
+                   adapter={'key':'fixture','evaluatorId':'benchmark:fixture','requiredArtifacts':[],
+                            'evaluation':{'evaluatorKey':'fixture','defaultTimeoutSeconds':30}}, operation_key='create-'+exp)
+            started = invoke('start',experiment_id=exp, scheduler_limits={'maxPendingEvaluations':1,'maxPendingEvaluationsPerUser':2},
+                             public_callback_origin='http://localhost:3000',executor_callback_origin='http://localhost:3000',operation_key='start-'+exp)
+            jobs.append(started['runId'])
+        def claim(job):
+            return invoke('claim',job_id=job,worker_id='worker-'+job)
+        with self._paused_writer(lambda: claim(jobs[0])) as (pool, first, holder):
+            second = pool.submit(claim,jobs[1])
+            self._wait_for_contender(holder)
+        self.assertEqual(first.result()['job_id'],jobs[0])
+        self.assertIsNone(second.result())
+        with self.store.read_transaction() as con:
+            self.assertEqual(con.execute("SELECT count(*) FROM work_attempts WHERE status='running'").fetchone()[0],1)
+            self.assertEqual(con.execute("SELECT count(*) FROM benchmark_jobs WHERE protocol_state='preparing'").fetchone()[0],1)
+
+    def test_two_experiments_and_two_trace_workers_can_commit_independently(self):
+        from services.storage.experiments import ExperimentStore
+        from services.storage.observations import ObservationIngest
+        from services.storage.tests.test_observations import Facts, packet
+        _, token = self._datasets()
+        experiments = ExperimentStore(self.store)
+        for exp in ('first','second'):
+            experiments.dispatch('create',token,'w',{'experiment':{'id':exp,'name':exp},'operation_key':'create-'+exp})
+        def update(exp):
+            return experiments.dispatch('update',token,'w',{'experiment_id':exp,'changes':{'name':'updated-'+exp},
+                                                             'expected_revision':1,'operation_key':'update-'+exp})
+        with self._paused_writer(lambda: update('first')) as (pool, first, _):
+            self.assertEqual(pool.submit(update,'second').result(timeout=5)['experiment']['name'],'updated-second')
+        first.result()
+
+        ingest = ObservationIngest(self.store, Facts())
+        one = ingest.accept(token,'w',packet())
+        two = ingest.accept(token,'w',packet(trace='b'*32))
+        event = ingest.delivery.claim('worker-one',30000)
+        with self._paused_writer(lambda: ingest._prepare(event)) as (pool, first, _):
+            self.assertTrue(pool.submit(ingest.work_once,'worker-two').result(timeout=5))
+            self.assertEqual(ingest.batch_status(token,'w',two['batch_id'])['state'],'indexed')
+        first.result()
+        self.assertEqual(ingest.batch_status(token,'w',one['batch_id'])['state'],'prepared')
+
+    def test_otlp_and_collector_share_last_ingest_slot(self):
+        from services.storage.collector_sources import CollectorSources
+        from services.storage.iam import IAMStore
+        from services.storage.observations import ObservationIngest
+        from services.storage.control import Conflict
+        from services.storage.tests.test_collector_sources import CollectorSourceTests, CurrentFacts
+        from services.storage.tests.test_observations import packet
+        _, token = self._datasets()
+        api = IAMStore(self.store).issue_api_credential(token,'w',['read','write'])
+        self.store.max_pending_ingest_batches = 1
+        ingest = ObservationIngest(self.store,CurrentFacts())
+        collector = CollectorSources(self.store,ingest)
+        reservation = collector.reserve(api,'w',CollectorSourceTests.body(self))
+        commit = dict(task_id='task',operation_key=reservation['operation_key'],expected_revision=reservation['base_revision'],
+                      snapshot=CollectorSourceTests.snapshot(self))
+        with self._paused_writer(lambda: ingest.accept(token,'w',packet())) as (pool, first, holder):
+            second = pool.submit(collector.commit,api,'w',commit)
+            self._wait_for_contender(holder)
+        with self.assertRaises(Conflict) as failed:
+            second.result()
+        self.assertEqual(failed.exception.code,'QUEUE_LIMIT')
+        self.assertTrue(ingest.work_once('worker'))
+        self.assertEqual(ingest.batch_status(token,'w',first.result()['batch_id'])['state'],'indexed')
+        self.assertTrue(collector.commit(api,'w',commit)['batch_refs'])
+        with self.store.read_transaction() as con:
+            queued = [r[0] for r in con.execute('SELECT created_at_ms FROM outbox_events WHERE event_type=? ORDER BY created_at_ms',('observability.otlp.accepted.v1',))]
+            self.assertEqual(len(queued),2)
+            self.assertLess(queued[0],queued[1])
+
+    def test_interrupted_diagnosis_rejects_late_finish(self):
+        from services.storage.authorized import AuthorizedStorage
+        from services.storage.control import Conflict
+        from services.storage.diagnosis import TraceDiagnosis
+        from services.storage.iam import IAMStore
+        _, token = self._datasets()
+        AuthorizedStorage(IAMStore(self.store),None).create_trace(token,'w','trace','2026-11-12',source_namespace='test',native_trace_id='trace')
+        diagnosis = TraceDiagnosis(self.store)
+        turn = diagnosis.begin_turn(token,'w','trace',request_key='turn',message='question',evidence_hash='a'*64,lease_owner='worker')
+        handle = dict(request_key='turn',lease_owner='worker',turn_fence=turn['turn']['fence'],expected_revision=turn['turn']['revision'])
+        def finish(**values):
+            return diagnosis.finish_turn(token,'w',turn['session']['id'],**handle,**values)
+        with self._paused_writer(lambda: finish(content='partial',state='interrupted',error_code='cancelled')) as (pool, first, holder):
+            second = pool.submit(finish,content='late model output')
+            self._wait_for_contender(holder)
+        first.result()
+        with self.assertRaises(Conflict):
+            second.result()
+        with self.store.read_transaction() as con:
+            self.assertEqual(tuple(con.execute("SELECT state,content FROM trace_diagnosis_messages WHERE role='assistant'").fetchone()),('interrupted','partial'))
+
+    @unittest.skipUnless(os.environ.get('STORAGE_TEST_CLICKHOUSE_URL'), 'isolated ClickHouse required')
+    def test_trace_retired_during_clickhouse_publication_cannot_be_indexed(self):
+        from services.storage.clickhouse import ClickHouseStore
+        from services.storage.observations import ObservationIngest
+        from services.storage.tests.test_observations import packet
+        from services.storage.trace_metadata import TraceMetadata
+        _, token = self._datasets()
+        database = 'locks_' + uuid.uuid4().hex
+        facts = ClickHouseStore(os.environ['STORAGE_TEST_CLICKHOUSE_URL'], database=database,
+                                user=os.environ.get('STORAGE_TEST_CLICKHOUSE_USER','default'),
+                                password=os.environ.get('STORAGE_TEST_CLICKHOUSE_PASSWORD',''))
+        facts.initialize_new_database()
+        self.addCleanup(lambda: facts._request('DROP DATABASE '+database, database='default'))
+        ingest = ObservationIngest(self.store, facts)
+        first = ingest.accept(token,'w',packet())
+        trace = first['trace_ids'][0]
+        self.assertTrue(ingest.work_once('first'))
+        self.assertEqual(ingest.batch_status(token,'w',first['batch_id'])['state'],'indexed')
+        later = ingest.accept(token,'w',packet(span='2'*16))
+        written, release = threading.Event(), threading.Event()
+        original = facts._insert
+        def insert(table, rows):
+            original(table, rows)
+            if table == 'obs_trace_current':
+                written.set()
+                if not release.wait(20):
+                    raise RuntimeError('publication was not released')
+        with patch.object(facts,'_insert',insert), concurrent.futures.ThreadPoolExecutor(1) as pool:
+            worker = pool.submit(ingest.work_once,'second')
+            try:
+                self.assertTrue(written.wait(10))
+                self.assertTrue(TraceMetadata(self.store).delete(token,'w',trace))
+            finally:
+                release.set()
+            worker.result(timeout=5)
+        with self.store.read_transaction() as con:
+            self.assertEqual(con.execute('SELECT state FROM trace_locators WHERE trace_id=?',(trace,)).fetchone()[0],'deleting')
+            self.assertEqual(con.execute('SELECT state FROM ingest_batches WHERE batch_id=?',(later['batch_id'],)).fetchone()[0],'failed')
+            self.assertEqual(con.execute('SELECT count(*) FROM deletion_requests WHERE resource_id=?',(trace,)).fetchone()[0],1)
+        # The slow external write really committed; the control barrier must survive it.
+        self.assertEqual(int(facts._request('SELECT count() FROM obs_span_current FINAL FORMAT TabSeparated').strip()),2)
 
     def _baseline_001_store(self, version=1):
         import hashlib

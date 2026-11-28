@@ -162,6 +162,10 @@ class DerivedIssueMigrationPreservationTests(unittest.TestCase):
     prepare=DerivedIssueResolutionTests.prepare
     call=DerivedIssueResolutionTests.call
     def setUp(self):
+        from services.storage.tests.historical_observations import pre021_ingest_fixture
+        historical = pre021_ingest_fixture()
+        historical.__enter__()
+        self.addCleanup(historical.__exit__, None, None, None)
         from services.storage import migrations
         original=migrations.load_migrations
         with patch.object(migrations,'load_migrations',side_effect=lambda backend:original(backend)[:13]):fixture.ExperimentTests.setUp(self)

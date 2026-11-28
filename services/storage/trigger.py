@@ -138,7 +138,7 @@ def validate_checkpoint(store,con,token,ws,body,cp,previous,incoming):
 
 
 def _cancel_action(store,action,token,ws,body):
-    with store.control.transaction() as con:
+    with store.control.transaction(('evaluation', ws), ('platform', ws), ('trace', ws)) as con:
         scope=store.iam._scope(con,token)
         for capability in (('read','delete') if action.startswith('trigger_delete_draft') else ('read','write')):store.iam._workspace(scope,ws,capability)
         head=_head(store,con,token,ws,scope,body.get('run_id'));exp=head['experiment_id'];records=_cancelled(store,con,ws,exp)
@@ -277,7 +277,7 @@ def dispatch_trigger(store,action,token,ws,body):
     value=_manifest(body.get('manifest'))
     expected_scope={'derived_skill_ids':[value['skill']['id']],'derived_skill_versions':{value['skill']['id']:[value['skill']['version']]}}
     if body.get('config')!=expected_scope:raise Forbidden('Attested Skill scope differs from the frozen Trigger manifest')
-    with store.control.transaction() as con:
+    with store.control.transaction(('evaluation', ws), ('platform', ws), ('trace', ws)) as con:
         scope=store.iam._scope(con,token)
         for capability in ('read','write','execute'):store.iam._workspace(scope,ws,capability)
         key,digest,old=store._receipt(con,scope,ws,action,body)

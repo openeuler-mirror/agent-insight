@@ -41,3 +41,5 @@ Administrators (default: `admin` when `AGENT_INSIGHT_ADMIN_USERS` is empty) can 
 
 
 Provision databases independently, then follow the [configuration examples and application installer](../how-to/platform/storage-core.md) for SQLite/ClickHouse or PostgreSQL/ClickHouse.
+
+Core defaults to 64 concurrent request slots. Inspect failed ingestion receipts and retry status before following [batch recovery](../how-to/platform/storage-core.md#recover-ingest).

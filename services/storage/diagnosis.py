@@ -70,6 +70,7 @@ class TraceDiagnosis:
             if con.execute('SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=?',(ws,ref)).fetchone():traces.add(ref)
             if len(traces)>1:raise Conflict('Trace alias is ambiguous')
             trace=next(iter(traces)) if traces else ref
+        self.control.lock_keys(con, ('diagnosis', ws, trace), shared=(('trace', ws, trace),))
         self.iam._authorize(con,token,ws,'read','trace',trace)
         if write:self.iam._authorize(con,token,ws,'write','trace',trace)
         route=con.execute('SELECT state,incarnation FROM trace_locators WHERE workspace_id=? AND trace_id=?',(ws,trace)).fetchone()
@@ -166,7 +167,7 @@ class TraceDiagnosis:
 
     def ensure_session(self,token,ws,trace_ref,*,opencode_session_id=UNSET,expected_revision=None):
         if opencode_session_id is not UNSET and opencode_session_id is not None:identifier(opencode_session_id)
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('diagnosis', ws), ('trace', ws),)) as con:
             scope,trace,execution=self._access(con,token,ws,trace_ref,write=True)
             session=self._session(con,ws,trace=trace)
             self._expected(expected_revision,session['revision'] if session else 0)
@@ -199,7 +200,7 @@ class TraceDiagnosis:
         if opencode_session_id is not UNSET and opencode_session_id is not None:identifier(opencode_session_id)
         intent={'mode':'default'} if opencode_session_id is UNSET else {'mode':'new' if opencode_session_id is None else 'known','id':opencode_session_id}
         digest=_digest(_json(dict(message=message,evidence_hash=evidence_hash,model_key=model_key,context_hash=context_hash,continuation=intent)))
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('diagnosis', ws), ('trace', ws),)) as con:
             scope,trace,execution=self._access(con,token,ws,trace_ref,write=True)
             session=self._session(con,ws,trace=trace)
             if session is None:
@@ -227,6 +228,7 @@ class TraceDiagnosis:
         session=self._session(con,ws,session_id=sid)
         if session is None:raise DiagnosisNotFound('Diagnosis session not found')
         scope,_,execution=self._access(con,token,ws,session['trace_id'],write=True,internal=True)
+        session=self._session(con,ws,session_id=sid)
         pair=self._messages(con,session,key)
         if len(pair)!=2:raise Conflict('Diagnosis turn not found')
         if pair['assistant']['created_by']!=scope.principal_id:raise Forbidden('Diagnosis turn belongs to another actor')
@@ -239,7 +241,7 @@ class TraceDiagnosis:
 
     def renew(self,token,ws,session_id,*,request_key,lease_owner,turn_fence,lease_ms=90000):
         self._lease(lease_ms)
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('diagnosis', ws), ('trace', ws),)) as con:
             session,pair,scope,execution=self._turn(con,token,ws,session_id,request_key,lease_owner,turn_fence)
             expiry=revision(max(session['lease_expires_at_ms'],self.control.clock()+lease_ms))
             self._update_session(con,session,lease_expires_at_ms=expiry)
@@ -247,7 +249,7 @@ class TraceDiagnosis:
 
     def checkpoint(self,token,ws,session_id,*,request_key,lease_owner,turn_fence,expected_revision,content):
         revision(expected_revision);_text(content,MAX_ASSISTANT_BYTES,empty=True)
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('diagnosis', ws), ('trace', ws),)) as con:
             session,pair,scope,execution=self._turn(con,token,ws,session_id,request_key,lease_owner,turn_fence)
             old=pair['assistant']
             if old['content']==content and expected_revision in (old['revision'],old['revision']-1):return self._result(con,session,execution,request_key,scope)
@@ -264,7 +266,7 @@ class TraceDiagnosis:
         if state!='done':
             identifier(error_code)
             if len(error_code)>128:raise ValueError('diagnosis error code too long')
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('diagnosis', ws), ('trace', ws),)) as con:
             session,pair,scope,execution=self._turn(con,token,ws,session_id,request_key,lease_owner,turn_fence,terminal=True)
             old=pair['assistant']
             same=(old['content'],old['state'],old['opencode_session_id'],old['error_code'])==(content,state,opencode_session_id,error_code)

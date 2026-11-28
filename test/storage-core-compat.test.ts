@@ -120,3 +120,16 @@ test('trusted model configuration identity follows the authenticated legacy mapp
  assert.equal(actor.username,'old-user');
  assert.equal(actor.principalUsername,profile.username);
 });
+
+test('legacy observe callers receive typed Core overload from both authentication and data requests',async()=>{
+ bindings();const {handleCompatibleObserveData}=await import('../src/lib/storage-core/compat');
+ for(const overloaded of ['auth','data']){
+  let calls=0;
+  const response=await handleCompatibleObserveData(request('?paginated=1'),{resolveIdentity,fetcher:async url=>{
+   calls++;
+   if(overloaded==='data'&&new URL(String(url)).pathname==='/v1/auth/me')return Response.json(profile);
+   return Response.json({code:'CORE_BUSY'},{status:503,headers:{'x-storage-retry':'core-busy','retry-after':'1'}});
+  }});
+  assert.equal(response.status,503);assert.equal(response.headers.get('retry-after'),'1');assert.equal(response.headers.get('x-storage-retry'),'core-busy');assert.equal((await response.json()).code,'CORE_BUSY');assert.equal(calls,overloaded==='auth'?1:2);
+ }
+});

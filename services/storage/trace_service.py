@@ -309,10 +309,17 @@ class RateLimited(StorageError):
     pass
 
 
+def request_capacity(value):
+    if type(value) is not int or not 1<=value<=256:
+        raise ValueError('max_concurrent_requests must be between 1 and 256')
+    return value
+
+
 def create_server(runtime, *, host='127.0.0.1', port=0):
     import http.server
     import re
     import socketserver
+    import time
     import threading
     import urllib.parse
     from .control import Conflict
@@ -321,22 +328,49 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
 
     if host!='127.0.0.1':raise ValueError('Trace service must bind to IPv4 loopback')
 
+    capacity=request_capacity(getattr(runtime,'max_concurrent_requests',64))
+
     class Server(socketserver.ThreadingMixIn,http.server.HTTPServer):
         daemon_threads=True
-        request_queue_size=32
+        request_queue_size=capacity
         def __init__(self,*args,**kwargs):
-            self.slots=threading.BoundedSemaphore(32)
+            self.slots=threading.BoundedSemaphore(capacity)
+            self.metrics_lock=threading.Lock()
+            self.metrics=dict(capacity=capacity,active=0,peak=0,rejected=0,completed=0,duration_ms_total=0,duration_ms_max=0)
             super().__init__(*args,**kwargs)
+        def http_metrics(self):
+            with self.metrics_lock:return dict(self.metrics)
+        def release_slot(self,started):
+            elapsed=round((time.monotonic()-started)*1000,3)
+            with self.metrics_lock:
+                self.metrics['active']-=1
+                self.metrics['completed']+=1
+                self.metrics['duration_ms_total']+=elapsed
+                self.metrics['duration_ms_max']=max(self.metrics['duration_ms_max'],elapsed)
+            self.slots.release()
         def process_request(self,request,address):
             if not self.slots.acquire(blocking=False):
-                try:request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+                with self.metrics_lock:self.metrics['rejected']+=1
+                raw=b'{"error":"Storage core busy; retry shortly","code":"CORE_BUSY"}'
+                try:
+                    request.settimeout(1)
+                    request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nRetry-After: 1\r\nX-Storage-Retry: core-busy\r\nContent-Length: '+str(len(raw)).encode()+b'\r\n\r\n'+raw)
+                except OSError:pass
                 finally:self.shutdown_request(request)
                 return
-            try:super().process_request(request,address)
-            except BaseException:self.slots.release();raise
-        def process_request_thread(self,*args):
-            try:super().process_request_thread(*args)
-            finally:self.slots.release()
+            started=time.monotonic()
+            with self.metrics_lock:
+                self.metrics['active']+=1
+                self.metrics['peak']=max(self.metrics['peak'],self.metrics['active'])
+            try:
+                thread=threading.Thread(target=self.process_request_thread,args=(request,address,started),daemon=self.daemon_threads)
+                thread.start()
+            except BaseException:
+                self.release_slot(started)
+                raise
+        def process_request_thread(self,request,address,started):
+            try:super().process_request_thread(request,address)
+            finally:self.release_slot(started)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version='HTTP/1.1'
@@ -798,7 +832,7 @@ def create_server(runtime, *, host='127.0.0.1', port=0):
                 return int(value)
             if self.command=='GET' and pieces==['v1','health']:
                 status, health = runtime.readiness()
-                self.reply(status, health);return
+                self.reply(status, {**health,'http':self.server.http_metrics()});return
             if self.command=='POST' and pieces==['v1','compat','platform-control-capability']:
                 from .controller_protocol import verify_controller_proof
                 from .platform_controls import PlatformControls
@@ -922,6 +956,7 @@ def runtime_from_config(path):
     target=Path(path)
     if target.is_symlink() or not target.is_file() or target.stat().st_mode & 0o077:raise ValueError('config must be a private regular file')
     config=json.loads(target.read_text())
+    capacity=request_capacity(config.get('max_concurrent_requests',64))
     backend=config['control']['backend']
     if backend=='sqlite':
         database=Path(config['control']['database'])
@@ -942,11 +977,13 @@ def runtime_from_config(path):
         pending_limit=config.get('max_pending_ingest_batches',256)
         if type(pending_limit) is not int or not 1<=pending_limit<=10000:raise ValueError('max_pending_ingest_batches must be between 1 and 10000')
         control.max_pending_ingest_batches=pending_limit
+        if backend=='mariadb' and control.inspect()=='empty':raise ValueError('explicit schema initialization is required before service startup')
         plan=control.migration_plan()
         if plan['current_version']!=len(load_migrations(backend)) or plan['pending']:raise ValueError('explicit schema upgrade is required before service startup')
         facts=ClickHouseStore(**config['clickhouse'])
         facts.check_schema()
         runtime=TraceRuntime(control,facts,cursor_secret=bytes.fromhex(config['cursor_secret_hex']),default_workspace=config.get('default_workspace'),controller_key_file=config.get('controller_key_file'))
+        runtime.max_concurrent_requests=capacity
         optimization=config.get('trace_list_optimization',{})
         if not isinstance(optimization,dict) or set(optimization)-{'enabled'} or type(optimization.get('enabled',True)) is not bool:
             raise ValueError('invalid trace_list_optimization options')

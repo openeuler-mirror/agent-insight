@@ -142,7 +142,7 @@ class CollectorPublic:
         if not isinstance(value,dict) or set(value)-{'operation_key','task_id','legacy_username','mode','changes','expected_revision','expected_annotation_revision','session_json'} or value.get('mode') not in ('create','patch','append'):raise ValueError('Session mutation required')
         changes=value.get('changes')
         if not isinstance(changes,dict) or set(changes)-{'label','query','model','startTime','endTime','interaction','interactions'}:raise ValueError('Session fields required')
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             signature=_hash({key:value.get(key) for key in ('operation_key','task_id','legacy_username','mode','changes')})
             prior_route=self._route(con,workspace,value['task_id'])
             if prior_route:
@@ -235,7 +235,7 @@ class CollectorPublic:
     def normalize_history(self,token,workspace,value):
         framework=value.get('framework');primary=value.get('primary_agent_name');codex=value.get('codex') is True
         if not isinstance(framework,str) or (not codex and not isinstance(primary,str)):raise ValueError('Framework normalization required')
-        with self.control.transaction() as con:
+        with self.control.transaction(('collector', workspace), ('trace', workspace), ('ingest', workspace)) as con:
             scope=self.sources._scope(con,token,workspace);count=0
             rows=con.execute("SELECT t.* FROM trace_locators t JOIN iam_resource_access a ON a.workspace_id=t.workspace_id AND a.resource_kind='trace' AND a.resource_id=t.trace_id WHERE t.workspace_id=? AND t.source_namespace=? AND t.state='active' AND a.owner_principal_id=? ORDER BY t.trace_id",(workspace,NAMESPACE,scope.principal_id)).fetchall()
             for row in rows:

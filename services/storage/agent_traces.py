@@ -242,7 +242,7 @@ class AgentTraceRecorder:
                 ack=self.ingest.accept_import(token,ws,packet,receipt_key='agent-record:'+_hash([trace,input_hash,index]))
                 if ack['state'] not in ('accepted','prepared','indexed'):raise AgentTracePending('Agent batch failed')
                 refs.append({'workspace_id':ws,'batch_id':ack['batch_id'],'trace_ids':ack['trace_ids']})
-                with self.control.transaction() as con:
+                with self.control.transaction(('trace', ws, trace)) as con:
                     self.iam._authorize(con,token,ws,'write','trace',trace)
                     _,_,state=self._annotation(con,ws,trace);op=state['operations'][input_hash]
                     if op['plan_digest']!=plan_digest:raise Conflict('Agent submission plan changed')
@@ -266,7 +266,7 @@ class AgentTraceRecorder:
     def record(self,credential,workspace_id,payload):
         identifier(workspace_id);task,body=self._input(payload);digest=_hash(body);duplicate=False
         while True:
-            with self.control.transaction() as con:
+            with self.control.transaction(('trace', workspace_id), ('evaluation', workspace_id), ('diagnosis', workspace_id), ('platform', workspace_id)) as con:
                 route,scope,new=self._route(con,credential,workspace_id,task,body);trace=route['trace_id']
                 if body['context'].get('experiment_recording_kind')=='execution':
                     from .experiments import ExperimentStore

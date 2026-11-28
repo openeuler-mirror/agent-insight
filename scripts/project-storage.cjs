@@ -20,9 +20,10 @@ function string(value, label, empty = false) {
 function readConfig(file = path.join(ROOT, 'config/storage.local.json')) {
   if (!fs.existsSync(file)) fail('缺少 config/storage.local.json；请复制 storage.sqlite.example.json、storage.postgresql.example.json 或 storage.mariadb.example.json，填写后 chmod 600');
   const config = runtime.readPrivate(file);
-  keys(config, ['control', 'clickhouse', 'runtime', 'trace_list_optimization'], '配置');
+  keys(config, ['control', 'clickhouse', 'runtime', 'trace_list_optimization', 'max_concurrent_requests'], '配置');
   const c = config.control;
   keys(c, ['backend', 'database', 'dsn', 'schema', 'artifacts', 'connection_pool'], 'control');
+  if (config.max_concurrent_requests !== undefined && (!Number.isInteger(config.max_concurrent_requests) || config.max_concurrent_requests < 1 || config.max_concurrent_requests > 256)) fail('max_concurrent_requests 必须为 1–256 的整数');
   if (config.trace_list_optimization !== undefined) {
     keys(config.trace_list_optimization, ['enabled'], 'trace_list_optimization');
     if (typeof config.trace_list_optimization.enabled !== 'boolean') fail('trace_list_optimization.enabled 必须为布尔值');
@@ -109,6 +110,7 @@ function configurationFile(config, home) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o077) fail('controller 必须为 0600 普通文件');
   }
   const cfg = { control: config.control, clickhouse: config.clickhouse,
+    max_concurrent_requests: config.max_concurrent_requests ?? 64,
     ...(config.trace_list_optimization === undefined ? {} : { trace_list_optimization: config.trace_list_optimization }),
     port: config.runtime.corePort, controller_key_file: controller,
     cursor_secret_hex: previous?.cursor_secret_hex || crypto.randomBytes(32).toString('hex'),

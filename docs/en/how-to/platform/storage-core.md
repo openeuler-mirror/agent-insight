@@ -7,7 +7,7 @@ description: "Explicit initialization, private identity mappings, original scree
 
 ## Single storage runtime
 
-The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL, openGauss or MariaDB), with ClickHouse required for analytical facts. The current baseline is transaction migration 020 (77 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
+The application always uses Storage Core: choose one transactional backend (SQLite, PostgreSQL, openGauss or MariaDB), with ClickHouse required for analytical facts. The current baseline is transaction migration 021 (80 tables) and ClickHouse 004 (19 tables). An unset mode flag selects Core; explicit non-core values are rejected. DATABASE_URL and DB_HOST no longer select the Web business database. Web does not create or access legacy Session/Execution tables.
 
 Web startup checks the Core origin, private controller file and readiness of both stores. Core startup and /v1/health verify transaction migrations and required ClickHouse tables, columns and SELECT access. This does not replace ingestion and business acceptance tests. Outbox work survives ClickHouse outages without falling back to a relational analytical store. The private Core configuration accepts max_pending_ingest_batches (per workspace, default 256, range 1–10000). New ingestion receives 429/QUEUE_LIMIT when full; retries of accepted receipts remain idempotent.
 
@@ -20,7 +20,7 @@ Dashboard and quality-analysis registration reads share the verified Core contro
 This implementation run validates startup with SQLite + ClickHouse and PostgreSQL + ClickHouse. openGauss remains supported but is not exercised against a real server in this run. The original UI, server-side Trace pagination and scrolling Span batches of at most 50 are supported.
 
 
-The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 020 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
+The following domain sections retain historical migration and acceptance notes. Their older version numbers describe when a feature was introduced; current deployments require transaction 021 and ClickHouse 004. They do not authorize legacy storage or optional-mode fallback. Full product regression remains in progress; focused checks are not complete acceptance.
 
 ## Isolated Docker validation
 
@@ -35,7 +35,7 @@ docker compose -f docker-compose.storage-core.yml ps
 docker compose -f docker-compose.storage-core.yml logs --tail=100 storage-core
 ```
 
-The first start explicitly initializes SQLite migrations 001–020 and ClickHouse migrations 001–004 in new volumes, then creates a private controller key and service configuration. Subsequent starts verify the existing schema and configuration without replacing data. Keep the same password for restarts; back up and use the explicit migration workflow for an upgrade or credential change. Create an isolated account through the existing `/login`, submit a test Trace through `/api/ingest/otel/v1/traces`, then check `/trace` or `/api/observe/data` and the corresponding ClickHouse facts. The legacy collector compatibility endpoint returns an acceptance result; batch receipts apply when calling Storage Core `/v1/ingest/otlp` directly. `docker compose -f docker-compose.storage-core.yml down` stops the deployment while retaining volumes; do not add `-v` when keeping acceptance data.
+The first start explicitly initializes SQLite migrations 001–021 and ClickHouse migrations 001–004 in new volumes, then creates a private controller key and service configuration. Subsequent starts verify the existing schema and configuration without replacing data. Keep the same password for restarts; back up and use the explicit migration workflow for an upgrade or credential change. Create an isolated account through the existing `/login`, submit a test Trace through `/api/ingest/otel/v1/traces`, then check `/trace` or `/api/observe/data` and the corresponding ClickHouse facts. The legacy collector compatibility endpoint returns an acceptance result; batch receipts apply when calling Storage Core `/v1/ingest/otlp` directly. `docker compose -f docker-compose.storage-core.yml down` stops the deployment while retaining volumes; do not add `-v` when keeping acceptance data.
 
 This Compose setup uses SQLite as its transactional backend. PostgreSQL/openGauss, full legacy migration, production capacity, and high availability need separate validation. The manual setup procedure follows.
 
@@ -65,6 +65,8 @@ Reuse the same arguments and state file to resume; a new state file creates a ne
 
 Provision a dedicated MariaDB 11.4+ database with `utf8mb4` and `utf8mb4_unicode_ci` for a fresh installation. Use `config/storage.mariadb.example.json` with the exact database name in the DSN and a reachable ClickHouse instance. Keep the connection file private and use verified TLS. The database administrator grants DML to the runtime account and table, index and trigger privileges to the migration account. Run `bash scripts/install.sh --check` and `bash scripts/install.sh --storage-only` before starting the application. Follow the [migration procedure](../../reference/platform/storage-core.md) for upgrades.
 
+With binary logging enabled, use a DBA-approved `ROW` or `MIXED` format for migration and runtime connections. Preflight rejects `STATEMENT` with `READ COMMITTED`. When `log_bin_trust_function_creators=OFF`, a DBA account with `SUPER` runs installs or upgrades that create triggers. Keep the runtime account limited to `SELECT`, `INSERT`, `UPDATE`, and `DELETE`. The installer checks these requirements before writing its migration marker and preserves the server's binary logging and SQL mode settings.
+
 ## Initialize and provision explicit targets
 
 Use Python3.11+, a running ClickHouse instance and dedicated absolute paths, database names and ports. These examples use SQLite; PostgreSQL, openGauss and MariaDB are alternative control backends. Existing Prisma databases cannot be initialized or upgraded as core databases.
@@ -75,7 +77,7 @@ python3 -m services.storage init-sqlite --database /absolute/path/to/isolated-co
 python3 -m services.storage migration-plan --backend sqlite --database /absolute/path/to/isolated-core/core.db
 ```
 
-New targets apply001–020, currently schema_version20. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
+New targets apply001–021, currently schema_version21. Existing known prefixes are validated without an implicit upgrade. Upgrade an existing core target explicitly after backup:
 
 ```bash
 python3 -m services.storage migrate-sqlite \
@@ -139,7 +141,7 @@ The original `/trace` retains existing DTOs, filters, tags and detail controls. 
 
 Trace bundles retain v1 format and execution trees. Imports accept at most50MiB/500 executions, validate the entire tree first, remap colliding IDs and nested references, and return success only after all batches are indexed. Reuse an Idempotency-Key only to resume the same import. Export/full-session responses are capped at128MiB. Existing Langfuse views consume full nodes directly, so that compatibility path restores full bodies and is excluded from ordinary OTLP lazy-loading claims.
 
-The global earliest-event queue is a correctness baseline: an early retry blocks later events. Payload writes batch at most128 Spans and4MiB per HTTP request, persisting chunks before manifests, then Span rows and Trace summaries. Retry reuses frozen versions. Thousand-collector mixed load, sharded logs, HA and browser acceptance require their own evidence; consult the current implementation status. Stop only the services started for this environment and preserve the databases, artifacts and private configuration.
+Observation batches preserve workspace/Trace order; retries do not block independent Traces. Each batch allows five executions. A terminal predecessor failure marks dependent batches DEPENDENCY_FAILED; recover them in order after the predecessor indexes successfully. Dataset and Experiment delivery policies are unchanged. Payload writes batch at most128 Spans and4MiB per HTTP request, persisting chunks before manifests, then Span rows and Trace summaries. Retry reuses frozen versions. Thousand-collector mixed load, sharded logs, HA and browser acceptance require their own evidence; consult the current implementation status. Stop only the services started for this environment and preserve the databases, artifacts and private configuration.
 
 ## Isolation prerequisites for the application suite
 
@@ -212,7 +214,7 @@ The uploader still needs write only. Background analysis separately checks the s
 
 ## Isolated020 acceptance and explicit legacy import
 
-The current isolated target uses transactional schema020 and CH004. Keep new-database initialization separate from backed-up upgrades of existing targets. Never run Prisma db push against the original business database. Use the original login and pages; default-project ownership adds no project-selection UI.
+The current isolated target uses transactional schema021 and CH004. Keep new-database initialization separate from backed-up upgrades of existing targets. Never run Prisma db push against the original business database. Use the original login and pages; default-project ownership adds no project-selection UI.
 
 Export a consistent legacy SQLite copy with export-legacy, then use the separate plan-legacy-import, apply-legacy-import and verify-legacy-import commands. Specify the private export directory, stable source ID, owner bindings and isolated target config explicitly; apply/verify also require current actor credentials and a migration ID. The original plan-legacy remains strict read-only inventory and has no apply operation.
 
@@ -253,3 +255,24 @@ PostgreSQL Storage Core uses a process-wide connection pool by default. Requests
 Ordinary Trace lists enrich only the current database page in batches. Ordinary statistics and framework/source/Agent options use database aggregation. Outcome overrides, historical sources, advanced filters, and fields without equivalent SQL semantics explicitly fall back to compatibility reads, which may still scan records. Root Span attributes are read when execution metadata is needed; child Spans are not loaded in full. Detail pages continue to return at most 50 structural Spans per batch.
 
 Set `control.connection_pool.enabled=false` or `trace_list_optimization.enabled=false` in the existing Core configuration and restart to disable either optimization independently. No data reload is needed. The default pool limit is 16 connections per runtime, with an idle retention baseline of 2; account for all instances when budgeting database connections.
+
+
+<a id="recover-ingest"></a>
+## Recover a failed ingestion batch
+
+Fix the underlying sink/artifact failure first and inspect the batch receipt. Automatic execution is limited to five attempts; ordinary duplicate uploads never reopen failed batches. Run the local operator command with the existing private Core configuration and a private (0600, non-symlink) file containing a currently valid write credential:
+
+```bash
+python3 -m services.storage recover-ingest \
+  --config /private/core.json \
+  --credential-file /private/ingest-token.txt \
+  --workspace example-workspace \
+  --batch example-batch \
+  --request-key example-recovery-1
+```
+
+The actor must have current write access to the workspace and every affected Trace. Recovery records the previous failure, starts a new five-attempt cycle and reuses the packet/frozen plan. The same recovery key replays idempotently; another key cannot reset an active batch. Existing transaction coordination and monotonic worker tokens prevent an old worker from completing the new cycle.
+
+Recover `DEPENDENCY_FAILED` successors in order after predecessors become indexed. Deleted/deleting Traces and historical batches with an already prepared successor are rejected. Invalid input remains invalid; recovery neither edits packets nor bypasses validation. Recovery uses the existing pending-queue capacity. Check final batch status: a successful command means scheduled, not indexed.
+
+Apply transaction migration 021 for SQLite, PostgreSQL or openGauss; ClickHouse remains 004. Stop writes and back up the transactional database and artifacts before explicit migration. Older programs reject 021. Rollback requires stopping the service, restoring paired backups and accounting for subsequent data; do not merely downgrade binaries or reset attempt counters. See the [capacity and receipt reference](../../reference/platform/storage-core.md#core-request-capacity-and-ingest-retries-021).

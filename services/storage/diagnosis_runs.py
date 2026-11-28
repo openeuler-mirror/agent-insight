@@ -348,7 +348,7 @@ class DiagnosisRuns:
             if action=='preview':return preview
             if expected!=preview['input_hash']:raise Conflict('Diagnosis input changed; refresh preview')
             digest,ref=self._put(plan);identity=str(uuid.uuid4());now=self.control.clock()
-            with self.control.transaction() as con:
+            with self.control.transaction(('diagnosis', ws), ('evaluation', ws), ('trace', ws), ('platform', ws)) as con:
                 scope=self._scope(con,token,ws,'write');self.iam._workspace(scope,ws,'execute')
                 if scope.fingerprint!=prepared_scope:raise Forbidden('Diagnosis authorization changed before submission')
                 old=con.execute('SELECT * FROM diagnosis_runs WHERE workspace_id=? AND actor_principal_id=? AND request_key=?',(ws,scope.principal_id,key)).fetchone()
@@ -393,7 +393,7 @@ class DiagnosisRuns:
             if preview['source_fingerprint']!=row['source_fingerprint'] or preview['input_hash']!=row['input_hash']:raise Conflict('Diagnosis source changed')
             return {'valid':True,'input_hash':row['input_hash'],'source_fingerprint':row['source_fingerprint'],'snapshot':plan['snapshot'],**self._source_models(plan)}
         if action not in {'claim','load_work','renew','complete','fail','cancel'}:raise ValueError('Unsupported DiagnosisRun action')
-        with self.control.transaction() as con:
+        with self.control.transaction(('diagnosis', ws), ('evaluation', ws), ('trace', ws), ('platform', ws)) as con:
             row,scope=self._row(con,token,ws,identity,True);self.iam._workspace(scope,ws,'write');plan=self._plan(row)
             assert_control_live(con,ws,'diagnosisRun',identity)
             if action!='cancel':self.iam._workspace(scope,ws,'execute')

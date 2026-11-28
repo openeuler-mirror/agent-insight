@@ -113,7 +113,36 @@ export async function apiFetch(url: string, options?: RequestInit): Promise<Resp
     }
     return current;
   };
+  let busyIdentity:{key:string|null;user:string|null}|undefined;
+  if(method==='GET'&&typeof window!=='undefined')busyIdentity={key:localStorage.getItem('api_key'),user:localStorage.getItem('user_id')};
+  const checkBusyIdentity=()=>{
+    options?.signal?.throwIfAborted();
+    if(busyIdentity&&(localStorage.getItem('api_key')!==busyIdentity.key||localStorage.getItem('user_id')!==busyIdentity.user))throw new Error('登录身份已变化，请重新加载');
+  };
+  const busyDeadline=Date.now()+15_000;
   let response = await fetch(fullUrl, { ...options, headers });
+  for(let retry=0;method==='GET'&&response.status===503&&response.headers.get('x-storage-retry')==='core-busy'&&retry<3;retry++){
+    checkBusyIdentity();
+    const delay=1000*2**retry+Math.floor(Math.random()*250);
+    if(Date.now()+delay>=busyDeadline)break;
+    void response.body?.cancel().catch(()=>{});
+    const controller=new AbortController(),signal=options?.signal;
+    const abort=()=>controller.abort(signal?.reason);
+    signal?.addEventListener('abort',abort,{once:true});
+    const deadline=setTimeout(()=>controller.abort(new Error('Storage core request timed out')),Math.max(0,busyDeadline-Date.now()));
+    try{
+      if(signal?.aborted)abort();
+      await new Promise<void>((resolve,reject)=>{
+        if(controller.signal.aborted){reject(controller.signal.reason);return;}
+        const interrupted=()=>{clearTimeout(wait);reject(controller.signal.reason);};
+        const wait=setTimeout(()=>{controller.signal.removeEventListener('abort',interrupted);resolve();},delay);
+        controller.signal.addEventListener('abort',interrupted,{once:true});
+      });
+      checkBusyIdentity();
+      response=await fetch(fullUrl,{...options,headers,signal:controller.signal});
+      try{checkBusyIdentity();}catch(error){void response.body?.cancel().catch(()=>{});throw error;}
+    }finally{clearTimeout(deadline);signal?.removeEventListener('abort',abort);}
+  }
   let triggerReadRetries=0;
   while(triggerRunsRead&&response.status===409&&response.headers.get('x-storage-retry')==='trigger-read-changed'&&triggerReadRetries++<3&&Date.now()<triggerReadDeadline){
     void response.body?.cancel().catch(()=>{});triggerReadHeaders();

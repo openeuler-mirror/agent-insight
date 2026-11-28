@@ -12,6 +12,7 @@ from .contracts import canonical_json, content_hash, identifier, revision
 from .control import Conflict, StorageError
 from .iam import IAMStore, Forbidden
 from .projects import resolve_project
+from .ingest_delivery import IngestDelivery, register_delivery
 
 
 EVENT_TYPE = 'observability.otlp.accepted.v1'
@@ -464,7 +465,10 @@ def summary_status(state):
 
 class ObservationIngest:
     def __init__(self,control,facts):
-        self.control=control;self.facts=facts;self.iam=IAMStore(control)
+        with control.read_transaction() as con:
+            if con.execute('SELECT MAX(version) FROM schema_meta').fetchone()[0]<21:
+                raise StorageError('Explicit schema upgrade to version 21 is required for ingestion')
+        self.control=control;self.facts=facts;self.iam=IAMStore(control);self.delivery=IngestDelivery(control)
 
     def _load(self,ref):
         try:
@@ -502,7 +506,7 @@ class ObservationIngest:
         packet_hash=hashlib.sha256(data).hexdigest()
         receipt_key=packet_hash if receipt_key is None else identifier(receipt_key)
         now=self.control.clock();trace_ids=sorted({span['row']['trace_id'] for span in spans})
-        with self.control.transaction() as con:
+        with self.control.transaction(('ingest', workspace_id), *[('trace', workspace_id, trace) for trace in trace_ids], ('trace-alias', workspace_id)) as con:
             scope=self.iam._scope(con,credential);self.iam._workspace(scope,workspace_id,'write');resolve_project(con,workspace_id)
             old=con.execute('SELECT * FROM ingest_batches WHERE workspace_id=? AND principal_id=? AND receipt_key=?',(workspace_id,scope.principal_id,receipt_key)).fetchone()
             if old:
@@ -537,6 +541,7 @@ class ObservationIngest:
             queue_time=max(now,(previous+1) if previous is not None else now)
             con.execute('INSERT INTO outbox_events(workspace_id,event_id,aggregate_id,aggregate_revision,event_type,payload_json,created_at_ms,updated_at_ms) VALUES(?,?,?,1,?,?,?,?)',
                 (workspace_id,event_id,batch_id,EVENT_TYPE,canonical_json({'batch_id':batch_id}),queue_time,now))
+            register_delivery(con,workspace_id,batch_id,event_id,trace_ids)
         return {'batch_id':batch_id,'state':'accepted','trace_ids':trace_ids,'duplicate':False}
 
     def batch_status(self,credential,workspace_id,batch_id):
@@ -552,18 +557,11 @@ class ObservationIngest:
             for trace_id in trace_ids:
                 self.iam._authorize(con,credential,workspace_id,capability,'trace',trace_id)
             return {'batch_id':batch_id,'state':row['state'],'trace_ids':trace_ids,'accepted_at_ms':row['accepted_at_ms'],
-                    'indexed_at_ms':row['indexed_at_ms'],'error_code':row['error_code']}
+                    'indexed_at_ms':row['indexed_at_ms'],'error_code':row['error_code'],
+                    **self.delivery.status(con,workspace_id,batch_id)}
 
     def _claim(self,worker_id,lease_ms):
-        now=self.control.clock()
-        with self.control.transaction() as con:
-            row=con.execute("SELECT * FROM outbox_events WHERE event_type=? AND state IN ('pending','dispatching') ORDER BY created_at_ms,event_id LIMIT 1",(EVENT_TYPE,)).fetchone()
-            if row is None or row['next_attempt_at_ms']>now or (row['state']=='dispatching' and row['lease_until_ms'] is not None and row['lease_until_ms']>now): return None
-            attempt=revision(row['attempts']+1)
-            con.execute("UPDATE outbox_events SET state='dispatching',attempts=?,lease_owner=?,lease_until_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?",
-                (attempt,worker_id,now+lease_ms,now,row['workspace_id'],row['event_id']))
-            result=dict(row);result.update(attempts=attempt,lease_owner=worker_id,lease_until_ms=now+lease_ms)
-            return result
+        return self.delivery.claim(worker_id,lease_ms)
 
     def _owned(self,con,event):
         row=con.execute('SELECT * FROM outbox_events WHERE workspace_id=? AND event_id=?',(event['workspace_id'],event['event_id'])).fetchone()
@@ -571,7 +569,7 @@ class ObservationIngest:
         return row
 
     def _renew(self,event,lease_ms,trace_ids=()):
-        with self.control.transaction() as con:
+        with self.control.transaction(('ingest', event['workspace_id'], event['aggregate_id']), *[('trace', event['workspace_id'], trace) for trace in trace_ids]) as con:
             self._owned(con,event)
             for trace_id in trace_ids:
                 if con.execute("SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=? AND state='active'",(event['workspace_id'],trace_id)).fetchone() is None:
@@ -605,11 +603,14 @@ class ObservationIngest:
 
     def _prepare(self,event,lease_ms=30000):
         ws=event['workspace_id'];now=self.control.clock()
-        with self.control.transaction() as con:
+        with self.control.transaction(('ingest', ws, event['aggregate_id']), shared=(('collector', ws), ('trace', ws))) as con:
             self._owned(con,event)
             batch=con.execute('SELECT * FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(ws,event['aggregate_id'])).fetchone()
             if batch is None: raise IngestConflict('missing batch')
-            for trace_id in json.loads(batch['trace_ids_json']):
+            traces = json.loads(batch['trace_ids_json'])
+            self.control.lock_keys(con, *(('trace', ws, trace) for trace in traces))
+            now=self.control.clock()
+            for trace_id in traces:
                 if con.execute("SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=? AND state='active'",(ws,trace_id)).fetchone() is None:
                     raise _RouteRetired('Trace route no longer active')
             if batch['plan_ref']: return self._load(batch['plan_ref'])
@@ -723,8 +724,17 @@ class ObservationIngest:
                 for offset in range(0,len(rows),128):
                     selected=rows[offset:offset+128]
                     self._renew(event,lease_ms,{row['trace_id'] for row in selected});method(selected)
-            with self.control.transaction() as con:
-                self._owned(con,event);now=self.control.clock()
+            with self.control.transaction(('ingest', event['workspace_id'], event['aggregate_id'])) as con:
+                self._owned(con,event)
+                ws = event['workspace_id']
+                batch = con.execute('SELECT trace_ids_json FROM ingest_batches WHERE workspace_id=? AND batch_id=?',(ws,event['aggregate_id'])).fetchone()
+                traces = json.loads(batch[0])
+                self.control.lock_keys(con, shared=[('trace', ws, trace) for trace in traces])
+                for trace in traces:
+                    if not con.execute("SELECT 1 FROM trace_locators WHERE workspace_id=? AND trace_id=? AND state='active'", (ws, trace)).fetchone():
+                        raise _RouteRetired('Trace retired during indexing')
+                self._owned(con,event)
+                now=self.control.clock()
                 con.execute("UPDATE ingest_batches SET state='indexed',indexed_at_ms=CASE WHEN accepted_at_ms>? THEN accepted_at_ms ELSE ? END,error_code=NULL WHERE workspace_id=? AND batch_id=?",(now,now,event['workspace_id'],event['aggregate_id']))
                 con.execute("UPDATE outbox_events SET state='sent',lease_owner=NULL,lease_until_ms=NULL,updated_at_ms=? WHERE workspace_id=? AND event_id=?",(now,event['workspace_id'],event['event_id']))
         except _LeaseLost:
@@ -732,11 +742,11 @@ class ObservationIngest:
         except Exception as exc:
             permanent=isinstance(exc,_RouteRetired) or (not prepared and isinstance(exc,(IngestConflict,ValueError,FileNotFoundError)))
             try:
-                with self.control.transaction() as con:
-                    self._owned(con,event);now=self.control.clock()
-                    if permanent:
-                        con.execute("UPDATE ingest_batches SET state='failed',error_code='invalid_source_revision_or_artifact' WHERE workspace_id=? AND batch_id=?",(event['workspace_id'],event['aggregate_id']))
-                    con.execute('UPDATE outbox_events SET state=?,lease_owner=NULL,lease_until_ms=NULL,next_attempt_at_ms=?,updated_at_ms=? WHERE workspace_id=? AND event_id=?',
-                        ('dead' if permanent else 'pending',now+min(60000,1000*2**min(event['attempts'],6)),now,event['workspace_id'],event['event_id']))
+                with self.control.transaction(('ingest', event['workspace_id'], event['aggregate_id'])) as con:
+                    self._owned(con,event)
+                    exhausted=event['attempts']-event['attempt_base']>=event['attempt_limit']
+                    code='invalid_source_revision_or_artifact' if permanent else 'RETRY_EXHAUSTED' if exhausted else 'INGEST_TEMPORARY_FAILURE'
+                    message='Invalid source revision, artifact or inactive Trace' if permanent else 'Automatic execution limit reached' if exhausted else 'Temporary ingestion failure; retry scheduled'
+                    self.delivery.fail(con,event,code,message,terminal=permanent or exhausted)
             except _LeaseLost: pass
         return True

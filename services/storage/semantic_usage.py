@@ -99,17 +99,22 @@ class SemanticUsageStore:
         except Forbidden:self.metadata._trace(con,token,ws,trace,'write')
         access=con.execute("SELECT owner_principal_id FROM iam_resource_access WHERE workspace_id=? AND resource_kind='trace' AND resource_id=?",(ws,trace)).fetchone()
         if not access or access[0]!=owner:raise Forbidden('Same-owner actual Trace required')
+    def _ensure_scope(self, con, ws, owner, domain, username):
+        con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0)' + self.control.insert_if_absent_clause,
+                    (ws, owner, domain, username))
+
     def apply(self,token,ws,value):
         if not isinstance(value,dict) or set(value)!={'domain','revision','legacy_username','operations'}:raise ValueError('Fixed semantic batch required')
         domain=value['domain'];username=_text(value['legacy_username']);ops=value['operations']
         if domain not in ('goal','collaboration') or type(value['revision']) is not int or not isinstance(ops,list) or not 1<=len(ops)<=MAX_RECORDS:raise ValueError('Bounded semantic batch required')
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('semantic', ws), ('trace', ws))) as con:
             scope,_=self._scope(con,token,ws,'write');owner=scope.principal_id
+            self.control.lock_keys(con, ('semantic', ws, owner, domain))
             clock=con.execute('SELECT * FROM semantic_scopes WHERE workspace_id=? AND owner_principal_id=? AND domain=?',(ws,owner,domain)).fetchone();version=clock['revision'] if clock else 0
             if version!=value['revision']:raise Conflict('Semantic projection changed')
             if clock and clock['legacy_username']!=username:raise Forbidden('Semantic owner label differs')
             if not clock:
-                con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0)',(ws,owner,domain,username))
+                self._ensure_scope(con,ws,owner,domain,username)
             changed=con.execute('UPDATE semantic_scopes SET revision=revision+1 WHERE workspace_id=? AND owner_principal_id=? AND domain=? AND revision=?',(ws,owner,domain,version))
             if changed.rowcount!=1:raise Conflict('Semantic projection changed')
             normalized=[];pending={}
@@ -164,13 +169,6 @@ class SemanticUsageStore:
                     con.execute('INSERT INTO semantic_unique_keys VALUES(?,?,?,?,?,?)',(ws,owner,kind,','.join(unique),_hash(keys),rid))
             next_version=version+1
             self._scope(con,token,ws,'write');return {'revision':next_version}
-    @staticmethod
-    def _ensure_scope(con, workspace, owner, domain, username):
-        exists = con.execute('SELECT 1 FROM semantic_scopes WHERE workspace_id=? AND owner_principal_id=? AND domain=?',
-                             (workspace, owner, domain)).fetchone()
-        if exists is None:
-            con.execute('INSERT INTO semantic_scopes VALUES(?,?,?,?,0)', (workspace, owner, domain, username))
-
     def usage_persist(self,token,ws,events):
         if not isinstance(events,list) or not 1<=len(events)<=1000:raise ValueError('Bounded usage batch required')
         normalized=[]
@@ -179,11 +177,12 @@ class SemanticUsageStore:
             normalized.append({**e,'eventId':_text(e['eventId'],200),'dateKey':_day(e['dateKey']),'user':_text(e['user'],200),'featureKey':_text(e['featureKey'],100),'eventKey':_text(e['eventKey'],100)})
             _date(e['occurredAt'])
             if e['source'] not in ('client','server') or e['route'] is not None and (not isinstance(e['route'],str) or len(e['route'])>1024):raise ValueError('Usage source/route required')
-        with self.control.transaction() as con:
+        with self.control.transaction(shared=(('usage', ws),)) as con:
             scope,_=self._scope(con,token,ws,'write');owner=scope.principal_id;fresh=[];changed={}
+            self.control.lock_keys(con, ('usage', ws, owner))
             username=normalized[0]['user']
             if any(e['user']!=username for e in normalized):raise Forbidden('Same-owner usage batch required')
-            self._ensure_scope(con, ws, owner, 'usage', username)
+            self._ensure_scope(con,ws,owner,'usage',username)
             con.execute("UPDATE semantic_scopes SET revision=revision+1 WHERE workspace_id=? AND owner_principal_id=? AND domain='usage'",(ws,owner))
             label=con.execute("SELECT legacy_username FROM semantic_scopes WHERE workspace_id=? AND owner_principal_id=? AND domain='usage'",(ws,owner)).fetchone()[0]
             if label!=username:raise Forbidden('Usage owner label differs')
@@ -224,8 +223,10 @@ class SemanticUsageStore:
     def usage_cleanup(self,token,ws,date_key,limit=5000):
         _day(date_key)
         if type(limit) is not int or not 1<=limit<=50000:raise ValueError('Bounded cleanup required')
-        with self.control.transaction() as con:
-            scope,_=self._scope(con,token,ws,'write');rows=con.execute("SELECT event_id FROM usage_event_receipts WHERE workspace_id=? AND owner_principal_id=? AND date_key<? AND raw_state='active' ORDER BY date_key,event_id LIMIT ?",(ws,scope.principal_id,date_key,limit)).fetchall()
+        with self.control.transaction(shared=(('usage', ws),)) as con:
+            scope,_=self._scope(con,token,ws,'write')
+            self.control.lock_keys(con, ('usage', ws, scope.principal_id))
+            rows=con.execute("SELECT event_id FROM usage_event_receipts WHERE workspace_id=? AND owner_principal_id=? AND date_key<? AND raw_state='active' ORDER BY date_key,event_id LIMIT ?",(ws,scope.principal_id,date_key,limit)).fetchall()
             if rows:self.facts.delete_usage_event_facts(ws,scope.principal_id,[row[0] for row in rows])
             for row in rows:con.execute("UPDATE usage_event_receipts SET raw_state='retired' WHERE workspace_id=? AND owner_principal_id=? AND event_id=?",(ws,scope.principal_id,row[0]))
             return len(rows)
@@ -277,7 +278,7 @@ class SemanticUsageStore:
             for unique in definition['unique']:
                 values=[data[field] for field in unique]
                 if all(value is not None for value in values):con.execute('INSERT INTO semantic_unique_keys VALUES(?,?,?,?,?,?)',(workspace,owner,model,','.join(unique),_hash(values),rid))
-            self._ensure_scope(con, workspace, owner, definition['domain'], username)
+            self._ensure_scope(con,workspace,owner,definition['domain'],username)
             con.execute('UPDATE semantic_scopes SET revision=revision+1 WHERE workspace_id=? AND owner_principal_id=? AND domain=?',(workspace,owner,definition['domain']))
             return {'kind':model,'id':rid,'content_hash':digest,'duplicate':False}
         if table=='PlatformUsageEvent':
@@ -289,7 +290,7 @@ class SemanticUsageStore:
                 return {'kind':'usage','id':rid,'content_hash':digest,'duplicate':True}
             self.facts.write_semantic_fact('usage_event_facts',{'workspace_id':workspace,'owner_principal_id':owner,'kind':'usage','record_id':rid,'content_hash':digest,'body_json':_json(event),'retry_version':1})
             con.execute("INSERT INTO usage_event_receipts VALUES(?,?,?,?,?,?,'active')",(workspace,owner,rid,digest,event['dateKey'],self.control.clock()))
-            self._ensure_scope(con, workspace, owner, 'usage', username)
+            self._ensure_scope(con,workspace,owner,'usage',username)
             return {'kind':'usage','id':rid,'content_hash':digest,'duplicate':False}
         if table=='PlatformUsageDaily':
             key=[_day(row['dateKey']),_text(row['featureKey']),_text(row['eventKey'])];count=row['count']
@@ -302,6 +303,6 @@ class SemanticUsageStore:
                 return {'kind':'daily','id':rid,'content_hash':digest,'duplicate':True}
             self.facts.write_semantic_fact('usage_daily_facts',{'workspace_id':workspace,'owner_principal_id':owner,'kind':'daily','record_id':rid,'content_hash':digest,'body_json':_json(body),'retry_version':1})
             con.execute('INSERT INTO usage_daily_heads VALUES(?,?,?,?,?,?,?,?,?,?,?)',(workspace,owner,*key,username,count,first,last,1,digest))
-            self._ensure_scope(con, workspace, owner, 'usage', username)
+            self._ensure_scope(con,workspace,owner,'usage',username)
             return {'kind':'daily','id':rid,'content_hash':digest,'duplicate':False}
         raise ValueError('Known historical semantic table required')
